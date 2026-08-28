@@ -2213,14 +2213,14 @@ class TestRouterPreRoutingAliasOverrides:
                         "complexity_router_config": {
                             "tiers": {
                                 "SIMPLE": {
-                                    "model_name": "gpt-4o-mini",
+                                    "model_name": "gpt-5-mini",
                                     "litellm_params": {"reasoning_effort": "xhigh"},
                                 }
                             }
                         },
                     },
                 },
-                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {"model_name": "gpt-5-mini", "litellm_params": {"model": "openai/gpt-5-mini"}},
             ]
         )
         request_kwargs: Dict = {"reasoning_effort": "low"}
@@ -2231,7 +2231,7 @@ class TestRouterPreRoutingAliasOverrides:
             messages=[{"role": "user", "content": "hi"}],
         )
 
-        assert deployment["model_name"] == "gpt-4o-mini"
+        assert deployment["model_name"] == "gpt-5-mini"
         assert request_kwargs["reasoning_effort"] == "xhigh"
 
     @pytest.mark.asyncio

@@ -4150,17 +4150,11 @@ def get_optional_params(
         unsupported_params: Final = {}
         for k in non_default_params:
             if k not in supported_params:
-                if k == "user" or k == "stream_options" or k == "stream":
+                if k in PROVIDER_UNVALIDATED_PARAMS:
                     continue
                 if k == "n" and n == 1:  # langchain sends n=1 as a default value
                     continue  # skip this param
-                if (
-                    k == "max_retries"
-                ):  # TODO: This is a patch. We support max retries for OpenAI, Azure. For non OpenAI LLMs we need to add support for max retries
-                    continue  # skip this param
-                # Always keeps this in elif code blocks
-                else:
-                    unsupported_params[k] = non_default_params[k]
+                unsupported_params[k] = non_default_params[k]
 
         if unsupported_params:
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
@@ -4727,6 +4721,22 @@ def _apply_openai_param_overrides(optional_params: dict, non_default_params: dic
                 continue
             optional_params[param] = non_default_params.pop(param)
     return optional_params
+
+
+PROVIDER_UNVALIDATED_PARAMS: Final = frozenset({"user", "stream_options", "stream", "max_retries"})
+
+
+def provider_rejectable_params(passed_params: Mapping[str, object]) -> frozenset[str]:
+    """The params a provider can actually be rejected for, i.e. the ones _check_valid_arg compares
+    against its supported list.
+
+    Anything outside this set never reaches that comparison. Endpoint and transport controls such as
+    base_url, timeout, default_headers, organization and deployment_id are not chat completion
+    params at all, so a caller filtering on "is this an OpenAI param" would discard configuration the
+    request needs while never touching what the provider would have rejected.
+    """
+    params: Final = dict(passed_params)  # mutable-ok: get_non_default_params takes a dict
+    return frozenset(get_non_default_params(params)) - PROVIDER_UNVALIDATED_PARAMS
 
 
 def get_non_default_params(passed_params: dict) -> dict:

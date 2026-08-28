@@ -11194,3 +11194,159 @@ def test_resolved_litellm_models_answers_through_every_channel_a_request_uses(
     result is not "the call fails", so what to do about it stays each caller's policy.
     """
     assert set(_resolution_router().resolved_litellm_models(model_name)) == set(expected)
+
+
+class TestTierParamsTheTargetAccepts:
+    """A tier's litellm_params are applied to every request that tier routes, so one the target
+    cannot take raised UnsupportedParamsError before the request left the proxy, turning the whole
+    tier into a 400."""
+
+    @pytest.fixture(autouse=True)
+    def force_local_model_cost(self, monkeypatch):
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+
+    @staticmethod
+    def _router(model: str) -> litellm.Router:
+        return litellm.Router(
+            model_list=[{"model_name": "tiered", "litellm_params": {"model": model, "api_key": "sk-x"}}]
+        )
+
+    def test_drops_a_param_no_deployment_declares(self):
+        router = self._router("novita/moonshotai/kimi-k3")
+
+        accepted = router._tier_params_the_target_accepts("tiered", {"reasoning_effort": "max"})
+
+        assert accepted == {}
+
+    def test_keeps_a_param_the_deployment_declares(self):
+        router = self._router("fireworks_ai/kimi-k3")
+
+        accepted = router._tier_params_the_target_accepts("tiered", {"reasoning_effort": "max"})
+
+        assert accepted == {"reasoning_effort": "max"}
+
+    @pytest.mark.parametrize(
+        "control, value",
+        [
+            ("api_base", "https://example.invalid"),
+            ("api_key", "sk-tier"),
+            ("base_url", "https://example.invalid"),
+            ("timeout", 30),
+            ("default_headers", {"x-tier": "1"}),
+            ("organization", "org-tier"),
+            ("deployment_id", "dep-tier"),
+        ],
+    )
+    def test_keeps_credentials_and_transport_controls(self, control, value):
+        """These are not chat completion params, so get_optional_params never compares them against
+        a provider's supported list. Filtering on "is this an OpenAI param" would discard the
+        configuration the request needs while never touching what the provider would reject."""
+        router = self._router("novita/moonshotai/kimi-k3")
+
+        accepted = router._tier_params_the_target_accepts("tiered", {control: value, "reasoning_effort": "max"})
+
+        assert accepted == {control: value}
+
+    @pytest.mark.parametrize(
+        "control, value",
+        [
+            ("additional_drop_params", ["seed"]),
+            ("drop_params", True),
+            ("allowed_openai_params", ["reasoning_effort"]),
+            ("api_version", "2024-02-01"),
+            ("metadata", {"tier": "complex"}),
+        ],
+    )
+    def test_keeps_litellm_controls_the_provider_never_lists(self, control, value):
+        """No provider lists a litellm control among its supported params, so "no deployment
+        declares it" means litellm consumes it, not that the target refuses it. Dropping
+        drop_params or additional_drop_params would silently disable the operator's sanitization."""
+        router = self._router("novita/moonshotai/kimi-k3")
+
+        accepted = router._tier_params_the_target_accepts("tiered", {control: value, "reasoning_effort": "max"})
+
+        assert accepted == {control: value}
+
+    def test_keeps_a_token_ceiling_the_provider_spells_differently(self):
+        """petals lists max_tokens but not max_completion_tokens. A tier ceiling in the unsupported
+        spelling is a cost bound: dropping it would let a caller's larger max_tokens through where
+        today the mismatch fails loudly."""
+        router = self._router("petals/petals-team/StableBeluga2")
+
+        accepted = router._tier_params_the_target_accepts(
+            "tiered", {"max_completion_tokens": 100, "reasoning_effort": "max"}
+        )
+
+        assert accepted == {"max_completion_tokens": 100}
+
+    def test_keeps_extra_headers_even_when_the_provider_omits_it(self):
+        """Several providers leave extra_headers out of their supported params, so the filter would
+        drop it. Headers carry auth and tenancy, so sending fewer than the operator configured is
+        worse than the error they already get."""
+        router = self._router("ai21/jamba-1.5-mini")
+
+        accepted = router._tier_params_the_target_accepts(
+            "tiered", {"extra_headers": {"x-tenant": "acme"}, "reasoning_effort": "max"}
+        )
+
+        assert accepted == {"extra_headers": {"x-tenant": "acme"}}
+
+    def test_keeps_a_param_any_deployment_in_the_group_declares(self):
+        """Routing has not picked a deployment yet, so one capable member keeps the param alive."""
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "tiered", "litellm_params": {"model": "novita/moonshotai/kimi-k3", "api_key": "k"}},
+                {"model_name": "tiered", "litellm_params": {"model": "fireworks_ai/kimi-k3", "api_key": "k"}},
+            ]
+        )
+
+        accepted = router._tier_params_the_target_accepts("tiered", {"reasoning_effort": "max"})
+
+        assert accepted == {"reasoning_effort": "max"}
+
+    def test_deployment_accepts_param_honors_base_model(self):
+        """An azure deployment named after the deployment rather than the model carries the real
+        model in base_model, and request-time mapping resolves capability through it, so the filter
+        has to ask the same question or it drops a param the deployment accepts."""
+        by_model_info = {
+            "model_name": "x",
+            "litellm_params": {"model": "azure/my-gpt5-deploy"},
+            "model_info": {"base_model": "azure/gpt-5"},
+        }
+        by_litellm_params = {
+            "model_name": "x",
+            "litellm_params": {"model": "azure/my-gpt5-deploy", "base_model": "azure/gpt-5"},
+        }
+        without_hint = {"model_name": "x", "litellm_params": {"model": "azure/my-gpt5-deploy"}}
+
+        assert litellm.Router._deployment_accepts_param(by_model_info, "x", "reasoning_effort") is True
+        assert litellm.Router._deployment_accepts_param(by_litellm_params, "x", "reasoning_effort") is True
+        assert litellm.Router._deployment_accepts_param(without_hint, "x", "reasoning_effort") is False
+
+    def test_deployment_accepts_param_reads_the_provider(self):
+        deployment = {"model_name": "x", "litellm_params": {"model": "fireworks_ai/kimi-k3"}}
+
+        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is True
+
+    def test_deployment_accepts_param_is_false_when_the_provider_omits_it(self):
+        deployment = {"model_name": "x", "litellm_params": {"model": "novita/moonshotai/kimi-k3"}}
+
+        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is False
+
+    @pytest.mark.parametrize(
+        "deployment",
+        [{"model_name": "x"}, {"model_name": "x", "litellm_params": {}}, {"model_name": "x", "litellm_params": {"model": "not-a-real-provider/nope"}}],
+    )
+    def test_deployment_accepts_param_fails_open(self, deployment):
+        """An unresolvable deployment must not be the reason a param is dropped."""
+        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is True
+
+    def test_keeps_everything_for_an_unknown_group(self):
+        """An unresolvable target must never narrow what the request already did."""
+        router = self._router("fireworks_ai/kimi-k3")
+
+        accepted = router._tier_params_the_target_accepts("no-such-group", {"reasoning_effort": "max"})
+
+        assert accepted == {"reasoning_effort": "max"}
