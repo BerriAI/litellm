@@ -7877,10 +7877,12 @@ class TestSavingsBaselineOnDecision:
         router = self._router_with_tiers({"SIMPLE": "cheap", "MEDIUM": "mid"})
         assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
 
-    def test_a_configured_proxy_wide_baseline_disables_derivation(self, monkeypatch):
-        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-opus-5")
+    def test_a_leftover_proxy_wide_baseline_setting_does_not_disable_derivation(self, monkeypatch):
+        """The proxy config loader setattrs unknown litellm_settings keys, so a stale
+        autorouter_savings_baseline_model key must stay inert."""
+        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-opus-5", raising=False)
         router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": "top"})
-        assert router.savings_baseline is None
+        assert router.savings_baseline.model == "anthropic/claude-fable-5"
 
     def test_the_decision_record_carries_the_derived_baseline_and_its_deployment(self):
         """The deployment id is what lets the spend writer price a baseline whose
@@ -7953,12 +7955,6 @@ class TestSavingsBaselinePinnedPerInstance:
             complexity_router_config={"tiers": {"SIMPLE": "cheap", "REASONING": ["cheap", "top"]}},
         )
         assert rebuilt.savings_baseline is None
-
-    def test_the_configured_setting_bypasses_the_pin(self, monkeypatch):
-        router, _ = self._router_and_parent()
-        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
-        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-opus-5")
-        assert router.savings_baseline is None
 
     def test_an_unresolvable_pool_is_derived_once_and_pinned_as_none(self):
         router, parent = self._router_and_parent()

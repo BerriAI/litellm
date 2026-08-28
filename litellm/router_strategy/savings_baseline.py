@@ -1,16 +1,13 @@
-"""The default counterfactual a complexity router's savings are measured against.
+"""The counterfactual a complexity router's savings are measured against.
 
-`litellm_settings.autorouter_savings_baseline_model` names the model the traffic would
-have run on without a router. When the operator sets it, that answer wins and nothing
-here runs. When they do not, the router's own tier ladder already names it: without a
-router a deployment has to pick one model that can carry the hardest request it will
-see, so the default baseline is the priciest model in the hardest configured tier. A
-cheap tier is a choice the router made, not a ceiling it was bounded by.
+The router's own tier ladder names the model the traffic would have run on without a
+router: a deployment has to pick one model that can carry the hardest request it will
+see, so the baseline is the priciest model in the hardest configured tier. A cheap
+tier is a choice the router made, not a ceiling it was bounded by.
 
 Candidates are ranked once against a fixed reference request, not against each request
 that runs. Ranking per request means reading the request, and every input shape it can
-take; a default must not carry that surface. An operator whose pool ordering genuinely
-depends on request shape names the baseline in config, which skips this file entirely.
+take; a per-router default must not carry that surface.
 
 Baselines are always provider-qualified, because they travel to the spend writer as a
 bare string with no provider beside them; an operator who writes ``deepseek-r1`` meaning
