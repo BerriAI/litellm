@@ -4,6 +4,7 @@ Unit tests for cache settings management endpoints
 
 import asyncio
 import json
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1142,24 +1143,33 @@ def _prisma_with_cache_row(stored: dict | None) -> MagicMock:
     return mock_prisma
 
 
+@contextmanager
+def _proxy_server_state(prisma: MagicMock, proxy_config: MagicMock):
+    with (
+        patch(  # test-quality-ok: the cache endpoints read this proxy_server module global at call time, so there is no seam to inject through
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch("litellm.proxy.proxy_server.proxy_config", proxy_config),  # test-quality-ok: same module-global seam
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: same module-global seam
+    ):
+        yield
+
+
 class TestConfigYamlCacheParams:
     @pytest.mark.asyncio
     async def test_get_surfaces_config_yaml_params(self, monkeypatch):
         for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
             monkeypatch.delenv(var, raising=False)
 
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_cache_row(None)),
-            patch(
-                "litellm.proxy.proxy_server.proxy_config",
-                _proxy_config_with_yaml_cache_params(
-                    {
-                        "type": "redis",
-                        "namespace": "yamlns",
-                        "ttl": 1234,
-                        "supported_call_types": ["acompletion", "atext_completion"],
-                    }
-                ),
+        with _proxy_server_state(
+            _prisma_with_cache_row(None),
+            _proxy_config_with_yaml_cache_params(
+                {
+                    "type": "redis",
+                    "namespace": "yamlns",
+                    "ttl": 1234,
+                    "supported_call_types": ["acompletion", "atext_completion"],
+                }
             ),
         ):
             response = await get_cache_settings(user_api_key_dict=_admin_auth())
@@ -1173,12 +1183,9 @@ class TestConfigYamlCacheParams:
         for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
             monkeypatch.delenv(var, raising=False)
 
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_cache_row({"type": "redis", "host": "h"})),
-            patch(
-                "litellm.proxy.proxy_server.proxy_config",
-                _proxy_config_with_yaml_cache_params({"namespace": "yamlns", "ttl": 1234}),
-            ),
+        with _proxy_server_state(
+            _prisma_with_cache_row({"type": "redis", "host": "h"}),
+            _proxy_config_with_yaml_cache_params({"namespace": "yamlns", "ttl": 1234}),
         ):
             response = await get_cache_settings(user_api_key_dict=_admin_auth())
 
@@ -1190,15 +1197,9 @@ class TestConfigYamlCacheParams:
         for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
             monkeypatch.delenv(var, raising=False)
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.prisma_client",
-                _prisma_with_cache_row({"type": "redis", "host": "h", "ttl": 60}),
-            ),
-            patch(
-                "litellm.proxy.proxy_server.proxy_config",
-                _proxy_config_with_yaml_cache_params({"ttl": 1234}),
-            ),
+        with _proxy_server_state(
+            _prisma_with_cache_row({"type": "redis", "host": "h", "ttl": 60}),
+            _proxy_config_with_yaml_cache_params({"ttl": 1234}),
         ):
             response = await get_cache_settings(user_api_key_dict=_admin_auth())
 
@@ -1218,11 +1219,7 @@ class TestConfigYamlCacheParams:
         )
 
         monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True, raising=False)
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_cache_row(None)),
-            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
-            patch("litellm.proxy.proxy_server.store_model_in_db", True),
-        ):
+        with _proxy_server_state(_prisma_with_cache_row(None), proxy_config):
             await update_cache_settings(
                 request=CacheSettingsUpdateRequest(
                     cache_settings={
@@ -1267,10 +1264,7 @@ class TestConfigYamlCacheParams:
             return_value={"litellm_settings": {"cache_params": {"namespace": "yamlns", "ttl": 1234}}}
         )
 
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_cache_row({"type": "redis", "host": "h"})),
-            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
-        ):
+        with _proxy_server_state(_prisma_with_cache_row({"type": "redis", "host": "h"}), proxy_config):
             response = await get_cache_settings(user_api_key_dict=_admin_auth())
 
         assert "namespace" not in response.current_values
@@ -1318,11 +1312,7 @@ class TestConfigYamlCacheParams:
         proxy_config = _proxy_config_with_yaml_cache_params({"type": "redis", "namespace": "yamlns"})
         prisma = _prisma_with_cache_row({"type": "redis", "host": "h", "namespace": "stored-ns"})
 
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
-            patch("litellm.proxy.proxy_server.store_model_in_db", True),
-        ):
+        with _proxy_server_state(prisma, proxy_config):
             await update_cache_settings(
                 request=CacheSettingsUpdateRequest(
                     cache_settings={"type": "redis", "host": "h", "ttl": 600},
@@ -1343,11 +1333,7 @@ class TestConfigYamlCacheParams:
 
         proxy_config = _proxy_config_with_yaml_cache_params({"type": "redis", "namespace": "yamlns", "ttl": 1234})
 
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_cache_row(None)),
-            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
-            patch("litellm.proxy.proxy_server.store_model_in_db", True),
-        ):
+        with _proxy_server_state(_prisma_with_cache_row(None), proxy_config):
             result = await update_cache_settings(
                 request=CacheSettingsUpdateRequest(
                     cache_settings={"type": "redis", "host": "h", "namespace": "ignored", "ttl": 55555},
@@ -1367,21 +1353,28 @@ class TestConfigYamlCacheParams:
             {"type": "redis", "host": "yaml-host", "password": "yaml-pw"}
         )
         prisma = _prisma_with_cache_row({"type": "redis", "host": "stored-host", "password": "stored-pw"})
-        cache_instance = MagicMock()
-        cache_instance.cache.test_connection = AsyncMock(return_value={"status": "healthy", "message": "ok"})
+        connected_with: dict[str, object] = {}
+
+        class _RecordingCache:
+            def __init__(self, **kwargs: object) -> None:
+                connected_with.update(kwargs)
+                self.cache = MagicMock()
+                self.cache.test_connection = AsyncMock(return_value={"status": "healthy", "message": "ok"})
 
         with (
-            patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
-            patch("litellm.Cache", MagicMock(return_value=cache_instance)) as cache_cls,
+            _proxy_server_state(prisma, proxy_config),
+            patch(  # test-quality-ok: the endpoint constructs the cache itself, so recording its constructor args is the only way to see what it connected with
+                "litellm.Cache", _RecordingCache
+            ),
         ):
-            await test_cache_connection(
+            result = await test_cache_connection(
                 request=CacheTestRequest(cache_settings={"type": "redis"}),
                 user_api_key_dict=_admin_auth(),
             )
 
-        assert cache_cls.call_args.kwargs["password"] == "yaml-pw"
-        assert cache_cls.call_args.kwargs["host"] == "yaml-host"
+        assert result.status == "healthy"
+        assert connected_with["password"] == "yaml-pw"
+        assert connected_with["host"] == "yaml-host"
 
     @pytest.mark.asyncio
     async def test_a_config_yaml_url_drops_its_own_discrete_fields_everywhere(self, monkeypatch):
@@ -1391,11 +1384,7 @@ class TestConfigYamlCacheParams:
         yaml_params = {"type": "redis", "url": "redis://cfg:6379/2", "host": "cfg-discrete", "port": 7000}
         proxy_config = _proxy_config_with_yaml_cache_params(yaml_params)
 
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_cache_row(None)),
-            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
-            patch("litellm.proxy.proxy_server.store_model_in_db", True),
-        ):
+        with _proxy_server_state(_prisma_with_cache_row(None), proxy_config):
             reported = await get_cache_settings(user_api_key_dict=_admin_auth())
             await update_cache_settings(
                 request=CacheSettingsUpdateRequest(cache_settings={"type": "redis"}),
