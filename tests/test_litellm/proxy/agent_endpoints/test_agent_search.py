@@ -151,7 +151,10 @@ class TestAgentSearchIndex:
         fallback = FixedDimensionEmbedder(2)
         outcome = await index.search("language translation", AGENTS, top_k=5, embed=fallback, embedding_model="m")
         assert isinstance(outcome, AgentSearchHits)
-        assert fallback.calls == [("language translation",), tuple(agent_search_text(agent) for agent in AGENTS)]
+        assert fallback.calls == [
+            ("language translation",),
+            ("language translation", *(agent_search_text(agent) for agent in AGENTS)),
+        ]
 
     @pytest.mark.asyncio
     async def test_mixed_dimensions_in_one_batch_become_embedding_failed(self) -> None:
