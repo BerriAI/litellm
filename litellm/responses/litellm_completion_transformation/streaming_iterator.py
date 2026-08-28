@@ -641,7 +641,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         text: Final = getattr(litellm_complete_object.choices[0].message, "content", "") or ""
         annotations: Final = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
-        part: PART_UNION_TYPES | None = None
         # The message item's content part always carries the assistant text
         # as output_text. Reasoning content belongs to the reasoning item
         # (a separate output item), never to the message item's parts.
@@ -650,7 +649,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 annotations=annotations
             )
         )
-        part: Final = ContentPartDonePartOutputText(
+        part: Final[PART_UNION_TYPES] = ContentPartDonePartOutputText(
             type="output_text",
             text=text,
             annotations=response_annotations,
@@ -829,7 +828,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             # effect and _is_reasoning_end can close the lifecycle later.
             if not self._reasoning_active and not getattr(self, "_reasoning_done_emitted", False) and chunk.choices:
                 _delta: Final = chunk.choices[0].delta
-                if _delta is not None and hasattr(_delta, "reasoning_content") and _delta.reasoning_content:
+                if getattr(_delta, "reasoning_content", None):
                     self._reasoning_active = True
                     if self._cached_reasoning_item_id is None:
                         self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
@@ -843,10 +842,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                         output_index=0,
                         item=BaseLiteLLMOpenAIResponseObject(
-                            id=self._cached_reasoning_item_id,
-                            type="reasoning",
-                            status="in_progress",
-                            summary=[{"type": "summary_text", "text": ""}],
+                            **{
+                                "id": self._cached_reasoning_item_id,
+                                "type": "reasoning",
+                                "status": "in_progress",
+                                "summary": [{"type": "summary_text", "text": ""}],
+                            }
                         ),
                     )
                     _reasoning_added.__dict__["sequence_number"] = self._sequence_number
@@ -859,10 +860,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             # single active item can bind the upcoming text deltas.
             if not getattr(self, "_message_item_added_emitted", False) and chunk.choices:
                 _delta3: Final = chunk.choices[0].delta
-                _chunk_has_reasoning: Final = (
-                    _delta3 is not None and hasattr(_delta3, "reasoning_content") and _delta3.reasoning_content
-                )
-                if _delta3 is not None and hasattr(_delta3, "content") and _delta3.content and not _chunk_has_reasoning:
+                _delta3_has_reasoning: Final[bool] = bool(getattr(_delta3, "reasoning_content", None))
+                if getattr(_delta3, "content", None) and not _delta3_has_reasoning:
                     # Close the reasoning lifecycle before announcing the
                     # message item: item lifecycles must not overlap.
                     # Queueing the reasoning done events here (and latching
@@ -909,11 +908,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                         output_index=0,
                         item=BaseLiteLLMOpenAIResponseObject(
-                            id=self._cached_item_id,
-                            type="message",
-                            role="assistant",
-                            status="in_progress",
-                            content=[],
+                            **{
+                                "id": self._cached_item_id,
+                                "type": "message",
+                                "role": "assistant",
+                                "status": "in_progress",
+                                "content": [],
+                            }
                         ),
                     )
                     _msg_added.__dict__["sequence_number"] = self._sequence_number
