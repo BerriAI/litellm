@@ -16,10 +16,15 @@ const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefault
   getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
 }));
 
+const { validateAutoRouterConfig } = vi.hoisted(() => ({
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+}));
+
 vi.mock("../networking", () => ({
   modelPatchUpdateCall,
   modelAvailableCall,
   getAutoRouterClassifierDefaultPromptCall,
+  validateAutoRouterConfig,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "sk-test" }) }));
@@ -94,6 +99,21 @@ describe("EditAutoRouterModal keyword matching", () => {
     expect(config.semantic_keyword_matching).toBe(true);
     expect(config.embedding_model).toBe("voyage-4-large");
     expect(config.match_threshold).toBe(0.72);
+  });
+
+  it("does not PATCH when the backend's dry-run rejects the config", async () => {
+    const user = userEvent.setup();
+    validateAutoRouterConfig.mockResolvedValueOnce({
+      valid: false,
+      error: "tier_labels cannot be combined with tier_definitions",
+    });
+
+    renderModal();
+    await screen.findByText(/Escalation Keywords/i);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalled());
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
 
   // The create form blocks this; the edit modal renders the same controls, so it must block it

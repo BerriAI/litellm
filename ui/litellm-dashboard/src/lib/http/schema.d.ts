@@ -1247,19 +1247,30 @@ export interface paths {
         put?: never;
         /**
          * Preview Auto Router Routing
-         * @description Route a single prompt through a complexity-router config and report where it landed.
+         * @description Route a single request through a complexity-router config and report where it landed.
          *
-         *     Answers "which model would this prompt get?" for a config that only exists in a form,
-         *     so an auto router can be checked before it is created. The prompt is classified by the
-         *     same pre-routing hook a live request runs, then dropped: nothing is sent to the model it
-         *     routed to, and no auto router is created. A heuristic config therefore spends nothing, while
-         *     an `llm` classifier or semantic keyword matching bills its classifier/embedding call to the
-         *     calling key, like Test Connection does.
+         *     Answers "which model would this request get?" for a config that only exists in a form,
+         *     so an auto router can be checked before it is created. The request is classified by the
+         *     same pre-routing hook a live request runs, over the same messages, system prompt and tool
+         *     definitions, then dropped: nothing is sent to the model it routed to, and no auto router is
+         *     created. A heuristic config therefore spends nothing, while an `llm` classifier or semantic
+         *     keyword matching bills its classifier/embedding call to the calling key, like Test Connection
+         *     does.
+         *
+         *     Send `messages` to classify a real turn, with `system` and `tools` beside it when the surface
+         *     carries them top level, as Anthropic /v1/messages does. `prompt` is the single-ask shorthand and
+         *     routes as one user turn with nothing around it.
          *
          *     **Example Request:**
          *     ```json
          *     {
-         *         "prompt": "think step by step about how to shard this table",
+         *         "messages": [
+         *             {"role": "system", "content": "You are a database migration assistant"},
+         *             {"role": "user", "content": "the index is not unique"},
+         *             {"role": "assistant", "content": "Then two workers can both insert. Add a unique index"},
+         *             {"role": "user", "content": "ok do it"}
+         *         ],
+         *         "tools": [{"type": "function", "function": {"name": "Bash", "description": "Run a command"}}],
          *         "complexity_router_config": {
          *             "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["o3"]},
          *             "classifier_type": "heuristic"
@@ -22850,7 +22861,12 @@ export interface components {
         };
         /**
          * AutoRouterRoutingTestRequest
-         * @description A single prompt to classify against a complexity-router config that need not be saved yet.
+         * @description A single request to classify against a complexity-router config that need not be saved yet.
+         *
+         *     Carries the same fields the serving path carries, so a dry run classifies what a real turn
+         *     would classify. `messages`, `system` and `tools` are forwarded to the routing hook untranslated,
+         *     which is why they are typed loosely: the hook reads whatever dialect the surface produced, and
+         *     validating them against one surface's schema would reject the others.
          */
         AutoRouterRoutingTestRequest: {
             /** @description The complexity router config to route against, in the shape /model/new accepts */
@@ -22861,10 +22877,17 @@ export interface components {
              */
             default_model?: string | null;
             /**
-             * Prompt
-             * @description The prompt to route, as an end user would send it
+             * Messages
+             * @description The full message list to route, exactly as the serving path would receive it. Mutually exclusive with prompt
              */
-            prompt: string;
+            messages?: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Prompt
+             * @description A single ask to route, as an end user would send it. Mutually exclusive with messages
+             */
+            prompt?: string | null;
             /**
              * Router Name
              * @description Name reported as the router in the routing decision. Display only
@@ -22872,10 +22895,24 @@ export interface components {
              */
             router_name: string;
             /**
+             * System
+             * @description The top-level system prompt an Anthropic /v1/messages body carries beside its messages
+             */
+            system?: string | {
+                [key: string]: unknown;
+            }[] | null;
+            /**
              * Team Id
              * @description Team the router is being created for. Required for a team admin, who may only test their own team's routers
              */
             team_id?: string | null;
+            /**
+             * Tools
+             * @description The tool definitions the request advertises, which decide whether the plan-mode floor applies
+             */
+            tools?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /**
          * AutoRouterRoutingTestResponse
@@ -22976,7 +23013,7 @@ export interface components {
             extra_headers?: string[] | null;
             /**
              * Fail On Error
-             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
+             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
              * @default true
              */
             fail_on_error: boolean | null;
@@ -24985,6 +25022,11 @@ export interface components {
              * @default false
              */
             enable_public_model_hub: boolean;
+            /**
+             * Enforce Fallback Model Access
+             * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.
+             */
+            enforce_fallback_model_access?: boolean | null;
             /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
@@ -29684,7 +29726,7 @@ export interface components {
             extra_headers?: string[] | null;
             /**
              * Fail On Error
-             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
+             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
              * @default true
              */
             fail_on_error: boolean | null;
@@ -29932,6 +29974,11 @@ export interface components {
              * @description Path to a JSON file containing ad-hoc recognizers for Presidio
              */
             presidio_ad_hoc_recognizers?: string | null;
+            /**
+             * Presidio Analyze Chunk Size Bytes
+             * @description Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. Longer texts are split into overlapping chunks of at most this size and the merged results are remapped onto the original text. Defaults to 500000; set it below your analyzer deployment's request body limit, leaving headroom for the rest of the analyze payload.
+             */
+            presidio_analyze_chunk_size_bytes?: number | null;
             /**
              * Presidio Analyzer Api Base
              * @description Base URL for the Presidio analyzer API
