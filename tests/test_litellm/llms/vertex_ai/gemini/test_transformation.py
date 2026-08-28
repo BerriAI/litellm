@@ -571,3 +571,12 @@ def test_text_part_with_disallowed_key_model_tail_is_unchanged() -> None:
         {"role": "user", "parts": [{"text": "Remember cobalt"}]},
         {"role": "model", "parts": [{"text": "stored", "media_resolution": "low"}]},
     )
+
+
+def test_empty_parts_model_tail_is_unchanged() -> None:
+    contents: tuple[ContentType, ...] = (
+        ContentType(role="user", parts=[PartType(text="Remember cobalt")]),
+        ContentType(role="model", parts=[]),
+    )
+
+    assert transformation._append_user_after_text_only_model_tail(contents) == contents
