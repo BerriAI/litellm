@@ -3841,3 +3841,18 @@ def test_generic_cost_per_token_grok_46_long_context(_local_model_cost_map):
     )
     assert prompt_cost == pytest.approx(200_000 * 4e-06 + 50_000 * 1e-06)
     assert completion_cost == pytest.approx(1_000 * 1.2e-05)
+
+
+def test_select_cost_metric_for_model_treats_zero_token_cost_as_priced():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import select_cost_metric_for_model
+
+    free_model = {"key": "free-model", "input_cost_per_token": 0.0}
+    assert select_cost_metric_for_model(free_model) == "cost_per_token"
+
+    char_model = {"key": "char-model", "input_cost_per_character": 1e-6, "input_cost_per_token": 0.0}
+    assert select_cost_metric_for_model(char_model) == "cost_per_character"
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        select_cost_metric_for_model({"key": "no-pricing"})

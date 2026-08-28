@@ -126,7 +126,7 @@ def select_cost_metric_for_model(
     """
     if model_info.get("input_cost_per_character"):
         return "cost_per_character"
-    elif model_info.get("input_cost_per_token"):
+    elif model_info.get("input_cost_per_token") is not None:
         return "cost_per_token"
     else:
         raise ValueError(
