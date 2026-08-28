@@ -1810,9 +1810,7 @@ class TestLLMClassifier:
         "request_kwargs",
         [
             pytest.param({"metadata": {"user_api_key": "sk-abc"}}, id="metadata-bucket"),
-            pytest.param(
-                {"litellm_metadata": {"user_api_key": "sk-abc"}}, id="litellm-metadata-bucket"
-            ),
+            pytest.param({"litellm_metadata": {"user_api_key": "sk-abc"}}, id="litellm-metadata-bucket"),
             pytest.param({}, id="no-caller-context"),
             pytest.param(None, id="no-request-kwargs"),
         ],
@@ -6044,7 +6042,8 @@ class TestContextAwareClassifier:
         turn = (
             "We run a multi-region gateway and last night the eu-west pod returned 502s on the "
             "streaming path only, for thirty minutes, while non-streaming stayed healthy the whole "
-            "window and the cooldown map was mid-failover. " + "Filler sentence to push past the cap. " * 4
+            "window and the cooldown map was mid-failover. "
+            + "Filler sentence to push past the cap. " * 4
             + "Now rewrite the streaming retry path and prove it cannot livelock."
         )
 
@@ -8691,6 +8690,38 @@ def test_tier_model_params_reject_malformed_entries(tiers):
         ComplexityRouterConfig(tiers=tiers)
 
 
+@pytest.mark.parametrize(
+    "misplaced",
+    [
+        {"tier_boundaries": {"simple_medium": 0.1}},
+        {"token_thresholds": {"medium": 100}},
+        {"classifier_type": "llm"},
+    ],
+)
+def test_tier_model_params_reject_router_settings(misplaced):
+    """A tier entry's litellm_params are request params for that deployment: the pre-routing hook
+    spreads them onto the outbound call, so a router setting placed there configures nothing and
+    reaches the provider as an unknown body field, failing every call through that tier."""
+    with pytest.raises(ValidationError, match="complexity_router_config settings"):
+        ComplexityRouterConfig(tiers={"REASONING": [{"model_name": "opus", "litellm_params": misplaced}]})
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"reasoning_effort": "xhigh"},
+        {"thinking": {"type": "enabled"}},
+        {"max_tokens": 512, "temperature": 0.2},
+    ],
+)
+def test_tier_model_params_still_accept_real_request_params(params):
+    """The negative class for the gate above: per-tier request-param overrides are a shipped
+    feature, so the check must reject only names the config itself owns."""
+    config = ComplexityRouterConfig(tiers={"REASONING": [{"model_name": "opus", "litellm_params": params}]})
+
+    assert config.tier_model_configs["REASONING"][0].litellm_params == params
+
+
 def test_tier_model_params_reject_duplicate_models():
     with pytest.raises(ValidationError, match="duplicate model_name"):
         ComplexityRouterConfig(
@@ -8889,3 +8920,210 @@ async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
     assert response.model == "shared"
     assert response.litellm_params == {"reasoning_effort": "low"}
     assert cache.async_set_cache.call_args.kwargs["value"] == {"model": "shared", "tier": "SIMPLE"}
+
+
+HEURISTIC_FIRST_TIERS: dict[str, str] = {
+    "SIMPLE": "gpt-4o-mini",
+    "MEDIUM": "gpt-4o",
+    "COMPLEX": "claude-sonnet-4-20250514",
+    "REASONING": "o1-preview",
+}
+
+# The scorer maps a weighted score to a tier against these, and PR #37910 is retuning the shipped
+# defaults, so every heuristic_first test pins them rather than inheriting DEFAULT_TIER_BOUNDARIES.
+HEURISTIC_FIRST_BOUNDARIES: dict[str, float] = {
+    "simple_medium": 0.15,
+    "medium_complex": 0.35,
+    "complex_reasoning": 0.60,
+}
+
+# Scores 0.0 with an empty signals tuple: no dimension fires, so the scorer has no opinion and the
+# score-to-tier mapping lands SIMPLE purely by default. This is the population the permutation
+# control measured at ~zero information, and the prompt that must always escalate.
+NO_SIGNAL_PROMPT = (
+    "A distributed ledger must guarantee linearizability across five regions while tolerating one "
+    "region partition and bounded clock skew. Derive the minimum quorum configuration and prove why "
+    "a smaller quorum violates linearizability."
+)
+
+
+def _heuristic_first_router(mock_router_instance, **config_overrides):
+    config = {
+        "tiers": dict(HEURISTIC_FIRST_TIERS),
+        "tier_boundaries": dict(HEURISTIC_FIRST_BOUNDARIES),
+        "classifier_type": "heuristic_first",
+        "heuristic_first_max_tier": "SIMPLE",
+        "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+        **config_overrides,
+    }
+    return ComplexityRouter(
+        model_name="test-complexity-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config=config,
+    )
+
+
+class TestHeuristicFirstConfig:
+    """Config validation for classifier_type='heuristic_first'."""
+
+    @pytest.mark.parametrize(
+        "overrides, expected",
+        [
+            ({"classifier_llm_config": None}, "classifier_llm_config is required"),
+            ({"heuristic_first_max_tier": None}, "heuristic_first_max_tier is required"),
+            ({"heuristic_first_max_tier": "REASONING"}, "is the highest tier"),
+            ({"heuristic_first_max_tier": "NOPE"}, "is not an active tier"),
+            (
+                {
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "COMPLEX": "c", "REASONING": "r"},
+                    "heuristic_first_max_tier": "MEDIUM",
+                },
+                "has no model configured in tiers",
+            ),
+        ],
+    )
+    def test_rejects_incoherent_config(self, overrides, expected):
+        config = {
+            "tiers": dict(HEURISTIC_FIRST_TIERS),
+            "classifier_type": "heuristic_first",
+            "heuristic_first_max_tier": "SIMPLE",
+            "classifier_llm_config": {"model": "haiku-classifier"},
+            **overrides,
+        }
+        with pytest.raises(ValidationError, match=expected):
+            ComplexityRouterConfig(**config)
+
+    @pytest.mark.parametrize("classifier_type", ["heuristic", "llm", "custom"])
+    def test_threshold_rejected_on_every_other_classifier_type(self, classifier_type):
+        """A threshold on a router with no heuristic gate is a silent no-op, so it is refused
+        rather than accepted and ignored."""
+        config: dict[str, object] = {
+            "tiers": dict(HEURISTIC_FIRST_TIERS),
+            "classifier_type": classifier_type,
+            "heuristic_first_max_tier": "SIMPLE",
+        }
+        if classifier_type == "llm":
+            config["classifier_llm_config"] = {"model": "haiku-classifier"}
+        if classifier_type == "custom":
+            config["classifier_plugin"] = _FixedTierClassifier("SIMPLE")
+        with pytest.raises(ValidationError, match="heuristic_first_max_tier is set but classifier_type"):
+            ComplexityRouterConfig(**config)
+
+    def test_custom_tier_set_is_rejected(self):
+        """The scorer only emits the four built-in tiers, so it cannot gate a replaced tier set."""
+        with pytest.raises(ValidationError, match="tier_definitions requires classifier_type"):
+            ComplexityRouterConfig(
+                classifier_type="heuristic_first",
+                heuristic_first_max_tier="lo",
+                classifier_llm_config={"model": "haiku-classifier"},
+                tier_definitions=[{"name": "lo", "description": "x"}, {"name": "hi", "description": "y"}],
+                tiers={"lo": "gpt-4o-mini", "hi": "gpt-4o"},
+            )
+
+    def test_classifier_model_is_a_dependency(self):
+        """uses_llm_classifier is what tells the health graph and the routing-test authorizer that
+        the classifier model is really called, so heuristic_first must answer True."""
+        config = ComplexityRouterConfig(
+            tiers=dict(HEURISTIC_FIRST_TIERS),
+            classifier_type="heuristic_first",
+            heuristic_first_max_tier="SIMPLE",
+            classifier_llm_config={"model": "haiku-classifier"},
+        )
+        assert config.uses_llm_classifier is True
+        assert ComplexityRouterConfig(tiers=dict(HEURISTIC_FIRST_TIERS)).uses_llm_classifier is False
+
+
+class TestHeuristicFirst:
+    """Behavior of the heuristic-first chain: when the classifier call is skipped, and when it is not."""
+
+    @pytest.mark.asyncio
+    async def test_signalled_cheap_prompt_short_circuits(self, mock_router_instance):
+        """A prompt the scorer actually placed at or below the threshold must not reach the LLM."""
+        mock_router_instance.acompletion = AsyncMock()
+        router = _heuristic_first_router(mock_router_instance)
+        outcome = await router.aclassify("thanks so much, appreciate it")
+        mock_router_instance.acompletion.assert_not_called()
+        assert outcome.tier == ComplexityTier.SIMPLE
+        assert outcome.cause == "heuristic_first_short_circuit"
+        assert outcome.score is not None
+        assert outcome.signals
+        assert outcome.classifier_cost is None
+
+    @pytest.mark.asyncio
+    async def test_no_signal_prompt_escalates_even_though_it_scores_simple(self, mock_router_instance):
+        """The core guard. This prompt scores 0.0 and the mapping calls it SIMPLE, which is at the
+        threshold, so a bare tier comparison would short-circuit it to the cheapest model. No
+        dimension fired, so the scorer has no opinion and the classifier must decide."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        router = _heuristic_first_router(mock_router_instance)
+
+        tier, score, signals, _cause = router._score_and_classify(NO_SIGNAL_PROMPT)
+        assert (tier, score, signals) == (ComplexityTier.SIMPLE, 0.0, ())
+
+        outcome = await router.aclassify(NO_SIGNAL_PROMPT)
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.tier == ComplexityTier.COMPLEX
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_signalled_prompt_above_threshold_escalates(self, mock_router_instance):
+        """The scorer had an opinion, but it was above the threshold, so the classifier decides."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        router = _heuristic_first_router(mock_router_instance)
+
+        tier, _score, signals, _cause = router._score_and_classify("write a python function to reverse a string")
+        assert tier == ComplexityTier.MEDIUM and signals
+
+        outcome = await router.aclassify("write a python function to reverse a string")
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.tier == ComplexityTier.REASONING
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_raising_threshold_short_circuits_what_it_previously_escalated(self, mock_router_instance):
+        """The threshold is the knob: the same signalled MEDIUM prompt escalates at SIMPLE and
+        short-circuits at MEDIUM."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        router = _heuristic_first_router(mock_router_instance, heuristic_first_max_tier="MEDIUM")
+        outcome = await router.aclassify("write a python function to reverse a string")
+        mock_router_instance.acompletion.assert_not_called()
+        assert outcome.tier == ComplexityTier.MEDIUM
+        assert outcome.cause == "heuristic_first_short_circuit"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_override_never_short_circuits(self, mock_router_instance):
+        """A reasoning-override prompt lands REASONING, which outranks every legal threshold, so it
+        always reaches the classifier."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "MEDIUM"}'))
+        router = _heuristic_first_router(mock_router_instance, heuristic_first_max_tier="COMPLEX")
+        outcome = await router.aclassify(
+            "think step by step and analyze the tradeoffs, then reason through the consequences carefully"
+        )
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_classifier_failure_falls_back_to_the_scorer(self, mock_router_instance):
+        """An escalated request whose classifier call fails still gets the scorer's own verdict,
+        the same way classifier_type='llm' does, rather than erroring out."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=RuntimeError("classifier exploded"))
+        router = _heuristic_first_router(mock_router_instance)
+        expected_tier, expected_score, expected_signals, _cause = router._score_and_classify(NO_SIGNAL_PROMPT)
+
+        outcome = await router.aclassify(NO_SIGNAL_PROMPT)
+
+        assert outcome.tier == expected_tier
+        assert outcome.score == expected_score
+        assert outcome.signals == expected_signals
+        assert outcome.cause == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_classifier_failure_honors_default_model_fallback(self, mock_router_instance):
+        """classifier_fallback='default_model' still wins over the heuristic outcome, same as it
+        does for classifier_type='llm'."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=RuntimeError("classifier exploded"))
+        router = _heuristic_first_router(
+            mock_router_instance, classifier_fallback="default_model", default_model="gpt-4o"
+        )
+        outcome = await router.aclassify(NO_SIGNAL_PROMPT)
+        assert outcome.cause == "default_model_fallback"

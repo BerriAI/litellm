@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
@@ -9,6 +9,7 @@ from litellm.types.mcp import (
     MCPAuthType,
     MCPTokenEndpointAuthMethod,
     MCPTransportType,
+    normalize_upstream_header_name,
 )
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
@@ -86,6 +87,22 @@ class MCPServer(BaseModel):
     # today's behavior; "auto" derives the canonical URI from ``url``; any other value is sent
     # verbatim. Resolved by ``oauth_utils.resolve_upstream_resource``.
     upstream_resource: str | None = None
+    # Which upstream header carries the credential LiteLLM resolves for this server (the minted
+    # OAuth token, or the static key). None keeps RFC 6750's default, ``Authorization``. An ESB or
+    # API gateway that terminates its own credential in a private header needs this so a second,
+    # operator-configured ``Authorization`` can pass through to the origin untouched.
+    upstream_token_header: str | None = None
+
+    @field_validator("upstream_token_header")
+    @classmethod
+    def _check_upstream_token_header(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        normalized: Final = normalize_upstream_header_name(value)
+        if normalized is None:
+            raise ValueError(f"upstream_token_header must be a valid HTTP header name (RFC 7230 token), got {value!r}")
+        return normalized
+
     # AWS SigV4 fields
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
@@ -182,6 +199,18 @@ class MCPServer(BaseModel):
 
     def __str__(self) -> str:
         return self.__repr__()
+
+    @property
+    def effective_authorization_url(self) -> str | None:
+        return self.authorization_url or self.configured_authorization_url
+
+    @property
+    def effective_token_url(self) -> str | None:
+        return self.token_url or self.configured_token_url
+
+    @property
+    def effective_registration_url(self) -> str | None:
+        return self.registration_url or self.configured_registration_url
 
     @property
     def has_client_credentials(self) -> bool:
