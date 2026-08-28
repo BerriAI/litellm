@@ -1005,6 +1005,58 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["name"] == "get_weather"
             assert output_data[0]["arguments"] == {}
 
+    @pytest.mark.parametrize(
+        "arguments",
+        ["", "   ", '{"location":'],
+        ids=["empty", "whitespace", "partial-json"],
+    )
+    def test_responses_api_function_call_with_invalid_arguments(self, arguments: str):
+        """Empty, whitespace-only, and truncated JSON tool-call arguments must degrade to {}
+        without dropping observation.output, alongside the redacted-sentinel case above."""
+        from openai.types.responses import ResponseFunctionToolCall
+
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        response_obj = ResponsesAPIResponse(
+            id="response-invalid-arguments",
+            created_at=1625247700,
+            output=[
+                ResponseFunctionToolCall(
+                    id="fc-invalid",
+                    type="function_call",
+                    name="get_weather",
+                    call_id="call-invalid",
+                    arguments=arguments,
+                    status="completed",
+                )
+            ],
+        )
+
+        kwargs = {
+            "call_type": "responses",
+            "messages": [{"role": "user", "content": "What's the weather?"}],
+            "model": "gpt-4o",
+            "optional_params": {},
+        }
+
+        mock_span = MagicMock()
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
+
+            output_calls = [
+                call
+                for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+            ]
+
+            assert len(output_calls) > 0, "observation.output should still be set"
+            output_data = json.loads(output_calls[0].args[2])
+            assert output_data[0]["name"] == "get_weather"
+            assert output_data[0]["arguments"] == {}
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
