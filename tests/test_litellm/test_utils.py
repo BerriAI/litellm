@@ -4271,7 +4271,11 @@ class TestGetOptionalParamsTencent:
     """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
 
     def test_tencent_supports_thinking_param(self):
-        """Verify get_optional_params for tencent accepts the 'thinking' param."""
+        """Verify get_optional_params for tencent accepts the 'thinking' param.
+
+        `thinking` must be nested in extra_body: tencent routes through the
+        OpenAI SDK's chat.completions.create(), which rejects unknown kwargs.
+        """
         from unittest.mock import patch
 
         from litellm.utils import get_optional_params
@@ -4285,7 +4289,8 @@ class TestGetOptionalParamsTencent:
                 custom_llm_provider="tencent",
                 thinking={"type": "enabled"},
             )
-        assert result.get("thinking") == {"type": "enabled"}
+        assert "thinking" not in result
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_tencent_supports_reasoning_effort(self):
         """Verify get_optional_params for tencent converts reasoning_effort to thinking."""
@@ -4302,7 +4307,8 @@ class TestGetOptionalParamsTencent:
                 custom_llm_provider="tencent",
                 reasoning_effort="medium",
             )
-        assert result.get("thinking") == {"type": "enabled"}
+        assert "thinking" not in result
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_tencent_supported_params_includes_thinking_and_reasoning_effort(self):
         """Verify get_supported_openai_params for tencent includes custom params."""
