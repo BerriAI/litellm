@@ -50,6 +50,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -10860,6 +10861,11 @@ class Router:
             return True
         if param in Router._declared_param_allowlist(deployment_params):
             return True
+        declared_provider: Final = (
+            deployment_params.get("custom_llm_provider") or str(deployment_params.get("model") or "").split("/", 1)[0]
+        )
+        if declared_provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO:
+            return True
         deployment_model_info: Final = deployment.get("model_info")
         base_model: Final = (
             deployment_model_info.get("base_model") if deployment_model_info else None
@@ -10907,6 +10913,10 @@ class Router:
         A param survives if ANY deployment could take it, because routing has not chosen one yet,
         and it survives both an unresolvable provider and a group with no deployments, because a
         best-effort filter must never narrow what the request already did.
+
+        A github_copilot or chatgpt deployment counts as accepting everything, decided before any
+        lookup: resolving either provider runs its OAuth device flow, so a capability question
+        asked from the routing path can freeze the event loop for minutes waiting on a human.
 
         allowed_openai_params is the documented escape hatch for an outdated or incomplete
         supported-params list: request-time validation extends the supported list with it before

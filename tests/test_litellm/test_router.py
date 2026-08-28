@@ -11390,6 +11390,34 @@ class TestTierParamsTheTargetAccepts:
         """An unresolvable deployment must not be the reason a param is dropped."""
         assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is True
 
+    @pytest.mark.parametrize(
+        "litellm_params",
+        [
+            {"model": "github_copilot/gpt-4o"},
+            {"model": "chatgpt/gpt-5"},
+            {"model": "gpt-4o", "custom_llm_provider": "github_copilot"},
+        ],
+    )
+    def test_deployment_accepts_param_never_asks_a_provider_whose_lookup_authenticates(
+        self, litellm_params, monkeypatch
+    ):
+        """Resolving github_copilot or chatgpt runs their OAuth device flow, so a capability
+        question asked from the routing path can freeze the event loop for minutes waiting on a
+        human. The deployment counts as accepting everything, and the lookup is never made: an
+        exception-based sentinel cannot prove that, because the filter swallows exceptions into
+        the same keep answer."""
+        lookups: list = []
+
+        def _record(*args, **kwargs):
+            lookups.append((args, kwargs))
+            raise RuntimeError("provider resolution must not run for an authenticating provider")
+
+        monkeypatch.setattr(litellm, "get_llm_provider", _record)
+        deployment = {"model_name": "x", "litellm_params": litellm_params}
+
+        assert litellm.Router._deployment_accepts_param(deployment, "x", "reasoning_effort") is True
+        assert lookups == []
+
     def test_keeps_everything_for_an_unknown_group(self):
         """An unresolvable target must never narrow what the request already did."""
         router = self._router("fireworks_ai/kimi-k3")

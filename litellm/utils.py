@@ -76,6 +76,7 @@ from litellm.constants import (
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
+    PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.litellm_core_utils.fallback_generalizations import (
@@ -2991,12 +2992,7 @@ def register_model(
         for _registered_key, _registered_value in _registrations.items():
             _runtime_registered_model_cost[_registered_key] = dict(_registered_value)  # mutable-ok: caller-owned
 
-    # Providers that trigger side effects (e.g., OAuth flows) when get_model_info is called
-    # Skip get_model_info for these providers during model registration
-    _skip_get_model_info_providers: Final = {
-        LlmProviders.GITHUB_COPILOT.value,
-        LlmProviders.CHATGPT.value,
-    }
+    _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 
     for key, value in loaded_model_cost.items():
         ## get model info ##
