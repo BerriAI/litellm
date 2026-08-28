@@ -1456,9 +1456,7 @@ class BaseAWSLLM:
         api_key: str | None = None,
         supports_bearer_token: bool = True,
     ) -> AWSPreparedRequest:
-        aws_bearer_token: Final = (
-            self._get_bedrock_bearer_token(api_key) if supports_bearer_token else None
-        )
+        aws_bearer_token: Final = self._get_bedrock_bearer_token(api_key) if supports_bearer_token else None
 
         if aws_bearer_token:
             try:
@@ -1474,7 +1472,9 @@ class BaseAWSLLM:
             except ImportError:
                 raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
             if credentials is None:
-                raise ValueError("AWS credentials are required when Bedrock bearer token authentication is not configured.")
+                raise ValueError(
+                    "AWS credentials are required when Bedrock bearer token authentication is not configured."
+                )
 
             # Filter headers for AWS signature calculation
             # AWS SigV4 only includes specific headers in signature calculation
