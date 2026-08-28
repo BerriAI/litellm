@@ -136,8 +136,8 @@ class _UsageBearingChunk(TypedDict, total=False):
 
 
 class _UsageSummary(TypedDict):
-    prompt_tokens: int | None
-    completion_tokens: int | None
+    prompt_tokens: int
+    completion_tokens: int
     cache_creation_input_tokens: int | None
     cache_read_input_tokens: int | None
     completion_tokens_details: CompletionTokensDetails | None
