@@ -10847,9 +10847,18 @@ class Router:
     )
 
     @staticmethod
+    def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
+        declared: Final = params.get("allowed_openai_params")
+        if not isinstance(declared, (list, tuple, set, frozenset)):
+            return frozenset()
+        return frozenset(entry for entry in declared if isinstance(entry, str))
+
+    @staticmethod
     def _deployment_accepts_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:
         deployment_params: Final = deployment.get("litellm_params")
         if not deployment_params:
+            return True
+        if param in Router._declared_param_allowlist(deployment_params):
             return True
         deployment_model_info: Final = deployment.get("model_info")
         base_model: Final = (
@@ -10872,7 +10881,9 @@ class Router:
             return True
         return supported is None or param in supported
 
-    def _tier_params_the_target_accepts(self, model: str, tier_params: Mapping[str, object]) -> Mapping[str, object]:
+    def _tier_params_the_target_accepts(
+        self, model: str, tier_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+    ) -> Mapping[str, object]:
         """Drop an OpenAI param that no deployment behind ``model`` declares.
 
         A tier's litellm_params are an operator override applied to every request the tier routes,
@@ -10896,11 +10907,19 @@ class Router:
         A param survives if ANY deployment could take it, because routing has not chosen one yet,
         and it survives both an unresolvable provider and a group with no deployments, because a
         best-effort filter must never narrow what the request already did.
+
+        allowed_openai_params is the documented escape hatch for an outdated or incomplete
+        supported-params list: request-time validation extends the supported list with it before
+        comparing. The filter asks the same question, so a param named by the allowlist on the tier
+        overlay, the request, or a deployment's own litellm_params is never a drop candidate.
         """
         deployments: Final = self.get_model_list(model_name=model) or ()
         if not deployments:
             return tier_params
-        candidates: Final = provider_rejectable_params(tier_params) - self.TIER_PARAMS_NEVER_DROPPED
+        allowlisted: Final = self._declared_param_allowlist(tier_params) | self._declared_param_allowlist(
+            request_kwargs
+        )
+        candidates: Final = provider_rejectable_params(tier_params) - self.TIER_PARAMS_NEVER_DROPPED - allowlisted
         unsupported: Final = frozenset(
             param
             for param in candidates
@@ -11971,7 +11990,9 @@ class Router:
                 messages = pre_routing_hook_response.messages
                 if pre_routing_hook_response.litellm_params:
                     request_kwargs.update(
-                        self._tier_params_the_target_accepts(model, pre_routing_hook_response.litellm_params)
+                        self._tier_params_the_target_accepts(
+                            model, pre_routing_hook_response.litellm_params, request_kwargs
+                        )
                     )
             #########################################################
 
@@ -12084,7 +12105,9 @@ class Router:
                 messages = pre_routing_hook_response.messages
                 if pre_routing_hook_response.litellm_params:
                     request_kwargs.update(
-                        self._tier_params_the_target_accepts(model, pre_routing_hook_response.litellm_params)
+                        self._tier_params_the_target_accepts(
+                            model, pre_routing_hook_response.litellm_params, request_kwargs
+                        )
                     )
 
             # 2. Get healthy deployments
