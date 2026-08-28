@@ -2909,3 +2909,124 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+
+
+def _marked_tool_anthropic_shape():
+    """Anthropic shape: cache_control at the top level of the tool."""
+    return {
+        "type": "function",
+        "function": {"name": "search", "parameters": {}},
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def _marked_tool_openai_shape():
+    """OpenAI shape: cache_control nested under `function`."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "parameters": {},
+            "cache_control": {"type": "ephemeral"},
+        },
+    }
+
+
+def _three_client_marked_system_messages() -> List[AllMessageValues]:
+    messages: List[AllMessageValues] = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"System block {i}",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        for i in range(3)
+    ]
+    messages.append({"role": "user", "content": "hello"})
+    return messages
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [_marked_tool_anthropic_shape(), _marked_tool_openai_shape()],
+    ids=["anthropic_shape", "openai_shape"],
+)
+def test_chat_path_reserves_slots_for_client_marked_tools(tool):
+    """A cache_control the client put on a tool counts toward Anthropic's cap.
+
+    The /v1/messages census already counts tools; the chat/completions census did
+    not, so three client marks in messages plus one marked tool was read as 3 of
+    4 and an injection point still applied, sending 5 blocks. Reachable when an
+    Anthropic model is routed through an OpenAI-shaped provider.
+    """
+    hook = AnthropicCacheControlHook()
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=_three_client_marked_system_messages(),
+        non_default_params={
+            "cache_control_injection_points": _build_injection_points(),
+            "tools": [tool],
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    message_blocks = _count_cache_control(processed)
+    assert message_blocks == 3, "The marked tool must consume the fourth slot"
+    assert message_blocks + 1 <= 4, "Total breakpoints must stay within Anthropic's cap"
+
+
+def test_chat_path_counts_tools_passed_as_argument():
+    """The async entry point receives `tools` separately from non_default_params."""
+    hook = AnthropicCacheControlHook()
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=_three_client_marked_system_messages(),
+        non_default_params={"cache_control_injection_points": _build_injection_points()},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+        tools=[_marked_tool_anthropic_shape()],
+    )
+
+    assert _count_cache_control(processed) == 3
+
+
+def test_chat_path_unmarked_tools_do_not_consume_slots():
+    """Only client-marked tools reserve a slot; plain tools must not throttle injection."""
+    hook = AnthropicCacheControlHook()
+    unmarked_tool = {"type": "function", "function": {"name": "search", "parameters": {}}}
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=_three_client_marked_system_messages(),
+        non_default_params={
+            "cache_control_injection_points": _build_injection_points(),
+            "tools": [unmarked_tool],
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _count_cache_control(processed) == 4, "Nothing reserved, so the cap is still 4"
+
+
+def test_count_tool_cache_breakpoints_counts_both_shapes():
+    count = AnthropicCacheControlHook.count_tool_cache_breakpoints(
+        [
+            _marked_tool_anthropic_shape(),
+            _marked_tool_openai_shape(),
+            {"type": "function", "function": {"name": "plain", "parameters": {}}},
+            "not-a-dict",
+        ]
+    )
+    assert count == 2
+    assert AnthropicCacheControlHook.count_tool_cache_breakpoints(None) == 0
