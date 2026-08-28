@@ -739,11 +739,11 @@ def _get_provider_for_cost_calc(
     return custom_llm_provider
 
 
-def _get_provider_response_model_for_cost_calc(hidden_params: object) -> str | None:
+def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None:
     if not isinstance(hidden_params, Mapping):
         return None
-    model: Final[object] = hidden_params.get("provider_response_model")
-    return model if isinstance(model, str) and model else None
+    value: Final[object] = hidden_params.get(key)
+    return value if isinstance(value, str) and value else None
 
 
 def _select_model_name_for_cost_calc(
@@ -771,9 +771,14 @@ def _select_model_name_for_cost_calc(
         elif isinstance(completion_response, dict):
             completion_response_model = completion_response.get("model", None)
     hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
-    provider_response_model: Final = _get_provider_response_model_for_cost_calc(hidden_params)
-    region_name_value: Final[object] = hidden_params.get("region_name") if hidden_params is not None else None
-    region_name: str | None = region_name_value if isinstance(region_name_value, str) else None
+    provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
+    explicit_pricing: Final = custom_pricing is True or base_model is not None
+    priced_from_response: Final = provider_response_model is not None or completion_response_model is not None
+    region_name: Final = (
+        _get_hidden_str_for_cost_calc(hidden_params, "region_name")
+        if not explicit_pricing and priced_from_response
+        else None
+    )
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
