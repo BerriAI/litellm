@@ -2689,6 +2689,11 @@
               "title": "Total Flat Cost",
               "type": "number"
             },
+            "total_gateway_injected_caching_savings_spend": {
+              "default": 0.0,
+              "title": "Total Gateway Injected Caching Savings Spend",
+              "type": "number"
+            },
             "total_pages": {
               "default": 1,
               "title": "Total Pages",
@@ -3173,6 +3178,11 @@
             "flat_cost": {
               "default": 0.0,
               "title": "Flat Cost",
+              "type": "number"
+            },
+            "gateway_injected_caching_savings_spend": {
+              "default": 0.0,
+              "title": "Gateway Injected Caching Savings Spend",
               "type": "number"
             },
             "prompt_caching_savings_spend": {
