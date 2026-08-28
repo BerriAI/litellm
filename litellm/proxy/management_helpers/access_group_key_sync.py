@@ -18,6 +18,13 @@ every group the request touches at once, so the size of the caller's id list doe
 into a matching number of round trips, and returns the ids it actually moved so only those
 groups are dropped from cache.
 
+Each statement is an `UPDATE ... RETURNING` run inside a transaction so it lands on the
+writer. `RoutingPrismaWrapper` routes a bare `query_raw` to the read replica, where the
+write fails with `cannot execute UPDATE in a read-only transaction`; it routes `tx()` to
+the writer, so wrapping the statement keeps the write off the read-only reader while still
+yielding its RETURNING rows. The cache is dropped only after the transaction commits, so a
+rolled-back write never evicts a still-valid entry. This mirrors `access_group_team_sync`.
+
 It deliberately lives outside `access_group_endpoints`, which is a lazily
 registered feature router (see `_lazy_features.LAZY_FEATURES`). Importing that
 module eagerly from `key_management_endpoints` would put it in `sys.modules`
@@ -45,8 +52,18 @@ class _MovedGroupRow(BaseModel):
     access_group_id: str
 
 
-class _RawExecutor(Protocol):
+class _AccessGroupSyncTx(Protocol):
     async def query_raw(self, query: str, *args: str | Sequence[str]) -> Sequence[object]: ...
+
+
+class _Transaction(Protocol):
+    async def __aenter__(self) -> _AccessGroupSyncTx: ...
+
+    async def __aexit__(self, *exc_info: object) -> None: ...
+
+
+class _PrismaDb(Protocol):
+    def tx(self) -> _Transaction: ...
 
 
 _ATTACH_KEY_SQL: Final = (
@@ -71,8 +88,8 @@ _REPOINT_KEY_SQL: Final = (
 )
 
 
-def _raw_executor(prisma_client: object) -> _RawExecutor:
-    """Narrow the untyped Prisma client down to the raw-query call this module makes."""
+def _prisma_db(prisma_client: object) -> _PrismaDb:
+    """Narrow the untyped Prisma client down to the transaction accessor this module needs."""
     return AccessGroupRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
 
 
@@ -97,13 +114,25 @@ async def _invalidate_moved_groups(moved_rows: Sequence[object]) -> None:
         await _invalidate_access_group_cache(_MovedGroupRow.model_validate(row).access_group_id)
 
 
+async def _run_membership_statement(
+    prisma_client: object, sql: str, *args: str | Sequence[str]
+) -> Sequence[object]:
+    """Run one guarded membership `UPDATE ... RETURNING` on the writer and return the rows it moved.
+
+    Wrapped in a transaction because `RoutingPrismaWrapper` routes a bare `query_raw` to the
+    read replica, where the write fails with `cannot execute UPDATE in a read-only transaction`,
+    whereas it routes `tx()` to the writer.
+    """
+    async with _prisma_db(prisma_client).tx() as tx:
+        return await tx.query_raw(sql, *args)
+
+
 async def _write_membership(prisma_client: object, sql: str, access_group_ids: frozenset[str], key_token: str) -> None:
     """Run one guarded membership statement for every listed group, dropping the cache of those it moved."""
     if not access_group_ids:
         return
-    await _invalidate_moved_groups(
-        await _raw_executor(prisma_client).query_raw(sql, key_token, sorted(access_group_ids))
-    )
+    moved: Final = await _run_membership_statement(prisma_client, sql, key_token, sorted(access_group_ids))
+    await _invalidate_moved_groups(moved)
 
 
 async def sync_key_access_group_membership(
@@ -161,9 +190,8 @@ async def sync_key_regeneration_access_group_membership(
     edited in between is neither resurrected nor skipped. Removing the new token before
     appending it keeps a re-run from duplicating it.
     """
-    await _invalidate_moved_groups(
-        await _raw_executor(prisma_client).query_raw(_REPOINT_KEY_SQL, previous_key_token, new_key_token)
-    )
+    moved: Final = await _run_membership_statement(prisma_client, _REPOINT_KEY_SQL, previous_key_token, new_key_token)
+    await _invalidate_moved_groups(moved)
     if data is not None:
         await sync_key_update_access_group_membership(
             prisma_client=prisma_client,
