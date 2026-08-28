@@ -9,12 +9,12 @@ import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
 import React from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
+import { DocsLink } from "./Navbar/DocsLink/DocsLink";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
-import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
 import { cn } from "@/lib/cva.config";
 import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
@@ -143,16 +143,7 @@ const Navbar: React.FC<NavbarProps> = ({
               aria-label="Product documentation"
               className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-border pl-4" : ""}`}
             >
-              <a
-                href="https://docs.litellm.ai/docs/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className={NAV_PRODUCT_LINK_CLASS}
-              >
-                Docs
-                {/* Layout parity with Blog chevron — intentional single-level link */}
-                <ChevronDown className="pointer-events-none size-2.5 opacity-0" aria-hidden />
-              </a>
+              <DocsLink />
               <BlogDropdown />
             </nav>
 
