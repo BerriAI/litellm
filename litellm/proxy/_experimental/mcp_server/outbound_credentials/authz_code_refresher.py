@@ -88,7 +88,10 @@ class AuthorizationCodeRefresher:
         if token.refresh_token is None:
             return None
         server: Final = self._server_lookup(server_id)
-        if server is None or not server.token_url:
+        if server is None:
+            return None
+        token_url: Final = server.effective_token_url
+        if not token_url:
             return None
 
         try:
@@ -106,7 +109,7 @@ class AuthorizationCodeRefresher:
             "refresh_token": token.refresh_token,
             **token_request.body,
         }
-        body: Final = await self._token_endpoint(server.token_url, form, token_request.headers)
+        body: Final = await self._token_endpoint(token_url, form, token_request.headers)
         if body is None:
             return None
         access_token: Final = body.get("access_token")
