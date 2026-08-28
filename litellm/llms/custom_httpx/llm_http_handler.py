@@ -25,6 +25,10 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
+    SUBTITLE_RESPONSE_FORMATS,
+    synthesize_subtitle_document,
+)
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -1296,9 +1300,23 @@ class BaseLLMHTTPHandler:
         api_key: str | None,
     ) -> TranscriptionResponse:
         """Shared logic for transforming audio transcription responses."""
-        return provider_config.transform_audio_transcription_response(
+        transformed: Final = provider_config.transform_audio_transcription_response(
             raw_response=response,
         )
+        if not provider_config.supports_subtitle_synthesis:
+            return transformed
+        requested_format: Final = optional_params.get("response_format")
+        if not isinstance(requested_format, str) or requested_format not in SUBTITLE_RESPONSE_FORMATS:
+            return transformed
+        document: Final = synthesize_subtitle_document(
+            words=transformed.get("words"),
+            response_format=requested_format,
+        )
+        if document is not None:
+            transformed.text = document
+        if "words" in transformed:
+            delattr(transformed, "words")
+        return transformed
 
     def audio_transcriptions(
         self,
@@ -5620,10 +5638,9 @@ class BaseLLMHTTPHandler:
                     kwargs=hook_kwargs,
                 )
             except Exception as e:
-                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.exception(
                     "LiteLLM.AgenticHookError: Exception in async_should_run_agentic_loop [call_id=%s model=%s]: %s",
-                    _call_id,
+                    logging_obj.litellm_call_id,
                     model,
                     str(e),
                 )
@@ -5645,10 +5662,9 @@ class BaseLLMHTTPHandler:
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
                     raise
-                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.warning(
                     "LiteLLM.AgenticLoopRefused: ending turn [call_id=%s model=%s]: %s",
-                    _call_id,
+                    logging_obj.litellm_call_id,
                     model,
                     str(e),
                 )

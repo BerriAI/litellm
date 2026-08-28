@@ -45,7 +45,6 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
-    AUTO_ROUTED_REQUEST_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
@@ -197,6 +196,7 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    FallbackAccessCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
@@ -205,6 +205,7 @@ from litellm.types.router import (
     PreRoutingStrategy,
     RetryPolicy,
     RouterCacheEnum,
+    RouterErrors,
     RouterGeneralSettings,
     RouterModelGroupAliasItem,
     RouterRateLimitError,
@@ -420,6 +421,36 @@ def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error
     return has_generated_content or not error.is_pre_first_chunk
 
 
+def _anthropic_stream_raised_error_status(error: Exception) -> int | None:
+    raw_status: Final = getattr(error, "status_code", None)
+    if isinstance(raw_status, int):
+        return raw_status
+    if isinstance(raw_status, str) and raw_status.isdigit():
+        return int(raw_status)
+    response_status: Final = getattr(getattr(error, "response", None), "status_code", None)
+    return response_status if isinstance(response_status, int) else None
+
+
+def _anthropic_stream_fallback_error_for_raised(
+    error: Exception, model: str, has_generated_content: bool
+) -> "MidStreamFallbackError | None":
+    """Same gate as a detected SSE error event; None means the raise propagates unchanged."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    if has_generated_content:
+        return None
+    status_code: Final = _anthropic_stream_raised_error_status(error)
+    if status_code is not None and not _is_retriable_anthropic_status(status_code):
+        return None
+    return MidStreamFallbackError(
+        message=str(error),
+        model=model,
+        llm_provider="anthropic",
+        original_exception=error,
+        is_pre_first_chunk=True,
+    )
+
+
 def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
     """
     Whether `chunk` should make Router._aanthropic_messages_streaming_iterator
@@ -602,7 +633,9 @@ class Router:
         enable_health_check_routing: bool = False,
         health_check_staleness_threshold: int | None = None,
         health_check_ignore_transient_errors: bool = False,
+        background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
+        fallback_access_check: FallbackAccessCheck | None = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -639,6 +672,7 @@ class Router:
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+            fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -678,6 +712,7 @@ class Router:
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
+        self.fallback_access_check: Final = fallback_access_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
@@ -811,6 +846,11 @@ class Router:
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
+        self.background_health_check_model_groups: frozenset[str] | None = (
+            frozenset(background_health_check_model_groups)
+            if background_health_check_model_groups is not None
+            else None
+        )
         _staleness: Final = health_check_staleness_threshold or (
             DEFAULT_HEALTH_CHECK_INTERVAL * DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER
         )
@@ -5055,14 +5095,15 @@ class Router:
                     yield chunk
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
-            except MidStreamFallbackError as e:
-                if _anthropic_stream_should_decline_fallback(has_generated_content, e):
-                    for buffered_chunk in buffered_lifecycle_chunks:
-                        yield buffered_chunk
-                    if e.original_exception is not None:
-                        raise e.original_exception from e
-                    raise
-                async for item in self._aanthropic_messages_fallback_attempt(e, initial_kwargs, wrapper):
+            except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
+                async for item in self._aanthropic_messages_recover_stream_error(
+                    stream_error,
+                    has_generated_content,
+                    buffered_lifecycle_chunks,
+                    model,
+                    initial_kwargs,
+                    wrapper,
+                ):
                     yield item
             finally:
                 with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
@@ -5073,6 +5114,36 @@ class Router:
         # being defined textually after the function that captures it.
         wrapper: Final = FallbackAwareAnthropicMessagesStream(stream_with_fallbacks(), source_iterator)
         return wrapper
+
+    async def _aanthropic_messages_recover_stream_error(
+        self,
+        stream_error: Exception,
+        has_generated_content: bool,
+        buffered_lifecycle_chunks: tuple[bytes, ...],
+        model: str,
+        initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
+        wrapper: "FallbackAwareAnthropicMessagesStream",
+    ) -> AsyncGenerator[bytes, None]:
+        """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
+        from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(stream_error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
+            has_generated_content, stream_error
+        ):
+            for buffered_chunk in buffered_lifecycle_chunks:
+                yield buffered_chunk
+            if stream_error.original_exception is not None:
+                raise stream_error.original_exception from stream_error
+            raise stream_error
+        fallback_error: Final = (
+            stream_error
+            if isinstance(stream_error, MidStreamFallbackError)
+            else _anthropic_stream_fallback_error_for_raised(stream_error, model, has_generated_content)
+        )
+        if fallback_error is None:
+            raise stream_error
+        async for item in self._aanthropic_messages_fallback_attempt(fallback_error, initial_kwargs, wrapper):
+            yield item
 
     async def _aanthropic_messages_fallback_attempt(
         self,
@@ -6976,9 +7047,13 @@ class Router:
             _sibling_metadata_key: Final = (
                 "metadata" if _fallback_metadata_key == "litellm_metadata" else "litellm_metadata"
             )
-            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict):
-                _sibling_metadata.pop("attempted_fallbacks", None)
-                _sibling_metadata.pop("original_model_group", None)
+            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict) and (
+                "attempted_fallbacks" in _sibling_metadata or "original_model_group" in _sibling_metadata
+            ):
+                _scrubbed_sibling_metadata: Final = _sibling_metadata.copy()
+                _scrubbed_sibling_metadata.pop("attempted_fallbacks", None)
+                _scrubbed_sibling_metadata.pop("original_model_group", None)
+                kwargs[_sibling_metadata_key] = _scrubbed_sibling_metadata
             if isinstance(_fallback_metadata := kwargs.get(_fallback_metadata_key), dict):
                 _fallback_metadata["attempted_fallbacks"] = 0
                 if model_group is not None:
@@ -9210,7 +9285,11 @@ class Router:
             }
 
         if model_id is not None:
-            litellm.register_model(model_cost={model_id: model_info}, persist_across_reloads=False)
+            litellm.register_model(
+                model_cost={model_id: model_info},
+                persist_across_reloads=False,
+                warning_display_name=model,
+            )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
         backend_keys: Final = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
@@ -10697,10 +10776,9 @@ class Router:
                 _router_model_name: str = model_value
             elif isinstance(model_value, dict):
                 _model_value = RouterModelGroupAliasItem(**model_value)
-                if _model_value["hidden"] is True:
+                if _model_value["hidden"] is True and model_name is None:
                     continue
-                else:
-                    _router_model_name = _model_value["model"]
+                _router_model_name = _model_value["model"]
             else:
                 continue
 
@@ -10792,6 +10870,25 @@ class Router:
             returned_models += self.model_list
 
         return returned_models
+
+    def resolved_litellm_models(self, model_name: str, team_id: str | None = None) -> tuple[str, ...]:
+        """The provider model strings `model_name` can actually be served by on this proxy.
+
+        `get_model_list` composes every channel the request path itself uses (exact name,
+        model_group_alias, routing groups, wildcards), so this answers "which models will
+        answer a call to this name" rather than "what did the admin call it": the deployment
+        name is admin-arbitrary, and two names over one provider model are one model.
+
+        Empty when the name resolves to no deployment. That is not the same fact as "the
+        call will fail" - a provider-qualified public name is served by the SDK with no
+        deployment behind it - so the fallback for an empty result is the caller's policy,
+        never this function's.
+        """
+        return tuple(
+            litellm_model
+            for deployment in self.get_model_list(model_name=model_name, team_id=team_id) or ()
+            if isinstance(litellm_model := deployment.get("litellm_params", {}).get("model"), str) and litellm_model
+        )
 
     def _invalidate_model_group_info_cache(self) -> None:
         """Invalidate the cached model group info.
@@ -11521,10 +11618,8 @@ class Router:
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
-                message: Final = f"You passed in model={model}. There are no healthy deployments for this model"
-
                 raise litellm.BadRequestError(
-                    message=message,
+                    message=f"You passed in model={model}. {RouterErrors.no_healthy_deployments.value}",
                     model=model,
                     llm_provider="",
                 )
@@ -11535,11 +11630,18 @@ class Router:
             ]  # update the model to the actual value if an alias has been passed in
 
         marker_flags: Final = tuple(self._is_strategy_marker_deployment(d) for d in healthy_deployments)
-        if all(marker_flags) or not any(marker_flags):
+        if not any(marker_flags):
             return model, healthy_deployments
-        return model, [  # mutable-ok: matches this function's list contract expected by downstream filters
+        selectable: Final = [  # mutable-ok: matches this function's list contract expected by downstream filters
             d for d, is_marker in zip(healthy_deployments, marker_flags, strict=True) if not is_marker
         ]
+        if not selectable:
+            raise litellm.BadRequestError(
+                message=f"You passed in model={model}. {RouterErrors.only_strategy_marker_deployments.value}",
+                model=model,
+                llm_provider="",
+            )
+        return model, selectable
 
     def _filter_deployments_by_model_access_groups(
         self,
@@ -12011,10 +12113,7 @@ class Router:
             resolve_structured_messages,
         )
 
-        deployments: Final = self.get_model_list(model_name=model) or []
-        candidate_models: Final = [
-            d["litellm_params"]["model"] for d in deployments if d.get("litellm_params", {}).get("model")
-        ]
+        candidate_models: Final = list(self.resolved_litellm_models(model))
 
         metadata_key: Final = self._get_metadata_variable_name_from_kwargs(request_kwargs)
         metadata: Final = request_kwargs.setdefault(metadata_key, {})
@@ -12128,7 +12227,15 @@ class Router:
         This hook is called before the routing decision is made.
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
+
+        `model` is whatever the caller asked for, which may be a `model_group_alias` key, while the
+        strategy registries and the marker deployment are keyed by the marker's own `model_name`, so
+        every lookup below resolves the alias first. Only the lookups: the caller-facing name stays
+        the alias, since spend metadata is stamped before routing and the response carries the tier
+        group the strategy picked.
         """
+        registered_model_name: Final = self._get_model_from_alias(model=model) or model
+
         #########################################################
         # Run the routing-plugin pipeline, if any plugins are configured.
         # Plugins narrow the candidate deployment pool (consumed later by
@@ -12136,9 +12243,13 @@ class Router:
         # downstream strategies (auto-router, complexity-router, ...) to read.
         #########################################################
         if self.routing_plugins:
-            await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
+            await self._run_routing_plugins(
+                model=registered_model_name, request_kwargs=request_kwargs, messages=messages
+            )
 
-        selected_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
+        selected_strategy: Final = self._select_pre_routing_strategy(
+            model=registered_model_name, request_kwargs=request_kwargs
+        )
         if selected_strategy is None:
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(
@@ -12147,13 +12258,10 @@ class Router:
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
             )
-            self._stamp_or_clear_metadata_key(
-                request_kwargs=request_kwargs, key=AUTO_ROUTED_REQUEST_METADATA_KEY, value=None
-            )
             return None
 
         pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
-            model=model,
+            model=registered_model_name,
             request_kwargs=request_kwargs,
             messages=messages,
             input=input,
@@ -12177,13 +12285,6 @@ class Router:
                 request_tags=_get_tags_from_request_kwargs(request_kwargs),
             ),
         )
-        # Gates the proxy's `router_model_name` response field; the body `model` is
-        # always restamped back to the alias the client sent.
-        self._stamp_or_clear_metadata_key(
-            request_kwargs=request_kwargs,
-            key=AUTO_ROUTED_REQUEST_METADATA_KEY,
-            value=(True if pre_routing_hook_response is not None else None),
-        )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
         # called - apply the router marker's own litellm_params to the request,
@@ -12205,7 +12306,7 @@ class Router:
         # Per-tier `litellm_params` on the hook response are deliberate overrides
         # the caller applies on top, so those keys are never forwarded here.
         marker_params: Final = (
-            self._forwardable_alias_marker_params(model=model, strategy_tags=selected_strategy.tags)
+            self._forwardable_alias_marker_params(model=registered_model_name, strategy_tags=selected_strategy.tags)
             if pre_routing_hook_response is not None
             else ()
         )
@@ -12713,6 +12814,10 @@ class Router:
         """
         Filter out deployments marked unhealthy by background health checks.
         No-op when enable_health_check_routing is False.
+        When background_health_check_model_groups is set, only deployments in the
+        listed model groups are filtered; every other group keeps its configured
+        routing strategy untouched, and a router-level allowed_fails_policy no
+        longer disables the filter for the listed groups.
         Returns all deployments if health state is unavailable, stale, or would
         exclude every candidate (safety net).
         """
@@ -12721,8 +12826,10 @@ class Router:
 
         # When allowed_fails_policy is set, cooldown is the sole routing exclusion
         # mechanism -- skip the binary health check filter so the policy threshold
-        # is respected before any deployment is excluded.
-        if self.allowed_fails_policy is not None:
+        # is respected before any deployment is excluded. With a model-group
+        # allowlist the filter is already scoped, so listed groups keep it.
+        scoped_groups: Final = self.background_health_check_model_groups
+        if self.allowed_fails_policy is not None and scoped_groups is None:
             return healthy_deployments
 
         unhealthy_ids: Final = await self.health_state_cache.async_get_unhealthy_deployment_ids(
@@ -12731,7 +12838,12 @@ class Router:
         if not unhealthy_ids:
             return healthy_deployments
 
-        filtered: Final = [d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids]
+        filtered: Final = [
+            d
+            for d in healthy_deployments
+            if d["model_info"]["id"] not in unhealthy_ids
+            or (scoped_groups is not None and d["model_name"] not in scoped_groups)
+        ]
 
         if not filtered:
             verbose_router_logger.warning("All deployments marked unhealthy by health checks, bypassing health filter")
@@ -12748,14 +12860,20 @@ class Router:
         if not self.enable_health_check_routing:
             return healthy_deployments
 
-        if self.allowed_fails_policy is not None:
+        scoped_groups: Final = self.background_health_check_model_groups
+        if self.allowed_fails_policy is not None and scoped_groups is None:
             return healthy_deployments
 
         unhealthy_ids: Final = self.health_state_cache.get_unhealthy_deployment_ids(parent_otel_span=parent_otel_span)
         if not unhealthy_ids:
             return healthy_deployments
 
-        filtered: Final = [d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids]
+        filtered: Final = [
+            d
+            for d in healthy_deployments
+            if d["model_info"]["id"] not in unhealthy_ids
+            or (scoped_groups is not None and d["model_name"] not in scoped_groups)
+        ]
 
         if not filtered:
             verbose_router_logger.warning("All deployments marked unhealthy by health checks, bypassing health filter")

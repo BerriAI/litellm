@@ -60,6 +60,11 @@ AzureTokenAuthFlag = Annotated[
     bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=AZURE_POSTGRESQL_AUTH_ENV_VAR))
 ]
 
+DISABLE_PREPARED_STATEMENTS_ENV_VAR: Final = "DATABASE_DISABLE_PREPARED_STATEMENTS"
+DisablePreparedStatementsFlag = Annotated[
+    bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR))
+]
+
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
 # Prisma can actually connect with.
 SUPPORTED_DB_SCHEMES: Final[frozenset[str]] = frozenset({"postgresql", "postgres"})
@@ -153,6 +158,9 @@ class DatabaseURLSettings(BaseSettings):
 
     iam_token_db_auth: IamTokenAuthFlag = Field(default=False, validation_alias=IAM_TOKEN_DB_AUTH_ENV_VAR)
     azure_postgresql_auth: AzureTokenAuthFlag = Field(default=False, validation_alias=AZURE_POSTGRESQL_AUTH_ENV_VAR)
+    disable_prepared_statements: DisablePreparedStatementsFlag = Field(
+        default=False, validation_alias=DISABLE_PREPARED_STATEMENTS_ENV_VAR
+    )
 
     # Writer
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
@@ -374,6 +382,15 @@ class DatabaseURLSettings(BaseSettings):
         """
         self._raise_for_unsupported_scheme()
         wrote_writer: Final = self.apply_writer_url_to_env()
+
+        # DATABASE_DISABLE_PREPARED_STATEMENTS maps to Prisma's `pgbouncer=true`
+        # URL param, same as the CLI's `database_disable_prepared_statements`
+        # config key. An explicit `pgbouncer` value already on the URL wins.
+        if self.disable_prepared_statements:
+            for env_var in ("DATABASE_URL", "DIRECT_URL"):
+                url = os.environ.get(env_var)
+                if url:
+                    os.environ[env_var] = add_missing_query_params(url, MappingProxyType({"pgbouncer": "true"}))
 
         # The reader inherits the writer's connection params (pool size, timeouts,
         # pgbouncer mode). Without this the reader pool ignores the configured cap

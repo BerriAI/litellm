@@ -1829,7 +1829,7 @@ class TestBedrockMantleResponsesPricing:
         assert info["input_cost_per_token"] == pytest.approx(5.5e-06)
         assert info["output_cost_per_token"] == pytest.approx(3.3e-05)
         assert info["cache_read_input_token_cost"] == pytest.approx(5.5e-07)
-        assert info["max_input_tokens"] == 272000
+        assert info["max_input_tokens"] == 1050000
 
     def test_gpt_5_4_pricing_and_mode(self, local_cost_map):
         info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.4")
@@ -1837,12 +1837,21 @@ class TestBedrockMantleResponsesPricing:
         assert info["input_cost_per_token"] == pytest.approx(2.75e-06)
         assert info["output_cost_per_token"] == pytest.approx(1.65e-05)
         assert info["cache_read_input_token_cost"] == pytest.approx(2.75e-07)
+        assert info["max_input_tokens"] == 1050000
+
+    def test_gpt_5_6_cyber_pricing_and_mode(self, local_cost_map):
+        info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.6-cyber")
+        assert info["mode"] == "responses"
+        assert info["input_cost_per_token"] == pytest.approx(1.375e-05)
+        assert info["cache_creation_input_token_cost"] == pytest.approx(1.71875e-05)
+        assert info["cache_read_input_token_cost"] == pytest.approx(1.375e-06)
+        assert info["output_cost_per_token"] == pytest.approx(8.25e-05)
         assert info["max_input_tokens"] == 272000
 
     @pytest.mark.parametrize(
         "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
         [
-            ("openai.gpt-5.6-sol", 5.5e-06, 6.875e-06, 5.5e-07, 3.3e-05),
+            ("openai.gpt-5.6-sol", 4.4e-06, 5.5e-06, 4.4e-07, 2.2e-05),
             ("openai.gpt-5.6-terra", 2.2e-06, 2.75e-06, 2.2e-07, 1.32e-05),
             ("openai.gpt-5.6-luna", 2.2e-07, 2.75e-07, 2.2e-08, 1.32e-06),
         ],
@@ -1865,7 +1874,7 @@ class TestBedrockMantleResponsesPricing:
     @pytest.mark.parametrize(
         "model, input_cost, output_cost",
         [
-            ("openai.gpt-5.6-sol", 5.5e-06, 3.3e-05),
+            ("openai.gpt-5.6-sol", 4.4e-06, 2.2e-05),
             ("openai.gpt-5.6-terra", 2.2e-06, 1.32e-05),
             ("openai.gpt-5.6-luna", 2.2e-07, 1.32e-06),
         ],
@@ -1909,13 +1918,14 @@ def _repo_cost_map(map_name: str) -> dict[str, dict[str, object]]:
     return json.loads(paths[map_name].read_text())
 
 
-class TestGpt56MantleRegistryEntries:
-    """Locks the gpt-5.6 frontier entries to Bedrock Mantle's live behavior.
+class TestMantleGptRegistryEntries:
+    """Locks the OpenAI GPT entries to Bedrock Mantle's live behavior.
 
     Mantle enforces a 1,050,000-token prompt maximum for gpt-5.6 sol/terra/luna
-    (oversize requests 400 with "prompt tokens (N) exceed model maximum
-    (1050000)", and a 1,030,590-token request completes), matching the OpenAI
-    Bedrock guide. mode must stay "responses": Mantle's native
+    and for gpt-5.5 and gpt-5.4 (oversize requests 400 with "prompt tokens (N)
+    exceed model maximum (1050000)", and a 1,030,590-token request completes
+    on every one of them), while the AWS model cards still quote 272K for
+    gpt-5.5 and gpt-5.4. mode must stay "responses": Mantle's native
     /v1/chat/completions rejects function tools unless reasoning_effort is
     "none", so chat traffic has to keep bridging to the Responses API
     (see the responses_api_bridge tests above).
@@ -1937,3 +1947,18 @@ class TestGpt56MantleRegistryEntries:
         assert entry["mode"] == "responses"
         assert entry["use_openai_responses_path"] is True
         assert entry["supported_endpoints"] == ["/v1/chat/completions", "/v1/responses"]
+
+    @pytest.mark.parametrize("map_name", ("root", "bundled_backup"))
+    @pytest.mark.parametrize(
+        "key",
+        (
+            "bedrock_mantle/openai.gpt-5.5",
+            "bedrock_mantle/openai.gpt-5.4",
+        ),
+    )
+    def test_gpt_55_and_54_entries_match_mantle_enforced_limits(self, map_name, key):
+        entry = _repo_cost_map(map_name)[key]
+        assert entry["max_input_tokens"] == 1050000
+        assert entry["max_output_tokens"] == 128000
+        assert entry["mode"] == "responses"
+        assert entry["use_openai_responses_path"] is True

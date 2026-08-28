@@ -256,6 +256,7 @@ class ChatBody(BaseModel):
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
+    prompt_cache_key: str | None = None
     tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
@@ -420,6 +421,7 @@ class AnthropicContentBlock(BaseModel):
     text: str | None = None
     id: str | None = None
     name: str | None = None
+    input: dict[str, object] | None = None
 
 
 class AnthropicToolResultBlock(BaseModel):
@@ -857,6 +859,26 @@ class ModelDeleteBody(BaseModel):
     id: str
 
 
+class ConnectionTestBody(BaseModel):
+    """POST /health/test_connection body, the API behind the Admin UI's Test
+    Connection button: the deployment params as typed into the add-model form and
+    the health-check mode picking which endpoint the probe calls. The endpoint
+    rejects `os.environ/` references, so credentials are either literal values or
+    omitted to fall through to the proxy's own environment."""
+
+    litellm_params: LiteLLMParamsBody
+    mode: Literal["chat", "completion", "embedding", "responses"]
+
+
+class ConnectionTestResult(BaseModel):
+    error: str | None = None
+
+
+class ConnectionTestResponse(BaseModel):
+    status: Literal["success", "error"]
+    result: ConnectionTestResult | None = None
+
+
 class CredentialCreateBody(BaseModel):
     credential_name: str
     credential_values: dict[str, str]
@@ -872,7 +894,10 @@ class CredentialCreateResponse(BaseModel):
 
 class KeyUpdateBody(BaseModel):
     key: str
-    models: list[str]
+    models: list[str] | None = None
+    key_alias: str | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
 
 
 class KeyBlockBody(BaseModel):
@@ -885,6 +910,27 @@ class KeyListParams(BaseModel):
 
 class KeyListResponse(BaseModel):
     total_count: int
+
+
+# ---------- admin UI session ----------
+
+
+class UiLoginBody(BaseModel):
+    username: str
+    password: str
+
+
+class UiLoginResponse(BaseModel):
+    token: str
+    redirect_url: str
+
+
+class UiSessionClaims(BaseModel):
+    user_id: str
+    key: str
+    user_role: str
+    login_method: Literal["sso", "username_password"]
+    exp: int
 
 
 class TeamMemberEntry(BaseModel):
