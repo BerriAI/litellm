@@ -4095,7 +4095,10 @@ def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_ma
         ],
         model="us-east-1/anthropic.claude-v2:1",
     )
-    response._hidden_params = {"region_name": "us-east-1"}
+    response._hidden_params = {
+        "provider_response_model": "anthropic.claude-v2:1",
+        "region_name": "us-east-1",
+    }
 
     selected = _select_model_name_for_cost_calc(
         model=None,
@@ -4350,3 +4353,79 @@ def test_realtime_explicitly_free_session_model_still_bills_zero(
     )
 
     assert cost == 0.0
+
+
+def test_completion_cost_prefers_private_provider_response_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/selected-cost-model",
+        {
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000004,
+            "litellm_provider": "openai",
+        },
+    )
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="requested-route",
+    )
+    response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "provider_response_model": "selected-cost-model",
+    }
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="openai",
+    )
+
+    assert response.model == "requested-route"
+    assert cost == pytest.approx(100 * 0.000002 + 50 * 0.000004)
+
+
+@pytest.mark.parametrize(
+    ("base_model", "custom_pricing", "expected"),
+    [
+        ("openai/base-model", False, "openai/base-model"),
+        (None, True, "openai/requested-route"),
+    ],
+)
+def test_explicit_pricing_precedes_private_provider_response_model(
+    base_model: str | None,
+    custom_pricing: bool,
+    expected: str,
+) -> None:
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="requested-route",
+    )
+    response._hidden_params = {"provider_response_model": "selected-cost-model"}
+
+    selected = _select_model_name_for_cost_calc(
+        model="requested-route",
+        completion_response=response,
+        base_model=base_model,
+        custom_pricing=custom_pricing,
+        custom_llm_provider="openai",
+    )
+
+    assert selected == expected

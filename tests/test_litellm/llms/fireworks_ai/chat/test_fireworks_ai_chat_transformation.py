@@ -1719,3 +1719,82 @@ def test_in_schema_unsupported_params_still_raise():
         store=True,
     )
     assert "store" not in optional_params
+
+
+def test_streaming_preserves_selected_model_for_private_accounting():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    requested_route = (
+        "accounts/fireworks/routers/firerouter/"
+        "kimi-k3/deepseek-v4-pro-0813/deepseek-v4-flash-0731"
+    )
+    selected_model = "deepseek-v4-flash-0731"
+    sse_lines = [
+        "data: "
+        + json.dumps(
+            {
+                "id": "stream-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": selected_model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Hi"},
+                    }
+                ],
+            }
+        ),
+        "data: "
+        + json.dumps(
+            {
+                "id": "stream-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": selected_model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 1,
+                    "total_tokens": 6,
+                },
+            }
+        ),
+        "data: [DONE]",
+    ]
+
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.iter_lines = lambda: iter(sse_lines)
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=raw_response):
+        stream = litellm.completion(
+            model=f"fireworks_ai/{requested_route}",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            api_key="test-key",
+            client=client,
+        )
+        chunks = list(stream)
+
+    assert chunks
+    assert {chunk.model for chunk in chunks} == {requested_route}
+    assert {
+        chunk._hidden_params.get("provider_response_model") for chunk in chunks
+    } == {selected_model}
+
+    assembled = litellm.stream_chunk_builder(chunks=chunks)
+    assert assembled is not None
+    assert assembled.model == requested_route
+    assert assembled._hidden_params["provider_response_model"] == selected_model
+    selected_model_info = litellm.model_cost[f"fireworks_ai/{selected_model}"]
+    expected_cost = (
+        5 * selected_model_info["input_cost_per_token"]
+        + selected_model_info["output_cost_per_token"]
+    )
+    assert litellm.completion_cost(
+        completion_response=assembled,
+        custom_llm_provider="fireworks_ai",
+    ) == pytest.approx(expected_cost)
