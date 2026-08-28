@@ -180,6 +180,13 @@ async def test_config_file_success_callback_registers_custom_logger_instance(mon
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    # test_add_callbacks_from_db_config clears _known_custom_logger_compatible_callbacks
+    # without restoring it (and the conftest snapshot skips underscore attrs), so
+    # re-assert the precondition explicitly instead of depending on test order.
+    known_callbacks = list(getattr(litellm, "_known_custom_logger_compatible_callbacks", []))
+    if "langfuse" not in known_callbacks:
+        known_callbacks.append("langfuse")
+    monkeypatch.setattr(litellm, "_known_custom_logger_compatible_callbacks", known_callbacks)
     # the custom-logger instance path needs env credentials; without them the
     # config path falls back to the string and this test would not exercise
     # the instance registration
@@ -236,6 +243,13 @@ async def test_config_file_callback_falls_back_to_string_when_init_fails(monkeyp
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    # same precondition as the sibling instance test: langfuse must be a known
+    # custom-logger name, otherwise the config path skips the helper entirely
+    # and this test would not exercise the fallback branch
+    known_callbacks = list(getattr(litellm, "_known_custom_logger_compatible_callbacks", []))
+    if "langfuse" not in known_callbacks:
+        known_callbacks.append("langfuse")
+    monkeypatch.setattr(litellm, "_known_custom_logger_compatible_callbacks", known_callbacks)
     monkeypatch.setattr(
         "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
         lambda callback, internal_usage_cache=None, llm_router=None: None,
