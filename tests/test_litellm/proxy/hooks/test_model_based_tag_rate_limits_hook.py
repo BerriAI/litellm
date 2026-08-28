@@ -2674,6 +2674,72 @@ async def test_post_call_failure_hook_cannot_release_a_different_keys_reservatio
 
 
 @pytest.mark.asyncio
+async def test_mirror_write_does_not_erase_a_concurrent_siblings_own_reservation(time_controller):
+    """
+    Cursor Bugbot finding: Router.abatch_completion's branches share one
+    litellm_call_id and one authenticated key, so they mirror their own
+    concurrency reservation under the identical (call_id, key_hash) cache
+    entry. Mirroring used to overwrite rather than merge, so branch two's own
+    admission silently erased branch one's already-mirrored reservation --
+    branch one's own eventual chain-exhausting failure would then find
+    nothing to release there, permanently leaking its slot (until the safety
+    TTL) even though both branches genuinely finished.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=2)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    shared_call_id = "batch-call-id"
+    shared_tags = {"tags": ["end_user_id:shared-user"], "user_api_key": "batch-key-hash"}
+    branch_one_kwargs = {"metadata": shared_tags, "litellm_call_id": shared_call_id}
+    branch_two_kwargs = {"metadata": shared_tags, "litellm_call_id": shared_call_id}
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=branch_one_kwargs
+    )
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=branch_two_kwargs
+    )
+
+    # Both branches finish (order doesn't matter -- whichever hook reads the
+    # mirror first releases whatever is genuinely still there for either).
+    await limiter.async_post_call_failure_hook(
+        request_data={"litellm_call_id": shared_call_id},
+        original_exception=Exception("branch one exhausted its fallbacks"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="batch-key-hash"),
+    )
+    await limiter.async_post_call_failure_hook(
+        request_data={"litellm_call_id": shared_call_id},
+        original_exception=Exception("branch two exhausted its fallbacks"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="batch-key-hash"),
+    )
+
+    # Neither slot leaked: two fresh admissions fit under the limit of 2,
+    # and a third does not. Under the erasure bug, branch two's write wiped
+    # branch one's mirrored entry before it was ever read, so only one of
+    # the two reservations was ever actually released.
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:shared-user"]}},
+    )
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:shared-user"]}},
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:shared-user"]}},
+        )
+
+
+@pytest.mark.asyncio
 async def test_concurrency_slot_released_when_a_different_hook_rejects_the_request(time_controller):
     """
     global_tag_rate_limits_hook raises the identical ProxyRateLimitError
@@ -3008,63 +3074,6 @@ async def test_concurrent_batch_siblings_do_not_bypass_a_concurrency_limit(time_
     )
     rejections = [result for result in results if isinstance(result, ProxyRateLimitError)]
     assert len(rejections) == 1
-
-
-@pytest.mark.asyncio
-async def test_concurrent_batch_siblings_terminal_event_does_not_release_a_live_siblings_slot(time_controller):
-    """
-    Bugbot finding: async_log_success_event/async_log_failure_event still
-    released every pending reservation unconditionally, so the first
-    finishing abatch_completion branch freed a still-live sibling branch's
-    own concurrency slot too, letting a third, unrelated caller admit past
-    a limit that branch was still genuinely occupying.
-    """
-    limiter = _make_limiter(time_controller)
-    router = _concurrency_router(limit=2)
-    limiter.update_variables(llm_router=router)
-    healthy = router.model_list
-    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
-    branch_two_admitted = asyncio.Event()
-
-    async def _branch_two() -> None:
-        await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
-        )
-        branch_two_admitted.set()
-        # Still "in flight" while branch one below finishes and releases.
-        await asyncio.sleep(0.05)
-
-    task_two = asyncio.create_task(_branch_two())
-
-    await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
-    )
-    await branch_two_admitted.wait()
-    kwargs["standard_logging_object"] = {
-        "model_group": "grp",
-        "model_id": "dep-1",
-        "total_tokens": 0,
-        "response_cost": 0,
-    }
-    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
-    await asyncio.sleep(0)
-
-    # Only branch one's own slot was freed; branch two's is still live, so
-    # exactly one more caller fits before the limit of 2 is hit again.
-    await limiter.async_filter_deployments(
-        model="grp",
-        healthy_deployments=healthy,
-        messages=None,
-        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
-    )
-    with pytest.raises(ProxyRateLimitError):
-        await limiter.async_filter_deployments(
-            model="grp",
-            healthy_deployments=healthy,
-            messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
-        )
-    await task_two
 
 
 def _request_limit_router(limit: int) -> "litellm.Router":
@@ -3852,6 +3861,34 @@ def test_build_limits_index_computes_identical_bucket_key_for_alias_and_internal
     key_via_internal_name = _bucket_key("real-model-name", by_name, tag_value="u1", bucket_id=0)
     key_via_alias = _bucket_key("team-alias-name", by_alias, tag_value="u1", bucket_id=0)
     assert key_via_internal_name == key_via_alias
+
+
+def test_resolve_any_preserves_team_alias_resolved_group_through_routing_group_fallback():
+    """
+    Cursor Bugbot finding: resolve_any's routing-group fallback always
+    restamped resolved_group with the candidate's own model_name, discarding
+    the team_public_model_name _build_limits_index already stamped there --
+    so a team-owned deployment reachable both via its team alias and via a
+    routing group split one team's usage across two buckets depending on
+    which path a caller took.
+    """
+    deployment = _deployment(
+        "real-model-name",
+        "dep-1",
+        {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}},
+    )
+    deployment["model_info"]["team_id"] = "team-1"
+    deployment["model_info"]["team_public_model_name"] = "team-alias-name"
+    index = _build_limits_index([deployment])
+
+    via_alias = index.resolve("team-alias-name", team_id="team-1")[0]
+    via_routing_group_fallback = index.resolve_any(
+        "my-group", team_id="team-1", candidate_model_names=["real-model-name"]
+    )[0]
+
+    key_via_alias = _bucket_key("team-alias-name", via_alias, tag_value="u1", bucket_id=0)
+    key_via_fallback = _bucket_key("my-group", via_routing_group_fallback, tag_value="u1", bucket_id=0)
+    assert key_via_alias == key_via_fallback
 
 
 def test_build_limits_index_preserves_key_ttl_seconds_and_max_in_memory_cache_size():

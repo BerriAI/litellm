@@ -393,6 +393,13 @@ class _LimitsIndex:
         workers resolving the identical candidate set could otherwise pick
         different members as `resolved_group` and end up checking/accounting
         against different Redis keys for what's meant to be one shared bucket.
+
+        A candidate's own entry can already carry `resolved_group` set to its
+        team's `team_public_model_name` (see `_build_limits_index`) -- that
+        stamp is left untouched rather than overwritten with `name` here, or
+        a team-owned deployment reachable through *both* its team alias and a
+        routing group would hash to two different buckets depending on which
+        path a caller happened to take.
         """
         direct: Final = self.resolve(model, team_id)
         if direct:
@@ -414,7 +421,9 @@ class _LimitsIndex:
                     limit.deployment_scope,
                     limit.team_scope,
                 )
-                deduped.setdefault(key, replace(limit, resolved_group=name))  # mutable-ok: see docstring above
+                deduped.setdefault(  # mutable-ok: see docstring above
+                    key, limit if limit.resolved_group is not None else replace(limit, resolved_group=name)
+                )
         return tuple(deduped.values())
 
 
@@ -564,12 +573,18 @@ _INDEX_TTL_SECONDS: Final = 5.0
 # several branches concurrently, each its own Task, but hands every branch
 # the identical `litellm_logging_obj` -- so a still-live sibling branch's
 # own reservation can sit in this same list. Each entry also carries an
-# admission-scoped token (see `_current_admission_token`) so a release can
-# tell a genuinely stale same-lineage hop apart from a still-live sibling
-# branch's own reservation, without reintroducing the non-descendant-task
-# blind spot a bare `ContextVar` has for the data itself (see above): the
-# token is only ever compared for *identity*, never relied on to carry the
-# reservation across a task boundary the way `model_call_details` does.
+# admission-scoped token (see `_current_admission_token`), but that token is
+# only ever trusted at the *next admission's own* stale-hop cleanup (see
+# `_release_stale_hop_reservations`), never at the terminal release hooks
+# below: a `ContextVar` has the identical non-descendant-task blind spot
+# documented above for the reservation data itself, so a streaming
+# response's own success event -- fired from a task the proxy forked
+# independently of admission's -- would never see a matching token either,
+# leaking every streaming request's reservation instead of releasing it.
+# The terminal hooks release unconditionally, accepting the narrower risk
+# that a still-live `abatch_completion` sibling's own reservation gets
+# freed early, in exchange for actually releasing the far more common
+# single-branch (including streaming) case.
 _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_model_based_tag_rate_limits_pending_concurrency_keys"
 
 # Identifies which admission call queued a given reservation, scoped by
@@ -580,7 +595,10 @@ _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_model_based_tag_rate_limits_pend
 # context) still reads back the same token, while `abatch_completion`'s
 # sibling branches -- forked *before* any of them ever called admission --
 # each start from an unset ContextVar and mint their own distinct token on
-# first use, never matching each other's.
+# first use, never matching each other's. Only safe where the reader is
+# guaranteed to run in a descendant of the writer's task -- see
+# `_PENDING_CONCURRENCY_KEYS_FIELD`'s own docstring for where that doesn't
+# hold.
 _ADMISSION_CONTEXT: Final[contextvars.ContextVar[object | None]] = contextvars.ContextVar(
     "_model_based_tag_rate_limits_admission_context", default=None
 )
@@ -1348,12 +1366,25 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
     async def _mirror_pending_reservations(
         self, call_id: object, key_hash: str | None, reservations: Sequence[tuple[str, "_PartitionKey"]]
     ) -> None:
+        # Merged onto whatever's already mirrored, not overwritten: `call_id`
+        # and `key_hash` are identical across every branch of one
+        # abatch_completion dispatch (see _PENDING_CONCURRENCY_KEYS_FIELD's
+        # docstring), so an overwrite here would erase a still-live sibling
+        # branch's own mirrored reservation the moment this hop admits.
+        # Read-then-write is not atomic against a concurrent sibling doing
+        # the identical merge, so a rare interleaving can still lose one
+        # side's addition -- narrower than the guaranteed loss an overwrite
+        # caused, and self-heals via the same TTL either way.
         if not isinstance(call_id, str):
             return
+        cache_key: Final = _pending_reservations_cache_key(call_id, key_hash)
         try:
+            existing: Final = _decode_reservations(
+                await self.internal_usage_cache.async_get_cache(key=cache_key, litellm_parent_otel_span=None)
+            )
             await self.internal_usage_cache.async_set_cache(
-                key=_pending_reservations_cache_key(call_id, key_hash),
-                value=_encode_reservations(reservations),
+                key=cache_key,
+                value=_encode_reservations(existing + tuple(reservations)),
                 ttl=_CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
                 litellm_parent_otel_span=None,
             )
@@ -1516,9 +1547,10 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         concluded and failed: Router awaits one hop's entire attempt (call
         plus its own failure handling) before starting the next, and a hop
         that instead succeeded ends the request there via
-        async_log_success_event, which already pops its own lineage's
-        entries -- so admission is never re-entered, in that same lineage,
-        while an earlier hop's reservation is still legitimately in flight.
+        async_log_success_event, which already pops everything pending on
+        this same model_call_details -- so admission is never re-entered, in
+        that same lineage, while an earlier hop's reservation is still
+        legitimately in flight.
 
         The lineage check matters because `model_call_details` is not always
         scoped to one such chain: `Router.abatch_completion`'s comma-separated
@@ -1581,33 +1613,6 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
     async def _pop_pending_concurrency_keys(
         self, kwargs: Mapping[str, object], *, only_own_lineage: bool = False
     ) -> tuple[tuple[str, _PartitionKey], ...]:
-        # Every caller of this method is itself a normal release path, so
-        # also clear the async_post_call_failure_hook cache mirror for the
-        # same call_id right here: whatever this pop is about to release
-        # must never be found there later and double-released.
-        call_id: Final = kwargs.get("litellm_call_id")
-        if isinstance(call_id, str):
-            # Not `get_metadata_variable_name_from_kwargs` (naive key-presence
-            # check): at this point `kwargs` is `model_call_details`, which
-            # carries `litellm_metadata` present-but-`None` alongside the
-            # real, populated `metadata` for a standard request -- see
-            # `_resolve_authoritative_metadata_variable_name`'s own docstring.
-            litellm_params_raw: Final = kwargs.get("litellm_params")
-            litellm_params_for_metadata: Final = (
-                litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
-            )
-            metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
-            key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
-            try:
-                await self.internal_usage_cache.dual_cache.async_delete_cache(
-                    _pending_reservations_cache_key(call_id, key_hash)
-                )
-            except Exception as e:  # noqa: BLE001 - a failed mirror clear must never block the real release below
-                verbose_proxy_logger.warning(
-                    "model_based_tag_rate_limits_hook: failed to clear mirrored reservations for call_id=%s: %s",
-                    call_id,
-                    e,
-                )
         # Snapshot then remove only those exact entries, never a blanket
         # clear: a sibling branch sharing this same request's
         # model_call_details can still be live and appending concurrently
@@ -1616,9 +1621,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # releasing it later. `only_own_lineage` additionally excludes any
         # entry a *different* admission lineage queued -- see
         # `_release_stale_hop_reservations`'s own docstring for why that
-        # distinction, not just presence, decides what's actually stale;
-        # the same distinction applies to a terminal release (success/failure)
-        # racing a still-live sibling branch's own reservation.
+        # distinction, not just presence, decides what's actually stale.
         pending: Final = kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
         if not isinstance(pending, list) or not pending:
             return ()
@@ -1632,7 +1635,59 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
                 pending.remove(entry)
             except ValueError:
                 pass
-        return tuple(entry[:2] for entry in snapshot)
+        released: Final = tuple(entry[:2] for entry in snapshot)
+        if released:
+            await self._discard_from_mirror(kwargs, released)
+        return released
+
+    async def _discard_from_mirror(
+        self, kwargs: Mapping[str, object], released: Sequence[tuple[str, _PartitionKey]]
+    ) -> None:
+        # Removes only the entries this pop actually released, not a blanket
+        # delete of the whole (call_id, key_hash) mirror: that key is shared
+        # across every branch of one abatch_completion dispatch (see
+        # _PENDING_CONCURRENCY_KEYS_FIELD's docstring), so wiping it here
+        # would silently drop a still-live sibling branch's own entry before
+        # async_post_call_failure_hook ever gets to read it.
+        call_id: Final = kwargs.get("litellm_call_id")
+        if not isinstance(call_id, str):
+            return
+        # Not `get_metadata_variable_name_from_kwargs` (naive key-presence
+        # check): at this point `kwargs` is `model_call_details`, which
+        # carries `litellm_metadata` present-but-`None` alongside the real,
+        # populated `metadata` for a standard request -- see
+        # `_resolve_authoritative_metadata_variable_name`'s own docstring.
+        litellm_params_raw: Final = kwargs.get("litellm_params")
+        litellm_params_for_metadata: Final = litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
+        key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
+        cache_key: Final = _pending_reservations_cache_key(call_id, key_hash)
+        try:
+            mirrored: Final = list(  # mutable-ok: local working copy, discarded after removing exactly `released`'s own occurrences below
+                _decode_reservations(
+                    await self.internal_usage_cache.async_get_cache(key=cache_key, litellm_parent_otel_span=None)
+                )
+            )
+            for entry in released:
+                try:
+                    mirrored.remove(entry)
+                except ValueError:
+                    pass
+            if mirrored:
+                await self.internal_usage_cache.async_set_cache(
+                    key=cache_key,
+                    value=_encode_reservations(tuple(mirrored)),
+                    ttl=_CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
+                    litellm_parent_otel_span=None,
+                )
+            else:
+                await self.internal_usage_cache.dual_cache.async_delete_cache(cache_key)
+        except Exception as e:  # noqa: BLE001 - a failed mirror update must never block the real release above
+            verbose_proxy_logger.warning(
+                "model_based_tag_rate_limits_hook: failed to update mirrored reservations for call_id=%s: %s",
+                call_id,
+                e,
+            )
 
     async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
         """
@@ -1724,18 +1779,24 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # the exception's error marker alone would be wrong here, since
         # global_tag_rate_limits_hook raises the identical marker -- that
         # rejection can land after this hook already reserved a slot for the
-        # same request, and that slot must still be released. only_own_lineage
-        # keeps this from releasing a still-live sibling branch's own
-        # reservation when model_call_details is shared across an
-        # abatch_completion dispatch -- see _PENDING_CONCURRENCY_KEYS_FIELD's
-        # docstring.
-        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs, only_own_lineage=True)
+        # same request, and that slot must still be released.
+        #
+        # Not `only_own_lineage=True`: a streaming response is consumed (and
+        # this event fired) from a task the proxy forks independently of
+        # admission's own, so `_ADMISSION_CONTEXT` never reaches it either --
+        # requiring a match here would leak every streaming request's
+        # reservation until `_CONCURRENCY_MIN_SAFETY_TTL_SECONDS` instead of
+        # releasing it. `async_release_disconnect_state_hook` stays
+        # unfiltered for the identical reason; releasing everything here
+        # keeps a still-live `abatch_completion` sibling's own reservation
+        # exposed to the same risk that hook already accepts.
+        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs)
         if release_keys:
             await self._release_keys(release_keys)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        # only_own_lineage: see async_log_failure_event's own comment above.
-        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs, only_own_lineage=True)
+        # Not `only_own_lineage=True`: see async_log_failure_event's own comment above.
+        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs)
         if release_keys:
             release_task: Final = asyncio.create_task(self._release_keys(release_keys))
             _BACKGROUND_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
