@@ -704,6 +704,18 @@ from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawR
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
+
+def _register_config_custom_logger_callback(callback: str, logging_event: Literal["success", "failure"]) -> None:
+    """Register a config-file custom-logger name as an instance, not a string.
+
+    Pass-through endpoints log through the async success path only; a string in
+    ``litellm.success_callback`` never reaches them. Mirrors the DB-config path.
+    """
+    _add_custom_logger_callback_to_specific_event(  # pyright: ignore[reportPrivateUsage]  # mirrors DB-config path
+        callback, logging_event
+    )
+
+
 try:
     from litellm._version import version
 except Exception:
@@ -5127,10 +5139,7 @@ class ProxyConfig:
                                 # instance already exists from an earlier registration
                                 if callback in litellm.success_callback:
                                     litellm.success_callback.remove(callback)
-                                _add_custom_logger_callback_to_specific_event(  # pyright: ignore[reportPrivateUsage]
-                                    callback,
-                                    "success",  # mirrors the DB-config registration path
-                                )
+                                _register_config_custom_logger_callback(callback, "success")
                             else:
                                 litellm.logging_callback_manager.add_litellm_success_callback(callback)
                             if "prometheus" in callback:
@@ -5162,10 +5171,7 @@ class ProxyConfig:
                             if callback in litellm._known_custom_logger_compatible_callbacks:
                                 if callback in litellm.failure_callback:
                                     litellm.failure_callback.remove(callback)
-                                _add_custom_logger_callback_to_specific_event(  # pyright: ignore[reportPrivateUsage]
-                                    callback,
-                                    "failure",  # mirrors the DB-config registration path
-                                )
+                                _register_config_custom_logger_callback(callback, "failure")
                             else:
                                 litellm.logging_callback_manager.add_litellm_failure_callback(callback)
                     print(  # noqa: T201
