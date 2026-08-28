@@ -93,20 +93,18 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - functions parameter is not supported (use tools instead)
         - tool_choice doesn't support "required" value
         - kimi-thinking-preview doesn't support tool calls at all
+
+        A reasoning model additionally takes `reasoning_effort`, which the OpenAI base list this
+        subtracts from does not carry, so it has to be added back rather than merely kept.
         """
-        excluded_params: Final[list[str]] = ["functions"]
-
-        # kimi-thinking-preview has additional limitations
-        if "kimi-thinking-preview" in model:
-            excluded_params.extend(["tools", "tool_choice"])
-
+        excluded_params: Final = frozenset(
+            ("functions", "tools", "tool_choice") if "kimi-thinking-preview" in model else ("functions",)
+        )
         base_openai_params: Final = super().get_supported_openai_params(model=model)
-        final_params: Final[list[str]] = []
-        for param in base_openai_params:
-            if param not in excluded_params:
-                final_params.append(param)
-
-        return final_params
+        supported: Final = [param for param in base_openai_params if param not in excluded_params]
+        if supports_reasoning(model=model, custom_llm_provider="moonshot"):
+            return [*supported, "reasoning_effort"]
+        return supported
 
     def map_openai_params(
         self,
