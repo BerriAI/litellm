@@ -4426,7 +4426,7 @@ class TestBedrockEmbeddingDefaultEncodingFormat:
             "some-unmapped-bedrock-model",
         ],
     )
-    def test_encoding_format_float_is_dropped(self, model):
+    def test_encoding_format_float_is_dropped(self, model: str):
         optional_params = litellm.utils.get_optional_params_embeddings(
             model=model,
             encoding_format="float",
