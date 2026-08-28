@@ -123,7 +123,7 @@ class TestGetVirtualToolDefinitions:
         agent_tool = next(t for t in tools if t["name"] == AGENT_SEARCH_TOOL_NAME)
         props = agent_tool["inputSchema"]["properties"]
         assert set(props) == {"query", "top_k"}
-        assert agent_tool["inputSchema"]["required"] == ("query",)
+        assert agent_tool["inputSchema"]["required"] == ["query"]
 
     def test_has_mcp_tool_search(self) -> None:
         names = [t["name"] for t in get_virtual_tool_definitions()]
@@ -138,7 +138,7 @@ class TestGetVirtualToolDefinitions:
         search_tool = next(t for t in tools if t["name"] == MCP_TOOL_SEARCH_TOOL_NAME)
         props = search_tool["inputSchema"]["properties"]
         assert "query" in props
-        assert search_tool["inputSchema"]["required"] == ("query",)
+        assert search_tool["inputSchema"]["required"] == ["query"]
 
     def test_mcp_tool_call_schema_has_tool_name_and_arguments(self) -> None:
         tools = get_virtual_tool_definitions()
@@ -147,6 +147,17 @@ class TestGetVirtualToolDefinitions:
         assert "tool_name" in props
         assert "arguments" in props
         assert "tool_name" in call_tool["inputSchema"]["required"]
+
+    def test_input_schemas_validate_arguments_like_the_mcp_server_does(self) -> None:
+        from jsonschema import ValidationError, validate
+        from mcp.types import Tool
+
+        for definition in get_virtual_tool_definitions():
+            tool = Tool.model_validate(definition)
+            required_arguments = {name: "x" for name in tool.inputSchema["required"]}
+            validate(instance=required_arguments, schema=tool.inputSchema)
+            with pytest.raises(ValidationError):
+                validate(instance={}, schema=tool.inputSchema)
 
     def test_all_tools_have_description(self) -> None:
         for tool in get_virtual_tool_definitions():

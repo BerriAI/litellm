@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, TypedDict, assert_never
 
@@ -51,13 +51,17 @@ class _ToolParamSchema(TypedDict, total=False):
 class _ToolInputSchema(TypedDict):
     type: ReadOnly[str]
     properties: ReadOnly[Mapping[str, _ToolParamSchema]]
-    required: ReadOnly[tuple[str, ...]]
+    required: ReadOnly[Sequence[str]]
 
 
 class VirtualToolDefinition(TypedDict):
     name: ReadOnly[str]
     description: ReadOnly[str]
     inputSchema: ReadOnly[_ToolInputSchema]
+
+
+def _json_array(*items: str) -> Sequence[str]:
+    return list(items)  # mutable-ok: jsonschema's metaschema only accepts a JSON array for required
 
 
 _MCP_TOOL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
@@ -69,7 +73,7 @@ _MCP_TOOL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
             "query": {"type": "string", "description": "Keywords to search for in tool names and descriptions."},
             "top_k": {"type": "integer", "description": "Maximum number of results to return.", "default": 5},
         },
-        "required": ("query",),
+        "required": _json_array("query"),
     },
 }
 
@@ -82,7 +86,7 @@ _MCP_TOOL_CALL_DEFINITION: Final[VirtualToolDefinition] = {
             "tool_name": {"type": "string", "description": "The exact name of the MCP tool to call."},
             "arguments": {"type": "object", "description": "Arguments to pass to the tool."},
         },
-        "required": ("tool_name",),
+        "required": _json_array("tool_name"),
     },
 }
 
@@ -99,7 +103,7 @@ _AGENT_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
                 "default": DEFAULT_AGENT_SEARCH_TOP_K,
             },
         },
-        "required": ("query",),
+        "required": _json_array("query"),
     },
 }
 
