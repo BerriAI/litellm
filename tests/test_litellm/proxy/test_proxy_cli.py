@@ -919,8 +919,8 @@ class TestProxyInitializationHelpers:
     )
     @patch("subprocess.run")
     @patch("atexit.register")
-    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
-    @patch(
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: CLI boot test cannot run real prisma migrations, same as sibling boot tests
+    @patch(  # test-quality-ok: CLI boot test cannot run real prisma migrations, same as sibling boot tests
         "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
     )
     def test_db_connection_idle_lifetime_forwarded_to_url(
@@ -969,10 +969,10 @@ class TestProxyInitializationHelpers:
                     "litellm.proxy.proxy_server": mock_proxy_module,
                 },
             ),
-            patch(
+            patch(  # test-quality-ok: keeps the boot test from binding a real port, same as sibling boot tests
                 "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
             ) as mock_get_args,
-            patch(
+            patch(  # test-quality-ok: capture point for the assembled URL params, same as sibling boot tests
                 "litellm.proxy.proxy_cli.append_query_params",
                 side_effect=lambda url, params: str(url),
             ) as mock_append_query_params,

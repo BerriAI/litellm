@@ -1085,7 +1085,7 @@ def run_server(
         db_connection_timeout: int | float | None = 60
         db_connect_timeout: int | float | None = None
         db_socket_timeout: int | float | None = None
-        db_connection_idle_lifetime: int | float | None = (
+        db_connection_idle_lifetime: int | float | None = (  # rebind-ok: overwritten from general_settings when a config is provided
             LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value
         )
         db_disable_prepared_statements: bool = False
@@ -1190,7 +1190,7 @@ def run_server(
                 db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
             db_connect_timeout = general_settings.get("database_connect_timeout")
             db_socket_timeout = general_settings.get("database_socket_timeout")
-            db_connection_idle_lifetime = general_settings.get(
+            db_connection_idle_lifetime = general_settings.get(  # rebind-ok: default declared above for the no-config path
                 "database_connection_idle_lifetime",
                 LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
             )

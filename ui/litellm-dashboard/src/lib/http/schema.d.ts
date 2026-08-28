@@ -24931,6 +24931,12 @@ export interface components {
              */
             database_connect_timeout?: number | null;
             /**
+             * Database Connection Idle Lifetime
+             * @description Prisma `max_idle_connection_lifetime` URL param (seconds). Connections idle longer than this are closed by the pool before a managed database (RDS, Cloud SQL, Azure) silently drops them, preventing intermittent `Error { kind: Closed }` failures. Set to null to fall back to Prisma's built-in default (300s).
+             * @default 60
+             */
+            database_connection_idle_lifetime: number | null;
+            /**
              * Database Connection Pool Limit
              * @description default connection pool for prisma client connecting to postgres db
              * @default 10
