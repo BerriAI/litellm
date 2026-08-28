@@ -850,6 +850,11 @@ def _shadow_router() -> Router:
                 "model_info": {"team_id": "team-a", "team_public_model_name": "house-judge"},
             },
             {
+                "model_name": "anthropic/claude-sonnet-5-team-a",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"},
+                "model_info": {"team_id": "team-a", "team_public_model_name": "anthropic/claude-sonnet-5"},
+            },
+            {
                 "model_name": "model_name_team-b_y",
                 "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"},
                 "model_info": {"team_id": "team-b", "team_public_model_name": "b-tier"},
@@ -1075,6 +1080,107 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_start_shadow_eval_rejects_an_uncredentialed_sdk_judge(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+
+    with pytest.raises(HTTPException, match="ANTHROPIC_API_KEY") as exc:
+        await start_shadow_eval(_start_request(), ADMIN)
+
+    assert exc.value.status_code == 400
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credential_name", ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"))
+async def test_start_shadow_eval_accepts_an_sdk_judge_with_anthropic_credentials(
+    monkeypatch: pytest.MonkeyPatch, credential_name: str
+) -> None:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv(credential_name, "test-credential")
+
+    response = await start_shadow_eval(_start_request(), ADMIN)
+
+    assert response.status == "running"
+    prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_accepts_an_sdk_judge_when_anthropic_secret_lookup_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.integrations.custom_secret_manager import CustomSecretManager
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
+
+    class AnthropicSecretManager(CustomSecretManager):
+        def sync_read_secret(
+            self, secret_name: str, optional_params: dict | None = None, timeout: float | None = None
+        ) -> str | None:
+            return "test-credential" if secret_name == "ANTHROPIC_API_KEY" else None
+
+        async def async_read_secret(
+            self, secret_name: str, optional_params: dict | None = None, timeout: float | None = None
+        ) -> str | None:
+            return self.sync_read_secret(secret_name, optional_params, timeout)
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "secret_manager_client", AnthropicSecretManager())
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+    response = await start_shadow_eval(_start_request(), ADMIN)
+
+    assert response.status == "running"
+    prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_accepts_a_configured_judge_without_anthropic_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+    response = await start_shadow_eval(_start_request(judge_model="house-sonnet"), ADMIN)
+
+    assert response.status == "running"
+    prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "caller,request_overrides,claimed,expected_status",
     [
@@ -1153,6 +1259,9 @@ async def test_start_shadow_eval_accepts_a_judge_that_serves_neither_arm(
     Without these, a gate that refused every judge would pass the rejection table above
     while making the endpoint useless.
     """
+    import litellm
+
+    monkeypatch.setattr(litellm, "api_key", "sk-test")
     import litellm.proxy.proxy_server as proxy_server
 
     prisma = _shadow_prisma()
@@ -1219,6 +1328,34 @@ async def test_start_shadow_eval_reuses_a_key_whose_previous_job_already_stopped
 
     assert job.status == "running"
     prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_rejects_an_uncredentialed_sdk_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+
+    with pytest.raises(HTTPException, match=r"baseline_model.*ANTHROPIC_API_KEY") as exc:
+        await start_shadow_eval(
+            _start_request(
+                direction="reverse",
+                router_name="sonnet-router",
+                judge_model="pricey",
+                baseline_model="anthropic/claude-sonnet-5",
+            ),
+            ADMIN,
+        )
+
+    assert exc.value.status_code == 400
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1946,6 +2083,30 @@ async def test_two_racing_stops_produce_exactly_one_winner(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
+async def test_start_shadow_eval_scopes_missing_sdk_judge_credentials_to_the_sdk_team(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(key_teams={"key-hash": "team-a", "key-hash-2": "team-b"})
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.setattr(litellm, "anthropic_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+    with pytest.raises(HTTPException, match="ANTHROPIC_API_KEY") as exc:
+        await start_shadow_eval(_start_request(api_key_ids=("key-hash", "key-hash-2")), ADMIN)
+
+    assert exc.value.status_code == 400
+    assert "team-b" in exc.value.detail
+    assert "team-a" not in exc.value.detail
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_start_shadow_eval_finds_a_collision_only_the_keys_team_can_see(monkeypatch: pytest.MonkeyPatch):
     """The shadow and judge calls carry the shadowed key's team, so the router selects
     deployments with it and an unscoped check answers for a caller that does not exist.
@@ -2039,11 +2200,13 @@ async def test_start_shadow_eval_matches_a_bare_public_judge_name_to_a_prefixed_
     configured. Comparing those two spellings finds nothing, and the job runs a week with
     the judge grading its own answers, which is the whole defect this endpoint guards.
     """
+    import litellm
     import litellm.proxy.proxy_server as proxy_server
 
     prisma = _shadow_prisma()
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.setattr(litellm, "api_key", "sk-test")
 
     with pytest.raises(HTTPException) as exc:
         await start_shadow_eval(_start_request(router_name="prefixed-router", judge_model="gpt-4o"), ADMIN)
@@ -2064,11 +2227,13 @@ async def test_start_shadow_eval_matches_a_prefixed_judge_name_to_a_bare_tier_de
     is the same model, so the collision would be missed for exactly the configs that spell
     the two ends differently, which is every config this guard exists for.
     """
+    import litellm
     import litellm.proxy.proxy_server as proxy_server
 
     prisma = _shadow_prisma()
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.setattr(litellm, "api_key", "sk-test")
 
     with pytest.raises(HTTPException) as exc:
         await start_shadow_eval(_start_request(router_name="bare-router", judge_model="openai/gpt-4o"), ADMIN)
