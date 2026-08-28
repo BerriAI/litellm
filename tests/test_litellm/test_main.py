@@ -1485,6 +1485,62 @@ async def test_async_mock_delay():
     assert delay >= 0.01
 
 
+def _n_choice_stream_chunk(index, content, finish_reason=None, role=None):
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    delta = {"content": content}
+    if role is not None:
+        delta["role"] = role
+    return ModelResponseStream(
+        id="chatcmpl-n2",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(index=index, delta=Delta(**delta), finish_reason=finish_reason)],
+    )
+
+
+def test_stream_chunk_builder_keeps_n_greater_than_one_choices_separate():
+    from litellm import stream_chunk_builder
+
+    chunks = [
+        _n_choice_stream_chunk(0, "AAA", role="assistant"),
+        _n_choice_stream_chunk(1, "BBB", role="assistant"),
+        _n_choice_stream_chunk(0, " aaa"),
+        _n_choice_stream_chunk(1, " bbb"),
+        _n_choice_stream_chunk(0, None, finish_reason="stop"),
+        _n_choice_stream_chunk(1, None, finish_reason="length"),
+    ]
+
+    response = stream_chunk_builder(chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert len(response.choices) == 2
+    assert [choice.index for choice in response.choices] == [0, 1]
+    assert response.choices[0].message.content == "AAA aaa"
+    assert response.choices[1].message.content == "BBB bbb"
+    assert response.choices[0].finish_reason == "stop"
+    assert response.choices[1].finish_reason == "length"
+
+
+def test_stream_chunk_builder_single_choice_is_unchanged():
+    from litellm import stream_chunk_builder
+
+    chunks = [
+        _n_choice_stream_chunk(0, "AAA", role="assistant"),
+        _n_choice_stream_chunk(0, " aaa"),
+        _n_choice_stream_chunk(0, None, finish_reason="stop"),
+    ]
+
+    response = stream_chunk_builder(chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert len(response.choices) == 1
+    assert response.choices[0].index == 0
+    assert response.choices[0].message.content == "AAA aaa"
+    assert response.choices[0].finish_reason == "stop"
+
+
 def test_stream_chunk_builder_thinking_blocks():
     from litellm import stream_chunk_builder
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
