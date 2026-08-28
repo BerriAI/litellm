@@ -1599,6 +1599,14 @@ class TestEnableAnthropicPromptCaching:
         assert supports_prompt_caching(model=model, custom_llm_provider=provider) is True
         assert self._points(model=model, provider=provider) == []
 
+    def test_databricks_claude_not_injected_despite_caching_support(self, monkeypatch, local_model_cost_map):
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        model = "databricks/databricks-claude-sonnet-4-5"
+        assert supports_prompt_caching(model=model, custom_llm_provider="databricks") is True
+        assert self._points(model=model, provider="databricks") == []
+
     def test_model_without_caching_support_not_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         assert self._points(model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
@@ -2788,3 +2796,116 @@ class TestPromptCacheBreakpointCapability:
     def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):
         assert model not in litellm.model_cost
         assert supports_openai_prompt_cache_breakpoint(model) is expected
+
+
+class TestRecordGatewayInjection:
+    """The injection marker spend accounting gates prompt-caching savings on."""
+
+    KEY = "litellm_gateway_injected_cache"
+    DEPLOYMENT = "dep-abc"
+
+    def test_records_only_an_actual_injection(self):
+        """A zero delta is hook re-entry and a negative one is a prompt manager replacing
+        the messages; neither is litellm adding a breakpoint."""
+        kwargs: dict = {"metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, -3)
+        assert kwargs["metadata"] == {}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 2)
+        assert kwargs["metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_a_point_this_pass_did_not_place_is_not_claimed(self):
+        """A tool_config point is placed by the Bedrock converse transform, and only when
+        the request carries tools, so its presence here says nothing about whether a
+        breakpoint reaches the wire. Claiming it credited litellm on request shapes that
+        inject nothing, and under-crediting Bedrock tool caching is the fail-closed half.
+        """
+        kwargs: dict = {"metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        assert kwargs["metadata"] == {}
+
+    @pytest.mark.parametrize("kwargs", [{}, {"metadata": None}, {"metadata": "not-a-dict"}])
+    def test_never_introduces_a_metadata_key(self, kwargs):
+        """Stamping must not add a key to a dict the caller splats as ``**kwargs``.
+
+        ``aresponses`` takes ``metadata`` as an explicit parameter and forwards the rest
+        of the request as ``**kwargs``, so a bucket created here arrives twice and the
+        call dies with "got multiple values for keyword argument 'metadata'". Only the
+        proxy reads this marker and it always seeds the bucket first, so a request
+        without one has nothing to record.
+        """
+        before = dict(kwargs)
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 3)
+        assert kwargs == before
+
+    def test_a_later_pass_cannot_unset_an_earlier_injection(self):
+        kwargs: dict = {"litellm_metadata": {"user_api_key": "k"}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 2)
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_v1_messages_auto_injection_stamps_the_marker(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        kwargs: dict = {"litellm_metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "latest turn"}],
+            "a long system prompt",
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_v1_messages_stand_down_leaves_no_marker(self, monkeypatch):
+        """Client-supplied cache_control means the gateway did nothing to credit."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        kwargs: dict = {"litellm_metadata": {}}
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}],
+                },
+                {"role": "user", "content": "latest turn"},
+            ],
+            None,
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert self.KEY not in kwargs["litellm_metadata"]
+
+    def test_v1_messages_reentry_keeps_the_marker(self, monkeypatch):
+        """A second pass over already-injected messages computes a zero delta, which must
+        leave the first pass's mark standing rather than reading as no injection."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        kwargs: dict = {"litellm_metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        messages = [{"role": "user", "content": "latest turn"}]
+        first_msgs, first_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages, "a long system prompt", kwargs, model="claude-sonnet-4-5", custom_llm_provider="anthropic"
+        )
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            first_msgs, first_sys, kwargs, model="claude-sonnet-4-5", custom_llm_provider="anthropic"
+        )
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_configured_points_skipping_a_marked_target_record_nothing(self):
+        """Configured injection stands down on client breakpoints, so no marker lands."""
+        kwargs: dict = {
+            "litellm_metadata": {},
+            "cache_control_injection_points": [{"location": "message", "role": "system", "index": None}],
+        }
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}],
+                },
+                {"role": "user", "content": "hi"},
+            ],
+            None,
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert self.KEY not in kwargs["litellm_metadata"]

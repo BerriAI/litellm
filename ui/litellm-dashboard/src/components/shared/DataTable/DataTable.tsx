@@ -105,14 +105,14 @@ function buildRowModels<TData>(
   };
 }
 
-function stickyZIndex(isPinned: boolean, isHeader: boolean): number {
+function stickyLayer(isPinned: boolean, isHeader: boolean): string {
   if (isPinned && isHeader) {
-    return 30;
+    return "z-sticky-pinned";
   }
   if (isHeader) {
-    return 20;
+    return "z-sticky";
   }
-  return 10;
+  return "z-raised";
 }
 
 function pinnedShadow(pinned: false | ColumnPinnedSide): string {
@@ -141,13 +141,15 @@ function computeStickyStyle<TData, TValue>(
 
   const style: React.CSSProperties = {
     position: "sticky",
-    zIndex: stickyZIndex(pinned !== false, isHeader),
     ...(stickyTop ? { top: 0 } : {}),
     ...(left !== undefined ? { left } : {}),
     ...(right !== undefined ? { right } : {}),
   };
 
-  return { style, className: cn(pinned ? "bg-background" : "", pinnedShadow(pinned)) };
+  return {
+    style,
+    className: cn(stickyLayer(pinned !== false, isHeader), pinned ? "bg-background" : "", pinnedShadow(pinned)),
+  };
 }
 
 function widthStyle<TData, TValue>(
@@ -595,7 +597,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
           style={maxBodyHeight !== undefined ? { maxHeight: maxBodyHeight } : undefined}
         >
           <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
-            <TableHeader className={cn(stickyHeader ? "sticky top-0 z-20" : "", fill.header)}>
+            <TableHeader className={cn(stickyHeader ? "sticky top-0 z-sticky" : "", fill.header)}>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id} className="bg-muted/50">
                   {headerGroup.headers.map((header) => (

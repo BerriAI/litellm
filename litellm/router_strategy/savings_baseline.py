@@ -54,9 +54,17 @@ def canonical_model(model: str, custom_llm_provider: str | None = None) -> str |
     A deployment may name its vendor in the model prefix or in a separate
     ``custom_llm_provider``, and the bare name alone is not enough to price: it can
     resolve to a different vendor's rates, or to nothing at all.
+
+    A github_copilot or chatgpt candidate is qualified by string alone: resolving either
+    provider runs its OAuth device flow, and for a declared pair the resolver's answer is
+    the declaration itself, so asking it buys nothing but the block.
     """
     import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return f"{declared}/{model.removeprefix(f'{declared}/')}"
     try:
         resolved, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
     except Exception as e:  # noqa: BLE001  # an unroutable candidate cannot be the baseline

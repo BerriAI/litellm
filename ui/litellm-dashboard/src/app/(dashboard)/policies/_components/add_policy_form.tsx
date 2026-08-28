@@ -7,9 +7,10 @@ import { toast } from "@/lib/toast";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -341,9 +342,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
           {selectedMode === "flow_builder" && (
             <Alert variant="info" className="mt-4 border border-info/20 bg-info/10">
-              <AlertTitle>
-                You&apos;ll be redirected to the full-screen Flow Builder to design your policy logic visually.
-              </AlertTitle>
+              <AlertTitle>You&apos;ll be taken to the Flow Builder to design your policy logic visually.</AlertTitle>
             </Alert>
           )}
 
@@ -466,9 +465,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
                     </span>
                     <div className="flex flex-wrap gap-1">
                       {resolvedGuardrails.map((g) => (
-                        <Badge key={g} variant="info">
-                          {g}
-                        </Badge>
+                        <StatusBadge key={g} tone="info" label={g} />
                       ))}
                     </div>
                   </AlertDescription>

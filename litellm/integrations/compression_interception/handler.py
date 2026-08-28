@@ -7,7 +7,7 @@ litellm_content_retrieve tool calls server-side via the typed agentic loop plan.
 
 import time
 import uuid
-from typing import Any, Final, cast
+from typing import Any, ClassVar, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.compression import compress
@@ -71,6 +71,8 @@ class CompressionInterceptionLogger(CustomLogger):
     3. Detect retrieval tool_use blocks in first model response.
     4. Build typed rerun plan with tool_result blocks from the compressed cache.
     """
+
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({LITELLM_CONTENT_RETRIEVE_TOOL_NAME})
 
     def __init__(
         self,

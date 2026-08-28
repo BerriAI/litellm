@@ -46,13 +46,13 @@ export function DrawerHeader({
 
   return (
     <div
+      className="z-chrome"
       style={{
         padding: DRAWER_HEADER_PADDING,
         borderBottom: `1px solid ${COLOR_BORDER}`,
         backgroundColor: COLOR_BACKGROUND,
         position: "sticky",
         top: 0,
-        zIndex: 10,
       }}
     >
       {/* Row 0: Model + Provider with Logo */}

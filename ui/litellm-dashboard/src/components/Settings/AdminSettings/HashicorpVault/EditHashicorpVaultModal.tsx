@@ -6,7 +6,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
 import React, { useMemo } from "react";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";

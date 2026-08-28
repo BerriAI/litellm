@@ -15,7 +15,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import NewBadge from "@/components/common_components/NewBadge";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
@@ -538,8 +537,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               </TabsTrigger>
             )}
             {isAdminRole(userRole) && (
-              <TabsTrigger value="submitted" className="flex-none gap-2 rounded-none px-4 py-2">
-                Submitted MCPs <NewBadge />
+              <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
+                Submitted MCPs
               </TabsTrigger>
             )}
           </TabsList>

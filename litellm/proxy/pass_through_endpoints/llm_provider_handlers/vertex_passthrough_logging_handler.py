@@ -615,7 +615,7 @@ class VertexPassthroughLoggingHandler:
         response_cost: Final = litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model,
-            custom_llm_provider="vertex_ai",
+            custom_llm_provider=custom_llm_provider,
             vertex_location=vertex_location,
         )
 

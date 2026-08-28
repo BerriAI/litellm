@@ -390,10 +390,10 @@ class OpenTelemetryV2(CustomLogger):
 
         MCP tool calls reach the success/failure callbacks like any other request
         (with ``call_type`` ``call_mcp_tool``), but they are not LLM calls and have
-        no ``pre_call`` carrier — so they get their own CLIENT span here. Per the MCP
-        semconv it parents to the trace context the client propagated in
-        ``params._meta`` (or starts a new root) and links the transport span, rather
-        than nesting under the HTTP/session span. Returns whether it handled the
+        no ``pre_call`` carrier — so they get their own CLIENT span here. It nests
+        under the transport span of the request carrying this message, and trace
+        context the client propagated in ``params._meta`` is recorded as a span
+        link (see ``resolve_mcp_span_context``). Returns whether it handled the
         event, so the caller skips the LLM-call path. The whole span is emitted at
         once (there is no boundary to open it at), deduped on the call id.
         """
@@ -436,9 +436,9 @@ class OpenTelemetryV2(CustomLogger):
 
         Like a tool call, listing reaches the success/failure callbacks (here with
         ``call_type`` ``list_mcp_tools``) with no ``pre_call`` carrier, so it gets its
-        own CLIENT span. Per the MCP semconv it parents to the ``params._meta`` trace
-        context (or starts a new root) and links the transport span, rather than
-        nesting under the HTTP/session span. Returns whether it handled the event so
+        own CLIENT span, nested under the transport span of the request carrying
+        this message with any ``params._meta`` trace context recorded as a span
+        link (see ``resolve_mcp_span_context``). Returns whether it handled the event so
         the caller skips the LLM-call path.
         """
         raw_payload: Final = kwargs.get("standard_logging_object")

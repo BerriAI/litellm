@@ -48,6 +48,27 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   }
 };
 
+export const getAutoRouterCustomTierPromptCall = async (
+  accessToken: string,
+  contextWindowSize: number,
+  tierDefinitions: { name: string; description?: string }[],
+  classificationPrompt?: string,
+): Promise<string> => {
+  /**
+   * Assembled by the proxy, because a built-in name with no description inherits criteria that live
+   * only in the backend. POSTed so the operator's prompt does not reach access logs through a URL.
+   */
+  const response = await apiClient.post<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+    accessToken,
+    body: {
+      context_window_size: contextWindowSize,
+      tier_definitions: tierDefinitions,
+      ...(classificationPrompt?.trim() ? { classification_prompt: classificationPrompt } : {}),
+    },
+  });
+  return response.system_prompt;
+};
+
 /**
  * Helper file for calls being made to proxy
  */
@@ -2002,6 +2023,7 @@ interface UiSpendLogsParams {
   user_id?: string;
   end_user?: string;
   status_filter?: string;
+  cache_hit_filter?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
   /** Filter by model ID (litellm model deployment id) */
@@ -2013,6 +2035,7 @@ interface UiSpendLogsParams {
   sort_order?: "asc" | "desc";
   min_spend?: number;
   max_spend?: number;
+  exclude_internal_health_checks?: boolean;
 }
 
 interface UiSpendLogsCallOptions {
@@ -2047,6 +2070,8 @@ export const uiSpendLogsCall = async ({
       if (value == null) continue;
       if (key === "min_spend" || key === "max_spend") {
         queryParams.append(key, value.toString());
+      } else if (typeof value === "boolean") {
+        if (value) queryParams.append(key, "true");
       } else if (typeof value === "string" && value !== "") {
         queryParams.append(key, String(value));
       }
@@ -2391,6 +2416,30 @@ export const testAutoRouterRouting = async (
     return { status: "success", result };
   } catch (error) {
     return { status: "error", error: extractProxyErrorMessage(error) };
+  }
+};
+
+export interface ComplexityRouterConfigValidation {
+  valid: boolean;
+  error?: string | null;
+}
+
+// Dry-runs the same write gate /model/new and /model/update apply, so a save that would come back
+// as a raw 400 shows the backend's own message inline first. Transport failures fail open: the
+// write gate stays authoritative.
+export const validateAutoRouterConfig = async (
+  accessToken: string,
+  complexityRouterConfig: Record<string, unknown>,
+  teamId?: string,
+): Promise<ComplexityRouterConfigValidation> => {
+  try {
+    return await apiClient.post<ComplexityRouterConfigValidation>("/auto_router/validate_complexity_router_config", {
+      accessToken,
+      body: { complexity_router_config: complexityRouterConfig, ...(teamId && { team_id: teamId }) },
+    });
+  } catch (error) {
+    console.warn("Could not dry-run the complexity router config; the save will be validated server side", error);
+    return { valid: true };
   }
 };
 

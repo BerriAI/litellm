@@ -199,6 +199,7 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
 )
 log_raw_request_response: bool = False
+log_client_error_tracebacks: bool = False
 request_correlation_in_logs: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
@@ -444,6 +445,7 @@ max_ui_session_budget: Optional[float] = (
     1.0  # USD budget for each dashboard login session (playground, test connection)
 )
 internal_user_budget_duration: Optional[str] = None
+budget_rollover: bool = False  # carry spend beyond max_budget into the next window instead of zeroing it
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
@@ -463,6 +465,11 @@ prometheus_metrics_config: Optional[List] = None
 prometheus_exclude_metrics: Optional[List[str]] = None
 prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
+prometheus_deployment_and_latency_caller_identity: Literal[
+    "api_key_alias",
+    "user_email",
+    "both",
+] = "api_key_alias"
 # Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
 # `litellm_proxy_failed_requests_metric`. Off by default to preserve the
 # pre-unification label set so existing dashboards / recording rules keyed on
@@ -480,6 +487,7 @@ public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
+agent_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)
@@ -1628,6 +1636,9 @@ if TYPE_CHECKING:
         AmazonMantleMessagesConfig as AmazonMantleMessagesConfig,
     )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
+    from .llms.together_ai.chat.transformation import (
+        TogetherAIChatConfig as TogetherAIChatConfig,
+    )
     from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig as VertexGeminiConfig,
@@ -1800,6 +1811,9 @@ if TYPE_CHECKING:
     )
     from .llms.gemini.interactions.transformation import (
         GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig,
+    )
+    from .llms.vertex_ai.interactions.transformation import (
+        VertexAIInteractionsConfig as VertexAIInteractionsConfig,
     )
     from .llms.openai.chat.o_series_transformation import (
         OpenAIOSeriesConfig as OpenAIOSeriesConfig,
