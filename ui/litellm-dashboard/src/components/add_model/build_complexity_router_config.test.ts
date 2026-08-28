@@ -48,13 +48,14 @@ const baseParams: BuildComplexityRouterConfigParams = {
 describe("buildComplexityRouterConfig", () => {
   it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
-    expect(config).toEqual({
+    const expected = {
       tiers,
       classifier_type: "heuristic",
       session_affinity: false,
       deployment_affinity: true,
       escalation_keywords: ["LITELLM ESCALATE"],
-    });
+    };
+    expect(config).toEqual(expected);
   });
 
   it("trims escalation keywords and drops blank entries", () => {
@@ -216,13 +217,14 @@ describe("buildComplexityRouterConfig", () => {
   });
 
   it("omits adaptive fields when adaptive is disabled even if weights linger in state", () => {
-    const config = buildComplexityRouterConfig({
+    const params = {
       ...baseParams,
       adaptive: false,
       adaptiveWeights: { quality: 0.9, cost: 0.1 },
       tierDistancePenalty: 2,
-      adaptiveEligible: "classified_tier",
-    });
+      adaptiveEligible: "classified_tier" as const,
+    };
+    const config = buildComplexityRouterConfig(params);
     expect(config.adaptive).toBeUndefined();
     expect(config.adaptive_weights).toBeUndefined();
     expect(config.tier_distance_penalty).toBeUndefined();
@@ -250,13 +252,14 @@ describe("buildComplexityRouterConfig", () => {
   });
 
   it("includes tier_distance_penalty when adaptive is enabled with eligible='all'", () => {
-    const config = buildComplexityRouterConfig({
+    const params = {
       ...baseParams,
       adaptive: true,
       adaptiveWeights: { quality: 0.6, cost: 0.4 },
       tierDistancePenalty: 0.75,
-      adaptiveEligible: "all",
-    });
+      adaptiveEligible: "all" as const,
+    };
+    const config = buildComplexityRouterConfig(params);
     expect(config.adaptive).toBe(true);
     expect(config.adaptive_weights).toEqual({ quality: 0.6, cost: 0.4 });
     expect(config.tier_distance_penalty).toBe(0.75);
@@ -264,13 +267,14 @@ describe("buildComplexityRouterConfig", () => {
   });
 
   it("omits tier_distance_penalty when eligible='classified_tier', since the penalty doesn't apply there", () => {
-    const config = buildComplexityRouterConfig({
+    const params = {
       ...baseParams,
       adaptive: true,
       adaptiveWeights: { quality: 0.6, cost: 0.4 },
       tierDistancePenalty: 0.75,
-      adaptiveEligible: "classified_tier",
-    });
+      adaptiveEligible: "classified_tier" as const,
+    };
+    const config = buildComplexityRouterConfig(params);
     expect(config.adaptive).toBe(true);
     expect(config.adaptive_eligible).toBe("classified_tier");
     expect(config.tier_distance_penalty).toBeUndefined();
@@ -942,8 +946,6 @@ describe("hydrateCustomTierSet", () => {
 
 describe("dryRunRejection", () => {
   it("blocks the save on a rejection whose message is missing, which the write would return as a raw 400", () => {
-    // The verdict's two fields arrive independently, so a rejection carrying no message must still
-    // stop the save rather than fall through to the write endpoint.
     expect(dryRunRejection({ valid: false })).toBe("The proxy rejected this auto-router configuration");
     expect(dryRunRejection({ valid: false, error: null })).toBe("The proxy rejected this auto-router configuration");
     expect(dryRunRejection({ valid: false, error: "   " })).toBe("The proxy rejected this auto-router configuration");

@@ -332,6 +332,45 @@ export const hydratePlanModeMinTier = (
   return tierRowByName(customTierSet.tiers, stored)?.id;
 };
 
+const classifierWireFields = (
+  effectiveType: ClassifierType,
+  {
+    classifierLlmConfig,
+    classifierFallback,
+    heuristicFirstMaxTier,
+    classifierContextWindowSize,
+    classifierContextBudgetChars,
+    classifierContextIncludeAssistantTurns,
+  }: Pick<
+    BuildComplexityRouterConfigParams,
+    | "classifierLlmConfig"
+    | "classifierFallback"
+    | "heuristicFirstMaxTier"
+    | "classifierContextWindowSize"
+    | "classifierContextBudgetChars"
+    | "classifierContextIncludeAssistantTurns"
+  >,
+): Partial<ComplexityRouterConfigPayload> => ({
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
+  ...(effectiveType === "heuristic_first" &&
+    heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierContextWindowSize !== undefined && {
+      classifier_context_window_size: classifierContextWindowSize,
+    }),
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierContextBudgetChars !== undefined && {
+      classifier_context_budget_chars: classifierContextBudgetChars,
+    }),
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierContextIncludeAssistantTurns !== undefined && {
+      classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
+    }),
+});
+
 export const buildComplexityRouterConfig = ({
   tiers,
   customTierSet,
@@ -382,6 +421,14 @@ export const buildComplexityRouterConfig = ({
     reasoningOverrideMinScore,
   };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
+  const classifierInputs = {
+    classifierLlmConfig,
+    classifierFallback,
+    heuristicFirstMaxTier,
+    classifierContextWindowSize,
+    classifierContextBudgetChars,
+    classifierContextIncludeAssistantTurns,
+  };
   // An edited tier set forces the LLM classifier, so llm-only inputs must survive a classifier_type
   // the form never rewrote. The UI gates the same controls on this, not on the raw value.
   const effectiveType: ClassifierType = customTierSet ? "llm" : classifierType;
@@ -393,24 +440,7 @@ export const buildComplexityRouterConfig = ({
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
-    ...(usesLlmClassifier(effectiveType) &&
-      classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-    ...(usesLlmClassifier(effectiveType) &&
-      classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
-    ...(effectiveType === "heuristic_first" &&
-      heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
-    ...(usesLlmClassifier(effectiveType) &&
-      classifierContextWindowSize !== undefined && {
-        classifier_context_window_size: classifierContextWindowSize,
-      }),
-    ...(usesLlmClassifier(effectiveType) &&
-      classifierContextBudgetChars !== undefined && {
-        classifier_context_budget_chars: classifierContextBudgetChars,
-      }),
-    ...(usesLlmClassifier(effectiveType) &&
-      classifierContextIncludeAssistantTurns !== undefined && {
-        classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
-      }),
+    ...classifierWireFields(effectiveType, classifierInputs),
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),

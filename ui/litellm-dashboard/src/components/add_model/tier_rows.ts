@@ -74,12 +74,9 @@ export const tierRowByName = <T extends TierRow>(rows: readonly T[], name: strin
 export const resolveComplexityDefaultModel = (value: ActiveTierSet, pinned?: string): string | undefined => {
   const rows = activeTierRows(value);
   const named = (name: string) => rows.find((row) => activeTierName(row) === name)?.models[0];
-  return (
-    pinned?.trim() ||
-    tierRowById(rows, value.custom_tier_set?.fallback_tier_id)?.models[0] ||
-    named("MEDIUM") ||
-    named("SIMPLE")
-  );
+  const fallbackPoolModel = tierRowById(rows, value.custom_tier_set?.fallback_tier_id)?.models[0];
+  const builtInDefault = named("MEDIUM") || named("SIMPLE");
+  return pinned?.trim() || fallbackPoolModel || builtInDefault;
 };
 
 // Stored params arrive keyed by the wire tier name while the editor keys them by row id, which is
