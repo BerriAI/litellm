@@ -1,4 +1,6 @@
 
+from typing import Final
+
 import httpx
 import openai
 import pytest
