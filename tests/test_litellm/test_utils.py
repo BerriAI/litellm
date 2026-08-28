@@ -120,6 +120,21 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
     assert generalized["supports_adaptive_thinking"] is True
 
 
+
+def test_get_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
+    """A registry entry's supports_parallel_function_calling must read back through get_model_info
+    and litellm.supports_parallel_function_calling. Regression: the key was never copied into
+    ModelInfo, so provider-prefixed entries read None / False even when the map said True, and an
+    explicit False was indistinguishable from unset."""
+    declared_true = litellm.get_model_info(model="together_ai/zai-org/GLM-5.3-Flash")
+    assert declared_true["supports_parallel_function_calling"] is True
+    assert litellm.supports_parallel_function_calling(model="together_ai/zai-org/GLM-5.3-Flash") is True
+
+    declared_false = litellm.get_model_info(model="o3-mini")
+    assert declared_false["supports_parallel_function_calling"] is False
+    assert litellm.supports_parallel_function_calling(model="o3-mini") is False
+
+
 def test_get_model_info_surfaces_supported_endpoints(local_model_cost_map):
     """supported_endpoints ships in the cost map and is declared on ModelInfoBase,
     but the constructor never copied it, so get_model_info always returned None.
