@@ -633,21 +633,10 @@ class LakeraAIGuardrail(CustomGuardrail):
             )
             return
 
-        # See async_pre_call_hook for the full rationale: mask-in-place
-        # degrades to block-on-detect only for multimodal content or when
-        # messages and input are both present; everything else (skipped/no-text
-        # messages, extra chat fields) is handled safely by
-        # _apply_redacted_messages_back_preserving_fields's scope-index merge.
-        is_multimodal_input: Final = (
-            has_non_string_content(data)
-            or _has_combined_messages_and_input(data)
-            or _has_responses_instructions(self, data)
-        )
-
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
-        lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
+        lakera_guardrail_response, _ = await self.call_v2_guard(
             messages=new_messages,
             request_data=data,
             event_type=GuardrailEventHooks.during_call,
@@ -657,56 +646,29 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 2. Handle flagged content ##########
         #########################################################
         if lakera_guardrail_response.get("flagged") is True:
-            # See async_pre_call_hook: PII-only violations get masked regardless of
-            # on_flagged, including inject_system_message, before any advisory logic.
-            if self._is_only_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
-                redacted_messages: Final = self._mask_pii_in_messages(
-                    messages=new_messages,
-                    lakera_response=lakera_guardrail_response,
-                    masked_entity_count=masked_entity_count,
-                )
-                _apply_redacted_messages_back_preserving_fields(self, data, redacted_messages)
-                verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
-            elif self.on_flagged == "inject_system_message":
-                if _breakdown_has_pii_violation(lakera_guardrail_response) and is_multimodal_input:
-                    # Same as async_pre_call_hook: there's PII in the mix and
-                    # nothing here can be safely masked, so allowing it through
-                    # unprotected would be worse than blocking. Unlike mutating
-                    # data["messages"] below, raising still blocks the response
-                    # from reaching the caller even though during_call races with
-                    # the LLM dispatch -- same mechanism on_flagged="block" already
-                    # relies on for this hook.
+            # during_call runs concurrently with the LLM dispatch (see
+            # ProxyLogging.during_call_hook / common_request_processing.py), with
+            # no pre-call barrier: in the common path, the provider call already
+            # binds its messages kwarg before this coroutine gets a chance to run,
+            # let alone before the masking helper's own network round trip
+            # completes. Unlike async_pre_call_hook, mask-in-place here can never
+            # reliably reach the outgoing request, so PII is never masked in this
+            # hook -- only blocked (which still works, since raising here blocks
+            # the response from reaching the caller regardless of dispatch timing)
+            # or, for non-PII violations, logged and allowed same as monitor mode.
+            if self.on_flagged == "inject_system_message":
+                if _breakdown_has_pii_violation(lakera_guardrail_response):
                     raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
-                if _breakdown_has_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
-                    # A mixed violation (PII plus something else): mask whatever's
-                    # maskable even though the advisory note below has no effect
-                    # here, so raw PII doesn't pass through untouched just because
-                    # this violation wasn't PII-only.
-                    mixed_redacted_messages: Final = self._mask_pii_in_messages(
-                        messages=new_messages,
-                        lakera_response=lakera_guardrail_response,
-                        masked_entity_count=masked_entity_count,
-                    )
-                    _apply_redacted_messages_back_preserving_fields(self, data, mixed_redacted_messages)
-                # during_call runs concurrently with the LLM dispatch (see
-                # ProxyLogging.during_call_hook / common_request_processing.py),
-                # with no pre-call barrier -- mutating data["messages"] here races
-                # against the outgoing request already being built from the same
-                # dict, so the advisory message can silently fail to reach the
-                # LLM. Degrade to monitor-equivalent (log only) instead, matching
-                # how post_call also can't reliably influence a request that's
-                # already been dispatched.
                 verbose_proxy_logger.warning(
                     "Lakera Guardrail: Advisory mode has no effect during during_call; "
                     "violation detected but allowing request"
                 )
-            else:
-                if self.on_flagged == "monitor":
-                    verbose_proxy_logger.warning(
-                        "Lakera Guardrail: Monitoring mode - violation detected but allowing request"
-                    )
-                elif self.on_flagged == "block":
-                    raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
+            elif self.on_flagged == "monitor":
+                verbose_proxy_logger.warning(
+                    "Lakera Guardrail: Monitoring mode - violation detected but allowing request"
+                )
+            elif self.on_flagged == "block":
+                raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
