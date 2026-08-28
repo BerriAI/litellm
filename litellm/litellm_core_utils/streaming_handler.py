@@ -187,17 +187,42 @@ class _ParsedChunkHiddenParams(BaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
 
 
-def _provider_hidden_params(chunk: object) -> Mapping[str, object] | None:
-    hidden: Final[object] = getattr(chunk, "_hidden_params", None)
+def _provider_response_model(chunk: object) -> str | None:
+    model: Final[object] = chunk.get("model") if isinstance(chunk, Mapping) else getattr(chunk, "model", None)
+    return model if isinstance(model, str) and model else None
+
+
+def _parsed_provider_hidden_params(hidden: object) -> _ParsedChunkHiddenParams | None:
     if not isinstance(hidden, dict):
         return None
     try:
-        parsed: Final = _ParsedChunkHiddenParams.model_validate(hidden)
+        return _ParsedChunkHiddenParams.model_validate(hidden)
     except ValidationError:
         return None
-    if not parsed.provider_specific_fields:
-        return None
-    return MappingProxyType({"provider_specific_fields": dict(parsed.provider_specific_fields)})
+
+
+def _provider_hidden_params(
+    chunk: object,
+    provider_response_model: str | None,
+) -> Mapping[str, object] | None:
+    hidden: Final[object] = getattr(chunk, "_hidden_params", None)
+    parsed: Final = _parsed_provider_hidden_params(hidden)
+    provider_specific_fields: Final[object | None] = (
+        dict(parsed.provider_specific_fields)  # mutable-ok: stream assembly merges provider metadata into this dict
+        if parsed is not None and parsed.provider_specific_fields
+        else None
+    )
+    params: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            key: value
+            for key, value in (
+                ("provider_response_model", provider_response_model),
+                ("provider_specific_fields", provider_specific_fields),
+            )
+            if value is not None
+        }
+    )
+    return params or None
 
 
 class CustomStreamWrapper:
@@ -229,6 +254,7 @@ class CustomStreamWrapper:
         self.thinking_content = ""
 
         self.system_fingerprint: str | None = None
+        self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
@@ -1524,7 +1550,12 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk: Any):
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
-        model_response = self.model_response_creator(hidden_params=_provider_hidden_params(chunk))
+        provider_response_model: Final = _provider_response_model(chunk)
+        if provider_response_model is not None:
+            self._provider_response_model = provider_response_model
+        model_response = self.model_response_creator(
+            hidden_params=_provider_hidden_params(chunk, self._provider_response_model)
+        )
         response_obj: dict[str, Any] = {}
         try:
             # return this for all models
