@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 from types import MappingProxyType
 from typing import Final
@@ -84,6 +85,7 @@ class FixedDimensionEmbedder:
 
     async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
         self.calls.append(tuple(texts))
+        await asyncio.sleep(0)
         return tuple((1.0,) * self.dimensions for _ in texts)
 
 
@@ -155,6 +157,26 @@ class TestAgentSearchIndex:
             ("language translation",),
             ("language translation", *(agent_search_text(agent) for agent in AGENTS)),
         ]
+
+    @pytest.mark.asyncio
+    async def test_re_embedding_a_subset_drops_the_other_agents_old_vectors(self) -> None:
+        index = AgentSearchIndex()
+        await index.search("language translation", AGENTS, top_k=5, embed=FakeEmbedder(), embedding_model="m")
+        wide = FixedDimensionEmbedder(2)
+        await index.search("language translation", AGENTS[:1], top_k=5, embed=wide, embedding_model="m")
+        await index.search("language translation", AGENTS, top_k=5, embed=wide, embedding_model="m")
+        assert wide.calls[-1] == ("language translation", *(agent_search_text(agent) for agent in AGENTS[1:]))
+
+    @pytest.mark.asyncio
+    async def test_concurrent_searches_keep_each_others_vectors(self) -> None:
+        index = AgentSearchIndex()
+        embedder = FixedDimensionEmbedder(3)
+        await asyncio.gather(
+            index.search("q", AGENTS[:1], top_k=5, embed=embedder, embedding_model="m"),
+            index.search("q", AGENTS[1:], top_k=5, embed=embedder, embedding_model="m"),
+        )
+        await index.search("q", AGENTS, top_k=5, embed=embedder, embedding_model="m")
+        assert embedder.calls[-1] == ("q",)
 
     @pytest.mark.asyncio
     async def test_mixed_dimensions_in_one_batch_become_embedding_failed(self) -> None:

@@ -193,6 +193,14 @@ class AgentSearchIndex:
     def __init__(self) -> None:
         self._vectors: Mapping[str, Mapping[str, Vector]] = MappingProxyType({})
 
+    def _merged(self, embedding_model: str, embedded: _Embedded) -> Mapping[str, Vector]:
+        kept: Final = {
+            text: vector
+            for text, vector in self._vectors.get(embedding_model, _NO_VECTORS).items()
+            if len(vector) == len(embedded.query_vector)
+        }
+        return MappingProxyType({**kept, **embedded.vectors})
+
     async def search(
         self, query: str, agents: Sequence[AgentResponse], top_k: int, embed: Embedder, embedding_model: str
     ) -> AgentSearchHits | AgentSearchEmbeddingFailed:
@@ -207,9 +215,7 @@ class AgentSearchIndex:
             return AgentSearchEmbeddingFailed(
                 reason=f"embedding model {embedding_model} returned vectors of mixed dimensions"
             )
-        self._vectors = MappingProxyType(
-            {**self._vectors, embedding_model: MappingProxyType({**cached, **embedded.vectors})}
-        )
+        self._vectors = MappingProxyType({**self._vectors, embedding_model: self._merged(embedding_model, embedded)})
         ranked: Final = sorted(
             (
                 AgentSearchHit(agent=agent, score=cosine_similarity(embedded.query_vector, embedded.vectors[text]))
