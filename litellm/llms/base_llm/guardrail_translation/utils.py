@@ -158,6 +158,22 @@ def openai_messages_without_tool(
     return tuple(m for m in messages if _message_role(m) != "tool")
 
 
+def filter_messages_by_skip_flags(
+    guardrail_to_apply: object, messages: Sequence[AllMessageValues]
+) -> tuple[tuple[AllMessageValues, ...], bool]:
+    system_filtered = (
+        openai_messages_without_system(messages)
+        if effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        else tuple(messages)
+    )
+    fully_filtered = (
+        openai_messages_without_tool(system_filtered)
+        if effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        else system_filtered
+    )
+    return fully_filtered, len(fully_filtered) != len(messages)
+
+
 def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -> bool:
     return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
 
