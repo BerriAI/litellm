@@ -10845,9 +10845,8 @@ def _record_router_acompletion_kwargs(router: litellm.Router) -> list:
 @pytest.mark.asyncio
 async def test_async_function_with_fallbacks_scrubs_spoofed_values_from_sibling_bucket():
     """Spend logs read a truthy litellm_metadata dict in preference to metadata, so spoofed
-    stamp keys planted in the bucket the route does not own are removed from the request's
-    downstream view on entry instead of flowing into the spend log row. The caller's own
-    dict object is never mutated: the scrub replaces the kwargs entry with a cleaned copy."""
+    stamp keys planted in the bucket the route does not own are removed on entry, in place,
+    before they can flow into the spend log row."""
     router = litellm.Router(
         model_list=[
             {
@@ -10876,20 +10875,19 @@ async def test_async_function_with_fallbacks_scrubs_spoofed_values_from_sibling_
     assert "attempted_fallbacks" not in downstream_sibling
     assert "original_model_group" not in downstream_sibling
     assert downstream_sibling["client_key"] == "client_value"
-    assert litellm_metadata == {
-        "attempted_fallbacks": 99,
-        "original_model_group": "spoofed-group",
-        "client_key": "client_value",
-    }
+    assert "attempted_fallbacks" not in litellm_metadata
+    assert "original_model_group" not in litellm_metadata
+    assert litellm_metadata["client_key"] == "client_value"
     assert metadata["attempted_fallbacks"] == 0
     assert metadata["original_model_group"] == "gpt-3.5-turbo"
 
 
 @pytest.mark.asyncio
-async def test_async_function_with_fallbacks_leaves_caller_sibling_dict_object_untouched():
-    """The sibling-bucket scrub hands downstream a cleaned copy and never edits the dict
-    object the caller passed in: callers reuse metadata dicts across requests, and logging
-    callbacks observe the caller's object."""
+async def test_async_function_with_fallbacks_scrubs_sibling_bucket_in_place():
+    """Everything below the router resolves the bucket by key presence, so the scrub edits
+    the caller's dict object like every other router bucket write. Rebinding kwargs to a
+    scrubbed copy detaches the proxy's request_data write-backs (guardrail telemetry, retry
+    accounting) from the object the spend row is built from."""
     router = litellm.Router(
         model_list=[
             {
@@ -10914,8 +10912,43 @@ async def test_async_function_with_fallbacks_leaves_caller_sibling_dict_object_u
     )
 
     assert len(downstream_calls) == 1
-    assert downstream_calls[0]["litellm_metadata"] is not litellm_metadata
-    assert litellm_metadata == caller_snapshot
+    assert downstream_calls[0]["litellm_metadata"] is litellm_metadata
+    assert "attempted_fallbacks" not in litellm_metadata
+    assert "original_model_group" not in litellm_metadata
+    assert litellm_metadata["client_key"] == caller_snapshot["client_key"]
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_stamps_aliased_buckets_on_every_call():
+    """One dict object passed as both metadata and litellm_metadata: the first call's own
+    stamp puts the reserved keys into the shared object, so the second call enters the
+    scrub with them present. Scrubbing in place keeps the stamp and the bucket on the same
+    object; a scrubbed copy would leave the spend reader's preferred bucket unstamped."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat-group",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    shared_metadata = {"team": "alpha"}
+    downstream_calls = _record_router_acompletion_kwargs(router)
+
+    for _ in range(3):
+        await router.acompletion(
+            model="chat-group",
+            messages=[{"role": "user", "content": "hey"}],
+            metadata=shared_metadata,
+            litellm_metadata=shared_metadata,
+        )
+
+    assert len(downstream_calls) == 3
+    for call_kwargs in downstream_calls:
+        assert call_kwargs["litellm_metadata"] is shared_metadata
+        assert call_kwargs["metadata"] is shared_metadata
+        assert call_kwargs["litellm_metadata"]["attempted_fallbacks"] == 0
+        assert call_kwargs["litellm_metadata"]["original_model_group"] == "chat-group"
 
 
 @pytest.mark.asyncio
