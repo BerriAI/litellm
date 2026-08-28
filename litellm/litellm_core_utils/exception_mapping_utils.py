@@ -2222,6 +2222,8 @@ def _map_exception_by_status(
     status_code: Final = original_exception.status_code if hasattr(original_exception, "status_code") else None
     if not isinstance(status_code, int) or status_code < 400:
         return
+    if getattr(original_exception, "status_code_is_synthesized", False):
+        return
     message: Final = f"{exception_provider} - {error_str}"
     response: Final = original_exception.response if hasattr(original_exception, "response") else None
     match status_code:
