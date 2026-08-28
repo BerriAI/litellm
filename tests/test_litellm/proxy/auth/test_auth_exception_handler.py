@@ -713,10 +713,10 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.",
             ),
-            logging.INFO,
+            logging.WARNING,
             False,
             False,
-            id="invalid_virtual_key_logs_at_info_without_traceback",
+            id="invalid_virtual_key_logs_at_warning_without_traceback",
         ),
         pytest.param(
             HTTPException(
@@ -727,6 +727,16 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
             True,
             True,
             id="invalid_virtual_key_keeps_traceback_opt_in",
+        ),
+        pytest.param(
+            HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication Error",
+            ),
+            logging.ERROR,
+            False,
+            False,
+            id="other_http_401_keeps_error_level_without_traceback",
         ),
         pytest.param(
             ProxyException(
@@ -757,7 +767,11 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
     ],
 )
 async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
-    auth_error, expected_level, expect_traceback, log_client_error_tracebacks, caplog
+    auth_error: Exception,
+    expected_level: int,
+    expect_traceback: bool,
+    log_client_error_tracebacks: bool,
+    caplog: pytest.LogCaptureFixture,
 ):
     """Regression for LIT-6043: expected 4xx auth rejections must not format a
     traceback via logger.exception; unexpected errors must keep it."""
