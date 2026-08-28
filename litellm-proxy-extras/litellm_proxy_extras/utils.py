@@ -709,10 +709,13 @@ class ProxyExtrasDBManager:
                             env=_get_prisma_env(),
                         )
                         return True
-                    except (
-                        subprocess.CalledProcessError,
-                        subprocess.TimeoutExpired,
-                    ) as e:
+                    except subprocess.TimeoutExpired:
+                        logger.info(
+                            "prisma db push attempt %s timed out, retrying",
+                            attempt + 1,
+                        )
+                        time.sleep(random.randrange(5, 15))
+                    except subprocess.CalledProcessError as e:
                         stderr = e.stderr or ""
                         transient = ProxyExtrasDBManager._transient_prisma_failure(
                             stderr
@@ -732,6 +735,9 @@ class ProxyExtrasDBManager:
                             stderr,
                         )
                         time.sleep(random.randrange(5, 15))
+                raise RuntimeError(
+                    f"prisma db push failed after {_PRISMA_ATTEMPTS} attempts."
+                )
             finally:
                 os.chdir(original_dir)
 

@@ -1737,7 +1737,8 @@ class TestRunServerDbSetup:
         mock_atexit_register,
         mock_subprocess_run,
     ):
-        """Test that use_prisma_db_push flag correctly controls PrismaManager.setup_database use_migrate parameter"""
+        """Which resolver and which migration mode run_server hands setup_database,
+        across the db push flag, the v2/legacy flag pair and USE_V2_MIGRATION_RESOLVER."""
         from litellm.proxy.proxy_cli import run_server
 
         # Mock subprocess.run to simulate prisma being available
@@ -1805,10 +1806,6 @@ class TestRunServerDbSetup:
                 use_migrate=False, use_v2_resolver=True
             )
 
-            # Test 3+: the resolver default and both routes back to v1. The flag
-            # covers a CLI boot; USE_V2_MIGRATION_RESOLVER covers deploys that
-            # cannot pass one, where prisma_migration.py fixes the argv. An
-            # explicit flag beats the env var.
             for argv, env_value, expected_v2 in (
                 ([], None, True),
                 (["--use_v2_migration_resolver"], None, True),
