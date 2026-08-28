@@ -56,6 +56,7 @@ from .config import (
     ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
+    resolve_tier_boundaries,
 )
 
 if TYPE_CHECKING:
@@ -1161,11 +1162,11 @@ class ComplexityRouter(CustomLogger):
         Shared by score-to-tier mapping and the per-request routing decision snapshot,
         so a logged decision always reflects the boundaries that actually applied.
         """
-        boundaries: Final = self.config.tier_boundaries
+        resolved: Final = resolve_tier_boundaries(self.config.tier_boundaries)
         return StandardLoggingRoutingDecisionTierBoundaries(
-            simple_medium=boundaries.get("simple_medium", 0.15),
-            medium_complex=boundaries.get("medium_complex", 0.35),
-            complex_reasoning=boundaries.get("complex_reasoning", 0.60),
+            simple_medium=resolved["simple_medium"],
+            medium_complex=resolved["medium_complex"],
+            complex_reasoning=resolved["complex_reasoning"],
         )
 
     def _build_routing_decision(

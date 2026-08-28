@@ -34,6 +34,7 @@ from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
+    DEFAULT_TIER_BOUNDARIES,
     ClassifierLLMConfig,
     ComplexityRouterConfig,
     ComplexityTier,
@@ -293,19 +294,25 @@ class TestReasoningMarkerScoring:
         assert tier == ComplexityTier.REASONING
 
     def test_floor_defaults_to_simple_medium_and_follows_it(self, mock_router_instance, basic_config):
-        """Unset tracks simple_medium, so moving that boundary moves the floor with it."""
+        """Unset tracks simple_medium, so moving that boundary moves the floor with it.
+
+        Both arms carry the fixture's other two boundaries unchanged: simple_medium is the only
+        variable, and boundaries must ascend, so the pair above it cannot be left to fill from
+        shipped defaults that sit below the value under test.
+        """
         prompt = (
             "Give me the pros and cons, step by step, of moving our checkout service to an event-driven architecture."
         )
+        boundaries = basic_config["tier_boundaries"]
         low = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={**basic_config, "tier_boundaries": {"simple_medium": 0.20}},
+            complexity_router_config={**basic_config, "tier_boundaries": {**boundaries, "simple_medium": 0.20}},
         )
         high = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config={**basic_config, "tier_boundaries": {"simple_medium": 0.30}},
+            complexity_router_config={**basic_config, "tier_boundaries": {**boundaries, "simple_medium": 0.30}},
         )
         assert low._effective_reasoning_override_min_score() == 0.20
         assert high._effective_reasoning_override_min_score() == 0.30
@@ -597,6 +604,91 @@ class TestPreRoutingHook:
         )
         assert result is not None
         assert result.model == "o1-preview"  # REASONING tier model
+
+
+class TestEffectiveTierBoundaries:
+    """Test how configured boundaries resolve against the shipped defaults."""
+
+    def test_unconfigured_boundaries_resolve_to_the_shipped_defaults(self, mock_router_instance):
+        """A router with no tier_boundaries runs on DEFAULT_TIER_BOUNDARIES, not on stale literals."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"}},
+        )
+        assert dict(router._effective_tier_boundaries()) == DEFAULT_TIER_BOUNDARIES
+
+    def test_partial_boundaries_fill_missing_keys_from_the_defaults(self, mock_router_instance):
+        """Overriding one boundary must not strand the other two on a second, drifting copy of the defaults."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"},
+                "tier_boundaries": {"simple_medium": 0.2},
+            },
+        )
+        assert dict(router._effective_tier_boundaries()) == {
+            "simple_medium": 0.2,
+            "medium_complex": DEFAULT_TIER_BOUNDARIES["medium_complex"],
+            "complex_reasoning": DEFAULT_TIER_BOUNDARIES["complex_reasoning"],
+        }
+
+    def test_omitting_a_boundary_below_one_that_is_set_is_rejected(self, mock_router_instance):
+        """The trap this guards: one boundary set high, the rest filled from lower shipped defaults."""
+        with pytest.raises(ValidationError, match="MEDIUM unreachable"):
+            ComplexityRouter(
+                model_name="test-complexity-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={
+                    "tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"},
+                    "tier_boundaries": {"simple_medium": 0.30},
+                },
+            )
+
+    def test_fully_specified_decreasing_boundaries_are_rejected(self, mock_router_instance):
+        """An operator can also strand a tier without omitting anything."""
+        with pytest.raises(ValidationError, match="COMPLEX unreachable"):
+            ComplexityRouter(
+                model_name="test-complexity-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={
+                    "tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"},
+                    "tier_boundaries": {"simple_medium": 0.10, "medium_complex": 0.60, "complex_reasoning": 0.50},
+                },
+            )
+
+    def test_equal_boundaries_are_accepted_and_close_the_band(self, mock_router_instance):
+        """Equal boundaries are accepted, and they leave the tier between them unreachable.
+
+        With simple_medium == medium_complex, MEDIUM's band is zero width: the strict `<` below it
+        already claims every lower score for SIMPLE, and every score from that value up falls
+        through to COMPLEX. The validator still allows it because a non-decreasing set is coherent,
+        it just describes an empty band, where a decreasing pair asks for a tier that starts above
+        the tier above it and no score can satisfy that.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "a", "MEDIUM": "b", "COMPLEX": "c", "REASONING": "d"},
+                "tier_boundaries": {"simple_medium": 0.25, "medium_complex": 0.25, "complex_reasoning": 0.50},
+            },
+        )
+        assert dict(router._effective_tier_boundaries()) == {
+            "simple_medium": 0.25,
+            "medium_complex": 0.25,
+            "complex_reasoning": 0.50,
+        }
+
+    def test_defaults_stay_ordered_and_within_the_scoring_range(self):
+        """The tiers only all remain reachable while the boundaries ascend."""
+        simple_medium, medium_complex, complex_reasoning = (
+            DEFAULT_TIER_BOUNDARIES["simple_medium"],
+            DEFAULT_TIER_BOUNDARIES["medium_complex"],
+            DEFAULT_TIER_BOUNDARIES["complex_reasoning"],
+        )
+        assert 0 < simple_medium < medium_complex < complex_reasoning < 1
 
 
 class TestConfigOverrides:
@@ -5114,7 +5206,7 @@ class TestRoutingDecisionContents:
         assert isinstance(decision["score"], float)
         assert any("short" in signal for signal in decision["signals"])
         # The snapshot must reflect the CONFIGURED boundaries (the fixture overrides the
-        # 0.15/0.35/0.60 defaults), so a logged row stays truthful after config edits.
+        # shipped defaults), so a logged row stays truthful after config edits.
         assert decision["tier_boundaries"] == {
             "simple_medium": 0.25,
             "medium_complex": 0.50,

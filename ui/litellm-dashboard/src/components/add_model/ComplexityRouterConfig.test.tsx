@@ -74,10 +74,10 @@ describe("ComplexityRouterConfig", () => {
   it("should show score thresholds in the classification section", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByText(/Score < 0.15/)).toBeInTheDocument();
-    expect(screen.getByText(/Score 0.15 - 0.35/)).toBeInTheDocument();
-    expect(screen.getByText(/Score 0.35 - 0.60/)).toBeInTheDocument();
-    expect(screen.getByText(/Score > 0.60/)).toBeInTheDocument();
+    expect(screen.getByText(/Score < 0.10/)).toBeInTheDocument();
+    expect(screen.getByText(/Score 0.10 - 0.25/)).toBeInTheDocument();
+    expect(screen.getByText(/Score 0.25 - 0.50/)).toBeInTheDocument();
+    expect(screen.getByText(/Score > 0.50/)).toBeInTheDocument();
   });
 
   it("should default to heuristic and hide classifier model/timeout fields", () => {

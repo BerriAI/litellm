@@ -405,7 +405,7 @@ class TestPreRoutingHook:
         request in the session, and carries no signal about how requests differ. Before
         the fix this system prompt alone supplied 5 codePresence + 2 technicalTerms
         keyword matches, saturating both dimensions and crossing the default
-        simple_medium boundary (0.15) purely from harness text, independent of the ask."""
+        simple_medium boundary purely from harness text, independent of the ask."""
         agent_system_prompt = (
             "You are Claude Code, Anthropic's official CLI for Claude.\n"
             "You are an interactive agent that helps users with software engineering tasks.\n\n"
