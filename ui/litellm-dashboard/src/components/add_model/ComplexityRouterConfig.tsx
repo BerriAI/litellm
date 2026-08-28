@@ -24,7 +24,8 @@ import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
-import { type TierRow, activeTierRows, resolveComplexityDefaultModel } from "./tier_rows";
+import { type CustomTierSet, type TierRow, activeTierRows, resolveComplexityDefaultModel } from "./tier_rows";
+export type { CustomTierSet, TierRow } from "./tier_rows";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
@@ -133,7 +134,12 @@ export const heuristicScoringRoleFor = (
 };
 
 export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
-  heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+  value.custom_tier_set ? "never" : heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+
+// Derived, never written into the value, so undoing a tier edit reverts the form with nothing left behind.
+export const effectiveClassifierType = (
+  value: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type">,
+): ClassifierType => (value.custom_tier_set ? "llm" : value.classifier_type);
 
 export type AdaptiveEligible = "all" | "classified_tier";
 
@@ -179,6 +185,7 @@ export interface ComplexityRouterConfigValue {
    * params object is held, not just reasoning_effort, so keys authored in config.yaml survive an
    * edit round-trip.
    */
+  custom_tier_set?: CustomTierSet;
   tier_model_params?: TierModelParamsByTier;
 }
 
