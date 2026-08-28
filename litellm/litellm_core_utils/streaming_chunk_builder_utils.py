@@ -981,14 +981,16 @@ class ChunkProcessor:
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0
-        returned_usage.completion_tokens = (
+        resolved_completion_tokens: Final = (
             completion_tokens
             or token_counter(
                 model=model,
                 text=completion_output,
                 count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
             )
+            + (reasoning_tokens or 0)
         )
+        returned_usage.completion_tokens = resolved_completion_tokens
         returned_usage.total_tokens = returned_usage.prompt_tokens + returned_usage.completion_tokens
 
         if cache_creation_input_tokens is not None:
