@@ -1,10 +1,13 @@
 """Resolve which reasoning_effort values a deployment, and by intersection a model group, accepts.
 
-The model map's supports_*_reasoning_effort flags are the only signal, and each level's polarity
-mirrors how a request path reads that same flag. medium and high are unconditional for a reasoning
-model. minimal and low are opt-out: openai/chat/gpt_5_transformation.py refuses them only when the
-map says false. xhigh and max are opt-in. none is opt-out everywhere except the azure gpt-5 family,
-whose config raises UnsupportedParamsError without an explicit true.
+An entry that states its levels outright in reasoning_effort_levels is read first and wins
+whole, for a model whose set the per-level flags cannot express: Kimi K3 takes low, high and max,
+and no flag can drop medium because medium has none. Every other entry answers through the
+supports_*_reasoning_effort flags below, whose polarity mirrors how a request path reads that same
+flag. medium and high are unconditional for a reasoning model. minimal and low are opt-out:
+openai/chat/gpt_5_transformation.py refuses them only when the map says false. xhigh and max are
+opt-in. none is opt-out everywhere except the azure gpt-5 family, whose config raises
+UnsupportedParamsError without an explicit true.
 
 xhigh is gated on the request path by the openai and azure gpt-5 configs. max is not gated there at
 all: every entry carrying supports_max_reasoning_effort is Claude-family, and
@@ -41,6 +44,7 @@ _EFFORT_FLAGS: Final = (
     ("xhigh", "supports_xhigh_reasoning_effort"),
     ("max", "supports_max_reasoning_effort"),
 )
+_DECLARED_EFFORTS_KEY: Final = "reasoning_effort_levels"
 _OPT_OUT_EFFORTS: Final = ("minimal", "low")
 _OPT_IN_EFFORTS: Final = ("xhigh", "max")
 _UNCONDITIONAL_EFFORTS: Final = frozenset(("medium", "high"))
@@ -67,6 +71,36 @@ def _declared_effort_flags(model_info: Mapping[str, object]) -> Mapping[str, obj
             for effort, flag in _EFFORT_FLAGS
         }
     )
+
+
+def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, ...] | None:
+    """The entry's own answer, read through the same bare twin as the flags so both spellings of one
+    model agree. Present-and-a-list IS the answer, so a declared [] correctly empties the group and
+    an unknown level is dropped rather than raised: the bundled map is enum-validated by
+    validate-model-prices-json, but an operator can put this key on a config.yaml model_info block
+    where that schema never runs, and one mistyped level must not fail every sibling on the proxy."""
+    own: Final = model_info.get(_DECLARED_EFFORTS_KEY)
+    raw: Final = own if own is not None else _bare_model_entry(model_info).get(_DECLARED_EFFORTS_KEY)
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        return None
+    declared: Final = frozenset(effort for effort in raw if isinstance(effort, str))
+    return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in declared)
+
+
+def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
+    """The levels an entry declares, resolved from the model string a provider config holds rather
+    than from a router deployment's model_info.
+
+    None means the map has no opinion, either because the entry declares nothing or because it
+    describes no such model, so a caller keeps whatever it did before the entry was described. The
+    entry is read straight off the map rather than through get_model_info, which raises for a model
+    it does not know: a provider config runs on the request path for every model it serves, most of
+    which the map never named, and a lookup miss there must not fail the call.
+    """
+    entry: Final = litellm.model_cost.get(f"{custom_llm_provider}/{model}") or litellm.model_cost.get(model)
+    if not isinstance(entry, dict):
+        return None
+    return declared_reasoning_efforts(entry)
 
 
 def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: object) -> bool:
@@ -118,6 +152,10 @@ def resolve_supported_reasoning_efforts(
     supports_reasoning: Final = model_info.get("supports_reasoning")
     if supports_reasoning is not True:
         return () if supports_reasoning is False or deployment_is_mapped else None
+
+    declared: Final = declared_reasoning_efforts(model_info)
+    if declared is not None:
+        return declared
 
     flags: Final = _declared_effort_flags(model_info)
     if all(value is None for value in flags.values()):

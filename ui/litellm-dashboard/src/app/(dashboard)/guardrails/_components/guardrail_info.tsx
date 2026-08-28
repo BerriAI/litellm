@@ -522,7 +522,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
             variant="ghost"
             size="icon-xs"
             onClick={() => copyToClipboard(guardrailData.guardrail_id, "guardrail-id")}
-            className={`left-2 z-10 transition-all duration-200 ${
+            className={`left-2 z-raised transition-all duration-200 ${
               copiedStates["guardrail-id"]
                 ? "text-success bg-success/10 border-success/20"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"

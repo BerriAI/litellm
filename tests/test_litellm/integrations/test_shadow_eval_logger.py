@@ -1238,3 +1238,36 @@ def _failing_router():
     router.get_model_list = MagicMock(return_value=None)
     router.acompletion = AsyncMock(side_effect=RuntimeError("provider exploded"))
     return router
+
+
+@pytest.mark.asyncio
+async def test_judge_call_resolves_its_arm_under_the_shadowed_keys_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start-time validation resolves the judge under the key's team, so the dispatch has to
+    as well or the two disagree about the same name.
+
+    A team-public judge resolves to a real deployment for its own team and to nothing for
+    anybody else. Choosing the arm without the team sends the literal name to the SDK, which
+    has never heard of it, so every judge call fails on a job validation just accepted.
+    """
+    import litellm
+    from litellm.litellm_core_utils.llm_judge import judge_acompletion
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "row_team_a",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"},
+                "model_info": {"team_id": "team-a", "team_public_model_name": "house-judge"},
+            }
+        ]
+    )
+    router.acompletion = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]  # fake the call, not the resolution
+        return_value={"choices": [{"message": {"content": "router answer"}}]}
+    )
+    sdk = AsyncMock(return_value={"choices": [{"message": {"content": "sdk answer"}}]})
+    monkeypatch.setattr(litellm, "acompletion", sdk)
+
+    await judge_acompletion(router, "house-judge", [{"role": "user", "content": "hi"}], team_id="team-a")
+
+    router.acompletion.assert_awaited_once()
+    sdk.assert_not_called()
