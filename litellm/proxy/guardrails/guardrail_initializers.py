@@ -104,7 +104,12 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             apply_to_output=False,
         )
         params.update(overrides)
-        callback: Final = _OPTIONAL_PresidioPIIMasking(**params)
+        # Passed outside the heterogeneous params dict so the argument keeps
+        # its precise int | None type.
+        callback: Final = _OPTIONAL_PresidioPIIMasking(
+            presidio_analyze_chunk_size_bytes=litellm_params.presidio_analyze_chunk_size_bytes,
+            **params,
+        )
         litellm.logging_callback_manager.add_litellm_callback(callback)
         return callback
 
