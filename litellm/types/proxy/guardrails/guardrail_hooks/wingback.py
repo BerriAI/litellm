@@ -31,10 +31,11 @@ class WingbackGuardrailConfigModel(GuardrailConfigModel):
         ),
     )
     unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
-        default="fail_open",
+        default="fail_closed",
         description=(
             "Behavior when the Wingback connectors service is unreachable. "
-            "fail_open allows traffic (monitor mode); fail_closed blocks traffic (enforce mode)."
+            "fail_closed blocks traffic when Wingback is unavailable (default, matches generic_guardrail_api). "
+            "fail_open allows traffic for monitor-only rollouts."
         ),
     )
     fail_on_error: bool | None = Field(

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -8,27 +8,24 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def _get_config_value(litellm_params: Any, attribute_name: str) -> Any | None:
-    return getattr(litellm_params, attribute_name, None)
-
-
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> WingbackGuardrail:
     import litellm
 
-    additional_params: Final = dict(
-        getattr(litellm_params, "additional_provider_specific_params", None) or {}
+    base_params = litellm_params.additional_provider_specific_params or {}
+    wingback_app_id = litellm_params.wingback_app_id
+    additional_params: Final = (
+        {**base_params, "wingback_app_id": wingback_app_id}
+        if wingback_app_id and "wingback_app_id" not in base_params
+        else base_params
     )
-    wingback_app_id = _get_config_value(litellm_params, "wingback_app_id")
-    if wingback_app_id:
-        additional_params.setdefault("wingback_app_id", wingback_app_id)
 
     _wingback_callback: Final = WingbackGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         wingback_app_id=wingback_app_id,
         additional_provider_specific_params=additional_params,
-        unreachable_fallback=_get_config_value(litellm_params, "unreachable_fallback") or "fail_open",
-        fail_on_error=_get_config_value(litellm_params, "fail_on_error"),
+        unreachable_fallback=litellm_params.unreachable_fallback or "fail_closed",
+        fail_on_error=litellm_params.fail_on_error,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,

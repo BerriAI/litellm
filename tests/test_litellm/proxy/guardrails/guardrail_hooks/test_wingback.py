@@ -15,6 +15,9 @@ from litellm.proxy.guardrails.guardrail_hooks.wingback.wingback import (
     WingbackGuardrail,
 )
 from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.proxy.guardrails.guardrail_hooks.wingback import (
+    WingbackGuardrailConfigModel,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -22,6 +25,11 @@ def test_wingback_guard_registry():
     assert SupportedGuardrailIntegrations.WINGBACK.value in guardrail_initializer_registry
     assert SupportedGuardrailIntegrations.WINGBACK.value in guardrail_class_registry
     assert guardrail_class_registry["wingback"].get_config_model().ui_friendly_name() == "Wingback"
+
+
+def test_wingback_config_model_defaults():
+    assert WingbackGuardrailConfigModel.ui_friendly_name() == "Wingback"
+    assert WingbackGuardrailConfigModel.model_fields["unreachable_fallback"].default == "fail_closed"
 
 
 class TestWingbackGuardrail:
@@ -46,7 +54,7 @@ class TestWingbackGuardrail:
 
         assert guardrail.api_base == f"{DEFAULT_WINGBACK_API_BASE}/beta/litellm_basic_guardrail_api"
         assert guardrail.headers["x-api-key"] == "wbk_eg_test_key"
-        assert guardrail.unreachable_fallback == "fail_open"
+        assert guardrail.unreachable_fallback == "fail_closed"
 
     def test_initialization_with_custom_api_base_and_app_id(self):
         guardrail = WingbackGuardrail(

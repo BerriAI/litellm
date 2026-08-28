@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
-from typing import TYPE_CHECKING, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.integrations.custom_guardrail import log_guardrail_information
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
@@ -41,12 +41,15 @@ class WingbackGuardrail(GenericGuardrailAPI):
         )
         resolved_api_key: Final = api_key or os.environ.get("WINGBACK_INTEGRATION_API_KEY")
 
-        additional_params: Final = dict(kwargs.pop("additional_provider_specific_params", None) or {})
-        if wingback_app_id and "wingback_app_id" not in additional_params:
-            additional_params["wingback_app_id"] = wingback_app_id
+        existing_params = kwargs.pop("additional_provider_specific_params", None) or {}
+        additional_params: Final = (
+            {**existing_params, "wingback_app_id": wingback_app_id}
+            if wingback_app_id and "wingback_app_id" not in existing_params
+            else existing_params
+        )
 
         kwargs.setdefault("guardrail_name", GUARDRAIL_NAME)
-        kwargs.setdefault("unreachable_fallback", "fail_open")
+        kwargs.setdefault("unreachable_fallback", "fail_closed")
 
         super().__init__(
             api_base=resolved_api_base,
@@ -61,7 +64,7 @@ class WingbackGuardrail(GenericGuardrailAPI):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         """
         Apply Wingback to the given inputs.
