@@ -1,12 +1,8 @@
 """An in-memory `ListExecutor`, for list resources whose rows are computed rather than queried.
 
-A table-backed resource renders its plan to SQL with `where_sql` / `order_by_sql`. A resource
-whose rows come out of the running proxy has nothing to render against, so the same plan is
-applied here in Python instead: filter, sort, then slice, in that order.
-
-`enrich_page` runs on the slice and never on the whole match set. Anything a row needs from a
-second store, a health check, a spend rollup, therefore costs the page size rather than the size
-of the collection, which is the reason the resource pages at all.
+Answers the same `QueryPlan` a SQL executor would render through `where_sql` / `order_by_sql`,
+so a filter or a sort means the same thing on either. `enrich_page` runs on the page slice and
+never on the whole match set.
 """
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -38,7 +34,7 @@ Cells: TypeAlias = Mapping[str, Cell | tuple[Cell, ...]]
 
 
 def _sign(cell: Cell, value: FilterValue) -> int | None:
-    """-1, 0 or 1; None when the two are not orderable against each other."""
+    """None when the two values are not orderable against each other."""
     if isinstance(cell, str) and isinstance(value, str):
         return (cell > value) - (cell < value)
     if isinstance(cell, datetime) and isinstance(value, datetime):
@@ -86,7 +82,7 @@ def _holds(predicate: Predicate, cells: Cells) -> bool:
         case Within(field=name, values=values):
             return _any_cell(cells, name, lambda cell: cell is not None and cell in values)
         case IsNull(field=name, negated=negated):
-            return (cells.get(name) is None) != negated
+            return _any_cell(cells, name, lambda cell: (cell is None) != negated)
         case AnyOf(clauses=clauses):
             return any(_holds(clause, cells) for clause in clauses)
         case _:
@@ -121,11 +117,8 @@ async def _unchanged(rows: Sequence[TRow]) -> Sequence[TRow]:
 
 @dataclass(frozen=True, slots=True)
 class InMemoryListExecutor(Generic[TRow]):
-    """Runs a `QueryPlan` over rows already in memory.
-
-    `cells` projects a row down to the values the spec's filters, search and sort read, so the
-    plan can be applied without this module knowing the row type.
-    """
+    """`cells` projects a row down to the values the spec's filters, search and sort read, so a
+    plan can be applied without this module knowing the row type."""
 
     rows: Sequence[TRow]
     cells: Callable[[TRow], Cells]

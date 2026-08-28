@@ -12061,6 +12061,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/v1/model_hub": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Model Hub List
+         * @description The public model groups this proxy publishes, paged, sortable, searchable and
+         *     filterable, for the public Model Hub page.
+         *
+         *     No authentication. The older `/public/model_hub` answers with every public model
+         *     group as a bare array, which is a multi-megabyte response and an unusable page
+         *     once a proxy publishes a few thousand of them.
+         *
+         *     `sort` takes a comma-separated list of `model_group`, `mode`, `max_input_tokens`,
+         *     `max_output_tokens`, `input_cost_per_token` or `output_cost_per_token`, each
+         *     optionally prefixed with `-` for descending, and defaults to `model_group`
+         *     ascending. `model_group` is appended to every sort as the tiebreaker. `q` is a
+         *     case-insensitive substring match on `model_group`. `page_size` defaults to 50 and
+         *     is capped at 100. Filters are `filter[mode]`, `filter[mode][in]` and
+         *     `filter[providers][contains]`.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff         'http://0.0.0.0:4000/public/v1/model_hub?sort=-input_cost_per_token&filter[mode][in]=chat&page_size=25'
+         *     ```
+         */
+        get: operations["public_model_hub_list_public_v1_model_hub_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/queue/chat/completions": {
         parameters: {
             query?: never;
@@ -27449,6 +27487,13 @@ export interface components {
         ListResponse_BudgetListItem_: {
             /** Data */
             data: components["schemas"]["BudgetListItem"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
+        /** ListResponse[ModelGroupInfoProxy] */
+        ListResponse_ModelGroupInfoProxy_: {
+            /** Data */
+            data: components["schemas"]["ModelGroupInfoProxy"][];
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
@@ -53348,6 +53393,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    public_model_hub_list_public_v1_model_hub_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_ModelGroupInfoProxy_"];
                 };
             };
         };

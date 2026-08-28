@@ -51,8 +51,6 @@ class HealthSnapshotLookup(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PrismaHealthSnapshotLookup:
-    """Reads the latest health check per model, bounded to the models actually asked about."""
-
     prisma_client: PrismaClient
 
     async def latest_for(self, model_groups: Sequence[str]) -> Mapping[str, HealthSnapshot]:
@@ -125,8 +123,6 @@ def _scope(_caller: UserAPIKeyAuth) -> Scope:
     return ScopeAll()
 
 
-# What the Model Hub page filters on today. Its `supports_*` feature filter is absent
-# deliberately: those are booleans, and FilterSpec has no boolean type to declare them with.
 MODEL_HUB_FILTERS: Final[Mapping[str, FilterSpec]] = MappingProxyType(
     {
         "mode": FilterSpec(type=str, ops=frozenset(("eq", "in"))),
@@ -198,7 +194,8 @@ async def public_model_hub_list(
 
     Example curl:
     ```
-    curl --location --globoff 'http://0.0.0.0:4000/public/v1/model_hub?sort=-input_cost_per_token&filter[mode][in]=chat,embedding&page_size=25'
+    curl --location --globoff \
+        'http://0.0.0.0:4000/public/v1/model_hub?sort=-input_cost_per_token&filter[mode][in]=chat&page_size=25'
     ```
     """
     try:

@@ -20,7 +20,7 @@ from litellm.proxy.list_api.list_framework import (
 class Row:
     name: str
     size: float | None = None
-    tags: tuple[str, ...] = ()
+    tags: tuple[str | None, ...] = ()
     seen_at: datetime | None = None
 
 
@@ -138,6 +138,16 @@ async def test_is_null_is_the_way_to_ask_for_the_null_rows():
 
     assert await _names(executor, _plan(where=(IsNull(field="size", negated=False),))) == ["unsized"]
     assert await _names(executor, _plan(where=(IsNull(field="size", negated=True),))) == ["sized"]
+
+
+@pytest.mark.asyncio
+async def test_is_null_reads_a_repeated_field_element_by_element_too():
+    """Every other predicate lifts over a repeated field; `is_null` reading the container
+    instead would make a field holding only nulls indistinguishable from a populated one."""
+    executor = _executor(Row("only_nulls", tags=(None,)), Row("populated", tags=("openai",)))
+
+    assert await _names(executor, _plan(where=(IsNull(field="tags", negated=False),))) == ["only_nulls"]
+    assert await _names(executor, _plan(where=(IsNull(field="tags", negated=True),))) == ["populated"]
 
 
 @pytest.mark.asyncio

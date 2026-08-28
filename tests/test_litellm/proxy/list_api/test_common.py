@@ -107,9 +107,14 @@ def test_declared_query_params_is_empty_when_the_route_has_no_dependant():
 FASTAPI_NAMES_REMOVED_IN_0_140_7 = frozenset({"get_flat_dependant"})
 
 LIST_API_PACKAGE = Path(str(common_module.__file__)).parent
-MANAGEMENT_V1_PACKAGE = LIST_API_PACKAGE.parent / "management_endpoints" / "management_v1"
+PROXY_PACKAGE = LIST_API_PACKAGE.parent
+GUARDED_PACKAGES = (
+    LIST_API_PACKAGE,
+    PROXY_PACKAGE / "management_endpoints" / "management_v1",
+    PROXY_PACKAGE / "public_endpoints" / "public_v1",
+)
 FRAMEWORK_SOURCE_FILES = sorted(
-    (*LIST_API_PACKAGE.glob("*.py"), *MANAGEMENT_V1_PACKAGE.glob("*.py")),
+    (path for package in GUARDED_PACKAGES for path in package.glob("*.py")),
     key=lambda path: (path.parent.name, path.name),
 )
 
@@ -134,9 +139,9 @@ def test_no_module_imports_a_fastapi_name_removed_in_a_supported_release(source_
 
     Every other test here passes just as well against a module importing a name
     fastapi has since deleted, because the pinned fastapi still has it. On a user's
-    fastapi>=0.140.7 that import is an ImportError, and `proxy_server` imports both
-    packages unguarded at module level, so it takes the whole proxy down rather than
-    just these routes. Globbing them means a new module is covered on sight.
+    fastapi>=0.140.7 that import is an ImportError, and `proxy_server` imports every one
+    of these packages unguarded at module level, so it takes the whole proxy down rather
+    than just these routes. Globbing them means a new module is covered on sight.
     """
     assert not _fastapi_names_imported_by(source_file) & FASTAPI_NAMES_REMOVED_IN_0_140_7
 
