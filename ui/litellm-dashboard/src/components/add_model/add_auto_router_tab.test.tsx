@@ -5,6 +5,8 @@ import AddAutoRouterTab from "./add_auto_router_tab";
 import { toast } from "@/lib/toast";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
+import { getSubmitBlockedReason } from "./add_auto_router_tab";
+import { buildModelAvailability } from "@/lib/autorouter_presets";
 import { testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { getAllPresets, getPresetByKey, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
@@ -68,9 +70,14 @@ const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(()
   mockFetchAllModelDeployments: vi.fn(),
 }));
 
+const { validateAutoRouterConfig } = vi.hoisted(() => ({
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+}));
+
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
+  validateAutoRouterConfig,
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -185,6 +192,57 @@ describe("AddAutoRouterTab", () => {
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({ team_id: "team-1" });
+  });
+
+  it("does not submit when the backend's dry-run rejects the config", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    validateAutoRouterConfig.mockResolvedValueOnce({
+      valid: false,
+      error: "session_affinity cannot be combined with tier_definitions",
+    });
+
+    renderWithProviders(<Harness />);
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "rejected-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalled());
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
+  it("creates the router once when the form is submitted again mid dry-run", async () => {
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    let resolveVerdict: (verdict: { valid: boolean }) => void = () => {};
+    validateAutoRouterConfig.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveVerdict = resolve;
+        }),
+    );
+
+    const { container } = renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "double-submit-router" } });
+
+    fireEvent.submit(container.querySelector("form")!);
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled());
+    fireEvent.submit(container.querySelector("form")!);
+
+    resolveVerdict({ valid: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
+    expect(validateAutoRouterConfig).toHaveBeenCalledTimes(1);
+    expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits when the dry-run passes, so the gate is not simply blocking everything", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    validateAutoRouterConfig.mockResolvedValueOnce({ valid: true });
+
+    renderWithProviders(<Harness />);
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "accepted-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
   });
 
   // LIT-5133: "Add keyword rule" seeds a row with no keywords, and the semantic toggle that used
@@ -385,7 +443,7 @@ describe("AddAutoRouterTab", () => {
 
     const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
 
-    expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+    expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
   });
 
   describe("routing test", () => {
@@ -617,6 +675,27 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(expect.stringContaining("no longer available")));
       expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
     });
+
+    it("carries a preset's per-tier reasoning effort through to the create payload", async () => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      await selectTemplate("Anthropic Family");
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
+        complexity_router_config: {
+          tier_model_configs: {
+            REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+          },
+        },
+      });
+    });
   });
 
   describe("default model pin", () => {
@@ -788,7 +867,7 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
-      expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+      expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
     });
 
     it.each([
@@ -862,5 +941,57 @@ describe("AddAutoRouterTab", () => {
         },
       });
     });
+  });
+});
+
+describe("getSubmitBlockedReason", () => {
+  const tiers = {
+    SIMPLE: ["gpt-4o-mini"],
+    MEDIUM: ["gpt-4o-mini"],
+    COMPLEX: ["gpt-4o-mini"],
+    REASONING: ["gpt-4o-mini"],
+  };
+  const availability = buildModelAvailability(["gpt-4o-mini"], []);
+  const referenced = {
+    tiers,
+    classifierType: "heuristic" as const,
+    classifierLlmConfig: undefined,
+    semanticMatchingEnabled: false,
+    embeddingModel: undefined,
+    defaultModel: undefined,
+  };
+
+  it("lets a complete heuristic router through", () => {
+    expect(getSubmitBlockedReason({ tiers, classifier_type: "heuristic" }, [], referenced, availability)).toBeNull();
+  });
+
+  it("blocks an LLM classifier with no model, which the button previously left enabled", () => {
+    expect(getSubmitBlockedReason({ tiers, classifier_type: "llm" }, [], referenced, availability)).toContain(
+      "Please select a classifier model",
+    );
+  });
+
+  it("blocks an edited tier set with no classifier model, since the set forces the LLM classifier", () => {
+    const config = {
+      tiers,
+      classifier_type: "heuristic" as const,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "d", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "d", models: ["gpt-4o-mini"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    };
+    expect(getSubmitBlockedReason(config, [], referenced, availability)).toContain(
+      "an edited tier set routes with the LLM classifier",
+    );
+  });
+
+  it("blocks a keyword rule aimed at a tier this router does not have", () => {
+    const rules = [{ id: "r1", keywords: ["audit"], tier: "AUDIT" }];
+    expect(getSubmitBlockedReason({ tiers, classifier_type: "heuristic" }, rules, referenced, availability)).toContain(
+      "no longer has",
+    );
   });
 });
