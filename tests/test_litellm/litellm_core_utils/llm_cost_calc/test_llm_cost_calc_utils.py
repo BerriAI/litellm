@@ -3879,3 +3879,39 @@ def test_route_image_generation_cost_falls_back_to_requested_quality(
     )
 
     assert cost == expected_cost
+
+
+@pytest.mark.parametrize(
+    ("requested_size", "expected_cost"),
+    [
+        ("1536x1024", 0.05),
+        ("1536-x-1024", 0.05),
+        ("auto", 0.04),
+        (None, 0.04),
+    ],
+)
+def test_route_image_generation_cost_falls_back_to_requested_size(monkeypatch, requested_size, expected_cost):
+    def tier(cost):
+        return {"litellm_provider": "xai", "mode": "image_generation", "input_cost_per_image": cost}
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "xai/grok-imagine-image-2.0": tier(0.06),
+            "low/1024-x-1024/grok-imagine-image-2.0": tier(0.04),
+            "low/1536-x-1024/grok-imagine-image-2.0": tier(0.05),
+        },
+    )
+    response = ImageResponse(data=[ImageObject(url="https://example.com/image.png")])
+    optional_params = {"quality": "low", **({} if requested_size is None else {"size": requested_size})}
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="xai/grok-imagine-image-2.0",
+        completion_response=response,
+        custom_llm_provider="xai",
+        optional_params=optional_params,
+        call_type="image_generation",
+    )
+
+    assert cost == expected_cost

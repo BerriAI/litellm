@@ -1,6 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -72,9 +73,17 @@ def _get_token_detail_value(details: object, key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
+_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-)\d+")
+
+
 def _requested_image_param(optional_params: Mapping[str, object] | None, key: str) -> str | None:
     value: Final = None if optional_params is None else optional_params.get(key)
     return value if isinstance(value, str) else None
+
+
+def _requested_image_size(optional_params: Mapping[str, object] | None) -> str | None:
+    value: Final = _requested_image_param(optional_params, "size")
+    return value if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
 
 
 def get_web_search_requests(server_tool_use: Any) -> int | None:
@@ -1317,7 +1326,7 @@ class CostCalculatorUtils:
         )
 
         resolved_size: Final = (
-            size or completion_response.size or _requested_image_param(optional_params, "size") or "1024-x-1024"
+            size or completion_response.size or _requested_image_size(optional_params) or "1024-x-1024"
         )
         resolved_quality: Final = (
             quality or completion_response.quality or _requested_image_param(optional_params, "quality") or "standard"
