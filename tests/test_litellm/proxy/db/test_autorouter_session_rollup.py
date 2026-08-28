@@ -246,11 +246,9 @@ class TestFlush:
 class TestEnqueueSeam:
     @pytest.mark.asyncio
     async def test_update_database_seam_enqueues_only_auto_routed_success(self, monkeypatch: pytest.MonkeyPatch):
-        import litellm
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
         from litellm.proxy.utils import PrismaClient
 
-        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", None)
         monkeypatch.setattr(PrismaClient, "autorouter_turn_transactions", [])
         writer = DBSpendUpdateWriter()
         fake_prisma = type("P", (), {})()
