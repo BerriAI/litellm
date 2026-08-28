@@ -859,18 +859,39 @@ def function_setup(
         all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
+            from litellm.litellm_core_utils.litellm_logging import (
+                promote_otel_callback_to_global,
+            )
+            from litellm.litellm_core_utils.logging_callback_manager import (
+                register_dashboard_callback,
+            )
+
             for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                        callback,
-                        internal_usage_cache=None,
-                        llm_router=None,
-                    )
+                    dashboard_callback_name: str | None = callback if callback == "otel" else None
+                    if dashboard_callback_name is not None:
+                        callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                            callback,
+                            internal_usage_cache=None,
+                            llm_router=None,
+                            custom_logger_init_args=None,
+                            register_dashboard_provenance=False,
+                            register_on_proxy=False,
+                            cache_in_memory=False,
+                        )
+                    else:
+                        callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                            callback,
+                            internal_usage_cache=None,
+                            llm_router=None,
+                        )
                     if callback is None or any(
                         type(cb) is type(callback) for cb in litellm._async_success_callback
                     ):  # don't double add a callback
                         continue
+                else:
+                    dashboard_callback_name = None
                 if callback not in litellm.input_callback:
                     litellm.input_callback.append(callback)
                 if callback not in litellm.success_callback:
@@ -881,6 +902,9 @@ def function_setup(
                     litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
                 if callback not in litellm._async_failure_callback:
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
+                if dashboard_callback_name is not None:
+                    promote_otel_callback_to_global(callback)
+                    register_dashboard_callback(callback, dashboard_callback_name)
             print_verbose(f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}")
 
         if (

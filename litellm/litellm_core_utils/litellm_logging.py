@@ -246,6 +246,16 @@ else:
     _PAGERDUTY_ALERTING_FACTORY: Final = PagerDutyAlerting
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
+
+def _register_dashboard_callback(callback: CustomLogger, callback_name: str) -> None:
+    """Record the dashboard identity of a factory-created callback."""
+    from litellm.litellm_core_utils.logging_callback_manager import (
+        register_dashboard_callback,
+    )
+
+    register_dashboard_callback(callback, callback_name)
+
+
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = frozenset(StandardLoggingMetadata.__annotations__.keys())
 
 ### GLOBAL VARIABLES ###
@@ -651,6 +661,7 @@ class Logging(LiteLLMLoggingBaseClass):
             internal_usage_cache=None,
             llm_router=None,
             custom_logger_init_args=_custom_logger_init_args,
+            **_get_request_local_otel_init_options(callback),
         )
         if callback_class is None:
             return ()
@@ -659,7 +670,13 @@ class Logging(LiteLLMLoggingBaseClass):
         # resolve the name again without creds so the trace logger (OTel v2 /
         # legacy agent) keeps receiving this request.
         _newrelic_trace_class: Final = (
-            _init_custom_logger_compatible_class(callback, internal_usage_cache=None, llm_router=None)
+            _init_custom_logger_compatible_class(
+                callback,
+                internal_usage_cache=None,
+                llm_router=None,
+                custom_logger_init_args=None,
+                **_get_request_local_otel_init_options(callback),
+            )
             if callback == "newrelic" and _custom_logger_init_args and _custom_logger_init_args.get("newrelic_api_key")
             else None
         )
@@ -1062,6 +1079,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     logging_integration=callback_name,
                     internal_usage_cache=None,
                     llm_router=None,
+                    custom_logger_init_args=None,
+                    **_get_request_local_otel_init_options(callback_name),
                 )
                 if custom_logger is not None:
                     self.model_call_details["prompt_integration"] = model.split("/")[0]
@@ -4081,11 +4100,25 @@ def set_callbacks(callback_list, function_id=None):
         raise e
 
 
+def _get_request_local_otel_init_options(callback_name: str) -> dict[str, bool]:
+    """Prevent a request-local generic OTel logger from becoming proxy-global."""
+    if callback_name != "otel":
+        return {}  # mutable-ok: factory accepts a mutable keyword mapping
+    return {  # mutable-ok: factory accepts a mutable keyword mapping
+        "register_dashboard_provenance": False,
+        "register_on_proxy": False,
+        "cache_in_memory": False,
+    }
+
+
 def _init_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: DualCache | None,
     llm_router: Any | None,  # expect litellm.Router, but typing errors due to circular import
     custom_logger_init_args: dict | None = {},
+    register_dashboard_provenance: bool = True,
+    register_on_proxy: bool = True,
+    cache_in_memory: bool = True,
 ) -> CustomLogger | None:
     """
     Initialize a custom logger compatible class
@@ -4093,7 +4126,13 @@ def _init_custom_logger_compatible_class(
     try:
         custom_logger_init_args = custom_logger_init_args or {}
         if logging_integration == "agentops":  # Add AgentOps initialization
-            _v2 = _maybe_construct_otel_v2("agentops", _in_memory_loggers)
+            _v2 = _maybe_construct_otel_v2(
+                "agentops",
+                _in_memory_loggers,
+                register_dashboard_provenance=register_dashboard_provenance,
+                register_on_proxy=register_on_proxy,
+                cache_in_memory=cache_in_memory,
+            )
             if _v2 is not None:
                 return _v2
             for callback in _in_memory_loggers:
@@ -4266,7 +4305,13 @@ def _init_custom_logger_compatible_class(
             _in_memory_loggers.append(_opik_logger)
             return _opik_logger
         elif logging_integration == "arize":
-            _v2 = _maybe_construct_otel_v2("arize", _in_memory_loggers)
+            _v2 = _maybe_construct_otel_v2(
+                "arize",
+                _in_memory_loggers,
+                register_dashboard_provenance=register_dashboard_provenance,
+                register_on_proxy=register_on_proxy,
+                cache_in_memory=cache_in_memory,
+            )
             if _v2 is not None:
                 return _v2
             from litellm.integrations.opentelemetry import (
@@ -4291,11 +4336,22 @@ def _init_custom_logger_compatible_class(
             for callback in _in_memory_loggers:
                 if isinstance(callback, ArizeLogger) and callback.callback_name == "arize":
                     return callback
-            _arize_otel_logger: Final = ArizeLogger(config=otel_config, callback_name="arize")
-            _in_memory_loggers.append(_arize_otel_logger)
+            _arize_otel_logger: Final = ArizeLogger(
+                config=otel_config,
+                callback_name="arize",
+                register_on_proxy=register_on_proxy,
+            )
+            if cache_in_memory:
+                _in_memory_loggers.append(_arize_otel_logger)
             return _arize_otel_logger
         elif logging_integration == "arize_phoenix":
-            _v2 = _maybe_construct_otel_v2("arize_phoenix", _in_memory_loggers)
+            _v2 = _maybe_construct_otel_v2(
+                "arize_phoenix",
+                _in_memory_loggers,
+                register_dashboard_provenance=register_dashboard_provenance,
+                register_on_proxy=register_on_proxy,
+                cache_in_memory=cache_in_memory,
+            )
             if _v2 is not None:
                 return _v2
             from litellm.integrations.opentelemetry import (
@@ -4317,11 +4373,22 @@ def _init_custom_logger_compatible_class(
             for callback in _in_memory_loggers:
                 if isinstance(callback, ArizePhoenixLogger) and callback.callback_name == "arize_phoenix":
                     return callback
-            _arize_phoenix_otel_logger: Final = ArizePhoenixLogger(config=otel_config, callback_name="arize_phoenix")
-            _in_memory_loggers.append(_arize_phoenix_otel_logger)
+            _arize_phoenix_otel_logger: Final = ArizePhoenixLogger(
+                config=otel_config,
+                callback_name="arize_phoenix",
+                register_on_proxy=register_on_proxy,
+            )
+            if cache_in_memory:
+                _in_memory_loggers.append(_arize_phoenix_otel_logger)
             return _arize_phoenix_otel_logger
         elif logging_integration == "levo":
-            _v2 = _maybe_construct_otel_v2("levo", _in_memory_loggers)
+            _v2 = _maybe_construct_otel_v2(
+                "levo",
+                _in_memory_loggers,
+                register_dashboard_provenance=register_dashboard_provenance,
+                register_on_proxy=register_on_proxy,
+                cache_in_memory=cache_in_memory,
+            )
             if _v2 is not None:
                 return _v2
             from litellm.integrations.levo.levo import LevoLogger
@@ -4342,8 +4409,13 @@ def _init_custom_logger_compatible_class(
                 if isinstance(callback, LevoLogger) and callback.callback_name == "levo":
                     return callback
 
-            _levo_otel_logger: Final = LevoLogger(config=otel_config, callback_name="levo")
-            _in_memory_loggers.append(_levo_otel_logger)
+            _levo_otel_logger: Final = LevoLogger(
+                config=otel_config,
+                callback_name="levo",
+                register_on_proxy=register_on_proxy,
+            )
+            if cache_in_memory:
+                _in_memory_loggers.append(_levo_otel_logger)
             return _levo_otel_logger
         elif logging_integration == "otel":
             # Gate the new typed V2 adapter behind LITELLM_OTEL_V2. When off,
@@ -4357,29 +4429,51 @@ def _init_custom_logger_compatible_class(
                 from litellm.integrations.otel.logger import OpenTelemetryV2
 
                 for callback in _in_memory_loggers:
-                    if type(callback) is OpenTelemetryV2:
+                    if type(callback) is OpenTelemetryV2 and getattr(callback, "callback_name", None) == "otel":
+                        if register_dashboard_provenance:
+                            _register_dashboard_callback(callback, logging_integration)
                         return callback
+                otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                otel_settings.setdefault("callback_name", "otel")
+                otel_settings.pop("register_on_proxy", None)
                 otel_logger_v2: Final = OpenTelemetryV2(
-                    **_get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                    register_on_proxy=register_on_proxy,
+                    **otel_settings,
                 )
-                _in_memory_loggers.append(otel_logger_v2)
-                _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
+                if register_dashboard_provenance:
+                    _register_dashboard_callback(otel_logger_v2, logging_integration)
+                if cache_in_memory:
+                    _in_memory_loggers.append(otel_logger_v2)
+                if register_on_proxy:
+                    _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
                 return otel_logger_v2
 
             from litellm.integrations.opentelemetry import OpenTelemetry
 
             for callback in _in_memory_loggers:
-                if type(callback) is OpenTelemetry:
+                if type(callback) is OpenTelemetry and getattr(callback, "callback_name", None) == "otel":
+                    if register_dashboard_provenance:
+                        _register_dashboard_callback(callback, logging_integration)
                     return callback
-            otel_logger: Final = OpenTelemetry(
-                **_get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+            legacy_otel_settings: Final = _get_custom_logger_settings_from_proxy_server(
+                callback_name=logging_integration
             )
-            _in_memory_loggers.append(otel_logger)
+            legacy_otel_settings.setdefault("callback_name", "otel")
+            legacy_otel_settings.pop("register_on_proxy", None)
+            otel_logger: Final = OpenTelemetry(
+                register_on_proxy=register_on_proxy,
+                **legacy_otel_settings,
+            )
+            if register_dashboard_provenance:
+                _register_dashboard_callback(otel_logger, logging_integration)
+            if cache_in_memory:
+                _in_memory_loggers.append(otel_logger)
 
             # Auto-initialize Arize Phoenix if Phoenix env vars are configured
             # This allows users to get nested traces in both OTEL and Phoenix
             # by only specifying "otel" in callbacks
-            _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
+            if register_on_proxy:
+                _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
 
             return otel_logger
 
@@ -4455,8 +4549,12 @@ def _init_custom_logger_compatible_class(
                 # Use exact type check to avoid matching ArizePhoenixLogger (subclass)
                 if type(callback) is OpenTelemetry:
                     return callback
-            _otel_logger = OpenTelemetry(config=otel_config)
-            _in_memory_loggers.append(_otel_logger)
+            _otel_logger = OpenTelemetry(
+                config=otel_config,
+                register_on_proxy=register_on_proxy,
+            )
+            if cache_in_memory:
+                _in_memory_loggers.append(_otel_logger)
             return _otel_logger
         elif logging_integration == "dynamic_rate_limiter":
             from litellm.proxy.hooks.dynamic_rate_limiter import (
@@ -4497,7 +4595,13 @@ def _init_custom_logger_compatible_class(
         elif logging_integration == "langtrace":
             if "LANGTRACE_API_KEY" not in os.environ:
                 raise ValueError("LANGTRACE_API_KEY not found in environment variables")
-            _v2 = _maybe_construct_otel_v2("langtrace", _in_memory_loggers)
+            _v2 = _maybe_construct_otel_v2(
+                "langtrace",
+                _in_memory_loggers,
+                register_dashboard_provenance=register_dashboard_provenance,
+                register_on_proxy=register_on_proxy,
+                cache_in_memory=cache_in_memory,
+            )
             if _v2 is not None:
                 return _v2
 
@@ -4514,8 +4618,13 @@ def _init_custom_logger_compatible_class(
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenTelemetry) and callback.callback_name == "langtrace":
                     return callback
-            _otel_logger = OpenTelemetry(config=otel_config, callback_name="langtrace")
-            _in_memory_loggers.append(_otel_logger)
+            _otel_logger = OpenTelemetry(
+                config=otel_config,
+                callback_name="langtrace",
+                register_on_proxy=register_on_proxy,
+            )
+            if cache_in_memory:
+                _in_memory_loggers.append(_otel_logger)
             return _otel_logger
 
         elif logging_integration == "mlflow":
@@ -4535,7 +4644,13 @@ def _init_custom_logger_compatible_class(
             _in_memory_loggers.append(langfuse_logger)
             return langfuse_logger
         elif logging_integration == "langfuse_otel":
-            _v2 = _maybe_construct_otel_v2("langfuse_otel", _in_memory_loggers)
+            _v2 = _maybe_construct_otel_v2(
+                "langfuse_otel",
+                _in_memory_loggers,
+                register_dashboard_provenance=register_dashboard_provenance,
+                register_on_proxy=register_on_proxy,
+                cache_in_memory=cache_in_memory,
+            )
             if _v2 is not None:
                 return _v2
             from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
@@ -4545,11 +4660,22 @@ def _init_custom_logger_compatible_class(
                     return callback
             # Allow LangfuseOtelLogger to initialize its own config safely
             # This prevents startup crashes if LANGFUSE keys are not in env (e.g. for dynamic usage)
-            _otel_logger = LangfuseOtelLogger(config=None, callback_name="langfuse_otel")
-            _in_memory_loggers.append(_otel_logger)
+            _otel_logger = LangfuseOtelLogger(
+                config=None,
+                callback_name="langfuse_otel",
+                register_on_proxy=register_on_proxy,
+            )
+            if cache_in_memory:
+                _in_memory_loggers.append(_otel_logger)
             return _otel_logger
         elif logging_integration == "weave_otel":
-            _v2 = _maybe_construct_otel_v2("weave_otel", _in_memory_loggers)
+            _v2 = _maybe_construct_otel_v2(
+                "weave_otel",
+                _in_memory_loggers,
+                register_dashboard_provenance=register_dashboard_provenance,
+                register_on_proxy=register_on_proxy,
+                cache_in_memory=cache_in_memory,
+            )
             if _v2 is not None:
                 return _v2
             from litellm.integrations.opentelemetry import OpenTelemetryConfig
@@ -4569,8 +4695,13 @@ def _init_custom_logger_compatible_class(
             for callback in _in_memory_loggers:
                 if isinstance(callback, WeaveOtelLogger) and callback.callback_name == "weave_otel":
                     return callback
-            _otel_logger = WeaveOtelLogger(config=otel_config, callback_name="weave_otel")
-            _in_memory_loggers.append(_otel_logger)
+            _otel_logger = WeaveOtelLogger(
+                config=otel_config,
+                callback_name="weave_otel",
+                register_on_proxy=register_on_proxy,
+            )
+            if cache_in_memory:
+                _in_memory_loggers.append(_otel_logger)
             return _otel_logger
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
@@ -4696,7 +4827,13 @@ def _init_custom_logger_compatible_class(
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                 )
 
-            _v2 = _maybe_construct_otel_v2("newrelic", _in_memory_loggers)
+            _v2 = _maybe_construct_otel_v2(
+                "newrelic",
+                _in_memory_loggers,
+                register_dashboard_provenance=register_dashboard_provenance,
+                register_on_proxy=register_on_proxy,
+                cache_in_memory=cache_in_memory,
+            )
             if _v2 is not None:
                 return _v2
             for callback in _in_memory_loggers:
@@ -4712,7 +4849,28 @@ def _init_custom_logger_compatible_class(
     return None
 
 
-def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[CustomLogger]) -> "OpenTelemetryV2 | None":
+def promote_otel_callback_to_global(callback: CustomLogger) -> None:
+    """Activate and retain a generic OTel logger after global callback promotion."""
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+
+    if type(callback) not in (OpenTelemetry, OpenTelemetryV2):
+        return
+    if getattr(callback, "callback_name", None) != "otel":
+        return
+    callback._init_otel_logger_on_litellm_proxy()
+    if not any(cached_callback is callback for cached_callback in _in_memory_loggers):
+        _in_memory_loggers.append(callback)
+    _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
+
+
+def _maybe_construct_otel_v2(
+    callback_name: str,
+    _in_memory_loggers: list[CustomLogger],
+    register_dashboard_provenance: bool = True,
+    register_on_proxy: bool = True,
+    cache_in_memory: bool = True,
+) -> "OpenTelemetryV2 | None":
     """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
     instance configured via the preset for ``callback_name``.
 
@@ -4731,6 +4889,8 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         return None
     for callback in _in_memory_loggers:
         if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == callback_name:
+            if register_dashboard_provenance:
+                _register_dashboard_callback(callback, callback_name)
             return callback
     try:
         config: Final = preset_fn()
@@ -4738,8 +4898,15 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
-    v2_logger: Final = OpenTelemetryV2(config=config, callback_name=callback_name)
-    _in_memory_loggers.append(v2_logger)
+    v2_logger: Final = OpenTelemetryV2(
+        config=config,
+        callback_name=callback_name,
+        register_on_proxy=register_on_proxy,
+    )
+    if register_dashboard_provenance:
+        _register_dashboard_callback(v2_logger, callback_name)
+    if cache_in_memory:
+        _in_memory_loggers.append(v2_logger)
     return v2_logger
 
 

@@ -18,6 +18,7 @@ from litellm.proxy.management_helpers.audit_logs import (
     _audit_log_task_done_callback,
     _build_audit_log_payload,
     _dispatch_audit_log_to_callbacks,
+    _resolve_audit_log_callback,
     create_audit_log_for_update,
     is_audit_logging_enabled,
 )
@@ -26,8 +27,13 @@ from litellm.types.utils import StandardAuditLogPayload
 
 @pytest.fixture(autouse=True)
 def reset_audit_log_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every test starts with no audit log callbacks registered."""
+    """Every test starts with no audit log callbacks or cached resolvers."""
+    from litellm.proxy.management_helpers.audit_logs import reset_audit_log_callback_cache
+
     monkeypatch.setattr(litellm, "audit_log_callbacks", [])
+    reset_audit_log_callback_cache()
+    yield
+    reset_audit_log_callback_cache()
 
 
 def _make_audit_log(
@@ -45,6 +51,58 @@ def _make_audit_log(
         updated_values=json.dumps({"name": "new-team"}),
         before_value=json.dumps({"name": "old-team"}),
     )
+
+
+@pytest.mark.parametrize(
+    ("otel_v2_enabled", "expected_type"),
+    ((True, "OpenTelemetryV2"), (False, "OpenTelemetry")),
+)
+def test_resolving_an_audit_callback_is_local_and_not_dashboard_visible(
+    monkeypatch: pytest.MonkeyPatch,
+    otel_v2_enabled: bool,
+    expected_type: str,
+):
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+
+    manager = LoggingCallbackManager()
+    monkeypatch.setenv("LITELLM_OTEL_V2", str(otel_v2_enabled).lower())
+    is_otel_v2_enabled.cache_clear()
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "service_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    try:
+        audit_logger = _resolve_audit_log_callback("otel")
+
+        expected_callback_type = OpenTelemetryV2 if expected_type == "OpenTelemetryV2" else OpenTelemetry
+        assert type(audit_logger) is expected_callback_type
+        assert audit_logger.callback_name == "otel"
+        assert _resolve_audit_log_callback("otel") is audit_logger
+        assert litellm_logging._in_memory_loggers == []
+        assert all(
+            audit_logger is not registered_callback
+            for callback_registry in (
+                litellm.input_callback,
+                litellm.service_callback,
+                litellm.success_callback,
+                litellm.failure_callback,
+                litellm._async_success_callback,
+                litellm._async_failure_callback,
+                litellm.callbacks,
+            )
+            for registered_callback in callback_registry
+        )
+        assert manager.get_dashboard_callback_registrations() == ()
+    finally:
+        is_otel_v2_enabled.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -156,9 +214,7 @@ class TestDispatchAuditLogToCallbacks:
     async def test_nonblocking_on_callback_failure(self, monkeypatch: pytest.MonkeyPatch):
         """Callback errors should not propagate."""
         mock_logger = MagicMock(spec=CustomLogger)
-        mock_logger.async_log_audit_log_event = AsyncMock(
-            side_effect=RuntimeError("boom")
-        )
+        mock_logger.async_log_audit_log_event = AsyncMock(side_effect=RuntimeError("boom"))
         monkeypatch.setattr(litellm, "audit_log_callbacks", [mock_logger])
 
         audit_log = _make_audit_log()
@@ -264,9 +320,7 @@ class TestCreateAuditLogForUpdateWithCallbacks:
             patch("litellm.store_audit_logs", True),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         ):
-            mock_prisma.db.litellm_auditlog.create = AsyncMock(
-                side_effect=RuntimeError("DB connection lost")
-            )
+            mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=RuntimeError("DB connection lost"))
 
             audit_log = _make_audit_log()
             await create_audit_log_for_update(audit_log)
@@ -282,9 +336,7 @@ class TestAuditLogTaskDoneCallback:
         mock_task = MagicMock(spec=asyncio.Task)
         mock_task.exception.return_value = RuntimeError("callback failed")
 
-        with patch(
-            "litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger"
-        ) as mock_logger:
+        with patch("litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger") as mock_logger:
             _audit_log_task_done_callback(mock_task)
             mock_logger.error.assert_called_once()
             assert "callback failed" in str(mock_logger.error.call_args)
@@ -294,9 +346,7 @@ class TestAuditLogTaskDoneCallback:
         mock_task = MagicMock(spec=asyncio.Task)
         mock_task.exception.return_value = None
 
-        with patch(
-            "litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger"
-        ) as mock_logger:
+        with patch("litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger") as mock_logger:
             _audit_log_task_done_callback(mock_task)
             mock_logger.error.assert_not_called()
 
@@ -305,9 +355,7 @@ class TestAuditLogTaskDoneCallback:
         mock_task = MagicMock(spec=asyncio.Task)
         mock_task.exception.side_effect = asyncio.CancelledError()
 
-        with patch(
-            "litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger"
-        ) as mock_logger:
+        with patch("litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger") as mock_logger:
             _audit_log_task_done_callback(mock_task)
             mock_logger.error.assert_not_called()
 
@@ -386,9 +434,7 @@ class TestS3AuditCallbackParamsDecoupling:
         from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
 
         monkeypatch.setattr(litellm, "s3_callback_params", litellm.s3_callback_params)
-        monkeypatch.setattr(
-            litellm, "s3_audit_callback_params", getattr(litellm, "s3_audit_callback_params", None)
-        )
+        monkeypatch.setattr(litellm, "s3_audit_callback_params", getattr(litellm, "s3_audit_callback_params", None))
         ll_audit_logs._audit_log_callback_cache.clear()
         ll_logging._in_memory_loggers.clear()
         yield
@@ -452,7 +498,6 @@ class TestS3AuditCallbackParamsDecoupling:
     def test_empty_dict_opts_in(self, monkeypatch: pytest.MonkeyPatch):
         """`s3_audit_callback_params = {}` is opt-in (truthy-by-presence) and
         produces a separate instance with no bucket configured (env/IAM-only)."""
-        from litellm.integrations.s3_v2 import S3Logger
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
         )

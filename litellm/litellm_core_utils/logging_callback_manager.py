@@ -1,5 +1,8 @@
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Final
+import sys
+import weakref
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +18,172 @@ else:
     _custom_logger_compatible_callbacks_literal = str
 
 _generic_api_logger_cache: Final[dict[str, GenericAPILogger]] = {}
+
+
+class _DashboardCallbackRegistration(NamedTuple):
+    callback_name: str
+    callback_type: str
+
+
+_DASHBOARD_CALLBACK_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "arize": "arize",
+        "aws_sqs": "sqs",
+        "azure_sentinel": "azure_sentinel",
+        "braintrust": "braintrust",
+        "custom_callback_api": "generic_api",
+        "datadog": "datadog",
+        "datadog_cost_management": "datadog_cost_management",
+        "datadog_metrics": "datadog_metrics",
+        "galileo": "galileo",
+        "generic_api": "generic_api",
+        "lago": "lago",
+        "langfuse": "langfuse",
+        "langfuse_otel": "langfuse_otel",
+        "langsmith": "langsmith",
+        "newrelic": "newrelic",
+        "openmeter": "openmeter",
+        "opentelemetry": "otel",
+        "otel": "otel",
+        "s3": "s3",
+        "s3_v2": "s3",
+        "sqs": "sqs",
+        "traceloop": "traceloop",
+    }
+)
+
+
+def get_dashboard_callback_name(callback_name: str) -> str | None:
+    """Return the dashboard identity for a supported callback name."""
+    return _DASHBOARD_CALLBACK_ALIASES.get(callback_name.lower())
+
+
+def is_generic_api_callback(
+    callback_name: str,
+    callback_settings: Mapping[str, object] | None = None,
+) -> bool:
+    """Return whether a configured callback resolves to Generic API."""
+    if get_dashboard_callback_name(callback_name) == "generic_api":
+        return True
+    callback_settings_to_use: Final = callback_settings if callback_settings is not None else litellm.callback_settings
+    callback_config: Final = callback_settings_to_use.get(callback_name)
+    if isinstance(callback_config, dict) and callback_config.get("callback_type") == "generic_api":
+        return True
+    from litellm.integrations.generic_api.generic_api_callback import (
+        is_callback_compatible,
+    )
+
+    return is_callback_compatible(callback_name)
+
+
+class _DashboardCallbackProvenance(NamedTuple):
+    callback_ref: weakref.ReferenceType[CustomLogger]
+    callback_names: tuple[str, ...]
+
+
+_DASHBOARD_CALLBACK_PROVENANCE: Final[
+    dict[int, _DashboardCallbackProvenance]
+] = {}  # mutable-ok: weak-reference callbacks remove their collected logger entries
+
+_AMBIGUOUS_DASHBOARD_CALLBACK_TYPES: Final[Mapping[tuple[str, str], str]] = MappingProxyType(
+    {
+        ("litellm.integrations.opentelemetry", "OpenTelemetry"): "otel",
+        ("litellm.integrations.otel.logger", "OpenTelemetryV2"): "otel",
+    }
+)
+
+_SUPPORTED_DASHBOARD_CALLBACK_TYPES: Final[Mapping[tuple[str, str], str]] = MappingProxyType(
+    {
+        ("litellm.integrations.arize.arize", "ArizeLogger"): "arize",
+        ("litellm.integrations.azure_sentinel.azure_sentinel", "AzureSentinelLogger"): "azure_sentinel",
+        ("litellm.integrations.braintrust_logging", "BraintrustLogger"): "braintrust",
+        ("litellm.integrations.generic_api.generic_api_callback", "GenericAPILogger"): "generic_api",
+        ("litellm.integrations.datadog.datadog", "DataDogLogger"): "datadog",
+        (
+            "litellm.integrations.datadog.datadog_cost_management",
+            "DatadogCostManagementLogger",
+        ): "datadog_cost_management",
+        ("litellm.integrations.datadog.datadog_metrics", "DatadogMetricsLogger"): "datadog_metrics",
+        ("litellm.integrations.galileo", "GalileoObserve"): "galileo",
+        ("litellm.integrations.lago", "LagoLogger"): "lago",
+        ("litellm.integrations.langfuse.langfuse_otel", "LangfuseOtelLogger"): "langfuse_otel",
+        ("litellm.integrations.langfuse.langfuse_prompt_management", "LangfusePromptManagement"): "langfuse",
+        ("litellm.integrations.langsmith", "LangsmithLogger"): "langsmith",
+        ("litellm.integrations.newrelic.newrelic", "NewRelicLogger"): "newrelic",
+        ("litellm.integrations.openmeter", "OpenMeterLogger"): "openmeter",
+        ("litellm.integrations.s3_v2", "S3Logger"): "s3",
+        ("litellm.integrations.sqs", "SQSLogger"): "sqs",
+    }
+)
+
+
+def _get_dashboard_callback_type_name(
+    callback: CustomLogger,
+    callback_types: Mapping[tuple[str, str], str],
+) -> str | None:
+    callback_type: Final = type(callback)
+    callback_key: Final = (callback_type.__module__, callback_type.__name__)
+    dashboard_callback_name: Final = callback_types.get(callback_key)
+    if dashboard_callback_name is None:
+        return None
+    callback_module: Final = sys.modules.get(callback_type.__module__)
+    if callback_module is None or getattr(callback_module, callback_type.__name__, None) is not callback_type:
+        return None
+    return dashboard_callback_name
+
+
+def register_dashboard_callback(callback: CustomLogger, callback_name: str) -> None:
+    """Record the dashboard identity of a factory-created OTel logger."""
+    dashboard_callback_name: Final = get_dashboard_callback_name(callback_name)
+    if (
+        dashboard_callback_name is None
+        or _get_dashboard_callback_type_name(callback, _AMBIGUOUS_DASHBOARD_CALLBACK_TYPES) is None
+    ):
+        return
+
+    callback_id: Final = id(callback)
+    registered_callback: Final = _DASHBOARD_CALLBACK_PROVENANCE.get(callback_id)
+    if registered_callback is not None and registered_callback.callback_ref() is callback:
+        if dashboard_callback_name not in registered_callback.callback_names:
+            _DASHBOARD_CALLBACK_PROVENANCE[callback_id] = _DashboardCallbackProvenance(
+                registered_callback.callback_ref,
+                registered_callback.callback_names + (dashboard_callback_name,),
+            )
+        return
+
+    def _remove_callback(reference: weakref.ReferenceType[CustomLogger]) -> None:
+        registered_callback: Final = _DASHBOARD_CALLBACK_PROVENANCE.get(callback_id)
+        if registered_callback is not None and registered_callback.callback_ref is reference:
+            _DASHBOARD_CALLBACK_PROVENANCE.pop(callback_id, None)
+
+    try:
+        _DASHBOARD_CALLBACK_PROVENANCE[callback_id] = _DashboardCallbackProvenance(
+            weakref.ref(callback, _remove_callback),
+            (dashboard_callback_name,),
+        )
+    except TypeError:
+        return
+
+
+def _get_registered_dashboard_callback_names(callback: CustomLogger) -> tuple[str, ...]:
+    registered_callback: Final = _DASHBOARD_CALLBACK_PROVENANCE.get(id(callback))
+    if registered_callback is None or registered_callback.callback_ref() is not callback:
+        return ()
+    return registered_callback.callback_names
+
+
+def _get_dashboard_callback_registry_callbacks() -> tuple[CustomLogger | Callable | str, ...]:
+    return tuple(
+        callback
+        for callback_registry in (
+            litellm.success_callback,
+            getattr(litellm, "_async_success_callback", ()),
+            litellm.failure_callback,
+            getattr(litellm, "_async_failure_callback", ()),
+            litellm.callbacks,
+        )
+        for callback in callback_registry
+    )
 
 
 class LoggingCallbackManager:
@@ -244,6 +413,18 @@ class LoggingCallbackManager:
 
         return callback
 
+    def reset_dashboard_callback_registrations(self) -> None:
+        """Drop provenance for callbacks no longer active in dashboard registries."""
+        active_callbacks: Final = _get_dashboard_callback_registry_callbacks()
+        stale_callback_ids: Final = tuple(
+            callback_id
+            for callback_id, registration in _DASHBOARD_CALLBACK_PROVENANCE.items()
+            if registration.callback_ref() is None
+            or not any(registration.callback_ref() is callback for callback in active_callbacks)
+        )
+        for callback_id in stale_callback_ids:
+            _DASHBOARD_CALLBACK_PROVENANCE.pop(callback_id, None)
+
     def _safe_add_callback_to_list(
         self,
         callback: CustomLogger | Callable | str,
@@ -340,6 +521,7 @@ class LoggingCallbackManager:
         litellm._async_success_callback = []
         litellm._async_failure_callback = []
         litellm.callbacks = []
+        self.reset_dashboard_callback_registrations()
 
     def _get_all_callbacks(self) -> list[CustomLogger | Callable | str]:
         """
@@ -440,6 +622,80 @@ class LoggingCallbackManager:
         result["success_and_failure"] = list(set(result["success_and_failure"]))
 
         return result
+
+    def get_dashboard_callback_registrations(self) -> tuple[_DashboardCallbackRegistration, ...]:
+        """Return active callbacks recognized by the Logging & Alerts dashboard."""
+        self.reset_dashboard_callback_registrations()
+        success_callbacks: Final = tuple(litellm.success_callback) + tuple(
+            getattr(litellm, "_async_success_callback", ())
+        )
+        failure_callbacks: Final = tuple(litellm.failure_callback) + tuple(
+            getattr(litellm, "_async_failure_callback", ())
+        )
+        registrations: Final = tuple(
+            registration
+            for callback_type, callbacks in (
+                ("success", success_callbacks),
+                ("failure", failure_callbacks),
+                ("success_and_failure", tuple(litellm.callbacks)),
+            )
+            for callback in callbacks
+            for registration in self._get_dashboard_callback_registration(callback, callback_type)
+        )
+        callback_names: Final = tuple(
+            registration.callback_name
+            for registration_index, registration in enumerate(registrations)
+            if registration.callback_name
+            not in tuple(prior.callback_name for prior in registrations[:registration_index])
+        )
+        return tuple(
+            _DashboardCallbackRegistration(callback_name, callback_type)
+            for callback_name in callback_names
+            for callback_type in self._get_dashboard_callback_types(callback_name, registrations)
+        )
+
+    @staticmethod
+    def _get_dashboard_callback_types(
+        callback_name: str,
+        registrations: tuple[_DashboardCallbackRegistration, ...],
+    ) -> tuple[str, ...]:
+        callback_types: Final = tuple(
+            registration.callback_type for registration in registrations if registration.callback_name == callback_name
+        )
+        if "success_and_failure" in callback_types or ("success" in callback_types and "failure" in callback_types):
+            return ("success_and_failure",)
+        if "success" in callback_types:
+            return ("success",)
+        if "failure" in callback_types:
+            return ("failure",)
+        return ()
+
+    @staticmethod
+    def _get_dashboard_callback_registration(
+        callback: CustomLogger | Callable | str,
+        callback_type: str,
+    ) -> tuple[_DashboardCallbackRegistration, ...]:
+        return tuple(
+            _DashboardCallbackRegistration(callback_name, callback_type)
+            for callback_name in LoggingCallbackManager._get_dashboard_callback_names(callback)
+        )
+
+    @staticmethod
+    def _get_dashboard_callback_names(callback: CustomLogger | Callable | str) -> tuple[str, ...]:
+        if isinstance(callback, str):
+            callback_name: Final = get_dashboard_callback_name(callback)
+            return (callback_name,) if callback_name is not None else ()
+        if not isinstance(callback, CustomLogger):
+            return ()
+
+        dashboard_callback_name: Final = _get_dashboard_callback_type_name(
+            callback, _SUPPORTED_DASHBOARD_CALLBACK_TYPES
+        )
+        if dashboard_callback_name is not None:
+            return (dashboard_callback_name,)
+        if _get_dashboard_callback_type_name(callback, _AMBIGUOUS_DASHBOARD_CALLBACK_TYPES) is not None:
+            return _get_registered_dashboard_callback_names(callback)
+        return ()
 
     def _get_callback_string(self, callback: CustomLogger | Callable | str) -> str:
         from litellm.litellm_core_utils.custom_logger_registry import (

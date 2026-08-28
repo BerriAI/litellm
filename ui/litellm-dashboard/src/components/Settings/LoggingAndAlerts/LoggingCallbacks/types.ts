@@ -7,6 +7,7 @@ export interface AlertingObject {
   // UI must read this to render the correct badge; missing it caused
   // every row to render as "Success".
   type?: "success" | "failure" | "success_and_failure";
+  read_only?: boolean;
   variables: AlertingVariables;
 }
 

@@ -3462,6 +3462,45 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    arize: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="arize",
+        ui_callback_name="Arize",
+        litellm_callback_params=[  # mutable-ok: UI callback parameter order is user-facing
+            "ARIZE_SPACE_ID",
+            "ARIZE_SPACE_KEY",
+            "ARIZE_API_KEY",
+            "ARIZE_PROJECT_NAME",
+            "ARIZE_ENDPOINT",
+            "ARIZE_HTTP_ENDPOINT",
+        ],
+    )
+
+    datadog_metrics: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="datadog_metrics",
+        ui_callback_name="Datadog Metrics",
+        litellm_callback_params=[  # mutable-ok: UI callback parameter order is user-facing
+            "DD_API_KEY",
+            "DD_APP_KEY",
+            "DD_SITE",
+        ],
+    )
+
+    datadog_cost_management: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="datadog_cost_management",
+        ui_callback_name="Datadog Cost Management",
+        litellm_callback_params=[  # mutable-ok: UI callback parameter order is user-facing
+            "DD_API_KEY",
+            "DD_APP_KEY",
+            "DD_SITE",
+        ],
+    )
+
+    sqs: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="sqs",
+        ui_callback_name="SQS",
+        litellm_callback_params=[],  # mutable-ok: CallbackOnUI requires a mutable list
+    )
+
     openmeter: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="openmeter",
         ui_callback_name="OpenMeter",

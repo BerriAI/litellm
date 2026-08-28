@@ -172,6 +172,7 @@ class OpenTelemetryV2(CustomLogger):
         tracer_provider: TracerProvider | None = None,
         logger_provider: LoggerProvider | None = None,
         meter_provider: "MeterProvider | None" = None,
+        register_on_proxy: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -191,7 +192,8 @@ class OpenTelemetryV2(CustomLogger):
         )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
         self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
-        self._init_otel_logger_on_litellm_proxy()
+        if register_on_proxy:
+            self._init_otel_logger_on_litellm_proxy()
 
     def _init_metrics(self, meter_provider: "MeterProvider | None") -> "GenAIMetricRecorder | None":
         """Create the six GenAI histograms when metrics are enabled, else ``None``.
