@@ -1,4 +1,6 @@
 
+from typing import Literal
+
 import pytest
 
 from litellm.llms.vertex_ai.gemini import transformation
@@ -7,7 +9,23 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 )
 from litellm.types.llms import openai
 from litellm.types import completion
-from litellm.types.llms.vertex_ai import RequestBody
+from litellm.types.llms.vertex_ai import ContentType, PartType, RequestBody
+
+
+def _transform_vertex_messages(
+    messages: list[openai.AllMessageValues],
+    *,
+    model: str = "gemini-3.7-flash",
+    provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"] = "vertex_ai",
+) -> RequestBody:
+    return transformation._transform_request_body(
+        messages=messages,
+        model=model,
+        optional_params={},
+        custom_llm_provider=provider,
+        litellm_params={},
+        cached_content=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -338,3 +356,218 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "vertex_ai_beta"])
+def test_text_only_model_tail_appends_user_placeholder(
+    provider: Literal["vertex_ai", "vertex_ai_beta"],
+) -> None:
+    body: RequestBody = _transform_vertex_messages(
+        [
+            {"role": "user", "content": "Remember cobalt"},
+            {"role": "assistant", "content": "stored"},
+        ],
+        provider=provider,
+    )
+
+    assert body["contents"] == [
+        {"role": "user", "parts": [{"text": "Remember cobalt"}]},
+        {"role": "model", "parts": [{"text": "stored"}]},
+        {"role": "user", "parts": [{"text": "."}]},
+    ]
+
+
+def test_text_only_model_tail_before_system_message_appends_user_placeholder() -> None:
+    body: RequestBody = _transform_vertex_messages(
+        [
+            {"role": "user", "content": "Remember cobalt"},
+            {"role": "assistant", "content": "stored"},
+            {"role": "system", "content": "Keep replies short"},
+        ]
+    )
+
+    assert body["contents"][-1] == {
+        "role": "user",
+        "parts": [{"text": "."}],
+    }
+    assert body["system_instruction"] == {
+        "parts": [{"text": "Keep replies short"}]
+    }
+
+
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        {
+            "role": "assistant",
+            "content": "stored",
+            "provider_specific_fields": {"thought_signatures": ["sig-1"]},
+        },
+        {
+            "role": "assistant",
+            "content": "stored",
+            "reasoning_content": "Remembering the requested word",
+        },
+    ],
+)
+def test_text_model_tail_with_reasoning_metadata_appends_user_placeholder(
+    assistant_message: openai.ChatCompletionAssistantMessage,
+) -> None:
+    body: RequestBody = _transform_vertex_messages(
+        [
+            {"role": "user", "content": "Remember cobalt"},
+            assistant_message,
+        ]
+    )
+
+    assert body["contents"][-1] == {
+        "role": "user",
+        "parts": [{"text": "."}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        ("gemini-2.5-flash", "vertex_ai"),
+        ("gemini-3.7-flash", "gemini"),
+    ],
+)
+def test_text_model_tail_outside_vertex_gemini_3_scope_is_unchanged(
+    model: str,
+    provider: Literal["vertex_ai", "gemini"],
+) -> None:
+    body: RequestBody = _transform_vertex_messages(
+        [
+            {"role": "user", "content": "Remember cobalt"},
+            {"role": "assistant", "content": "stored"},
+        ],
+        model=model,
+        provider=provider,
+    )
+
+    assert body["contents"][-1] == {
+        "role": "model",
+        "parts": [{"text": "stored"}],
+    }
+
+
+def test_user_tail_is_unchanged() -> None:
+    body: RequestBody = _transform_vertex_messages(
+        [
+            {"role": "user", "content": "Remember cobalt"},
+            {"role": "assistant", "content": "stored"},
+            {"role": "user", "content": "What was it?"},
+        ]
+    )
+
+    assert body["contents"][-1] == {
+        "role": "user",
+        "parts": [{"text": "What was it?"}],
+    }
+
+
+def test_empty_assistant_tail_does_not_add_a_second_user_turn() -> None:
+    body: RequestBody = _transform_vertex_messages(
+        [
+            {"role": "user", "content": "Remember cobalt"},
+            {"role": "assistant", "content": None},
+        ]
+    )
+
+    assert body["contents"] == [
+        {"role": "user", "parts": [{"text": "Remember cobalt"}]}
+    ]
+
+
+def test_function_call_model_tail_is_unchanged() -> None:
+    body: RequestBody = _transform_vertex_messages(
+        [
+            {"role": "user", "content": "Look up cobalt"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert body["contents"][-1]["role"] == "model"
+    assert "function_call" in body["contents"][-1]["parts"][0]
+
+
+def test_server_side_tool_model_tail_is_unchanged() -> None:
+    body: RequestBody = _transform_vertex_messages(
+        [
+            {"role": "user", "content": "Search for cobalt"},
+            {
+                "role": "assistant",
+                "content": "stored",
+                "provider_specific_fields": {
+                    "server_side_tool_invocations": [
+                        {
+                            "tool_type": "googleSearch",
+                            "id": "tool-1",
+                            "args": {"query": "cobalt"},
+                            "response": {"result": "stored"},
+                        }
+                    ]
+                },
+            },
+        ]
+    )
+
+    assert body["contents"][-1]["role"] == "model"
+    assert any(
+        "toolCall" in part or "toolResponse" in part
+        for part in body["contents"][-1]["parts"]
+    )
+
+
+def test_assistant_media_model_tail_is_unchanged() -> None:
+    image_data_uri = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    body: RequestBody = _transform_vertex_messages(
+        [
+            {"role": "user", "content": "Generate an image"},
+            {
+                "role": "assistant",
+                "content": "generated",
+                "images": [
+                    {
+                        "image_url": {"url": image_data_uri, "detail": "auto"},
+                        "index": 0,
+                        "type": "image_url",
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert body["contents"][-1]["role"] == "model"
+    assert any(
+        "inline_data" in part for part in body["contents"][-1]["parts"]
+    )
+
+
+def test_text_part_with_disallowed_key_model_tail_is_unchanged() -> None:
+    contents: tuple[ContentType, ...] = (
+        ContentType(role="user", parts=[PartType(text="Remember cobalt")]),
+        ContentType(
+            role="model",
+            parts=[PartType(text="stored", media_resolution="low")],
+        ),
+    )
+
+    assert transformation._append_user_after_text_only_model_tail(contents) == (
+        {"role": "user", "parts": [{"text": "Remember cobalt"}]},
+        {"role": "model", "parts": [{"text": "stored", "media_resolution": "low"}]},
+    )

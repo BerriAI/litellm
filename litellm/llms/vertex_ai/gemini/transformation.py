@@ -7,6 +7,7 @@ Why separate file? Make it easy to see how transformation works
 import json
 import os
 import re
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
@@ -1075,6 +1076,8 @@ def _gemini_convert_messages_with_history(
 # Keys that LiteLLM consumes internally and must never be forwarded to the
 _LITELLM_INTERNAL_EXTRA_BODY_KEYS: Final[frozenset] = frozenset({"cache", "tags"})
 
+_TEXT_ONLY_MODEL_PART_KEYS: Final[frozenset[str]] = frozenset({"text", "thought", "thoughtSignature"})
+
 
 def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
     """Pop extra_body from optional_params and shallow-merge into data, deep-merging dict values."""
@@ -1143,6 +1146,30 @@ def _rewrite_google_maps_response_format(data: RequestBody) -> None:
         _rewrite_mime_type_to_response_format(generation_config)
 
 
+def _is_text_only_model_content(content: ContentType) -> bool:
+    if content.get("role") != "model":
+        return False
+
+    parts: Final = content.get("parts", [])
+    if not parts:
+        return False
+
+    return all("text" in part and frozenset(part).issubset(_TEXT_ONLY_MODEL_PART_KEYS) for part in parts)
+
+
+def _append_user_after_text_only_model_tail(
+    contents: Sequence[ContentType],
+) -> tuple[ContentType, ...]:
+    if not contents or not _is_text_only_model_content(contents[-1]):
+        return tuple(contents)
+
+    placeholder: Final = ContentType(
+        role="user",
+        parts=[PartType(text=".")],
+    )
+    return (*contents, placeholder)
+
+
 def _transform_request_body(
     messages: list[AllMessageValues],
     model: str,
@@ -1181,14 +1208,31 @@ def _transform_request_body(
     optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
 
     try:
-        if custom_llm_provider == "gemini":
-            content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(
-                messages=messages, model=model, litellm_params=litellm_params
+        transformed_content: Final = (
+            litellm.GoogleAIStudioGeminiConfig()._transform_messages(
+                messages=messages,
+                model=model,
+                litellm_params=litellm_params,
             )
-        else:
-            content = litellm.VertexGeminiConfig()._transform_messages(
-                messages=messages, model=model, litellm_params=litellm_params
+            if custom_llm_provider == "gemini"
+            else litellm.VertexGeminiConfig()._transform_messages(
+                messages=messages,
+                model=model,
+                litellm_params=litellm_params,
             )
+        )
+
+        should_normalize_model_tail: Final = custom_llm_provider in (
+            "vertex_ai",
+            "vertex_ai_beta",
+        ) and litellm.VertexGeminiConfig._is_gemini_3_or_newer(  # pyright: ignore[reportPrivateUsage]  # reuse the existing Vertex Gemini version gate without duplicating it
+            model
+        )
+        normalized_content: Final = (
+            _append_user_after_text_only_model_tail(transformed_content)
+            if should_normalize_model_tail
+            else tuple(transformed_content)
+        )
         tools: Final[Tools | None] = optional_params.pop("tools", None)
         tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
         include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
@@ -1214,7 +1258,7 @@ def _transform_request_body(
                 if media_resolution_value and generation_config is not None:
                     generation_config["mediaResolution"] = media_resolution_value["level"]
 
-        data: Final = RequestBody(contents=content)
+        data: Final = RequestBody(contents=list(normalized_content))
         # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
         # Treat dropping these fields as a request mutation guarded by modify_params.
         can_send_cache_incompatible_fields: Final = cached_content is None or litellm.modify_params is False
