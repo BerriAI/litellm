@@ -2377,6 +2377,17 @@
               ],
               "title": "Rpm Limit"
             },
+            "search_score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search Score"
+            },
             "session_rpm_limit": {
               "anyOf": [
                 {
@@ -3404,7 +3415,7 @@
       },
       "/v1/agents": {
         "get": {
-          "description": "Example usage:\n```\ncurl -X GET \"http://localhost:4000/v1/agents\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?health_check=true` to filter out agents whose URL is unreachable:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?health_check=true\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nReturns: List[AgentResponse]",
+          "description": "Example usage:\n```\ncurl -X GET \"http://localhost:4000/v1/agents\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?health_check=true` to filter out agents whose URL is unreachable:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?health_check=true\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?query=<task>` to get the best matching agents ranked by semantic similarity:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?query=translate+a+PDF+document&top_k=5\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nReturns: List[AgentResponse]",
           "operationId": "get_agents_v1_agents_get",
           "parameters": [
             {
@@ -3417,6 +3428,39 @@
                 "description": "When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out.",
                 "title": "Health Check",
                 "type": "boolean"
+              }
+            },
+            {
+              "description": "Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model.",
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model.",
+                "title": "Query"
+              }
+            },
+            {
+              "description": "With query: the maximum number of ranked agents to return.",
+              "in": "query",
+              "name": "top_k",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "description": "With query: the maximum number of ranked agents to return.",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Top K",
+                "type": "integer"
               }
             }
           ],
@@ -15038,6 +15082,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -17518,6 +17573,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -20352,6 +20418,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -23699,6 +23776,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",

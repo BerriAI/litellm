@@ -16575,6 +16575,10 @@ export interface paths {
          *     ```
          *     curl -X GET "http://localhost:4000/v1/agents?health_check=true"       -H "Content-Type: application/json"       -H "Authorization: Bearer your-key"     ```
          *
+         *     Pass `?query=<task>` to get the best matching agents ranked by semantic similarity:
+         *     ```
+         *     curl -X GET "http://localhost:4000/v1/agents?query=translate+a+PDF+document&top_k=5"       -H "Content-Type: application/json"       -H "Authorization: Bearer your-key"     ```
+         *
          *     Returns: List[AgentResponse]
          */
         get: operations["get_agents_v1_agents_get"];
@@ -22487,6 +22491,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Search Score */
+            search_score?: number | null;
             /** Session Rpm Limit */
             session_rpm_limit?: number | null;
             /** Session Tpm Limit */
@@ -30208,6 +30214,8 @@ export interface components {
             token_exchange_profile?: string | null;
             /** Upstream Resource */
             upstream_resource?: string | null;
+            /** Upstream Token Header */
+            upstream_token_header?: string | null;
         };
         /**
          * MCPEnvVar
@@ -58515,6 +58523,10 @@ export interface operations {
             query?: {
                 /** @description When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out. */
                 health_check?: boolean;
+                /** @description Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model. */
+                query?: string | null;
+                /** @description With query: the maximum number of ranked agents to return. */
+                top_k?: number;
             };
             header?: never;
             path?: never;
