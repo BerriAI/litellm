@@ -180,6 +180,12 @@ async def test_config_file_success_callback_registers_custom_logger_instance(mon
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    # the custom-logger instance path needs env credentials; without them the
+    # config path falls back to the string and this test would not exercise
+    # the instance registration
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    monkeypatch.setenv("LANGFUSE_HOST", "http://localhost:3000")
 
     config_content = {
         "litellm_settings": {

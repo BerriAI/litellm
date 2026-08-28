@@ -709,8 +709,25 @@ def _register_config_custom_logger_callback(callback: str, logging_event: Litera
     """Register a config-file custom-logger name as an instance, not a string.
 
     Pass-through endpoints log through the async success path only; a string in
-    ``litellm.success_callback`` never reaches them. Mirrors the DB-config path.
+    ``litellm.success_callback`` never reaches them. Falls back to the string
+    when the custom-logger class cannot be initialized (e.g. missing env
+    credentials), so standard-route logging still works. Mirrors the DB-config path.
     """
+    from litellm.litellm_core_utils.litellm_logging import (
+        _init_custom_logger_compatible_class,
+    )
+
+    if (
+        _init_custom_logger_compatible_class(  # pyright: ignore[reportPrivateUsage]  # mirrors DB-config path
+            callback, internal_usage_cache=None, llm_router=None
+        )
+        is None
+    ):
+        if logging_event == "success":
+            litellm.logging_callback_manager.add_litellm_success_callback(callback)
+        else:
+            litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+        return
     _add_custom_logger_callback_to_specific_event(  # pyright: ignore[reportPrivateUsage]  # mirrors DB-config path
         callback, logging_event
     )
@@ -5134,11 +5151,6 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             if callback in litellm._known_custom_logger_compatible_callbacks:
-                                # drop the string first: _add_custom_logger_callback_to_specific_event
-                                # skips registration (and the string removal inside it) when an
-                                # instance already exists from an earlier registration
-                                if callback in litellm.success_callback:
-                                    litellm.success_callback.remove(callback)
                                 _register_config_custom_logger_callback(callback, "success")
                             else:
                                 litellm.logging_callback_manager.add_litellm_success_callback(callback)
@@ -5169,8 +5181,6 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             if callback in litellm._known_custom_logger_compatible_callbacks:
-                                if callback in litellm.failure_callback:
-                                    litellm.failure_callback.remove(callback)
                                 _register_config_custom_logger_callback(callback, "failure")
                             else:
                                 litellm.logging_callback_manager.add_litellm_failure_callback(callback)
