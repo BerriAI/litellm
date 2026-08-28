@@ -375,12 +375,14 @@ async def run_async_fallback(
             elif isinstance(mg, dict):
                 kwargs.update(mg)
             fallback_depth = fallback_depth + 1
-            kwargs[metadata_variable_name] = {
-                "original_model_group": original_model_group,
-                **(kwargs.get(metadata_variable_name) or {}),
-                "model_group": kwargs.get("model", None),
-                "attempted_fallbacks": fallback_depth,
-            }
+            _hop_metadata = dict(kwargs.get(metadata_variable_name) or {})
+            _original_model_group_stamp = _hop_metadata.pop("original_model_group", original_model_group)
+            _hop_metadata.pop("model_group", None)
+            _hop_metadata.pop("attempted_fallbacks", None)
+            _hop_metadata["original_model_group"] = _original_model_group_stamp
+            _hop_metadata["model_group"] = kwargs.get("model", None)
+            _hop_metadata["attempted_fallbacks"] = fallback_depth
+            kwargs[metadata_variable_name] = _hop_metadata
             kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks
             kwargs["attempted_targets"] = attempted
