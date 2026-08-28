@@ -20,7 +20,6 @@ from litellm.types.llms.openai import (
     ContentPartAddedEvent,
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
-    ContentPartDonePartReasoningText,
     FunctionCallArgumentsDeltaEvent,
     FunctionCallArgumentsDoneEvent,
     OutputItemAddedEvent,
@@ -640,28 +639,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_item_id = f"msg_{uuid.uuid4()}"
 
         text: Final = getattr(litellm_complete_object.choices[0].message, "content", "") or ""
-        reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""
         annotations: Final = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
         part: PART_UNION_TYPES | None = None
-        if reasoning_content:
-            part = ContentPartDonePartReasoningText(
-                type="reasoning_text",
-                reasoning=reasoning_content,
+        # The message item's content part always carries the assistant text
+        # as output_text. Reasoning content belongs to the reasoning item
+        # (a separate output item), never to the message item's parts.
+        response_annotations: Final = (
+            LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+                annotations=annotations
             )
-
-        else:
-            response_annotations: Final = (
-                LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
-                    annotations=annotations
-                )
-            )
-            part = ContentPartDonePartOutputText(
-                type="output_text",
-                text=text,
-                annotations=response_annotations,
-                logprobs=None,
-            )
+        )
+        part = ContentPartDonePartOutputText(
+            type="output_text",
+            text=text,
+            annotations=response_annotations,
+            logprobs=None,
+        )
 
         return ContentPartDoneEvent(
             type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
@@ -751,6 +745,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def return_default_done_events(
         self, litellm_complete_object: ModelResponse
     ) -> BaseLiteLLMOpenAIResponseObject | None:
+        # Skip the message item's trailing done events when the message item
+        # was never announced via output_item.added (e.g. tool-call-only
+        # streams): emitting done events for an unannounced item violates
+        # the Responses streaming contract. Mark the done flags so
+        # is_stream_finished() semantics stay intact and fall through to
+        # response.completed.
+        if not getattr(self, "_message_item_added_emitted", False):
+            self.sent_output_text_done_event = True
+            self.sent_output_content_part_done_event = True
+            self.sent_output_item_done_event = True
+            return None
         if self.sent_output_text_done_event is False:
             self.sent_output_text_done_event = True
             return self.create_output_text_done_event(litellm_complete_object)
@@ -817,8 +822,128 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _ensure_output_item_for_chunk(self, chunk: ModelResponseStream) -> None:
         # Change: Never return a value, just enqueue output item events
         if self.sent_output_item_added_event:
+            # The one-shot added flag may already be consumed by a message
+            # item (role-only first chunk), in which case the reasoning item
+            # was never declared. Emit the reasoning output_item.added when
+            # reasoning_content first appears so _reasoning_active takes
+            # effect and _is_reasoning_end can close the lifecycle later.
+            if not self._reasoning_active and not self._reasoning_done_emitted and chunk.choices:
+                _delta = chunk.choices[0].delta
+                if _delta is not None and hasattr(_delta, "reasoning_content") and _delta.reasoning_content:
+                    self._reasoning_active = True
+                    if self._cached_reasoning_item_id is None:
+                        self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
+                    self._reasoning_item_id = self._cached_reasoning_item_id
+                    self._sequence_number += 1
+                    _reasoning_added = OutputItemAddedEvent(
+                        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                        output_index=0,
+                        item=BaseLiteLLMOpenAIResponseObject(
+                            **{
+                                "id": self._cached_reasoning_item_id,
+                                "type": "reasoning",
+                                "status": "in_progress",
+                                # summary must be a non-empty list of
+                                # summary_text parts: strict consumers
+                                # require a sequence, and null / missing /
+                                # empty lists (omitted by pydantic
+                                # serialization) cause the whole added frame
+                                # to be rejected.
+                                "summary": [{"type": "summary_text", "text": ""}],
+                            }
+                        ),
+                    )
+                    _reasoning_added.__dict__["sequence_number"] = self._sequence_number
+                    self._pending_response_events.append(_reasoning_added)
+
+            # Once reasoning has ended, the message item must be announced
+            # before its text deltas arrive. If message added was deferred
+            # past the role-only first chunk, emit it here (after the
+            # reasoning lifecycle is closed below) so clients that track a
+            # single active item can bind the upcoming text deltas.
+            if not getattr(self, "_message_item_added_emitted", False) and chunk.choices:
+                _delta3 = chunk.choices[0].delta
+                _chunk_has_reasoning = (
+                    _delta3 is not None and hasattr(_delta3, "reasoning_content") and _delta3.reasoning_content
+                )
+                if _delta3 is not None and hasattr(_delta3, "content") and _delta3.content and not _chunk_has_reasoning:
+                    # Close the reasoning lifecycle before announcing the
+                    # message item: item lifecycles must not overlap.
+                    # Queueing the reasoning done events here (and latching
+                    # _reasoning_done_emitted so the main-loop branch skips
+                    # them) keeps the queue order spec-compliant:
+                    # reasoning done -> message added -> text deltas.
+                    if self._reasoning_active and not self._reasoning_done_emitted:
+                        _reasoning_content = "".join(self._accumulated_reasoning_content_parts)
+                        self._cached_reasoning_item_id = (
+                            self._reasoning_item_id or self._cached_reasoning_item_id or f"rs_{uuid.uuid4()}"
+                        )
+                        _reasoning_item_id = self._cached_reasoning_item_id
+                        self._sequence_number += 1
+                        _rs_text_done = self.create_reasoning_summary_text_done_event(
+                            reasoning_item_id=_reasoning_item_id,
+                            reasoning_content=_reasoning_content,
+                            sequence_number=self._sequence_number,
+                        )
+                        self._sequence_number += 1
+                        _rs_part_done = self.create_reasoning_summary_part_done_event(
+                            reasoning_item_id=_reasoning_item_id,
+                            reasoning_content=_reasoning_content,
+                            sequence_number=self._sequence_number,
+                        )
+                        self._sequence_number += 1
+                        _rs_item_done = self.create_reasoning_output_item_done_event(
+                            reasoning_item_id=_reasoning_item_id,
+                            reasoning_content=_reasoning_content,
+                            sequence_number=self._sequence_number,
+                        )
+                        self._pending_response_events.extend(
+                            [
+                                _rs_text_done,
+                                _rs_part_done,
+                                _rs_item_done,
+                            ]
+                        )
+                        self._reasoning_done_emitted = True
+                        self._reasoning_active = False
+                    self._message_item_added_emitted = True
+                    self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
+                    self._sequence_number += 1
+                    _msg_added = OutputItemAddedEvent(
+                        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                        output_index=0,
+                        item=BaseLiteLLMOpenAIResponseObject(
+                            **{
+                                "id": self._cached_item_id,
+                                "type": "message",
+                                "role": "assistant",
+                                "status": "in_progress",
+                                "content": [],
+                            }
+                        ),
+                    )
+                    _msg_added.__dict__["sequence_number"] = self._sequence_number
+                    self._pending_response_events.append(_msg_added)
+                    if not self.sent_content_part_added_event:
+                        self.sent_content_part_added_event = True
+                        _content_part_event = self.create_content_part_added_event()
+                        self._pending_response_events.append(_content_part_event)
+                    self._drain_pending_annotation_events()
             return
         delta: Final = chunk.choices[0].delta
+
+        # Role-only chunks (no content / reasoning_content / tool_calls)
+        # must not decide the item type: defer message output_item.added
+        # until the first chunk carrying actual content. Reasoning
+        # providers commonly start with a role-only chunk; announcing the
+        # message item there breaks the native event order for reasoning
+        # streams. Pure text streams are unaffected (the first content
+        # chunk still takes the default branch, one chunk later).
+        _chunk_has_reasoning = hasattr(delta, "reasoning_content") and delta.reasoning_content
+        _chunk_has_tool_calls = hasattr(delta, "tool_calls") and delta.tool_calls
+        _chunk_has_content = hasattr(delta, "content") and delta.content
+        if not (_chunk_has_reasoning or _chunk_has_tool_calls or _chunk_has_content):
+            return
 
         self._sequence_number += 1
         self.sent_output_item_added_event = True
@@ -838,7 +963,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         "id": self._cached_reasoning_item_id,
                         "type": "reasoning",
                         "status": "in_progress",
-                        "summary": None,
+                        # summary must be a non-empty list of summary_text
+                        # parts: strict consumers require a sequence, and
+                        # null / missing / empty lists (omitted by pydantic
+                        # serialization) cause the whole added frame to be
+                        # rejected.
+                        "summary": [{"type": "summary_text", "text": ""}],
                     }
                 ),
             )
@@ -853,6 +983,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
 
         # Default: message
+        # Track that the message item has been announced so the
+        # early-return branch above knows whether a deferred emission
+        # is still needed.
+        self._message_item_added_emitted = True
         self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
         event = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -878,7 +1012,20 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self.sent_content_part_added_event = True
             content_part_event: Final = self.create_content_part_added_event()
             self._pending_response_events.append(content_part_event)
+        self._drain_pending_annotation_events()
         return
+
+    def _drain_pending_annotation_events(self) -> None:
+        """
+        Move annotation.added events collected before the message item was
+        announced onto the event queue, after the message's
+        output_item.added / content_part.added. Annotation events must never
+        reference an item that has not been announced yet, so they are held
+        back until this point.
+        """
+        if hasattr(self, "_pending_annotation_events") and self._pending_annotation_events:
+            self._pending_response_events.extend(self._pending_annotation_events)
+            self._pending_annotation_events = []
 
     async def __anext__(
         self,
@@ -1101,6 +1248,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 item_id=self._cached_reasoning_item_id,
                 output_index=0,
                 delta=reasoning_content,
+                # Pass summary_index explicitly: pydantic omits fields
+                # equal to their default when serializing, and strict
+                # consumers require both delta and summary_index to be
+                # present, dropping the frame otherwise.
+                summary_index=0,
             )
 
         # Priority 2: Handle text deltas
@@ -1127,7 +1279,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         # Priority 4: If we have pending annotation events, emit the next one
         # This happens when the current chunk has no text/reasoning content
-        if hasattr(self, "_pending_annotation_events") and self._pending_annotation_events:
+        # Only emit after the message item has been announced: annotation
+        # events reference the message item and must not precede its
+        # output_item.added (events collected before the announcement are
+        # drained onto the queue by the announcement itself).
+        if (
+            hasattr(self, "_pending_annotation_events")
+            and self._pending_annotation_events
+            and getattr(self, "_message_item_added_emitted", False)
+        ):
             event = self._pending_annotation_events.pop(0)
             return event
 
