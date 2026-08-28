@@ -7117,7 +7117,10 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: str | None, rais
 
         half_length = new_length // 2
         left_half = content[:half_length]
-        right_half = content[-half_length:]
+        # content[-0:] is content[0:], i.e. the whole string, so a zero half has to be
+        # spelled out. Otherwise every further attempt prepends ".." to the full content
+        # and the message grows by two characters instead of shrinking.
+        right_half = content[-half_length:] if half_length else ""
 
         trimmed_content = left_half + ".." + right_half
         message["content"] = trimmed_content
