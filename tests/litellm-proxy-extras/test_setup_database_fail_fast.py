@@ -4,19 +4,10 @@ v2 is the proxy CLI default; v1 stays reachable via the `use_v2_resolver`
 kwarg, which still defaults to False for direct callers.
 """
 
-import os
 import subprocess
-import sys
 from unittest.mock import patch
 
 import pytest
-
-sys.path.insert(
-    0,
-    os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../litellm-proxy-extras")
-    ),
-)
 
 from litellm_proxy_extras.utils import (
     ProxyExtrasDBManager,
@@ -175,13 +166,16 @@ def test_v2_warn_ahead_of_head_swallows_db_errors(monkeypatch, tmp_path):
             # Simulate an InsufficientPrivilege (subclass of DatabaseError).
             raise psycopg.errors.InsufficientPrivilege("permission denied")
 
+    connects = {"n": 0}
+
     def _fake_connect(*a, **kw):
+        connects["n"] += 1
         return _FakeConn()
 
     monkeypatch.setattr("psycopg.connect", _fake_connect)
 
-    # Must not raise.
-    ProxyExtrasDBManager._warn_if_db_ahead_of_head(str(tmp_path))
+    assert ProxyExtrasDBManager._warn_if_db_ahead_of_head(str(tmp_path)) is None
+    assert connects["n"] == 1, "the failing query must actually have been reached"
 
 
 def test_v2_resolve_specific_migration_failure_raises_runtime_error(
