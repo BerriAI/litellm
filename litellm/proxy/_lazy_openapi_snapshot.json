@@ -9018,6 +9018,18 @@
               "description": "When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.",
               "title": "Scan Only Tool Results"
             },
+            "scan_raw_request": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
+              "title": "Scan Raw Request"
+            },
             "sensitive_data_route_to_model": {
               "anyOf": [
                 {
@@ -10067,6 +10079,18 @@
               ],
               "description": "Additional provider-specific parameters for generic guardrail APIs",
               "title": "Additional Provider Specific Params"
+            },
+            "advisory_system_message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
+              "title": "Advisory System Message"
             },
             "akto_account_id": {
               "anyOf": [
@@ -11122,7 +11146,8 @@
                 {
                   "enum": [
                     "block",
-                    "monitor"
+                    "monitor",
+                    "inject_system_message"
                   ],
                   "type": "string"
                 },
@@ -11131,7 +11156,7 @@
                 }
               ],
               "default": "block",
-              "description": "Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+              "description": "Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
               "title": "On Flagged"
             },
             "on_flagged_action": {
@@ -11640,6 +11665,18 @@
               ],
               "description": "When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.",
               "title": "Scan Only Tool Results"
+            },
+            "scan_raw_request": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
+              "title": "Scan Raw Request"
             },
             "send_user_api_key_alias": {
               "anyOf": [
