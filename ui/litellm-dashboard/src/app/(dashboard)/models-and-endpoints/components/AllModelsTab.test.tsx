@@ -109,12 +109,15 @@ const MOCK_AUTHORIZED = {
 };
 
 const mockSetSelectedModelGroup = vi.fn();
+const mockSetSelectedModelAccessGroupFilter = vi.fn();
 const mockSetSelectedModelId = vi.fn();
 const mockSetSelectedTeamId = vi.fn();
 
 const defaultProps = {
   selectedModelGroup: "all",
   setSelectedModelGroup: mockSetSelectedModelGroup,
+  selectedModelAccessGroupFilter: null,
+  setSelectedModelAccessGroupFilter: mockSetSelectedModelAccessGroupFilter,
   availableModelGroups: ["gpt-4", "gpt-3.5-turbo"],
   availableModelAccessGroups: ["sales-team"],
   setSelectedModelId: mockSetSelectedModelId,
@@ -257,6 +260,50 @@ describe("AllModelsTab", () => {
     const table = screen.getByRole("table");
     expect(within(table).getByText("claude-opus")).toBeInTheDocument();
     expect(within(table).queryByText("gpt-4")).not.toBeInTheDocument();
+  });
+
+  it("filters the fetched page down to the selected access group", () => {
+    setModelsInfo(
+      [
+        makeRow(),
+        {
+          ...makeRow({ model_info: { id: "model-2", access_groups: ["sales-team"] } }),
+          model_name: "claude-opus",
+        },
+      ],
+      2,
+    );
+    render(<AllModelsTab {...defaultProps} selectedModelAccessGroupFilter="sales-team" />);
+
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("claude-opus")).toBeInTheDocument();
+    expect(within(table).queryByText("gpt-4")).not.toBeInTheDocument();
+  });
+
+  it("removing the access group filter chip clears it through the setter", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} selectedModelAccessGroupFilter="sales-team" />);
+
+    await user.click(screen.getByTestId("filter-chip-remove-model_info_access_groups"));
+
+    await waitFor(() => {
+      expect(mockSetSelectedModelAccessGroupFilter).toHaveBeenCalledWith(null);
+    });
+  });
+
+  it("keeps an unknown model group (for example a stale deep link) visible as a removable filter chip", async () => {
+    const user = userEvent.setup();
+    setModelsInfo([makeRow()], 1);
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="stale-deleted-model" />);
+
+    expect(screen.getByTestId("filter-chip-model_name")).toHaveTextContent("stale-deleted-model");
+    expect(screen.getByText("No models found")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("filter-chip-remove-model_name"));
+
+    await waitFor(() => {
+      expect(mockSetSelectedModelGroup).toHaveBeenCalledWith("all");
+    });
   });
 
   it("resets search, filters, team and sorting from the drawer reset button", async () => {
