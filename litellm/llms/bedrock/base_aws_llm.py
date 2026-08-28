@@ -1454,10 +1454,7 @@ class BaseAWSLLM:
             if credentials is None:
                 raise AwsAuthError(
                     status_code=401,
-                    message=(
-                        "No bearer token and no resolved AWS credentials: cannot sign the "
-                        "Bedrock request."
-                    ),
+                    message=("No bearer token and no resolved AWS credentials: cannot sign the Bedrock request."),
                 )
             try:
                 from botocore.auth import SigV4Auth
