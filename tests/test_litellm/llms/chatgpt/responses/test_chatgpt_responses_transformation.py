@@ -155,6 +155,91 @@ class TestChatGPTResponsesAPITransformation:
             "function": {"name": "hello"},
         }
 
+    @pytest.mark.parametrize("parallel_tool_calls", [True, False])
+    def test_chatgpt_preserves_parallel_tool_calls(self, parallel_tool_calls):
+        """parallel_tool_calls is validated by the Codex backend and must not
+        be dropped by the allowed-keys filter."""
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input="hi",
+            response_api_optional_request_params={
+                "parallel_tool_calls": parallel_tool_calls,
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["parallel_tool_calls"] is parallel_tool_calls
+
+    def test_chatgpt_responses_lite_restores_stripped_false(self):
+        """Regression: a Responses-Lite request (codex >= 0.144, gpt-5.6-*)
+        carries parallel_tool_calls=false; dropping it made the backend
+        reject every request with
+        "X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls`
+        to be false."."""
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={
+                "parallel_tool_calls": False,
+                "reasoning": {"context": "all_turns"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={"X-OpenAI-Internal-Codex-Responses-Lite": "true"},
+        )
+
+        assert request["parallel_tool_calls"] is False
+        assert request["reasoning"]["context"] == "all_turns"
+
+    def test_chatgpt_responses_lite_forces_lite_contract(self):
+        """Under the Lite header the backend hard-rejects any other value,
+        so true is normalized to false and reasoning.context is pinned."""
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={
+                "parallel_tool_calls": True,
+                "reasoning": {"effort": "high"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={"x-openai-internal-codex-responses-lite": "true"},
+        )
+
+        assert request["parallel_tool_calls"] is False
+        assert request["reasoning"] == {"effort": "high", "context": "all_turns"}
+
+    def test_chatgpt_responses_lite_normalizes_omitted_fields(self):
+        """codex 0.144.x can omit the reasoning object entirely; the Lite
+        validator rejects the omission the same way."""
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={"x-openai-internal-codex-responses-lite": "true"},
+        )
+
+        assert request["parallel_tool_calls"] is False
+        assert request["reasoning"] == {"context": "all_turns"}
+
+    @pytest.mark.parametrize("header_value", ["false", "0", "no", ""])
+    def test_chatgpt_responses_lite_falsy_header_is_ignored(self, header_value):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={"x-openai-internal-codex-responses-lite": header_value},
+        )
+
+        assert "parallel_tool_calls" not in request
+        assert "reasoning" not in request
+
     @pytest.mark.parametrize(
         ("model_name", "response_model"),
         [
