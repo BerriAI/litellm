@@ -318,7 +318,7 @@ async def test_get_latest_health_checks_for_models_does_not_query_for_an_empty_p
     prisma_client: PrismaClient,
 ) -> None:
     prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[])
-    assert await prisma_client.get_latest_health_checks_for_models([]) == []
+    assert await prisma_client.get_latest_health_checks_for_models([]) == ()
     assert prisma_client.db.litellm_healthchecktable.find_many.await_count == 0
 
 
@@ -327,4 +327,4 @@ async def test_get_latest_health_checks_for_models_db_error_returns_empty_list(
     prisma_client: PrismaClient,
 ) -> None:
     prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(side_effect=RuntimeError("oops"))
-    assert await prisma_client.get_latest_health_checks_for_models(["gpt-5"]) == []
+    assert await prisma_client.get_latest_health_checks_for_models(["gpt-5"]) == ()
