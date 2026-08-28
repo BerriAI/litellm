@@ -3227,12 +3227,6 @@ class ProxyLogging:
                     ),
                 )
 
-        # Actually iterate through the chained async generator and yield chunks.
-        # A guardrail block raised after upstream exhaustion (e.g.
-        # unified_guardrail re-raising HTTPException) must still flush any
-        # parked deferred logging, or the blocked stream loses its spend log.
-        # GeneratorExit/CancelledError stay untouched: disconnect cleanup owns
-        # those.
         try:
             async for chunk in current_response:
                 yield chunk

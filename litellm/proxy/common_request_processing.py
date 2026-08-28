@@ -2377,11 +2377,6 @@ class ProxyBaseLLMRequestProcessing:
                     and route_type == "anthropic_messages"
                     and self._is_streaming_response(response)
                 ):
-                    # Native /v1/messages SSE streams bypass CSW, so the raw
-                    # iterator parks its logging coroutine at stream end (see
-                    # BaseAnthropicMessagesStreamingIterator._handle_streaming_logging)
-                    # and _fire_deferred_stream_logging hands it here after the
-                    # guardrail end-of-stream scans complete.
                     from litellm.litellm_core_utils.logging_worker import (
                         GLOBAL_LOGGING_WORKER,
                     )
