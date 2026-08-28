@@ -104,7 +104,12 @@ pub enum AwsAuthFlow {
 fn cache_key(config: &AwsAuthConfig, flow: &AwsAuthFlow) -> String {
     let mut hasher = Sha256::new();
     hasher.update(format!("{config:?}:{flow:?}"));
-    format!("{:x}", hasher.finalize())
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest.as_slice() {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
 }
 
 fn get_cached_credentials(key: &str) -> Option<Credentials> {

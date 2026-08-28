@@ -87,7 +87,7 @@ where
     S::Error: std::fmt::Display,
 {
     if let Ok(payload) = serde_json::to_string(&ResponsesErrorFrame::invalid_request(message)) {
-        let _ = sink.send(Message::Text(payload)).await;
+        let _ = sink.send(Message::Text(payload.into())).await;
     }
     let _ = sink
         .send(Message::Close(Some(axum::extract::ws::CloseFrame {
@@ -117,7 +117,7 @@ impl Sink<ResponsesWsEvent> for ResponseClientSink {
         item: ResponsesWsEvent,
     ) -> Result<(), Self::Error> {
         let payload = serde_json::to_string(&item).map_err(axum::Error::new)?;
-        std::pin::Pin::new(&mut self.sink).start_send(Message::Text(payload))
+        std::pin::Pin::new(&mut self.sink).start_send(Message::Text(payload.into()))
     }
 
     fn poll_flush(

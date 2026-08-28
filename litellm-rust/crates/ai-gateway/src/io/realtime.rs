@@ -177,7 +177,7 @@ where
                     let payload = serde_json::to_string(&outbound)
                         .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
                     upstream_tx
-                        .send(Message::Text(payload))
+                        .send(Message::Text(payload.into()))
                         .await
                         .map_err(|err| CoreError::Network(err.to_string()))?;
                 }
