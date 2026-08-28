@@ -50,7 +50,6 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
-    PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -65,6 +64,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -10861,10 +10861,9 @@ class Router:
             return True
         if param in Router._declared_param_allowlist(deployment_params):
             return True
-        declared_provider: Final = (
-            deployment_params.get("custom_llm_provider") or str(deployment_params.get("model") or "").split("/", 1)[0]
-        )
-        if declared_provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO:
+        if declared_authenticating_provider(
+            str(deployment_params.get("model") or ""), deployment_params.get("custom_llm_provider")
+        ):
             return True
         deployment_model_info: Final = deployment.get("model_info")
         base_model: Final = (

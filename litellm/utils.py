@@ -2556,10 +2556,19 @@ def _supports_factory(model: str, custom_llm_provider: str | None, key: str) -> 
     Raises:
     Exception: If the given model is not found or there's an error in retrieval.
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
     try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
+        declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+        if declared is not None:
+            model = model.removeprefix(
+                f"{declared}/"
+            )  # rebind-ok: mirrors get_llm_provider's split without its OAuth flow
+            custom_llm_provider = declared  # rebind-ok: same
+        else:
+            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
 
         model_info: Final = _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
@@ -5550,6 +5559,8 @@ def _get_model_info_helper(
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
     try:
         azure_llms: Final = {**litellm.azure_llms, **litellm.azure_embedding_models}
         if model in azure_llms:
@@ -5564,7 +5575,9 @@ def _get_model_info_helper(
             ):
                 model = model + "@latest"
         ##########################
-        potential_model_names: Final = _get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider)
+        potential_model_names: Final = _get_potential_model_names(
+            model=model, custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model)
+        )
 
         verbose_logger.debug("checking potential_model_names in litellm.model_cost: %s", potential_model_names)
 
