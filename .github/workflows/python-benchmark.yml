@@ -1,0 +1,137 @@
+name: Python Benchmarks
+
+on:
+  push:
+    branches-ignore: [gh-pages]
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "SHA, branch, or refs/pull/123/head; blank uses the workflow commit"
+        type: string
+        required: false
+
+permissions: {}
+
+concurrency:
+  group: python-benchmark-pages
+  queue: max
+
+jobs:
+  benchmark:
+    name: Measure target commit
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      target_sha: ${{ steps.target.outputs.commit }}
+      script_sha: ${{ steps.harness.outputs.commit }}
+    steps:
+      - name: Fetch benchmark harness from default branch
+        id: harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: harness
+          persist-credentials: false
+
+      - name: Fetch target code
+        id: target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.target_ref || github.sha }}
+          path: target
+          persist-credentials: false
+
+      - name: Run benchmark
+        working-directory: harness
+        shell: bash
+        run: |
+          bash scripts/benchmark.sh \
+            "$GITHUB_WORKSPACE/target" \
+            "$RUNNER_TEMP/results.json"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-results
+          path: ${{ runner.temp }}/results.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Store benchmark history
+    needs: benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # Commit benchmark results to gh-pages
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: benchmark-results
+          path: ${{ runner.temp }}/incoming
+
+      - name: Validate metrics and attach provenance
+        shell: bash
+        env:
+          SCRIPT_SHA: ${{ needs.benchmark.outputs.script_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        run: |
+          test -f "$RUNNER_TEMP/incoming/results.json"
+          test ! -L "$RUNNER_TEMP/incoming/results.json"
+          test "$(wc -c < "$RUNNER_TEMP/incoming/results.json")" -le 1048576
+          jq -e '
+            type == "array" and length > 0 and length <= 1000 and
+            all(.[]; type == "object" and
+              (.name | type == "string" and length > 0 and length <= 200 and
+                test("^[a-zA-Z0-9_. /():%-]+$")) and
+              (.unit | type == "string" and length > 0 and length <= 32 and
+                test("^[a-zA-Z0-9_./% -]+$")) and
+              (.value | type == "number" and isfinite))
+          ' "$RUNNER_TEMP/incoming/results.json" > /dev/null
+          jq --arg extra "harness=$SCRIPT_SHA; run=$RUN_URL" \
+            'map({name, unit, value, extra: $extra})' \
+            "$RUNNER_TEMP/incoming/results.json" > "$RUNNER_TEMP/results.json"
+
+      - name: Store results and update dashboard
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba
+        with:
+          name: Benchmarks
+          tool: customSmallerIsBetter
+          output-file-path: ${{ runner.temp }}/results.json
+          ref: ${{ needs.benchmark.outputs.target_sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: benchmarks
+          auto-push: true
+
+      - name: Export dashboard
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/site"
+          git archive gh-pages:benchmarks | tar -x -C "$RUNNER_TEMP/site"
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    name: Deploy benchmark dashboard
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write # Deploy the prepared Pages artifact
+      id-token: write # Authenticate the Pages deployment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128
+        id: deployment
