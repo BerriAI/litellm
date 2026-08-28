@@ -158,6 +158,35 @@ async def _embed_all(embed: Embedder, texts: Sequence[str]) -> tuple[Vector, ...
     return vectors
 
 
+@dataclass(frozen=True, slots=True)
+class _Embedded:
+    query_vector: Vector
+    vectors: Mapping[str, Vector]
+
+
+def _same_dimension(query_vector: Vector, vectors: Mapping[str, Vector], texts: Sequence[str]) -> bool:
+    return all(len(vectors[text]) == len(query_vector) for text in texts)
+
+
+async def _embed_query_and_agents(
+    embed: Embedder, query: str, texts: Sequence[str], cached: Mapping[str, Vector]
+) -> _Embedded | AgentSearchEmbeddingFailed:
+    missing: Final = tuple(dict.fromkeys(text for text in texts if text not in cached))
+    embedded: Final = await _embed_all(embed, (query, *missing))
+    if isinstance(embedded, AgentSearchEmbeddingFailed):
+        return embedded
+    vectors: Final = MappingProxyType(dict(chain(cached.items(), zip(missing, embedded[1:], strict=True))))
+    if _same_dimension(embedded[0], vectors, texts):
+        return _Embedded(query_vector=embedded[0], vectors=vectors)
+    unique: Final = tuple(dict.fromkeys(texts))
+    reembedded: Final = await _embed_all(embed, (query, *unique))
+    if isinstance(reembedded, AgentSearchEmbeddingFailed):
+        return reembedded
+    return _Embedded(
+        query_vector=reembedded[0], vectors=MappingProxyType(dict(zip(unique, reembedded[1:], strict=True)))
+    )
+
+
 class AgentSearchIndex:
     """Caches one vector per distinct agent text per embedding model, so repeat searches only embed the query."""
 
@@ -171,28 +200,19 @@ class AgentSearchIndex:
             return AgentSearchHits(hits=())
         texts: Final = tuple(agent_search_text(agent) for agent in agents)
         cached: Final = self._vectors.get(embedding_model, _NO_VECTORS)
-        missing: Final = tuple(dict.fromkeys(text for text in texts if text not in cached))
-        embedded: Final = await _embed_all(embed, (query, *missing))
+        embedded: Final = await _embed_query_and_agents(embed, query, texts, cached)
         if isinstance(embedded, AgentSearchEmbeddingFailed):
             return embedded
-        query_vector: Final = embedded[0]
-        stale: Final = tuple(
-            dict.fromkeys(text for text in texts if text in cached and len(cached[text]) != len(query_vector))
-        )
-        refreshed: Final = await _embed_all(embed, stale) if stale else ()
-        if isinstance(refreshed, AgentSearchEmbeddingFailed):
-            return refreshed
-        vectors: Final = MappingProxyType(
-            dict(chain(cached.items(), zip(missing, embedded[1:], strict=True), zip(stale, refreshed, strict=True)))
-        )
-        if any(len(vectors[text]) != len(query_vector) for text in texts):
+        if not _same_dimension(embedded.query_vector, embedded.vectors, texts):
             return AgentSearchEmbeddingFailed(
                 reason=f"embedding model {embedding_model} returned vectors of mixed dimensions"
             )
-        self._vectors = MappingProxyType({**self._vectors, embedding_model: vectors})
+        self._vectors = MappingProxyType(
+            {**self._vectors, embedding_model: MappingProxyType({**cached, **embedded.vectors})}
+        )
         ranked: Final = sorted(
             (
-                AgentSearchHit(agent=agent, score=cosine_similarity(query_vector, vectors[text]))
+                AgentSearchHit(agent=agent, score=cosine_similarity(embedded.query_vector, embedded.vectors[text]))
                 for agent, text in zip(agents, texts, strict=True)
             ),
             key=lambda hit: hit.score,
