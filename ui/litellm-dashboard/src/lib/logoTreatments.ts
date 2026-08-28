@@ -1,3 +1,5 @@
+import { isExternalAssetSrc } from "@/lib/assetPaths";
+
 export type LogoTreatment = "invert" | "plate";
 
 const BUNDLED_LOGO_PATH = /(?:\/assets\/logos\/|\/_next\/static\/media\/)/;
@@ -49,7 +51,7 @@ const withoutBundlerHash = (basename: string): string | undefined => {
 };
 
 export const logoTreatmentFor = (src: string | null | undefined): LogoTreatment | undefined => {
-  if (!src || !BUNDLED_LOGO_PATH.test(src)) return undefined;
+  if (!src || isExternalAssetSrc(src) || !BUNDLED_LOGO_PATH.test(src)) return undefined;
   const basename = basenameOf(src);
   const key = basename === undefined ? undefined : withoutBundlerHash(basename);
   return key === undefined ? undefined : TREATMENT_BY_ASSET[key];

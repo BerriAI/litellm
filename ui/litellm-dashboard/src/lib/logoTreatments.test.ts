@@ -35,6 +35,17 @@ describe("logoTreatmentFor", () => {
     expect(logoTreatmentFor("https://cdn.example.com/github.svg")).toBeUndefined();
   });
 
+  it("does not treat a remote URL that also carries a bundled-looking path", () => {
+    expect(logoTreatmentFor("https://cdn.example.com/assets/logos/github.svg")).toBeUndefined();
+    expect(logoTreatmentFor("http://cdn.example.com/_next/static/media/github.abc123.svg")).toBeUndefined();
+    expect(logoTreatmentFor("//cdn.example.com/assets/logos/github.svg")).toBeUndefined();
+    expect(logoTreatmentFor("HTTPS://CDN.EXAMPLE.COM/assets/logos/github.svg")).toBeUndefined();
+  });
+
+  it("does not treat a data URL that happens to contain a bundled-looking path", () => {
+    expect(logoTreatmentFor("data:image/svg+xml,/assets/logos/github.svg")).toBeUndefined();
+  });
+
   it("does not treat a non-logo path whose filename collides with a bundled asset", () => {
     expect(logoTreatmentFor("/uploads/user/github.svg")).toBeUndefined();
   });

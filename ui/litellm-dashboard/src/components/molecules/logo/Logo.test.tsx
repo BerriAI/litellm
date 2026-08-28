@@ -81,6 +81,11 @@ describe("Logo", () => {
     expect(screen.getByRole("img", { name: "Ext logo" })).toHaveClass("w-5 h-5", { exact: true });
   });
 
+  it("does not treat a user-supplied logo URL that mimics the bundled asset path", () => {
+    render(<Logo src="https://cdn.example.com/assets/logos/github.svg" label="Ext" className="w-5 h-5" />);
+    expect(screen.getByRole("img", { name: "Ext logo" })).toHaveClass("w-5 h-5", { exact: true });
+  });
+
   it("applies the treatment to a provider logo resolved through the bundler", () => {
     render(<Logo provider="openrouter" className="w-5 h-5" />);
     expect(screen.getByRole("img", { name: "openrouter logo" })).toHaveClass("dark:[filter:brightness(0)_invert(1)]");
