@@ -8602,6 +8602,18 @@ def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional
     try:
         return litellm.completion_cost(completion_response=response, custom_llm_provider=provider_hint)
     except Exception:
+        return _stream_builder_model_map_cost(response)
+
+
+def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
+    model_name: Final = getattr(response, "model", None)
+    usage: Final = getattr(response, "usage", None)
+    if not isinstance(model_name, str) or not model_name or not isinstance(usage, Usage):
+        return None
+    try:
+        prompt_cost, completion_tokens_cost = litellm.cost_per_token(model=model_name, usage_object=usage)
+        return prompt_cost + completion_tokens_cost
+    except Exception:  # noqa: BLE001  # cost_per_token raises bare Exception for unpriceable models
         return None
 
 
