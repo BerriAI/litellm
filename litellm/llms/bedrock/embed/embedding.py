@@ -42,6 +42,9 @@ class BedrockEmbedding(BaseAWSLLM):
     def _load_credentials(
         self,
         optional_params: dict,
+        *,
+        api_key: str | None = None,
+        supports_bearer_token: bool = True,
     ) -> tuple[Any, str]:
         try:
             from botocore.credentials import Credentials
@@ -74,16 +77,23 @@ class BedrockEmbedding(BaseAWSLLM):
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
+        credentials: Final[Credentials | None] = (
+            None
+            if self._get_aws_bearer_token(
+                api_key=api_key,
+                supports_bearer_token=supports_bearer_token,
+            )
+            else self.get_credentials(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_region_name=aws_region_name,
+                aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
+                aws_role_name=aws_role_name,
+                aws_web_identity_token=aws_web_identity_token,
+                aws_sts_endpoint=aws_sts_endpoint,
+            )
         )
         return credentials, aws_region_name
 
@@ -378,7 +388,10 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
         api_key: str | None = None,
     ) -> EmbeddingResponse:
-        credentials, aws_region_name = self._load_credentials(optional_params)
+        credentials, aws_region_name = self._load_credentials(
+            optional_params,
+            api_key=api_key,
+        )
 
         ### TRANSFORMATION ###
         unencoded_model_id: Final = optional_params.pop("model_id", None) or model  # default to model if not passed
@@ -568,7 +581,10 @@ class BedrockEmbedding(BaseAWSLLM):
         """
 
         # Get AWS credentials using the same method as other Bedrock methods
-        credentials, _ = self._load_credentials(kwargs)
+        credentials, _ = self._load_credentials(
+            kwargs,
+            supports_bearer_token=False,
+        )
 
         # Get the runtime endpoint
         endpoint_url, _ = self.get_runtime_endpoint(

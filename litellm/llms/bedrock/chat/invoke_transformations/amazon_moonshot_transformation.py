@@ -148,7 +148,12 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
 
         """
         # Filter out AWS credentials using the existing method from BaseAWSLLM
-        self._get_boto_credentials_from_optional_params(optional_params, model)
+        self._get_boto_credentials_from_optional_params(
+            optional_params,
+            model,
+            api_key=litellm_params.get("api_key"),
+            supports_bearer_token=True,
+        )
 
         # Strip routing prefixes to get the actual model ID
         clean_model_id: Final = self._get_model_id(model)

@@ -48,7 +48,7 @@ SIGV4_COMPUTED_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz
 
 
 class Boto3CredentialsInfo(BaseModel):
-    credentials: Credentials
+    credentials: Credentials | None
     aws_region_name: str
     aws_bedrock_runtime_endpoint: str | None
 
@@ -1372,8 +1372,24 @@ class BaseAWSLLM:
         else:
             return f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
+    def _get_aws_bearer_token(
+        self,
+        api_key: str | None = None,
+        supports_bearer_token: bool = True,
+    ) -> str | None:
+        if not supports_bearer_token:
+            return None
+        if api_key is not None:
+            return api_key
+        return get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+
     def _get_boto_credentials_from_optional_params(
-        self, optional_params: dict, model: str | None = None
+        self,
+        optional_params: dict,
+        model: str | None = None,
+        *,
+        api_key: str | None = None,
+        supports_bearer_token: bool = False,
     ) -> Boto3CredentialsInfo:
         """
         Get boto3 credentials from optional params
@@ -1382,7 +1398,8 @@ class BaseAWSLLM:
             optional_params (dict): Optional parameters for the model call
 
         Returns:
-            Credentials: Boto3 credentials object
+            Boto3CredentialsInfo: Resolved request metadata. Credentials are None
+            when bearer-token authentication is active.
         """
         try:
             from botocore.credentials import Credentials
@@ -1405,17 +1422,24 @@ class BaseAWSLLM:
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_external_id: Final = optional_params.pop("aws_external_id", None)
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
+        credentials: Final[Credentials | None] = (
+            None
+            if self._get_aws_bearer_token(
+                api_key=api_key,
+                supports_bearer_token=supports_bearer_token,
+            )
+            else self.get_credentials(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_region_name=aws_region_name,
+                aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
+                aws_role_name=aws_role_name,
+                aws_web_identity_token=aws_web_identity_token,
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_external_id=aws_external_id,
+            )
         )
 
         return Boto3CredentialsInfo(
@@ -1427,7 +1451,7 @@ class BaseAWSLLM:
     @tracer.wrap()
     def get_request_headers(
         self,
-        credentials: Credentials,
+        credentials: Credentials | None,
         aws_region_name: str,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -1436,12 +1460,10 @@ class BaseAWSLLM:
         api_key: str | None = None,
         supports_bearer_token: bool = True,
     ) -> AWSPreparedRequest:
-        if not supports_bearer_token:
-            aws_bearer_token: str | None = None
-        elif api_key is not None:
-            aws_bearer_token = api_key
-        else:
-            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+        aws_bearer_token: Final = self._get_aws_bearer_token(
+            api_key=api_key,
+            supports_bearer_token=supports_bearer_token,
+        )
 
         if aws_bearer_token:
             try:
@@ -1451,6 +1473,8 @@ class BaseAWSLLM:
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
             request = AWSRequest(method="POST", url=endpoint_url, data=data, headers=headers)
         else:
+            if credentials is None:
+                raise ValueError("AWS credentials are required for SigV4 authentication")
             try:
                 from botocore.auth import SigV4Auth
                 from botocore.awsrequest import AWSRequest
@@ -1536,10 +1560,7 @@ class BaseAWSLLM:
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
-        if api_key is not None:
-            aws_bearer_token: str | None = api_key
-        else:
-            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+        aws_bearer_token: Final = self._get_aws_bearer_token(api_key=api_key)
 
         # If aws bearer token is set, use it directly in the header
         if aws_bearer_token:

@@ -731,10 +731,65 @@ def test_sign_request_with_api_key_bearer_token():
     assert result_body == json.dumps(request_data).encode()
 
 
+@pytest.mark.parametrize(
+    ("api_key", "env_bearer_token"),
+    [
+        ("deployment-bearer-token", None),
+        (None, "environment-bearer-token"),
+    ],
+)
+def test_bearer_token_skips_boto_credential_resolution(
+    api_key: str | None,
+    env_bearer_token: str | None,
+):
+    llm = BaseAWSLLM()
+    optional_params = {"aws_region_name": "us-east-1"}
+
+    with (
+        patch(
+            "litellm.llms.bedrock.base_aws_llm.get_secret_str",
+            return_value=env_bearer_token,
+        ),
+        patch.object(
+            llm,
+            "get_credentials",
+            side_effect=AssertionError("bearer-token requests must not resolve AWS credentials"),
+        ) as get_credentials,
+    ):
+        credential_info = llm._get_boto_credentials_from_optional_params(
+            optional_params,
+            api_key=api_key,
+            supports_bearer_token=True,
+        )
+
+    get_credentials.assert_not_called()
+    assert credential_info.credentials is None
+    assert credential_info.aws_region_name == "us-east-1"
+
+
+def test_shared_boto_helper_requires_credentials_by_default():
+    llm = BaseAWSLLM()
+    credentials = Credentials("test_key", "test_secret", "test_token")
+
+    with (
+        patch(
+            "litellm.llms.bedrock.base_aws_llm.get_secret_str",
+            return_value="environment-bearer-token",
+        ),
+        patch.object(llm, "get_credentials", return_value=credentials) as get_credentials,
+    ):
+        credential_info = llm._get_boto_credentials_from_optional_params(
+            {"aws_region_name": "us-east-1"},
+        )
+
+    get_credentials.assert_called_once()
+    assert credential_info.credentials is credentials
+
+
 def test_get_request_headers_with_env_var_bearer_token():
     # Setup
     llm = BaseAWSLLM()
-    credentials = Credentials("test_key", "test_secret", "test_token")
+    credentials = None
     headers = {"Content-Type": "application/json"}
     headers_dict = headers.copy()
 
@@ -831,7 +886,7 @@ def test_get_request_headers_with_api_key_bearer_token():
     """
     # Setup
     llm = BaseAWSLLM()
-    credentials = Credentials("test_key", "test_secret", "test_token")
+    credentials = None
     headers = {"Content-Type": "application/json"}
     headers_dict = headers.copy()
     api_key = "test_api_key"

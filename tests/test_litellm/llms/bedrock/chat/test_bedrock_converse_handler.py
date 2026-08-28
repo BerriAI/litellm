@@ -135,6 +135,25 @@ def test_the_core_receives_the_credentials_this_handler_already_resolved():
     assert params["aws_region_name"] == "us-east-1"
 
 
+def test_bearer_token_skips_aws_credential_resolution():
+    seen = _inject()
+
+    with patch.object(
+        BedrockConverseLLM,
+        "get_credentials",
+        side_effect=AssertionError("bearer-token requests must not resolve AWS credentials"),
+    ) as get_credentials:
+        response = BedrockConverseLLM().completion(**_completion_kwargs(api_key="bedrock-bearer-token"))
+
+    get_credentials.assert_not_called()
+    assert response.choices[0].message.content == "hello from rust"
+    params = seen["call"][0]["optional_params"]
+    assert params["aws_region_name"] == "us-east-1"
+    assert "aws_access_key_id" not in params
+    assert "aws_secret_access_key" not in params
+    assert "aws_session_token" not in params
+
+
 def test_the_core_receives_the_converse_url_this_handler_already_built():
     seen = _inject()
     _run()

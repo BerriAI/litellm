@@ -329,6 +329,28 @@ class TestBedrockMoonshotBasic:
         # The model ID in the request body should be stripped
         assert transformed["model"] == "moonshot.kimi-k2-thinking"
 
+    def test_transform_request_bearer_token_skips_aws_credentials(self):
+        from litellm.llms.bedrock.chat.invoke_transformations.amazon_moonshot_transformation import (
+            AmazonMoonshotConfig,
+        )
+
+        config = AmazonMoonshotConfig()
+        with patch.object(
+            config,
+            "get_credentials",
+            side_effect=AssertionError("bearer-token requests must not resolve AWS credentials"),
+        ) as get_credentials:
+            transformed = config.transform_request(
+                model="bedrock/invoke/moonshot.kimi-k2-thinking",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={"api_key": "bedrock-bearer-token"},
+                headers={},
+            )
+
+        get_credentials.assert_not_called()
+        assert transformed["model"] == "moonshot.kimi-k2-thinking"
+
 
 class TestBedrockMoonshotReasoningContent:
     """Tests for reasoning content extraction."""

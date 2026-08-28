@@ -220,7 +220,12 @@ class BedrockImageGeneration(BaseAWSLLM):
             prepped (httpx.Request): The prepared request object
             body (bytes): The request body
         """
-        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
+        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
+            optional_params,
+            model,
+            api_key=api_key,
+            supports_bearer_token=True,
+        )
 
         # Use the existing ARN-aware provider detection method
         bedrock_provider: Final = self.get_bedrock_invoke_provider(model)
