@@ -4,7 +4,6 @@ from typing import Any, Final
 
 import pytest
 
-
 import litellm
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
@@ -107,6 +106,27 @@ class TestEmbeddingInputCap:
         await _encoder(router, max_input_chars=100).aencode_documents(["y" * 9_000])
 
         assert router.embedded_inputs == [["y" * 100]]
+
+    @pytest.mark.asyncio
+    async def test_should_batch_large_document_embeddings(self):
+        router: Final = RecordingRouter()
+        docs: Final = [f"tool-{i}" for i in range(513)]
+
+        embeddings = await _encoder(router).aencode_documents(docs)
+
+        assert [len(batch) for batch in router.embedded_inputs] == [512, 1]
+        assert [doc for batch in router.embedded_inputs for doc in batch] == docs
+        assert len(embeddings) == len(docs)
+
+    @pytest.mark.asyncio
+    async def test_should_not_create_extra_embedding_batch_at_limit(self):
+        router: Final = RecordingRouter()
+        docs: Final = [f"tool-{i}" for i in range(512)]
+
+        embeddings = await _encoder(router).aencode_documents(docs)
+
+        assert [len(batch) for batch in router.embedded_inputs] == [512]
+        assert len(embeddings) == len(docs)
 
     def test_should_leave_docs_within_the_cap_untouched(self):
         router: Final = RecordingRouter()

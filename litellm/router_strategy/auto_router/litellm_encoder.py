@@ -7,6 +7,8 @@ from semantic_router.encoders.base import AsymmetricDenseMixin
 import litellm
 from litellm._logging import verbose_router_logger
 
+EMBEDDING_BATCH_SIZE = 512
+
 if TYPE_CHECKING:
     from litellm.router import Router
 else:
@@ -144,10 +146,21 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
     async def aencode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
-        try:
-            embeds: Final = await self.litellm_router_instance.aembedding(
-                input=self._clamp(docs), model=self.model_name, **kwargs
-            )
-            return litellm_to_list(embeds)
-        except Exception as e:
-            raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
+
+        embeddings: list[list[float]] = []
+
+        for i in range(0, len(docs), EMBEDDING_BATCH_SIZE):
+            batch = docs[i : i + EMBEDDING_BATCH_SIZE]
+
+            try:
+                embeds: Final = await self.litellm_router_instance.aembedding(
+                    input=self._clamp(batch),
+                    model=self.model_name,
+                    **kwargs,
+                )
+            except Exception as e:
+                raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
+
+            embeddings.extend(litellm_to_list(embeds))
+
+        return embeddings
