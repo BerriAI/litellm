@@ -82,6 +82,7 @@ CONNECTION_PARAM_KEYS: Final[frozenset[str]] = frozenset(
         "pool_timeout",
         "connect_timeout",
         "socket_timeout",
+        "max_idle_connection_lifetime",
         "pgbouncer",
     }
 )

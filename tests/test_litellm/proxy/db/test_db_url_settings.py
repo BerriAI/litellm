@@ -739,3 +739,12 @@ def test_unsupported_db_scheme_message_names_var_and_scheme():
     assert "DIRECT_URL" in msg
     assert "sqlite" in msg
     assert "postgresql://" in msg
+
+
+def test_reader_shareable_params_includes_idle_lifetime():
+    from litellm.proxy.db.db_url_settings import reader_shareable_params
+
+    shared = reader_shareable_params(
+        {"max_idle_connection_lifetime": 60, "schema": "other", "connection_limit": 10}
+    )
+    assert shared == {"max_idle_connection_lifetime": 60, "connection_limit": 10}
