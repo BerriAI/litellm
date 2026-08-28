@@ -15216,6 +15216,29 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "databricks/databricks-glm-5-3-flash": {
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "metadata": {
+            "notes": "Databricks has not published pay-per-token DBU rates for this model yet (not on the foundation-model-serving pricing page as of 2026-08-27), so cost fields are omitted until rates are published."
+        },
+        "mode": "chat",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "databricks/databricks-gpt-5": {
         "cache_creation_input_token_cost": 1.24999e-06,
         "cache_read_input_token_cost": 1.2502e-07,
@@ -31860,6 +31883,17 @@
         "supports_tool_choice": true,
         "supports_web_search": true
     },
+    "moonshot/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "moonshot",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://platform.kimi.ai/docs/pricing/chat-k27-code",
+        "supports_prompt_caching": true
+    },
     "moonshot/kimi-k2-turbo-preview": {
         "cache_read_input_token_cost": 1.5e-07,
         "deprecation_date": "2026-05-25",
@@ -44627,6 +44661,22 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "zai/glm-5.3-flash": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 5e-07,
+        "litellm_provider": "zai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "supports_vision": true
+    },
     "zai/glm-5.1": {
         "cache_creation_input_token_cost": 0,
         "cache_read_input_token_cost": 2.6e-07,
@@ -54371,7 +54421,8 @@
         ],
         "supported_output_modalities": [
             "image"
-        ]
+        ],
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-imagine-image-2.0": {
         "input_cost_per_image": 0.06,
