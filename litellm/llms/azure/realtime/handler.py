@@ -19,6 +19,7 @@ from litellm.constants import (
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from ....litellm_core_utils.realtime_errors import websocket_close_reason
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ....llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -219,7 +220,12 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             else None
         )
         if isinstance(minted, _EphemeralMintError):
-            await websocket.close(code=1008, reason=_redact_string(minted.reason)[:120])
+            await websocket.close(
+                code=1008,
+                reason=websocket_close_reason(
+                    _redact_string(minted.reason), fallback="Realtime transcription session error"
+                ),
+            )
             return
 
         url: Final = self._construct_url(
@@ -257,6 +263,9 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:
-            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
+            await websocket.close(
+                code=e.status_code,
+                reason=websocket_close_reason(_redact_string(str(e)), fallback="Invalid status code"),
+            )
         except Exception:
             verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
