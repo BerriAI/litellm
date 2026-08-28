@@ -9,6 +9,7 @@ import { STATUS_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
 const mockModelDeleteCall = vi.fn().mockResolvedValue({});
 const mockModelPatchUpdateCall = vi.fn().mockResolvedValue({});
 vi.mock("@/components/networking", () => ({
+  serverRootPath: "/",
   modelDeleteCall: (...args: unknown[]) => mockModelDeleteCall(...args),
   modelPatchUpdateCall: (...args: unknown[]) => mockModelPatchUpdateCall(...args),
 }));
@@ -333,6 +334,23 @@ describe("AllModelsTab", () => {
       render(<AllModelsTab {...defaultProps} />);
 
       expect(screen.getByText(/create a Virtual Key without selecting a team/i)).toBeInTheDocument();
+    });
+
+    it("links the Virtual Keys page through the migrated /ui route", () => {
+      render(<AllModelsTab {...defaultProps} />);
+
+      expect(screen.getByRole("link", { name: "Virtual Keys page" })).toHaveAttribute("href", "/ui/api-keys");
+    });
+
+    it("links the team hint's Virtual Keys page through the migrated /ui route", async () => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
+
+      await user.click(screen.getByTestId("models-team-select"));
+      await user.click(await screen.findByRole("option", { name: "Engineering" }));
+
+      await screen.findByText(/select Team as "Engineering"/i);
+      expect(screen.getByRole("link", { name: "Virtual Keys page" })).toHaveAttribute("href", "/ui/api-keys");
     });
 
     it("names the selected team in the hint", async () => {
