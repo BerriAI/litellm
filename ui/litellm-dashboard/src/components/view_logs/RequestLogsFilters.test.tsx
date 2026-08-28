@@ -1,8 +1,10 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { ERROR_CODE_OPTIONS } from "./constants";
 import { LOG_FILTER_IDS } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 
@@ -45,6 +47,20 @@ function renderFilters(filters: Record<string, string> = {}) {
   return { set };
 }
 
+function StatefulFilters() {
+  const [filters, setFilters] = useState<Record<string, string | undefined>>({});
+  return (
+    <RequestLogsFilters
+      get={(id: string) => filters[id]}
+      set={(id: string, value: unknown) =>
+        setFilters((previous) => ({ ...previous, [id]: typeof value === "string" ? value : undefined }))
+      }
+      teams={[]}
+      logsWindow={LOGS_WINDOW}
+    />
+  );
+}
+
 describe("RequestLogsFilters", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -69,6 +85,7 @@ describe("RequestLogsFilters", () => {
     for (const label of [
       "Team ID",
       "Status",
+      "Cache",
       "Key Alias",
       "User ID",
       "End User",
@@ -258,5 +275,74 @@ describe("RequestLogsFilters", () => {
     renderFilters(status === "" ? {} : { [LOG_FILTER_IDS.STATUS]: status });
 
     expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["", "All Requests"],
+    ["hit", "Cache Hit"],
+    ["miss", "Cache Miss"],
+  ])("shows the human label on the Cache trigger for %s", async (cacheState, label) => {
+    renderFilters(cacheState === "" ? {} : { [LOG_FILTER_IDS.CACHE_STATUS]: cacheState });
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["Cache Hit", "hit"],
+    ["Cache Miss", "miss"],
+  ])("selecting %s sets the cache filter to %s", async (label, expected) => {
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    await user.click(await screen.findByText("All Requests"));
+    await user.click(await screen.findByRole("option", { name: label }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CACHE_STATUS, expected);
+  });
+
+  it("stores the raw status code when a labeled error code is picked", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    await user.click(await screen.findByPlaceholderText("Select or type an error code"));
+    await user.click(await screen.findByRole("option", { name: "429 - Rate Limited" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.ERROR_CODE, "429");
+  });
+
+  it("offers every error code again after one was picked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<StatefulFilters />);
+
+    const input = await screen.findByPlaceholderText("Select or type an error code");
+    await user.click(input);
+    await user.click(await screen.findByRole("option", { name: "429 - Rate Limited" }));
+    await user.click(input);
+
+    const list = await screen.findByTestId("error-code-filter-list");
+    expect(within(list).getAllByRole("option")).toHaveLength(ERROR_CODE_OPTIONS.length);
+    expect(within(list).queryByText(/^Use custom code:/)).not.toBeInTheDocument();
+  });
+
+  it("filters by an error code the list does not offer", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    const input = await screen.findByPlaceholderText("Select or type an error code");
+    await user.click(input);
+    await user.type(input, "418");
+    await user.click(await screen.findByRole("option", { name: "Use custom code: 418" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.ERROR_CODE, "418");
+  });
+
+  it("selecting All Requests clears the cache filter", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters({ [LOG_FILTER_IDS.CACHE_STATUS]: "hit" });
+
+    await user.click(await screen.findByText("Cache Hit"));
+    await user.click(await screen.findByRole("option", { name: "All Requests" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CACHE_STATUS, undefined);
   });
 });
