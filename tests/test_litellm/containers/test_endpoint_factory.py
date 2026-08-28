@@ -47,8 +47,10 @@ class TestEndpointsConfig:
 
     def test_config_is_reread_rather_than_shared_between_callers(self):
         first = _load_endpoints_config()
-        first["endpoints"].clear()
-        assert len(_load_endpoints_config()["endpoints"]) == len(_SYNC_NAMES)
+        second = _load_endpoints_config()
+        assert first is not second
+        assert first["endpoints"] is not second["endpoints"]
+        assert first == second
 
 
 class TestResponseTypeMapping:
