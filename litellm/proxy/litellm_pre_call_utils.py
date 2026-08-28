@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -19,6 +19,7 @@ from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
@@ -50,6 +51,7 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE: Final = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
@@ -220,6 +222,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "policy_sources",
     "guardrail_scan_ids",
     "routing_decision",
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
     "pillar_response_headers",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
@@ -274,6 +277,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "policy_sources",
     "guardrail_scan_ids",
     "routing_decision",
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -754,6 +758,12 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
+        # New Relic routing reads these from the trusted-vars overlay with no
+        # callback-name check, so scope them to the newrelic entry: a team that
+        # put newrelic_* under a different callback never asked for New Relic and
+        # must not export to it.
+        if var.startswith("newrelic_") and data.callback_name != "newrelic":
+            continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
         team_callback_settings_obj.callback_vars[var] = str(value)
@@ -1622,6 +1632,32 @@ class LiteLLMProxyRequestSetup:
         )
 
 
+def refresh_proxy_server_request_body_snapshot(
+    data: MutableMapping[str, object],
+) -> None:
+    """
+    Re-snapshot ``data["proxy_server_request"]["body"]`` from the current state of ``data``.
+
+    ``add_litellm_data_to_request`` takes the initial snapshot before guardrails
+    (pre_call_hook) run. A guardrail that masks PII/PCI in place (e.g. Presidio)
+    mutates ``data`` afterward, so callers that persist ``proxy_server_request.body``
+    for audit/spend-tracking purposes must call this again post-guardrail, or the
+    persisted body silently bypasses whatever masking the guardrail applied.
+
+    By the time a caller refreshes post-guardrail, ``litellm.utils.function_setup``
+    has already stamped ``data["litellm_logging_obj"]`` with a live (non-serializable)
+    ``Logging`` instance, so it must be excluded here the same way ``secret_fields``
+    and ``proxy_server_request`` are.
+    """
+    proxy_server_request = data.get("proxy_server_request")
+    if not isinstance(proxy_server_request, dict):
+        return
+    _body_snapshot_exclude = (
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
+    )
+    proxy_server_request["body"] = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
+
+
 async def add_litellm_data_to_request(
     data: dict,
     request: Request,
@@ -1718,11 +1754,17 @@ async def add_litellm_data_to_request(
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
     ##########################################################
-    # Track arrival time for queue time metric. The body snapshot is filled
-    # in after the admin-injection strip below so the audit / spend-tracking
-    # consumers of proxy_server_request["body"] see the cleaned metadata
-    # rather than attacker-forged user_api_key_* fields.
-    arrival_time: Final = time.time()
+    # Track arrival time for queue time metric. Prefer the timestamp stamped at
+    # the top of user_api_key_auth (request.state.litellm_received_at): by the
+    # time this function runs, auth has already completed, so time.time() here
+    # would silently exclude the entire auth phase from the queue-time window.
+    # Falls back to time.time() for callers that never went through
+    # user_api_key_auth. The body snapshot is filled in after the
+    # admin-injection strip below so the audit / spend-tracking consumers of
+    # proxy_server_request["body"] see the cleaned metadata rather than
+    # attacker-forged user_api_key_* fields.
+    _litellm_received_at: Final = getattr(request.state, "litellm_received_at", None)
+    arrival_time: Final = _litellm_received_at.timestamp() if _litellm_received_at is not None else time.time()
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
@@ -1802,8 +1844,6 @@ async def add_litellm_data_to_request(
         cache_dict: Final = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
 
-    verbose_proxy_logger.debug("receiving data: %s", data)
-
     # requester_metadata is snapshotted AFTER the strip below so
     # downstream consumers (e.g. PANW guardrail reading user_ip /
     # profile_id) don't see attacker-injected admin slots preserved in
@@ -1863,9 +1903,7 @@ async def add_litellm_data_to_request(
     #     self-reference — body.proxy_server_request.body would be the same
     #     dict as body, producing an infinite traversal loop for any consumer
     #     that walks the structure.
-    _body_snapshot_exclude = frozenset({"secret_fields", "proxy_server_request"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
-    _body_snapshot: Final = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
-    data["proxy_server_request"]["body"] = _body_snapshot
+    refresh_proxy_server_request_body_snapshot(data)
 
     # Snapshot the requester-supplied metadata for downstream consumers.
     # Taking the deepcopy after the user_api_key_* / _pipeline_managed_guardrails
@@ -1966,6 +2004,19 @@ async def add_litellm_data_to_request(
     data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
         data=data,
         management_endpoint_metadata=team_metadata,
+        _metadata_variable_name=_metadata_variable_name,
+    )
+
+    # A key's OTel service name outranks its team's, so the key's values are
+    # re-applied after the last-writer-wins team metadata merge above
+    _key_otel_service_names: Final = {
+        field: value
+        for field, value in (key_metadata or {}).items()
+        if field in OTEL_SERVICE_NAME_METADATA_KEYS and isinstance(value, str) and value.strip()
+    }
+    data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
+        data=data,
+        management_endpoint_metadata=_key_otel_service_names,
         _metadata_variable_name=_metadata_variable_name,
     )
 
@@ -3044,36 +3095,36 @@ async def add_guardrails_from_policy_engine(
     )
 
 
+_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
+    (LlmProviders.ANTHROPIC.value, LlmProviders.BEDROCK.value, LlmProviders.VERTEX_AI.value)
+)
+_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.ANTHROPIC.value
+
+
 def add_provider_specific_headers_to_request(
     data: dict,
     headers: dict,
 ):
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
-    anthropic_headers: Final = {}
-    # boolean to indicate if a header was added
-    added_header = False
-    for header in ANTHROPIC_API_HEADERS:
-        if header in headers:
-            header_value = headers[header]
-            anthropic_headers[header] = header_value
-            added_header = True
+    anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
+    anthropic_oauth_credential_headers: Final = {
+        header: value
+        for header, value in headers.items()
+        if header.lower() == "authorization" and is_anthropic_oauth_key(value)
+    }
 
-    # Check for Authorization header with Anthropic OAuth token (sk-ant-oat*)
-    # This needs to be handled via provider-specific headers to ensure it only
-    # goes to Anthropic-compatible providers, not all providers in the router
-    for header, value in headers.items():
-        if header.lower() == "authorization" and is_anthropic_oauth_key(value):
-            anthropic_headers[header] = value
-            added_header = True
-            break
-    if added_header is True:
-        # Anthropic headers work across multiple providers
-        # Store as comma-separated list so retrieval can match any of them
-        data["provider_specific_header"] = ProviderSpecificHeader(
-            custom_llm_provider=f"{LlmProviders.ANTHROPIC.value},{LlmProviders.BEDROCK.value},{LlmProviders.VERTEX_AI.value}",
-            extra_headers=anthropic_headers,
+    scoped_headers: Final = [
+        ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
+        for providers, extra_headers in (
+            (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
+            (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
         )
+        if extra_headers
+    ]
+
+    if scoped_headers:
+        data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

@@ -12,7 +12,6 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
@@ -37,7 +36,7 @@ def _rendered_log_message(call):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_system_message():
+async def test_anthropic_cache_control_hook_system_message(monkeypatch: pytest.MonkeyPatch):
     # Use patch.dict to mock environment variables instead of setting them directly
     with patch.dict(
         os.environ,
@@ -48,7 +47,7 @@ async def test_anthropic_cache_control_hook_system_message():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -116,7 +115,7 @@ async def test_anthropic_cache_control_hook_system_message():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_user_message():
+async def test_anthropic_cache_control_hook_user_message(monkeypatch: pytest.MonkeyPatch):
     # Use patch.dict to mock environment variables instead of setting them directly
     with patch.dict(
         os.environ,
@@ -127,7 +126,7 @@ async def test_anthropic_cache_control_hook_user_message():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -188,7 +187,7 @@ async def test_anthropic_cache_control_hook_user_message():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_negative_indices():
+async def test_anthropic_cache_control_hook_negative_indices(monkeypatch: pytest.MonkeyPatch):
     """
     Test the bug fix for handling negative indices in cache control injection points.
     This test verifies that negative indices (-1, -2) are properly converted to positive indices
@@ -204,7 +203,7 @@ async def test_anthropic_cache_control_hook_negative_indices():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -302,7 +301,7 @@ async def test_anthropic_cache_control_hook_negative_indices():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_out_of_bounds_logging():
+async def test_anthropic_cache_control_hook_out_of_bounds_logging(monkeypatch: pytest.MonkeyPatch):
     """
     Test that warning logs are generated when out-of-bounds indices are used.
     This verifies that the verbose_logger.warning is called with the correct message.
@@ -316,7 +315,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -365,7 +364,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
+async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging(monkeypatch: pytest.MonkeyPatch):
     """
     Test that warning logs are generated for negative indices that are out of bounds.
     """
@@ -378,7 +377,7 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -431,7 +430,7 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_multiple_user_messages():
+async def test_anthropic_cache_control_hook_multiple_user_messages(monkeypatch: pytest.MonkeyPatch):
     """
     Test cache control injection on multiple user messages specifically.
     Note: Bedrock API combines consecutive user messages into a single message with multiple content blocks.
@@ -445,7 +444,7 @@ async def test_anthropic_cache_control_hook_multiple_user_messages():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -523,7 +522,7 @@ async def test_anthropic_cache_control_hook_multiple_user_messages():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad_index", [10, -10])
-async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
+async def test_anthropic_cache_control_hook_out_of_bounds(bad_index, monkeypatch: pytest.MonkeyPatch):
     """
     Verify the hook does not raise an error and makes no changes
     when an out-of-bounds index is provided.
@@ -537,7 +536,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -586,7 +585,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
     "message_list",
     [[{"role": "user", "content": "Single message"}]],  # Single message only - empty list will fail at API level
 )
-async def test_anthropic_cache_control_hook_single_message(message_list):
+async def test_anthropic_cache_control_hook_single_message(message_list, monkeypatch: pytest.MonkeyPatch):
     """
     Verify the hook runs without error on very short message lists.
     """
@@ -599,7 +598,7 @@ async def test_anthropic_cache_control_hook_single_message(message_list):
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -637,7 +636,7 @@ async def test_anthropic_cache_control_hook_single_message(message_list):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_empty_message_list():
+async def test_anthropic_cache_control_hook_empty_message_list(monkeypatch: pytest.MonkeyPatch):
     """
     Verify that empty message lists are handled appropriately (should fail at API level, not hook level).
     """
@@ -650,7 +649,7 @@ async def test_anthropic_cache_control_hook_empty_message_list():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=MagicMock()) as mock_post:
@@ -668,7 +667,7 @@ async def test_anthropic_cache_control_hook_empty_message_list():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_no_op():
+async def test_anthropic_cache_control_hook_no_op(monkeypatch: pytest.MonkeyPatch):
     """
     Verify that if no injection points are specified, messages remain unmodified.
     """
@@ -681,7 +680,7 @@ async def test_anthropic_cache_control_hook_no_op():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -726,7 +725,7 @@ async def test_anthropic_cache_control_hook_no_op():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
+async def test_anthropic_cache_control_hook_multiple_content_items_last_only(monkeypatch: pytest.MonkeyPatch):
     """
     Test that cache_control is only applied to the last content item in a list, not all items.
     This verifies the fix for https://github.com/BerriAI/litellm/issues/15696
@@ -740,7 +739,7 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -797,7 +796,7 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
+async def test_anthropic_cache_control_hook_document_analysis_multiple_pages(monkeypatch: pytest.MonkeyPatch):
     """
     Test cache_control with multiple document pages to ensure only the last page gets cached.
     This simulates document analysis with 6 content blocks, verifying the fix for issue 15696.
@@ -811,7 +810,7 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -969,7 +968,7 @@ def test_gemini_cache_control_injection_list_content_detected():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_string_negative_index():
+async def test_anthropic_cache_control_hook_string_negative_index(monkeypatch: pytest.MonkeyPatch):
     """
     Test that string negative indices like "-1" are handled correctly.
 
@@ -986,7 +985,7 @@ async def test_anthropic_cache_control_hook_string_negative_index():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -1185,7 +1184,7 @@ def test_cache_control_hook_does_not_overwrite_existing_cache_control():
 
 
 @pytest.mark.asyncio
-async def test_cache_control_hook_bedrock_payload_caps_cachepoints_at_four():
+async def test_cache_control_hook_bedrock_payload_caps_cachepoints_at_four(monkeypatch: pytest.MonkeyPatch):
     """End-to-end: outgoing Bedrock payload must not exceed 4 cachePoint blocks.
 
     Reproduces the customer report where 4 client cache_control system blocks
@@ -1199,7 +1198,7 @@ async def test_cache_control_hook_bedrock_payload_caps_cachepoints_at_four():
             "AWS_REGION_NAME": "us-east-1",
         },
     ):
-        litellm.callbacks = [AnthropicCacheControlHook()]
+        monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -1289,7 +1288,7 @@ def test_cache_control_hook_reserves_slot_for_tool_config_point():
 
 
 @pytest.mark.asyncio
-async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
+async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point(monkeypatch: pytest.MonkeyPatch):
     """End-to-end: message + tool_config injection must not exceed 4 cachePoints."""
     with patch.dict(
         os.environ,
@@ -1299,7 +1298,7 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
             "AWS_REGION_NAME": "us-east-1",
         },
     ):
-        litellm.callbacks = [AnthropicCacheControlHook()]
+        monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -1599,6 +1598,14 @@ class TestEnableAnthropicPromptCaching:
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         assert supports_prompt_caching(model=model, custom_llm_provider=provider) is True
         assert self._points(model=model, provider=provider) == []
+
+    def test_databricks_claude_not_injected_despite_caching_support(self, monkeypatch, local_model_cost_map):
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        model = "databricks/databricks-claude-sonnet-4-5"
+        assert supports_prompt_caching(model=model, custom_llm_provider="databricks") is True
+        assert self._points(model=model, provider="databricks") == []
 
     def test_model_without_caching_support_not_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
@@ -2789,3 +2796,116 @@ class TestPromptCacheBreakpointCapability:
     def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):
         assert model not in litellm.model_cost
         assert supports_openai_prompt_cache_breakpoint(model) is expected
+
+
+class TestRecordGatewayInjection:
+    """The injection marker spend accounting gates prompt-caching savings on."""
+
+    KEY = "litellm_gateway_injected_cache"
+    DEPLOYMENT = "dep-abc"
+
+    def test_records_only_an_actual_injection(self):
+        """A zero delta is hook re-entry and a negative one is a prompt manager replacing
+        the messages; neither is litellm adding a breakpoint."""
+        kwargs: dict = {"metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, -3)
+        assert kwargs["metadata"] == {}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 2)
+        assert kwargs["metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_a_point_this_pass_did_not_place_is_not_claimed(self):
+        """A tool_config point is placed by the Bedrock converse transform, and only when
+        the request carries tools, so its presence here says nothing about whether a
+        breakpoint reaches the wire. Claiming it credited litellm on request shapes that
+        inject nothing, and under-crediting Bedrock tool caching is the fail-closed half.
+        """
+        kwargs: dict = {"metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        assert kwargs["metadata"] == {}
+
+    @pytest.mark.parametrize("kwargs", [{}, {"metadata": None}, {"metadata": "not-a-dict"}])
+    def test_never_introduces_a_metadata_key(self, kwargs):
+        """Stamping must not add a key to a dict the caller splats as ``**kwargs``.
+
+        ``aresponses`` takes ``metadata`` as an explicit parameter and forwards the rest
+        of the request as ``**kwargs``, so a bucket created here arrives twice and the
+        call dies with "got multiple values for keyword argument 'metadata'". Only the
+        proxy reads this marker and it always seeds the bucket first, so a request
+        without one has nothing to record.
+        """
+        before = dict(kwargs)
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 3)
+        assert kwargs == before
+
+    def test_a_later_pass_cannot_unset_an_earlier_injection(self):
+        kwargs: dict = {"litellm_metadata": {"user_api_key": "k"}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 2)
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_v1_messages_auto_injection_stamps_the_marker(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        kwargs: dict = {"litellm_metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "latest turn"}],
+            "a long system prompt",
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_v1_messages_stand_down_leaves_no_marker(self, monkeypatch):
+        """Client-supplied cache_control means the gateway did nothing to credit."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        kwargs: dict = {"litellm_metadata": {}}
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}],
+                },
+                {"role": "user", "content": "latest turn"},
+            ],
+            None,
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert self.KEY not in kwargs["litellm_metadata"]
+
+    def test_v1_messages_reentry_keeps_the_marker(self, monkeypatch):
+        """A second pass over already-injected messages computes a zero delta, which must
+        leave the first pass's mark standing rather than reading as no injection."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        kwargs: dict = {"litellm_metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        messages = [{"role": "user", "content": "latest turn"}]
+        first_msgs, first_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages, "a long system prompt", kwargs, model="claude-sonnet-4-5", custom_llm_provider="anthropic"
+        )
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            first_msgs, first_sys, kwargs, model="claude-sonnet-4-5", custom_llm_provider="anthropic"
+        )
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_configured_points_skipping_a_marked_target_record_nothing(self):
+        """Configured injection stands down on client breakpoints, so no marker lands."""
+        kwargs: dict = {
+            "litellm_metadata": {},
+            "cache_control_injection_points": [{"location": "message", "role": "system", "index": None}],
+        }
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}],
+                },
+                {"role": "user", "content": "hi"},
+            ],
+            None,
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert self.KEY not in kwargs["litellm_metadata"]

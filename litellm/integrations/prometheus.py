@@ -49,6 +49,7 @@ from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,
     _sanitize_prometheus_label_value,
+    validate_prometheus_deployment_and_latency_caller_identity,
 )
 from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
@@ -96,7 +97,10 @@ class _PaginatedPrismaTable(Protocol[_TableRowT]):
 
 def _paginated_table(repository: BaseRepository[_TableRowT]) -> _PaginatedPrismaTable[_TableRowT]:
     """View a repository's prisma table through the pagination surface budget metrics need."""
-    return repository.table
+    return cast(
+        _PaginatedPrismaTable[_TableRowT],
+        repository.table,  # cast-ok: prisma rows carry the budget columns the domain model declares
+    )
 
 
 class _OrgBudgetRow(Protocol):
@@ -172,6 +176,11 @@ class PrometheusLogger(CustomLogger):
         try:
             from prometheus_client import Counter, Gauge, Histogram
 
+            # Validate the caller-identity mode before any collector registers so an
+            # invalid value cannot leave partially-registered metrics behind in the
+            # process-global registry.
+            validate_prometheus_deployment_and_latency_caller_identity()
+
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
 
@@ -215,7 +224,9 @@ class PrometheusLogger(CustomLogger):
             # request latency metrics
             self.litellm_request_total_latency_metric = self._histogram_factory(
                 "litellm_request_total_latency_metric",
-                "Total latency (seconds) for a request to LiteLLM",
+                "End-to-end latency (seconds) for a request to LiteLLM Proxy Server, from the moment "
+                "the request reached the proxy through the end of processing -- includes "
+                "authentication, pre-call hooks, the LLM API call, and post-call processing",
                 labelnames=self.get_labels_for_metric("litellm_request_total_latency_metric"),
                 buckets=self.latency_buckets,
             )
@@ -458,7 +469,8 @@ class PrometheusLogger(CustomLogger):
             # Request queue time metric
             self.litellm_request_queue_time_metric = self._histogram_factory(
                 "litellm_request_queue_time_seconds",
-                "Time spent in request queue before processing starts (seconds)",
+                "Time (seconds) from request arrival at the proxy to the start of pre-call "
+                "processing -- includes authentication and any ASGI-level queueing",
                 labelnames=self.get_labels_for_metric("litellm_request_queue_time_seconds"),
                 buckets=self.latency_buckets,
             )
@@ -2078,27 +2090,37 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
-        # total request latency
+        # request queue time (time from arrival to processing start) -- read first so
+        # it can be folded into the total-latency metric below. start_time/end_time
+        # only span from after auth completes, so without this the "total" latency
+        # metric silently excludes auth and pre-call hook time.
+        _litellm_params: Final = kwargs.get("litellm_params", {}) or {}
+        queue_time_seconds: Final = (_litellm_params.get("metadata") or {}).get("queue_time_seconds")
+
+        # total request latency: true end-to-end, from request arrival (queue_time_seconds,
+        # when available) through the end of processing.
         total_time_seconds: Final = self._safe_duration_seconds(
             start_time=start_time,
             end_time=end_time,
         )
         if total_time_seconds is not None:
+            _observed_total_time_seconds: Final = (
+                total_time_seconds + queue_time_seconds
+                if queue_time_seconds is not None and queue_time_seconds >= 0
+                else total_time_seconds
+            )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_request_total_latency_metric"),
                 enum_values=enum_values,
                 label_context=label_context,
             )
-            self.litellm_request_total_latency_metric.labels(**_labels).observe(total_time_seconds)
+            self.litellm_request_total_latency_metric.labels(**_labels).observe(_observed_total_time_seconds)
             self._track_end_user_metric_series(
                 self.litellm_request_total_latency_metric,
                 "litellm_request_total_latency_metric",
                 _labels,
             )
 
-        # request queue time (time from arrival to processing start)
-        _litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-        queue_time_seconds: Final = (_litellm_params.get("metadata") or {}).get("queue_time_seconds")
         if queue_time_seconds is not None and queue_time_seconds >= 0:
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_request_queue_time_seconds"),
@@ -2449,6 +2471,7 @@ class PrometheusLogger(CustomLogger):
         else:
             _metadata = {
                 "user_api_key_alias": getattr(_metadata_raw, "user_api_key_alias", None),
+                "user_api_key_user_email": getattr(_metadata_raw, "user_api_key_user_email", None),
                 "user_api_key_team_id": getattr(_metadata_raw, "user_api_key_team_id", None),
                 "user_api_key_team_alias": getattr(_metadata_raw, "user_api_key_team_alias", None),
                 "user_api_key_hash": getattr(_metadata_raw, "user_api_key_hash", None),
@@ -2469,6 +2492,17 @@ class PrometheusLogger(CustomLogger):
                 return val
             if user_api_key_auth is not None:
                 return getattr(user_api_key_auth, "key_alias", None)
+            return None
+
+        def _get_user_email() -> str | None:
+            from_metadata: Final = _metadata.get("user_api_key_user_email")
+            if from_metadata is not None:
+                return from_metadata
+            from_params: Final = _litellm_params_metadata.get("user_api_key_user_email")
+            if from_params is not None:
+                return from_params
+            if user_api_key_auth is not None:
+                return self._safe_get(user_api_key_auth, "user_email")
             return None
 
         def _get_team_id() -> str | None:
@@ -2506,6 +2540,7 @@ class PrometheusLogger(CustomLogger):
 
         return {
             "api_key_alias": _get_api_key_alias(),
+            "user_email": _get_user_email(),
             "team": _get_team_id(),
             "team_alias": _get_team_alias(),
             "hashed_api_key": _get_hashed_api_key(),
@@ -2563,6 +2598,7 @@ class PrometheusLogger(CustomLogger):
             _metadata: Final = standard_logging_payload.get("metadata", {}) or {}
             hashed_api_key: Final = fallback_values.get("hashed_api_key") or _metadata.get("user_api_key_hash")
             api_key_alias: Final = fallback_values.get("api_key_alias") or _metadata.get("user_api_key_alias")
+            user_email: Final = fallback_values.get("user_email")
             team: Final = fallback_values.get("team") or _metadata.get("user_api_key_team_id")
             team_alias: Final = fallback_values.get("team_alias") or _metadata.get("user_api_key_team_alias")
             client_ip: Final = fallback_values.get("client_ip") or _metadata.get("requester_ip_address")
@@ -2603,6 +2639,7 @@ class PrometheusLogger(CustomLogger):
                 requested_model=label_requested_model,
                 hashed_api_key=hashed_api_key,
                 api_key_alias=api_key_alias,
+                user_email=user_email,
                 team=team,
                 team_alias=team_alias,
                 tags=standard_logging_payload.get("request_tags", []),
@@ -3539,7 +3576,9 @@ class PrometheusLogger(CustomLogger):
         except Exception as e:
             verbose_logger.exception("Error initializing user/team count metrics: %s", e)
 
-    async def _set_key_list_budget_metrics(self, keys: list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken]):
+    async def _set_key_list_budget_metrics(
+        self, keys: list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken]
+    ) -> None:
         """Helper function to set budget metrics for a list of keys"""
         for key in keys:
             if isinstance(key, UserAPIKeyAuth):

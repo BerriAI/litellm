@@ -175,6 +175,10 @@ _RedisCallResult = TypeVar("_RedisCallResult")
 _swallowed_redis_failures: Final[ContextVar[int]] = ContextVar("litellm_swallowed_redis_failures", default=0)
 
 
+def _opaque_kwarg_key(value: object) -> str:
+    return f"{type(value).__name__}-{id(value)}"
+
+
 @functools.lru_cache(maxsize=1)
 def _redis_health_error_types() -> tuple[type, ...]:
     """Exception types that mean the Redis backend itself is unhealthy.
@@ -399,10 +403,9 @@ class RedisCache(BaseCache):
         Generate a cache key for the async Redis client based on connection parameters.
         This ensures different Redis configurations use different cached clients.
         """
-        # Create a stable representation of redis_kwargs for hashing
         # Sort keys to ensure consistent hash regardless of parameter order
         sorted_kwargs: Final = sorted(self.redis_kwargs.items())
-        kwargs_str: Final = json.dumps(sorted_kwargs, sort_keys=True)
+        kwargs_str: Final = json.dumps(sorted_kwargs, sort_keys=True, default=_opaque_kwarg_key)
         kwargs_hash: Final = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
         return f"async-redis-client-{kwargs_hash}"
 
@@ -432,7 +435,7 @@ class RedisCache(BaseCache):
         """
         if key is None:
             return key
-        if self.namespace is not None and not key.startswith(self.namespace):
+        if self.namespace and not key.startswith(self.namespace + ":"):
             key = self.namespace + ":" + key
 
         return key
@@ -1384,10 +1387,10 @@ class RedisCache(BaseCache):
             dict: {"status": "success" | "failed", "message": str, "error": Optional[str]}
         """
         try:
-            import redis.asyncio as redis_async
+            from .._redis import get_redis_async_client
 
             # Create a fresh Redis client with current settings
-            redis_client: Final = redis_async.Redis(**self.redis_kwargs)
+            redis_client: Final = get_redis_async_client(**self.redis_kwargs)
 
             # Test the connection
             ping_result: Final = await redis_client.ping()

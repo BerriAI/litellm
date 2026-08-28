@@ -1,12 +1,8 @@
-import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from litellm.types.utils import StandardLoggingPayload

@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -103,6 +98,48 @@ def test_calculate_usage():
     assert usage.prompt_tokens_details.cache_creation_tokens == 12304
     assert usage._cache_creation_input_tokens == 12304
     assert usage._cache_read_input_tokens == 0
+
+
+def test_calculate_usage_prefers_served_speed_from_response_usage():
+    """
+    Anthropic reports the speed a request was actually served at in the response
+    usage (a fast request on a model without fast mode comes back
+    ``"speed": "standard"``), so the served value must beat the requested one or
+    spend gets multiplied for fast service that never happened.
+    """
+    config = AnthropicConfig()
+
+    served_standard = config.calculate_usage(
+        usage_object={"input_tokens": 12, "output_tokens": 1, "speed": "standard"},
+        reasoning_content=None,
+        speed="fast",
+    )
+    assert served_standard.speed == "standard"
+
+    no_response_speed = config.calculate_usage(
+        usage_object={"input_tokens": 12, "output_tokens": 1},
+        reasoning_content=None,
+        speed="fast",
+    )
+    assert no_response_speed.speed == "fast"
+
+
+def test_streaming_iterator_persists_served_speed_across_usage_chunks():
+    """
+    Only ``message_start`` usage carries the served speed; the final
+    ``message_delta`` usage does not. The iterator must remember the served
+    value so the last usage chunk, which wins in the stream chunk builder, does
+    not fall back to the requested speed.
+    """
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    iterator = ModelResponseIterator(None, sync_stream=True, speed="fast")
+
+    start_usage = iterator._handle_usage({"input_tokens": 12, "output_tokens": 1, "speed": "standard"})
+    delta_usage = iterator._handle_usage({"output_tokens": 5})
+
+    assert start_usage.speed == "standard"
+    assert delta_usage.speed == "standard"
 
 
 def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
@@ -1055,6 +1092,7 @@ def test_anthropic_messages_validate_adds_beta_header():
         messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
         optional_params={"context_management": _sample_context_management_payload()},
         litellm_params={},
+        api_key="fake-anthropic-key",
     )
     assert headers["anthropic-beta"] == "context-management-2025-06-27"
 

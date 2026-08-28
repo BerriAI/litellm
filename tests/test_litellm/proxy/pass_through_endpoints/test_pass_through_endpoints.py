@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import sys
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
@@ -15,7 +14,6 @@ from fastapi import Request, UploadFile
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
@@ -186,6 +184,43 @@ async def test_make_multipart_http_request_forwards_repeated_fields():
         ("file", ("b.pdf", b"PDF-TWO", "application/pdf")),
     ]
     assert call_args["data"] == {"other_parameter": ["xxx", "yyy"]}
+
+
+@pytest.mark.asyncio
+async def test_make_multipart_http_request_fileless_form_stays_multipart():
+    """
+    Regression for #36493: a multipart form with no file parts was forwarded
+    through httpx's ``data=`` alone, which downgrades the request to
+    application/x-www-form-urlencoded. Every field must go through ``files``
+    as a ``(field_name, (None, value))`` tuple so httpx keeps the
+    multipart/form-data encoding the client sent.
+    """
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    form_data = FormData([("prompt", "a cat surfing"), ("model", "sora-2"), ("seconds", "4")])
+    request.form = AsyncMock(return_value=form_data)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    async_client = MagicMock()
+    async_client.request = AsyncMock(return_value=mock_response)
+
+    await HttpPassThroughEndpointHelpers.make_multipart_http_request(
+        request=request,
+        async_client=async_client,
+        url=httpx.URL("http://test.com"),
+        headers={},
+        requested_query_params=None,
+    )
+
+    call_args = async_client.request.call_args[1]
+
+    assert call_args["files"] == (
+        ("prompt", (None, "a cat surfing")),
+        ("model", (None, "sora-2")),
+        ("seconds", (None, "4")),
+    )
+    assert call_args["data"] is None
 
 
 @pytest.mark.asyncio
@@ -1456,6 +1491,86 @@ async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
                 logging_obj = mock_chunk_processor.call_args.kwargs["litellm_logging_obj"]
                 assert logging_obj.stream is True
                 assert logging_obj.model_call_details["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streamed_response_is_owned_by_the_caller():
+    """
+    Regression: with passthrough_managed_object_ids on, a streamed
+    POST /openai_passthrough/v1/responses left the raw resp_ id in the stream and
+    recorded no owner, so any other key could read, continue, and delete it.
+    """
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    raw_id = "resp_0123456789abcdef"
+    upstream_body = (
+        b'event: response.created\ndata: {"type": "response.created", "response": {"id": "%s"}}\n\n'
+        b'event: response.completed\ndata: {"type": "response.completed", "response": {"id": "%s"}}\n\n'
+    ) % (raw_id.encode(), raw_id.encode())
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=upstream_body, headers={"content-type": "text/event-stream"})
+
+    real_handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(None)},
+    )
+    cache_dict = litellm.in_memory_llm_clients_cache.cache_dict
+    cache_key = next(key for key, cached in cache_dict.items() if cached is real_handler)
+    cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    mock_proxy_logging.get_proxy_hook = MagicMock(return_value=MagicMock())
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.scope = {"path": "/openai_passthrough/v1/responses"}
+    mock_request.url = MagicMock()
+    mock_request.url.path = "/openai_passthrough/v1/responses"
+    mock_request.body = AsyncMock(return_value=b'{"model": "gpt-5.1", "input": "hi", "stream": true}')
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams({})
+
+    flag_on = {"passthrough_managed_object_ids": True}
+    proxy_server_globals = (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),  # test-quality-ok: read at call time
+        patch("litellm.proxy.proxy_server.general_settings", flag_on),  # test-quality-ok: read at call time
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: read at call time
+    )
+
+    try:
+        with ExitStack() as stack:
+            for patched_global in proxy_server_globals:
+                stack.enter_context(patched_global)
+            response = await pass_through_request(
+                request=mock_request,
+                target="https://api.openai.com/v1/responses",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(user_id="user-a", team_id="team-a"),
+                custom_llm_provider="openai",
+            )
+            streamed = b"".join([chunk async for chunk in response.body_iterator])
+    finally:
+        cache_dict[cache_key] = real_handler
+
+    assert response.status_code == 200
+    prisma_client.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+    created = prisma_client.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]["create"]
+    assert created["created_by"] == "user-a"
+    assert created["team_id"] == "team-a"
+    assert created["model_object_id"] == f"passthrough:openai:{raw_id}"
+    managed_id = created["unified_object_id"]
+    assert raw_id.encode() not in streamed
+    assert streamed == upstream_body.replace(raw_id.encode(), managed_id.encode())
 
 
 @pytest.mark.asyncio

@@ -20,7 +20,7 @@ import {
   SidebarMenuSub,
   SidebarSeparator,
   sidebarMenuButtonVariants,
-} from "@/components/ui/sidebar";
+} from "@/components/shared/Sidebar";
 import {
   Activity,
   BarChart3,
@@ -74,7 +74,6 @@ import {
   rolesWithWriteAccess,
 } from "../utils/roles";
 import BetaBadge from "./BetaBadge";
-import NewBadge from "./common_components/NewBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
@@ -320,11 +319,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: (
-          <span className="flex items-center gap-2">
-            Settings <NewBadge />
-          </span>
-        ),
+        label: "Settings",
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles,
         children: [
@@ -345,14 +340,7 @@ const menuGroups: MenuGroup[] = [
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: (
-              <span className="flex items-center gap-2">
-                Admin Settings{" "}
-                <NewBadge dot>
-                  <span />
-                </NewBadge>
-              </span>
-            ),
+            label: "Admin Settings",
             icon: <SettingsIcon {...ICON} />,
             roles: all_admin_roles,
           },

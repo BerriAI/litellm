@@ -26,6 +26,8 @@ from litellm.proxy.proxy_server import (
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
     resolve_routing_plugins,
+    validate_deployment_complexity_router_placement,
+    validate_deployment_max_agentic_loops,
 )
 
 from .conftest import normalize
@@ -151,6 +153,109 @@ def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance
     assert len(config["plugins"]) == 1
     assert hasattr(config["plugins"][0], "run")
     assert type(config["plugins"][0]).__name__ == "_Plugin"
+
+
+def test_validate_deployment_complexity_router_placement_refuses_to_start():
+    """Rejected here rather than at router build for the same reason as max_agentic_loops: the
+    proxy builds its router with ignore_invalid_deployments=True, so a rejection further down
+    turns the bad deployment into a silently missing model instead of a refusal to start."""
+    model = {
+        "model_name": "smart-router",
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
+            "tier_boundaries": {"simple_medium": 0.1},
+        },
+    }
+
+    with pytest.raises(ValueError, match="tier_boundaries"):
+        validate_deployment_complexity_router_placement(model)
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"model": "gpt-4o"},
+        {"model": "openai/gpt-4o", "embedding_model": "text-embedding-3-small"},
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}, "tier_boundaries": {"simple_medium": 0.1}},
+        },
+    ],
+)
+def test_validate_deployment_complexity_router_placement_leaves_valid_deployments_alone(litellm_params):
+    """`embedding_model` is a legitimate flat param on an s3_vectors vector store, so the gate is
+    scoped to complexity routers rather than applied to every deployment."""
+    model = {"model_name": "m", "litellm_params": dict(litellm_params)}
+
+    validate_deployment_complexity_router_placement(model)
+
+    assert model["litellm_params"] == litellm_params
+
+
+def test_validate_deployment_max_agentic_loops_allows_a_deployment_without_the_key():
+    model = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}
+
+    validate_deployment_max_agentic_loops(model)
+
+    assert "max_agentic_loops" not in model["litellm_params"]
+
+
+def test_validate_deployment_max_agentic_loops_leaves_a_valid_ceiling_alone():
+    model = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": 5}}
+
+    validate_deployment_max_agentic_loops(model)
+
+    assert model["litellm_params"]["max_agentic_loops"] == 5
+
+
+def test_validate_deployment_max_agentic_loops_rejects_zero():
+    """
+    A per-deployment 0 used to be swallowed by an `or 3` and read as the default
+    ceiling of 3, handing the loosest setting to whoever asked for the tightest.
+    """
+    with pytest.raises(ValueError, match="must be at least 1, got 0"):
+        validate_deployment_max_agentic_loops(
+            {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": 0}}
+        )
+
+
+def test_validate_deployment_max_agentic_loops_rejects_a_non_integer():
+    """
+    A per-deployment non-integer used to let the proxy boot and then fail every
+    request to that model with `invalid literal for int() with base 10`.
+    """
+    with pytest.raises(TypeError, match="must be an integer"):
+        validate_deployment_max_agentic_loops(
+            {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": "three"}}
+        )
+
+
+def test_validate_deployment_max_agentic_loops_rejects_a_bool():
+    with pytest.raises(TypeError, match="must be an integer"):
+        validate_deployment_max_agentic_loops(
+            {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": True}}
+        )
+
+
+def test_validate_deployment_max_agentic_loops_accepts_a_ceiling_from_an_env_var():
+    """
+    `max_agentic_loops: os.environ/MAX_AGENTIC_LOOPS` is resolved to a string
+    before this check runs, and the old `int(... or 3)` accepted that, so
+    refusing it here would stop an already working proxy from booting.
+    """
+    model = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o", "max_agentic_loops": "5"}}
+
+    validate_deployment_max_agentic_loops(model)
+
+    assert model["litellm_params"]["max_agentic_loops"] == "5"
+
+
+def test_validate_deployment_max_agentic_loops_names_the_offending_model():
+    with pytest.raises(ValueError, match="on model 'claude-sonnet-4-5'"):
+        validate_deployment_max_agentic_loops(
+            {"model_name": "claude-sonnet-4-5", "litellm_params": {"max_agentic_loops": -1}}
+        )
 
 
 def test_resolve_complexity_router_plugins_rejects_non_routing_plugin_object(tmp_path):
@@ -1187,26 +1292,114 @@ async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__init_search_tools_in_db_skips_empty_router_update(monkeypatch):
+async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool_is_deleted(monkeypatch):
+    """Deleting the last search tool must clear the router, not leave the tool live in memory."""
     from litellm.proxy import proxy_server
-    from litellm.router_utils.search_api_router import SearchAPIRouter
 
     pc = ProxyConfig()
     pc.update_config_state({})
+    fake_router = MagicMock()
+    fake_router.search_tools = [{"search_tool_name": "deleted-search", "litellm_params": {}}]
     mock_get_db_tools = AsyncMock(return_value=[])
-    mock_update_router = AsyncMock()
 
-    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
     )
-    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    mock_update_router.assert_not_awaited()
+    assert fake_router.search_tools == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_reload_search_tools_from_db_refreshes_router(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    mock_init = AsyncMock()
+    monkeypatch.setattr(pc, "_init_search_tools_in_db", mock_init)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    await pc.reload_search_tools_from_db()
+
+    mock_init.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_reload_search_tools_from_db_honors_supported_db_objects(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    mock_init = AsyncMock()
+    monkeypatch.setattr(pc, "_init_search_tools_in_db", mock_init)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+
+    await pc.reload_search_tools_from_db()
+
+    mock_init.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_reload_search_tools_from_db_serializes_overlapping_refreshes(monkeypatch):
+    """An older snapshot must not land last and restore a tool a newer refresh deleted."""
+    import asyncio
+
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    pc.update_config_state({})
+    fake_router = MagicMock()
+    fake_router.search_tools = []
+
+    stale_read_started = asyncio.Event()
+    fresh_write_committed = asyncio.Event()
+    snapshots = iter(
+        (
+            [{"search_tool_name": "doomed-search", "litellm_params": {}}],
+            [],
+        )
+    )
+
+    async def _read_db(**_):
+        snapshot = next(snapshots)
+        if not stale_read_started.is_set():
+            stale_read_started.set()
+            await fresh_write_committed.wait()
+        return snapshot
+
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+        _read_db,
+    )
+
+    stale = asyncio.create_task(pc.reload_search_tools_from_db())
+    await stale_read_started.wait()
+    deleter = asyncio.create_task(pc.reload_search_tools_from_db())
+    await asyncio.sleep(0)
+    fresh_write_committed.set()
+    await asyncio.gather(stale, deleter)
+
+    assert fake_router.search_tools == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_reload_search_tools_from_db_noops_without_prisma(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    mock_init = AsyncMock()
+    monkeypatch.setattr(pc, "_init_search_tools_in_db", mock_init)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    await pc.reload_search_tools_from_db()
+
+    mock_init.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -280,7 +280,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
                       <SelectTrigger className="w-[200px]" aria-label="Decision">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent alignItemWithTrigger={false}>
+                      <SelectContent>
                         {DECISION_ITEMS.map((item) => (
                           <SelectItem key={item.value} value={item.value}>
                             {item.label}
@@ -313,7 +313,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
               <SelectTrigger className="w-full" aria-label="Default action">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 {DECISION_ITEMS.map((item) => (
                   <SelectItem key={item.value} value={item.value}>
                     {item.label}
@@ -350,7 +350,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
               <SelectTrigger className="w-full" aria-label="On disallowed action">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 {ON_DISALLOWED_ITEMS.map((item) => (
                   <SelectItem key={item.value} value={item.value}>
                     {item.label}

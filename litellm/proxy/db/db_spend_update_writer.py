@@ -62,15 +62,20 @@ from litellm.proxy.spend_tracking.savings import (
     compute_savings_spend,
     extract_cache_creation_tokens,
     extract_cache_read_tokens,
+    marks_gateway_injection,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
+from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 else:
     PrismaClient = Any
     ProxyLogging = Any
+
+
+RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 
 
 class _SpendBatch(Protocol):
@@ -311,6 +316,7 @@ class DBSpendUpdateWriter:
                 model=payload.get("model"),
                 custom_llm_provider=payload.get("custom_llm_provider"),
                 compression_saved_tokens=0,
+                gateway_injected_cache=marks_gateway_injection(metadata, payload.get("model_id")),
                 routing_decision=metadata.get("routing_decision"),
                 usage_object=usage_object_raw if isinstance(usage_object_raw, dict) else None,
                 model_id=payload.get("model_id"),
@@ -820,9 +826,11 @@ class DBSpendUpdateWriter:
             )
         )
         if prisma_client is not None and spend_logs_url is not None or prisma_client is not None:
-            from litellm.proxy.utils import enqueue_spend_logs
+            from litellm.proxy.utils import enqueue_spend_logs, request_spend_log_flush
 
             await enqueue_spend_logs(prisma_client, (payload,))
+            if payload.get("call_type") in RESPONSES_SESSION_CALL_TYPES:
+                request_spend_log_flush()
         else:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
 
@@ -1873,6 +1881,7 @@ class DBSpendUpdateWriter:
                 model=payload.get("model", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
                 compression_saved_tokens=compression_saved_tokens,
+                gateway_injected_cache=marks_gateway_injection(_metadata, payload.get("model_id")),
                 routing_decision=_metadata.get("routing_decision"),
                 model_id=payload.get("model_id"),
                 llm_router=_get_llm_router,
@@ -1905,6 +1914,7 @@ class DBSpendUpdateWriter:
                 compression_saved_tokens=compression_saved_tokens,
                 compression_savings_spend=savings_spend.compression,
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
+                gateway_injected_caching_savings_spend=savings_spend.gateway_injected_caching,
                 autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
             )
             return daily_transaction

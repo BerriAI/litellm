@@ -11,7 +11,8 @@ Symbols pinned here:
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
+from contextlib import suppress
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -524,6 +525,53 @@ async def test_monitor_spend_logs_queue_swallows_errors_and_backs_off(
             proxy_logging_obj=proxy_logging,
         )
     assert sleep_count["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_monitor_spend_logs_queue_flushes_as_soon_as_one_is_requested(
+    mock_prisma_client: Any,
+    make_spend_log_row: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A requested flush wakes the monitor mid-poll, so a Responses row reaches the DB
+    before the client can chain a `previous_response_id` off it.
+    """
+    import litellm.constants as constants_mod
+    import litellm.proxy.utils as utils_mod
+    from litellm.proxy.utils import PrismaClient, request_spend_log_flush
+
+    monkeypatch.setattr(constants_mod, "SPEND_LOG_QUEUE_POLL_INTERVAL", 30.0, raising=False)
+    PrismaClient.spend_log_flush_requested.clear()
+    mock_prisma_client.spend_log_transactions = []
+    mock_prisma_client.tool_usage_transactions = []
+
+    flushed: Final = asyncio.Event()
+
+    async def _fake_job(*args: Any, **kwargs: Any) -> None:
+        flushed.set()
+
+    monkeypatch.setattr(utils_mod, "update_spend_logs_job", _fake_job)
+
+    monitor: Final = asyncio.create_task(
+        _monitor_spend_logs_queue(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=MagicMock(),
+        )
+    )
+    try:
+        await asyncio.sleep(0.05)
+        assert not flushed.is_set()
+
+        mock_prisma_client.spend_log_transactions.append(make_spend_log_row(request_id="r1"))
+        request_spend_log_flush()
+
+        await asyncio.wait_for(flushed.wait(), timeout=5.0)
+    finally:
+        monitor.cancel()
+        with suppress(asyncio.CancelledError):
+            await monitor
+        PrismaClient.spend_log_flush_requested.clear()
 
 
 def test_raise_failed_update_spend_exception_emits_failure_handler() -> None:

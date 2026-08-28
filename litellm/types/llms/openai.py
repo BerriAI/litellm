@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Literal, Optional, Union
+from typing import IO, Any, Final, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -65,9 +65,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Discriminator,
+    Field,
     PrivateAttr,
+    SerializerFunctionWrapHandler,
     field_serializer,
     field_validator,
+    model_serializer,
 )
 from typing_extensions import (
     NotRequired,
@@ -104,7 +107,17 @@ EmbeddingInput = str | list[str]
 
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
-    _hidden_params: dict = {}
+    _hidden_params: dict
+
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__(response)
+        self._hidden_params = {}  # mutable-ok: mutable-dict contract shared with ModelResponse logging consumers
+
+    def set_response_cost(self, response_cost: float | None) -> None:
+        if response_cost is None:
+            self._hidden_params.pop("response_cost", None)
+            return
+        self._hidden_params["response_cost"] = response_cost
 
 
 class NotGiven:
@@ -275,6 +288,7 @@ OpenAIFilesPurpose = Literal[
     "fine-tune-results",
     "vision",
     "user_data",
+    "evals",
     "messages",
 ]
 
@@ -311,6 +325,9 @@ class BatchGuardrailReport(BaseModel):
 
     modified_records: tuple[BatchGuardrailRecord, ...]
     """Every record that was redacted or dropped, in file order."""
+
+
+BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
 
 
 class OpenAIFileObject(BaseModel):
@@ -361,6 +378,17 @@ class OpenAIFileObject(BaseModel):
 
     _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file
 
+    @model_serializer(mode="wrap")
+    def _omit_absent_batch_guardrail(  # noqa: ANN202  # annotating it replaces the model's serialization schema
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        serialized: Final[Mapping[str, object]] = handler(self)
+        if self.litellm_batch_guardrail is not None:
+            return serialized
+        return {  # mutable-ok: pydantic's json serializer rejects a mapping that is not a dict
+            key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD
+        }
+
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
@@ -379,6 +407,21 @@ class OpenAIFileObject(BaseModel):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+class FileListPage(BaseModel):
+    """A page of files, as `GET /v1/files` returns it.
+
+    Post-call hooks and logging callbacks are handed the listing response, and
+    the provider SDKs hand them a page object rather than a mapping, so this
+    exposes the same ``.data`` attribute while serializing to an identical body.
+    """
+
+    object: Literal["list"] = "list"
+    data: list[OpenAIFileObject] = Field(default_factory=list)
+    first_id: str | None = None
+    last_id: str | None = None
+    has_more: bool = False
 
 
 CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune", "messages"]
@@ -777,9 +820,21 @@ class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total
     reasoning_items: list[ChatCompletionReasoningItem] | None
 
 
+class ChatCompletionToolReferenceObject(TypedDict):
+    """Anthropic tool-search result block, carried through untouched so it survives a round trip."""
+
+    type: Literal["tool_reference"]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    tool_name: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+
+
+ToolMessageContentPart: TypeAlias = (
+    ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionToolReferenceObject
+)
+
+
 class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
-    content: str | Iterable[ChatCompletionTextObject | ChatCompletionImageObject]
+    content: str | Iterable[ToolMessageContentPart]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tool_call_id: str
 
 
@@ -1215,6 +1270,8 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    audio_tokens: int | None = None
+
     reasoning_tokens: int | None = None
 
     text_tokens: int | None = None
@@ -1807,7 +1864,7 @@ ResponsesAPIStreamingResponse = Annotated[
 ]
 
 
-REASONING_EFFORT = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+REASONING_EFFORT = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
 class OpenAIRealtimeStreamSession(TypedDict, total=False):

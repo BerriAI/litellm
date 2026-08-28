@@ -15,7 +15,7 @@ import {
 import { Logo } from "@/components/molecules/logo/Logo";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { toast } from "@/lib/toast";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import {
@@ -298,7 +298,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                         }}
                       </SelectValue>
                     </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
+                    <SelectContent>
                       {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => (
                         <SelectItem key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
                           <Logo

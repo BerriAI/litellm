@@ -263,6 +263,25 @@ def _get_fallback_target_model_group(fallback_entry: str | Mapping[str, object])
     return target if isinstance(target, str) else None
 
 
+async def _is_fallback_target_authorized(
+    litellm_router: LitellmRouter,
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+) -> bool:
+    access_check: Final = litellm_router.fallback_access_check
+    target: Final = _get_fallback_target_model_group(fallback_entry)
+    if access_check is None or target is None or target == original_model_group:
+        return True
+    if await access_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
+        return True
+    verbose_router_logger.info(
+        "Skipping fallback to model_group = %s: caller is not authorized to call it",
+        mask_sensitive_structure(fallback_entry),
+    )
+    return False
+
+
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     """
     True when the request names a file that only exists under one provider's credentials.
@@ -357,6 +376,8 @@ async def run_async_fallback(
                 original_model_group,
             )
             continue
+        if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
+            continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:
             if attempt_key in attempted:
@@ -374,11 +395,15 @@ async def run_async_fallback(
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
                 kwargs.update(mg)
-            kwargs[metadata_variable_name] = {
-                **(kwargs.get(metadata_variable_name) or {}),
-                "model_group": kwargs.get("model", None),
-            }
             fallback_depth = fallback_depth + 1
+            _hop_metadata = dict(kwargs.get(metadata_variable_name) or {})
+            _original_model_group_stamp = _hop_metadata.pop("original_model_group", original_model_group)
+            _hop_metadata.pop("model_group", None)
+            _hop_metadata.pop("attempted_fallbacks", None)
+            _hop_metadata["original_model_group"] = _original_model_group_stamp
+            _hop_metadata["model_group"] = kwargs.get("model", None)
+            _hop_metadata["attempted_fallbacks"] = fallback_depth
+            kwargs[metadata_variable_name] = _hop_metadata
             kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks
             kwargs["attempted_targets"] = attempted

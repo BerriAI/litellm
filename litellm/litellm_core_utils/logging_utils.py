@@ -3,6 +3,7 @@ import functools
 import inspect
 import re
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -266,6 +267,16 @@ def _set_duration_in_model_call_details(
             verbose_logger.debug("`logging_obj` not found - unable to track `llm_api_duration_ms")
     except Exception as e:
         verbose_logger.warning("Error setting `llm_api_duration_ms`: %s", e)
+
+
+def speech_request_body(model: str, voice: str, optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    """Speech request body for telemetry, without the caller headers the provider SDKs
+    take as request kwargs rather than body fields."""
+    return {  # mutable-ok: loggers isinstance-check the request body as a dict
+        "model": model,
+        "voice": voice,
+        **{key: value for key, value in optional_params.items() if key != "extra_headers"},
+    }
 
 
 def track_llm_api_timing():

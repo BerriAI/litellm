@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -26,9 +24,6 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
@@ -706,3 +701,58 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
             )
 
     assert request_data == {"model": "gpt-4o"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_error,expect_traceback",
+    [
+        pytest.param(
+            ProxyException(
+                message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401
+            ),
+            False,
+            id="expected_401_no_traceback",
+        ),
+        pytest.param(ValueError("unexpected internal error"), True, id="unexpected_error_keeps_traceback"),
+    ],
+)
+async def test_handle_authentication_error_traceback_only_for_unexpected_errors(auth_error, expect_traceback, caplog):
+    """Regression for LIT-6043: expected 4xx auth rejections must not format a
+    traceback via logger.exception; unexpected errors must keep it."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        verbose_proxy_logger.propagate = True
+        try:
+            try:
+                raise auth_error
+            except (ProxyException, ValueError) as caught:
+                with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+                    await handler._handle_authentication_error(
+                        caught,
+                        MagicMock(),
+                        {},
+                        "/v1/chat/completions",
+                        None,
+                        "sk-bad-key",
+                    )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert (records[0].exc_info is not None) is expect_traceback

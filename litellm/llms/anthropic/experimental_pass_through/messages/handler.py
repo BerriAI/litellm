@@ -12,15 +12,17 @@ from functools import partial
 from typing import Any, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
     flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
-    strip_empty_text_blocks_from_anthropic_messages,
+    strip_empty_content_blocks_from_anthropic_messages,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
@@ -240,17 +242,20 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec.
 
-    Runs the empty-text-block sanitizer before any backend dispatch.
+    Runs the empty-content-block sanitizer before any backend dispatch.
     """
     # Anthropic's API rejects requests containing empty / whitespace-only
-    # text content blocks with "messages: text content blocks must be
-    # non-empty".  Multi-turn tool-use clients (e.g. Claude Code) routinely
-    # loop assistant responses that contain {"type": "text", "text": ""}
-    # alongside tool_use blocks back as conversation history, which then
-    # causes the next /v1/messages call to 400.  /v1/chat/completions
-    # already handles this in anthropic_messages_pt; sanitize the native
-    # Anthropic Messages path here for the same guarantee.  See #22930.
-    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+    # text content blocks ("messages: text content blocks must be
+    # non-empty") and empty thinking blocks ("each thinking block must
+    # contain thinking").  Multi-turn tool-use clients (e.g. Claude Code)
+    # routinely loop assistant responses that contain such blocks — an empty
+    # text block alongside tool_use, or an empty thinking block from a turn
+    # a non-Anthropic reasoning model served through the bridge — back as
+    # conversation history, which then causes the next /v1/messages call to
+    # 400.  /v1/chat/completions already handles this in
+    # anthropic_messages_pt; sanitize the native Anthropic Messages path
+    # here for the same guarantee.  See #22930.
+    messages = strip_empty_content_blocks_from_anthropic_messages(messages)
     # Replay of cross-provider tool history (e.g. kimi -> Anthropic) may carry
     # ids like ``functions.Bash:0`` that violate Anthropic's id pattern.
     messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
@@ -372,7 +377,7 @@ async def anthropic_messages(
         api_base=api_base,
         client=client,
         custom_llm_provider=custom_llm_provider,
-        # messages were already empty-text-block sanitized at the top of this
+        # messages were already empty-content-block sanitized at the top of this
         # function and are NOT reassigned before this dispatch, so the handler
         # can skip its (otherwise redundant) second full-messages scan. Passed
         # explicitly (not via **kwargs) so it only affects this direct
@@ -382,13 +387,18 @@ async def anthropic_messages(
     )
     ctx: Final = contextvars.copy_context()
     func_with_context: Final = partial(ctx.run, func)
-    init_response: Final = await loop.run_in_executor(None, func_with_context)
-
-    if asyncio.iscoroutine(init_response):
-        response = await init_response
-    else:
-        response = init_response
-    return response
+    try:
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            return await init_response
+        return init_response
+    except BaseLLMException as e:
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            extra_kwargs=kwargs,
+        )
 
 
 def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None:
@@ -444,7 +454,7 @@ def anthropic_messages_handler(
     # ``_litellm_messages_presanitized`` to skip this redundant second
     # full-messages scan. Pop it so it never leaks into provider params.
     if not kwargs.pop("_litellm_messages_presanitized", False):
-        messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+        messages = strip_empty_content_blocks_from_anthropic_messages(messages)
         messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
         messages = flatten_unencrypted_web_search_results_in_anthropic_messages(messages)
 

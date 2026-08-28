@@ -33,6 +33,11 @@ type ModelRequest struct {
 	Additional    map[string]interface{} `json:"additional"`
 }
 
+type TeamInfoResponse struct {
+	TeamID   string       `json:"team_id"`
+	TeamInfo TeamResponse `json:"team_info"`
+}
+
 // TeamResponse represents a response from the API containing team information.
 type TeamResponse struct {
 	TeamID                string                 `json:"team_id,omitempty"`
@@ -42,6 +47,7 @@ type TeamResponse struct {
 	TPMLimit              *int                   `json:"tpm_limit,omitempty"`
 	RPMLimit              *int                   `json:"rpm_limit,omitempty"`
 	MaxBudget             *float64               `json:"max_budget,omitempty"`
+	SoftBudget            *float64               `json:"soft_budget,omitempty"`
 	BudgetDuration        string                 `json:"budget_duration,omitempty"`
 	Models                []string               `json:"models"`
 	Blocked               bool                   `json:"blocked,omitempty"`

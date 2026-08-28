@@ -14,6 +14,8 @@ from litellm.constants import (
 )
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import LiteLLM_ManagedObjectTable
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -351,7 +353,7 @@ class CheckBatchCost:
         return isinstance(error, (NotFoundError, openai.NotFoundError)) and output_file_id in str(error)
 
     async def _finalize_unbilled_terminal_job(
-        self, job: "LiteLLM_ManagedObjectTable", response: "LiteLLMBatch"
+        self, job: "prisma_models.LiteLLM_ManagedObjectTable", response: "LiteLLMBatch"
     ) -> None:
         """Persist a terminal batch that has nothing billable, converting any raw
         provider file ids to managed ids, and take it out of the poll page."""
@@ -966,6 +968,16 @@ class CheckBatchCost:
                     )
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
+                from litellm.proxy.openai_files_endpoints.common_utils import (
+                    _completed_batch_safe_to_retire,
+                )
+
+                if response.status in ("completed", "complete") and not _completed_batch_safe_to_retire(response):
+                    verbose_proxy_logger.info(
+                        f"CheckBatchCost: batch {batch_id} is completed but its output file id "
+                        f"has not appeared yet; leaving job {job.id} for the next poll cycle"
+                    )
+                    continue
                 await self._finalize_unbilled_terminal_job(job, response)
 
         # Record polling run metrics (always, even if nothing was processed)
