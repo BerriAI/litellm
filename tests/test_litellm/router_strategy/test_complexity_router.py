@@ -2234,6 +2234,171 @@ class TestRouterPreRoutingAliasOverrides:
         assert deployment["model_name"] == "gpt-5-mini"
         assert request_kwargs["reasoning_effort"] == "xhigh"
 
+    def _make_effort_pinned_router(self, tier_litellm_params: Dict) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": {
+                                    "model_name": "gpt-5-mini",
+                                    "litellm_params": tier_litellm_params,
+                                }
+                            }
+                        },
+                    },
+                },
+                {"model_name": "gpt-5-mini", "litellm_params": {"model": "openai/gpt-5-mini"}},
+            ]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "client_carriers, expected_absent, expected_present",
+        [
+            (
+                {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}},
+                ("thinking", "output_config"),
+                {},
+            ),
+            ({"reasoning": {"effort": "high"}}, ("reasoning",), {}),
+            (
+                {"reasoning": {"effort": "high", "summary": "concise"}},
+                (),
+                {"reasoning": {"summary": "concise"}},
+            ),
+            (
+                {"output_config": {"effort": "max", "format": {"type": "json_schema"}}},
+                (),
+                {"output_config": {"format": {"type": "json_schema"}}},
+            ),
+        ],
+    )
+    async def test_tier_pinned_effort_supersedes_client_effort_carriers(
+        self, client_carriers, expected_absent, expected_present
+    ):
+        """A tier-pinned reasoning_effort is an operator override, but provider
+        translations give a caller-supplied thinking/output_config/reasoning
+        carrier precedence over the reasoning_effort alias, so the pin only
+        reaches the wire if those carriers are dropped at the merge."""
+        router = self._make_effort_pinned_router({"reasoning_effort": "xhigh"})
+        request_kwargs: Dict = dict(client_carriers)
+
+        await router.async_get_available_deployment(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert request_kwargs["reasoning_effort"] == "xhigh"
+        for key in expected_absent:
+            assert key not in request_kwargs
+        for key, value in expected_present.items():
+            assert request_kwargs[key] == value
+
+    @pytest.mark.asyncio
+    async def test_tier_pinned_effort_supersedes_client_carriers_on_pass_through_path(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": {
+                                    "model_name": "gpt-5-mini",
+                                    "litellm_params": {"reasoning_effort": "xhigh"},
+                                }
+                            }
+                        },
+                    },
+                },
+                {
+                    "model_name": "gpt-5-mini",
+                    "litellm_params": {"model": "openai/gpt-5-mini", "use_in_pass_through": True},
+                },
+            ]
+        )
+        request_kwargs: Dict = {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}}
+
+        await router.async_get_available_deployment_for_pass_through(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert request_kwargs["reasoning_effort"] == "xhigh"
+        assert "thinking" not in request_kwargs
+        assert "output_config" not in request_kwargs
+
+    def test_drop_client_effort_carriers_helper_edge_shapes(self):
+        no_pin: Dict = {"thinking": {"type": "adaptive"}}
+        Router._drop_client_effort_carriers_a_tier_pin_supersedes(no_pin, {"temperature": 0.1})
+        assert no_pin == {"thinking": {"type": "adaptive"}}
+
+        non_dict_carriers: Dict = {"output_config": "max", "reasoning": 3}
+        Router._drop_client_effort_carriers_a_tier_pin_supersedes(non_dict_carriers, {"reasoning_effort": "low"})
+        assert non_dict_carriers == {"output_config": "max", "reasoning": 3}
+
+        effort_only: Dict = {"output_config": {"effort": "max"}, "reasoning": {"effort": "high"}}
+        Router._pop_effort_from_nested_carrier(effort_only, "output_config")
+        Router._pop_effort_from_nested_carrier(effort_only, "reasoning")
+        assert effort_only == {}
+
+    @pytest.mark.asyncio
+    async def test_client_effort_carriers_survive_when_gate_drops_the_tier_pin(self):
+        """The tier-param gate removes a pin the routed target cannot take, and a
+        pin that never applies must not strip the client's own effort carriers."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": {
+                                    "model_name": "gpt-4o-mini",
+                                    "litellm_params": {"reasoning_effort": "xhigh"},
+                                }
+                            }
+                        },
+                    },
+                },
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+            ]
+        )
+        request_kwargs: Dict = {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}}
+
+        await router.async_get_available_deployment(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert "reasoning_effort" not in request_kwargs
+        assert request_kwargs["thinking"] == {"type": "adaptive"}
+        assert request_kwargs["output_config"] == {"effort": "max"}
+
+    @pytest.mark.asyncio
+    async def test_client_effort_carriers_survive_when_tier_pins_no_effort(self):
+        router = self._make_effort_pinned_router({"temperature": 0.2})
+        request_kwargs: Dict = {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}}
+
+        await router.async_get_available_deployment(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert request_kwargs["thinking"] == {"type": "adaptive"}
+        assert request_kwargs["output_config"] == {"effort": "max"}
+        assert request_kwargs["temperature"] == 0.2
+
     @pytest.mark.asyncio
     async def test_routing_never_resolves_an_authenticating_provider(self, monkeypatch, tmp_path):
         """Resolving github_copilot runs its OAuth device flow, so the whole routing path must
