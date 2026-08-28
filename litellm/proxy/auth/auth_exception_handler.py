@@ -110,10 +110,19 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
+            is_invalid_virtual_key: Final = (
+                isinstance(e, HTTPException)
+                and e.status_code == status.HTTP_401_UNAUTHORIZED
+                and "LiteLLM Virtual Key expected" in str(e.detail)
+            )
             log_fn: Final = (
-                verbose_proxy_logger.error
-                if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
-                else verbose_proxy_logger.exception
+                verbose_proxy_logger.info
+                if is_invalid_virtual_key and not litellm.log_client_error_tracebacks
+                else (
+                    verbose_proxy_logger.error
+                    if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
+                    else verbose_proxy_logger.exception
+                )
             )
             log_fn(
                 "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",

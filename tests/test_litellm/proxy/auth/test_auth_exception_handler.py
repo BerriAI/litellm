@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -705,19 +706,59 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "auth_error,expect_traceback",
+    "auth_error,expected_level,expect_traceback,log_client_error_tracebacks",
     [
+        pytest.param(
+            HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.",
+            ),
+            logging.INFO,
+            False,
+            False,
+            id="invalid_virtual_key_logs_at_info_without_traceback",
+        ),
+        pytest.param(
+            HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.",
+            ),
+            logging.ERROR,
+            True,
+            True,
+            id="invalid_virtual_key_keeps_traceback_opt_in",
+        ),
         pytest.param(
             ProxyException(
                 message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401
             ),
+            logging.ERROR,
             False,
-            id="expected_401_no_traceback",
+            False,
+            id="other_expected_401_keeps_error_level_without_traceback",
         ),
-        pytest.param(ValueError("unexpected internal error"), True, id="unexpected_error_keeps_traceback"),
+        pytest.param(
+            ValueError("unexpected internal error"),
+            logging.ERROR,
+            True,
+            False,
+            id="unexpected_error_keeps_traceback",
+        ),
+        pytest.param(
+            HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication database unavailable",
+            ),
+            logging.ERROR,
+            True,
+            False,
+            id="server_error_keeps_traceback",
+        ),
     ],
 )
-async def test_handle_authentication_error_traceback_only_for_unexpected_errors(auth_error, expect_traceback, caplog):
+async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
+    auth_error, expected_level, expect_traceback, log_client_error_tracebacks, caplog
+):
     """Regression for LIT-6043: expected 4xx auth rejections must not format a
     traceback via logger.exception; unexpected errors must keep it."""
     handler = UserAPIKeyAuthExceptionHandler()
@@ -731,6 +772,10 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
         patch(  # test-quality-ok: handler reads proxy_server globals at call time
             "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
         ),
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.litellm.log_client_error_tracebacks",
+            log_client_error_tracebacks,
+        ),
         patch(  # test-quality-ok: handler reads proxy_server globals at call time
             "litellm.proxy.proxy_server.general_settings",
             {"allow_requests_on_db_unavailable": False},
@@ -740,8 +785,8 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
         try:
             try:
                 raise auth_error
-            except (ProxyException, ValueError) as caught:
-                with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+            except (HTTPException, ProxyException, ValueError) as caught:
+                with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"), pytest.raises(ProxyException):
                     await handler._handle_authentication_error(
                         caught,
                         MagicMock(),
@@ -755,4 +800,5 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
 
     records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
     assert len(records) == 1
+    assert records[0].levelno == expected_level
     assert (records[0].exc_info is not None) is expect_traceback
