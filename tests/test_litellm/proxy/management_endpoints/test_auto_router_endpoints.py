@@ -862,12 +862,8 @@ def _shadow_router() -> Router:
             _complexity_router_deployment(
                 "my-router", {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "pricey"}, "mid"
             ),
-            _complexity_router_deployment(
-                "sonnet-router", {"SIMPLE": "cheap", "MEDIUM": "house-sonnet"}, "cheap"
-            ),
-            _complexity_router_deployment(
-                "classifier-router", {"SIMPLE": "cheap"}, "cheap", classifier="pricey"
-            ),
+            _complexity_router_deployment("sonnet-router", {"SIMPLE": "cheap", "MEDIUM": "house-sonnet"}, "cheap"),
+            _complexity_router_deployment("classifier-router", {"SIMPLE": "cheap"}, "cheap", classifier="pricey"),
             _complexity_router_deployment("b-team-router", {"SIMPLE": "cheap", "MEDIUM": "b-tier"}, "cheap"),
             _complexity_router_deployment("prefixed-router", {"SIMPLE": "prefixed-tier"}, "prefixed-tier"),
             _complexity_router_deployment("bare-router", {"SIMPLE": "bare-tier"}, "bare-tier"),
@@ -1038,6 +1034,12 @@ def _start_request(**overrides: object) -> StartShadowEvalRequest:
     return StartShadowEvalRequest.model_validate(payload)
 
 
+def _configure_anthropic_sdk_judge(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "anthropic_key", "sk-test")
+
+
 @pytest.mark.asyncio
 async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeypatch: pytest.MonkeyPatch):
     """N keys become N sibling rows sharing group_id and identical config, written by a
@@ -1045,6 +1047,7 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     budget exhaustion frees every requested key's slot first."""
     import litellm.proxy.proxy_server as proxy_server
 
+    _configure_anthropic_sdk_judge(monkeypatch)
     prisma = _shadow_prisma()
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
@@ -1223,6 +1226,7 @@ async def test_start_shadow_eval_rejections(
 ):
     import litellm.proxy.proxy_server as proxy_server
 
+    _configure_anthropic_sdk_judge(monkeypatch)
     prisma = _shadow_prisma(legs=[_leg_record(id=f"leg-{key}", group_id="job-7", api_key_id=key) for key in claimed])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
@@ -1287,6 +1291,7 @@ async def test_start_shadow_eval_names_the_colliding_arm_by_the_deployment_the_a
     """
     import litellm.proxy.proxy_server as proxy_server
 
+    _configure_anthropic_sdk_judge(monkeypatch)
     monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma())
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
 
@@ -1304,6 +1309,7 @@ async def test_start_shadow_eval_names_the_busy_key_and_its_job(monkeypatch: pyt
     it, and the 409 names which key and which job so the caller can stop or drop it."""
     import litellm.proxy.proxy_server as proxy_server
 
+    _configure_anthropic_sdk_judge(monkeypatch)
     prisma = _shadow_prisma(legs=[_leg_record(id="leg-b", group_id="job-7", api_key_id="key-hash-2")])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
@@ -1320,6 +1326,7 @@ async def test_start_shadow_eval_reuses_a_key_whose_previous_job_already_stopped
     that forgets that would strand every key that has ever finished a job."""
     import litellm.proxy.proxy_server as proxy_server
 
+    _configure_anthropic_sdk_judge(monkeypatch)
     prisma = _shadow_prisma(legs=[_leg_record(group_id="job-7", stopped_at=datetime.now(timezone.utc))])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
@@ -1364,6 +1371,7 @@ async def test_start_shadow_eval_reverse_records_its_arms_and_holds_its_own_slot
     the slot must not block a reverse one. The second reverse start still 409s."""
     import litellm.proxy.proxy_server as proxy_server
 
+    _configure_anthropic_sdk_judge(monkeypatch)
     legs = [_leg_record(group_id="job-fwd")]
     prisma = _shadow_prisma(legs=legs)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
@@ -1387,6 +1395,7 @@ async def test_start_shadow_eval_reverse_records_its_arms_and_holds_its_own_slot
 async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as proxy_server
 
+    _configure_anthropic_sdk_judge(monkeypatch)
     prisma = _shadow_prisma()
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
@@ -1432,6 +1441,7 @@ async def test_start_shadow_eval_concurrent_unique_violation_is_a_409(monkeypatc
     import litellm.proxy.proxy_server as proxy_server
     from prisma.errors import UniqueViolationError
 
+    _configure_anthropic_sdk_judge(monkeypatch)
     prisma = _shadow_prisma()
     prisma.db.litellm_shadowevaljob.create_many = AsyncMock(
         side_effect=UniqueViolationError(MagicMock(message="unique constraint"))
@@ -2169,9 +2179,7 @@ async def test_start_shadow_eval_sees_a_collision_hidden_behind_the_second_teams
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
 
     monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(key_teams={"key-hash": "team-a"}))
-    accepted = await start_shadow_eval(
-        _start_request(router_name="b-team-router", judge_model="house-sonnet"), ADMIN
-    )
+    accepted = await start_shadow_eval(_start_request(router_name="b-team-router", judge_model="house-sonnet"), ADMIN)
     assert accepted.job_id
 
     monkeypatch.setattr(
