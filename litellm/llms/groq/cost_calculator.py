@@ -32,4 +32,3 @@ def cost_per_web_search_request(usage: Usage, model_info: "ModelInfo") -> float:
     searches: Final = server_tool_use.web_search_requests or 0
     opens: Final = server_tool_use.browser_open_requests or 0
     return searches * cost_per_search + opens * GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL
-

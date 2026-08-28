@@ -85,5 +85,3 @@ def test_invalid_pricing_type_safe():
     )
     cost_bool = cost_per_web_search_request(usage=_usage_with_actions(4), model_info=bool_priced)
     assert cost_bool == 0.0
-
-
