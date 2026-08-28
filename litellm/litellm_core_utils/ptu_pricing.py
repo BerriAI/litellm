@@ -28,6 +28,7 @@ PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in MirroredPricingParams.model_
     "cache_creation_input_token_cost_above_1hr",
     "cache_creation_input_token_cost_above_200k_tokens",
     "cache_read_input_token_cost_above_200k_tokens",
+    "google_maps_grounding_cost_per_query",
 )
 # tiered_pricing is emptied rather than zeroed: its tiers outrank the zeros written beside
 # them, so a zero here would leave the cost map's tiers billing the traffic the reserved
