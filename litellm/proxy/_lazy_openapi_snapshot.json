@@ -11389,6 +11389,18 @@
               "description": "Path to a JSON file containing ad-hoc recognizers for Presidio",
               "title": "Presidio Ad Hoc Recognizers"
             },
+            "presidio_analyze_chunk_size_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. Longer texts are split into overlapping chunks of at most this size and the merged results are remapped onto the original text. Defaults to 500000; set it below your analyzer deployment's request body limit, leaving headroom for the rest of the analyze payload.",
+              "title": "Presidio Analyze Chunk Size Bytes"
+            },
             "presidio_analyzer_api_base": {
               "anyOf": [
                 {
