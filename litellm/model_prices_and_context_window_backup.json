@@ -12569,7 +12569,8 @@
             "us": 1.1
         },
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview"
     },
     "claude-sonnet-4-6": {
         "deprecation_date": "2027-02-17",
@@ -12971,7 +12972,8 @@
         },
         "supports_output_config": true,
         "prompt_cache_min_tokens": 512,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview"
     },
     "claude-opus-5": {
         "deprecation_date": "2027-07-24",
@@ -13011,7 +13013,8 @@
         },
         "supports_output_config": true,
         "supports_speed": true,
-        "prompt_cache_min_tokens": 512
+        "prompt_cache_min_tokens": 512,
+        "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview"
     },
     "claude-opus-4-8": {
         "deprecation_date": "2027-05-28",
@@ -20536,7 +20539,51 @@
         "output_cost_per_token": 2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_endpoints": [
-            "/vertex_ai/live"
+            "/vertex_ai/live",
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.035,
+            "search_context_size_medium": 0.035,
+            "search_context_size_high": 0.035
+        },
+        "gemini_native_audio": true
+    },
+    "gemini/gemini-live-2.5-flash-native-audio": {
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_tokens": 65535,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
         ],
         "supported_modalities": [
             "text",
@@ -54559,5 +54606,17 @@
         "output_cost_per_token_above_200k_tokens": 5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "supports_response_schema": true
+    },
+    "groq/qwen/qwen3.8-27b": {
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "groq",
+        "max_input_tokens": 131042,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://console.groq.com/docs/model/qwen/qwen3.8-27b",
+        "supports_reasoning": true,
+        "supports_vision": true
     }
 }
