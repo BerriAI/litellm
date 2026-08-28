@@ -11,7 +11,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "../add_model/AccessGroupTagsCombobox";
 import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceCombobox";
-import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
+import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
 import { hydrateTierModelParams, normalizeTierModels } from "../add_model/complexity_router_tiers";
@@ -26,6 +26,7 @@ import {
   getPlanModeTierError,
   getTierLabelsError,
   hydrateTierLabels,
+  dryRunRejection,
 } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
@@ -516,23 +517,26 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         return;
       }
 
+      const updatedConfig = buildUpdatedComplexityRouterConfig(
+        modelData.litellm_params?.complexity_router_config,
+        complexityRouterConfig,
+        customTechnicalKeywords,
+        { keywordTierRules, escalationKeywords, semanticMatchingEnabled, embeddingModel, matchThreshold },
+      );
+      const serverVerdict = await validateAutoRouterConfig(accessToken, updatedConfig, modelData?.model_info?.team_id);
+      const dryRunError = dryRunRejection(serverVerdict);
+      if (dryRunError) {
+        setShowValidationErrors(true);
+        toast.fromError(dryRunError);
+        return;
+      }
+
       // Dual write: complexity_router_config.default_model (the pin marker hydratePinnedDefaultModel
       // reads back) and complexity_router_default_model (what the backend routes on) must always be
       // written together from the same value. Same pairing in add_auto_router_tab.tsx.
       const updatedLitellmParams = {
         ...modelData.litellm_params,
-        complexity_router_config: buildUpdatedComplexityRouterConfig(
-          modelData.litellm_params?.complexity_router_config,
-          complexityRouterConfig,
-          customTechnicalKeywords,
-          {
-            keywordTierRules,
-            escalationKeywords,
-            semanticMatchingEnabled,
-            embeddingModel,
-            matchThreshold,
-          },
-        ),
+        complexity_router_config: updatedConfig,
         complexity_router_default_model: defaultModel,
       };
       const updatedModelInfo = {

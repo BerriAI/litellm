@@ -532,6 +532,22 @@
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
         },
+        "reasoning_effort_levels": {
+          "type": "array",
+          "description": "Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
         "regional_endpoint_uplift_multiplier": {
           "type": "number",
           "minimum": 1,
