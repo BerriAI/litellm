@@ -857,12 +857,8 @@ def _shadow_router() -> Router:
             _complexity_router_deployment(
                 "my-router", {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "pricey"}, "mid"
             ),
-            _complexity_router_deployment(
-                "sonnet-router", {"SIMPLE": "cheap", "MEDIUM": "house-sonnet"}, "cheap"
-            ),
-            _complexity_router_deployment(
-                "classifier-router", {"SIMPLE": "cheap"}, "cheap", classifier="pricey"
-            ),
+            _complexity_router_deployment("sonnet-router", {"SIMPLE": "cheap", "MEDIUM": "house-sonnet"}, "cheap"),
+            _complexity_router_deployment("classifier-router", {"SIMPLE": "cheap"}, "cheap", classifier="pricey"),
             _complexity_router_deployment("b-team-router", {"SIMPLE": "cheap", "MEDIUM": "b-tier"}, "cheap"),
             _complexity_router_deployment("prefixed-router", {"SIMPLE": "prefixed-tier"}, "prefixed-tier"),
             _complexity_router_deployment("bare-router", {"SIMPLE": "bare-tier"}, "bare-tier"),
@@ -1001,6 +997,7 @@ def _shadow_prisma(
     prisma.db.litellm_shadowevaljob.create_many = AsyncMock(return_value=1)
     prisma.db.litellm_shadowevaljob.update_many = AsyncMock(return_value=1)
     prisma.db.litellm_shadowevalattempt.find_first = AsyncMock(return_value=None)
+    prisma.db.litellm_shadowevalfunnel.create_many = AsyncMock(return_value=1)
     prisma.attempt_rows = []
 
     async def query_raw(sql: str, *params: object):
@@ -1014,8 +1011,11 @@ def _shadow_prisma(
             return [{"judged_count": 10, "error_count": 2, "judge_spend": 0.031}]
         if "SELECT job_id AS grp" in sql:
             return by_leg_rows if by_leg_rows is not None else []
+        if 'FROM "LiteLLM_ShadowEvalFunnel"' in sql:
+            return prisma.funnel_rows
         return agg_rows if agg_rows is not None else []
 
+    prisma.funnel_rows = []
     prisma.db.query_raw = AsyncMock(side_effect=query_raw)
     return prisma
 
@@ -1053,17 +1053,18 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     assert ">= j.max_turns" in sweep_sql
     assert "j.max_budget IS NOT NULL" in sweep_sql
     assert ">= j.max_budget" in sweep_sql
-    assert "SUM(a.judge_cost + a.shadow_cost)" in sweep_sql
+    assert "SUM(a.judge_cost + a.shadow_cost + a.shadow_classifier_cost)" in sweep_sql
     assert "j.api_key_id = ANY($1::text[])" in sweep_sql
     assert sweep_keys == ["key-hash", "key-hash-2"]
     prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
     rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
     assert [row["api_key_id"] for row in rows] == ["key-hash", "key-hash-2"]
-    assert len({frozenset((k, v) for k, v in row.items() if k != "api_key_id") for row in rows}) == 1
+    assert len({frozenset((k, v) for k, v in row.items() if k not in ("api_key_id", "id")) for row in rows}) == 1
+    assert len({row["id"] for row in rows}) == len(rows)
     assert len({row["group_id"] for row in rows}) == 1
     assert all(row["max_turns"] == SHADOW_EVAL_TURN_VALVE and row["created_by"] == "admin" for row in rows)
     assert all(row["max_budget"] == 5.0 for row in rows)
-    assert all("status" not in row and "id" not in row for row in rows)
+    assert all("status" not in row for row in rows)
     assert response.job_id == rows[0]["group_id"]
     assert response.status == "running"
     assert response.judged_count is None
@@ -1330,12 +1331,52 @@ async def test_get_shadow_eval_job_pools_counts_and_slices_results_per_key(monke
     import litellm.proxy.proxy_server as proxy_server
 
     tier_rows = [
-        {"grp": "SIMPLE", "turn_count": 8, "real_wins": 2, "shadow_wins": 4, "ties": 2, "avg_confidence": 0.8},
-        {"grp": "REASONING", "turn_count": 2, "real_wins": 2, "shadow_wins": 0, "ties": 0, "avg_confidence": 0.9},
+        {
+            "grp": "SIMPLE",
+            "turn_count": 8,
+            "real_wins": 2,
+            "shadow_wins": 4,
+            "ties": 2,
+            "avg_confidence": 0.8,
+            "real_spend": 0.08,
+            "shadow_spend": 0.02,
+            "cache_hit_turns": 1,
+        },
+        {
+            "grp": "REASONING",
+            "turn_count": 2,
+            "real_wins": 2,
+            "shadow_wins": 0,
+            "ties": 0,
+            "avg_confidence": 0.9,
+            "real_spend": 0.04,
+            "shadow_spend": 0.05,
+            "cache_hit_turns": 0,
+        },
     ]
     leg_rows = [
-        {"grp": "leg-1", "turn_count": 6, "real_wins": 1, "shadow_wins": 4, "ties": 1, "avg_confidence": 0.7},
-        {"grp": "leg-2", "turn_count": 4, "real_wins": 3, "shadow_wins": 0, "ties": 1, "avg_confidence": 0.6},
+        {
+            "grp": "leg-1",
+            "turn_count": 6,
+            "real_wins": 1,
+            "shadow_wins": 4,
+            "ties": 1,
+            "avg_confidence": 0.7,
+            "real_spend": 0.07,
+            "shadow_spend": 0.03,
+            "cache_hit_turns": 0,
+        },
+        {
+            "grp": "leg-2",
+            "turn_count": 4,
+            "real_wins": 3,
+            "shadow_wins": 0,
+            "ties": 1,
+            "avg_confidence": 0.6,
+            "real_spend": 0.05,
+            "shadow_spend": 0.04,
+            "cache_hit_turns": 1,
+        },
     ]
     prisma = _shadow_prisma(
         legs=[_leg_record(), _leg_record(id="leg-2", api_key_id="key-hash-2", max_turns=50)],
@@ -1359,6 +1400,16 @@ async def test_get_shadow_eval_job_pools_counts_and_slices_results_per_key(monke
     assert response.results.overall_tie_rate_pct == 20.0
     assert [(s.group, s.turn_count) for s in response.results.by_key] == [("key-hash", 6), ("key-hash-2", 4)]
     assert response.results.by_key[0].shadow_win_rate_pct == 66.7
+    agg_sql = next(call.args[0] for call in prisma.db.query_raw.await_args_list if "real_spend" in call.args[0])
+    assert agg_sql.count("FILTER (WHERE real_cost IS NOT NULL AND NOT real_cache_hit)") == 2
+    assert response.results.by_tier[0].real_spend == 0.08
+    assert response.results.by_tier[0].shadow_spend == 0.02
+    assert response.results.by_tier[0].cache_hit_turns == 1
+    assert response.results.sampled_real_spend == pytest.approx(0.12)
+    assert response.results.sampled_shadow_spend == pytest.approx(0.07)
+    assert response.results.not_sampled_count is None
+    assert response.results.unjudgeable_count is None
+    assert response.results.shed_count is None
     assert [(key.api_key_id, key.max_turns) for key in response.keys] == [("key-hash", 200), ("key-hash-2", 50)]
     totals_args = [call.args for call in prisma.db.query_raw.await_args_list if "judged_count" in call.args[0]]
     assert totals_args == [(totals_args[0][0], ["leg-1", "leg-2"])]
@@ -1429,7 +1480,12 @@ async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monke
     assert "AS attempt_count" in counts_sql
     assert "j.stopped_at IS NULL OR a.created_at <= j.stopped_at" in counts_sql
     assert prisma.db.query_raw.await_count == 2
-    prisma.db.litellm_shadowevaljob.find_many.assert_not_called()
+    group_reads = [
+        call
+        for call in prisma.db.litellm_shadowevaljob.find_many.call_args_list
+        if "group_id" in call.kwargs.get("where", {})
+    ]
+    assert group_reads == []
 
 
 @pytest.mark.asyncio
@@ -1726,7 +1782,7 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
     assert ") < k.max_turns" in stop_sql
     assert "k.max_budget IS NULL" in stop_sql
     assert ") < k.max_budget" in stop_sql
-    assert "SUM(a.judge_cost + a.shadow_cost)" in stop_sql
+    assert "SUM(a.judge_cost + a.shadow_cost + a.shadow_classifier_cost)" in stop_sql
     assert (stop_group, stop_operator) == ("job-1", "admin")
     assert datetime.fromisoformat(stop_stamp).tzinfo is None
     assert prisma.db.execute_raw.await_count == 1
@@ -2008,9 +2064,7 @@ async def test_start_shadow_eval_sees_a_collision_hidden_behind_the_second_teams
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
 
     monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(key_teams={"key-hash": "team-a"}))
-    accepted = await start_shadow_eval(
-        _start_request(router_name="b-team-router", judge_model="house-sonnet"), ADMIN
-    )
+    accepted = await start_shadow_eval(_start_request(router_name="b-team-router", judge_model="house-sonnet"), ADMIN)
     assert accepted.job_id
 
     monkeypatch.setattr(
@@ -2076,3 +2130,97 @@ async def test_start_shadow_eval_matches_a_prefixed_judge_name_to_a_bare_tier_de
     assert exc.value.status_code == 400
     assert "bare-tier" in str(exc.value.detail)
     prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_shadow_eval_job_sums_funnel_rows_across_legs(monkeypatch: pytest.MonkeyPatch):
+    """Legs with funnel rows sum into job-level coverage counts; a job with no funnel
+    rows at all reports None rather than a fabricated zero."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    tier_rows = [
+        {
+            "grp": "SIMPLE",
+            "turn_count": 4,
+            "real_wins": 1,
+            "shadow_wins": 2,
+            "ties": 1,
+            "avg_confidence": 0.8,
+            "real_spend": 0.05,
+            "shadow_spend": 0.02,
+            "cache_hit_turns": 0,
+        },
+    ]
+    prisma = _shadow_prisma(
+        legs=[_leg_record(), _leg_record(id="leg-2", api_key_id="key-hash-2")],
+        agg_rows=tier_rows,
+    )
+    prisma.funnel_rows = [{"legs_with_rows": 2, "not_sampled": 30, "unjudgeable": 5, "shed": 2, "withheld": 3}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    response = await get_shadow_eval_job("job-1", VIEWER)
+
+    assert response.results.not_sampled_count == 30
+    assert response.results.unjudgeable_count == 5
+    assert response.results.shed_count == 2
+    assert response.results.withheld_count == 3
+    funnel_args = [call.args for call in prisma.db.query_raw.await_args_list if "ShadowEvalFunnel" in call.args[0]]
+    assert funnel_args == [(funnel_args[0][0], ["leg-1", "leg-2"])]
+
+
+@pytest.mark.asyncio
+async def test_partially_seeded_funnel_reads_as_unknown_coverage(monkeypatch: pytest.MonkeyPatch):
+    """One leg's seed failing must not present the other leg's counts as job coverage."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    tier_rows = [
+        {
+            "grp": "SIMPLE",
+            "turn_count": 4,
+            "real_wins": 1,
+            "shadow_wins": 2,
+            "ties": 1,
+            "avg_confidence": 0.8,
+            "real_spend": 0.05,
+            "shadow_spend": 0.02,
+            "cache_hit_turns": 0,
+        },
+    ]
+    prisma = _shadow_prisma(
+        legs=[_leg_record(), _leg_record(id="leg-2", api_key_id="key-hash-2")],
+        agg_rows=tier_rows,
+    )
+    prisma.funnel_rows = [{"legs_with_rows": 1, "not_sampled": 30, "unjudgeable": 5, "shed": 2, "withheld": 0}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    response = await get_shadow_eval_job("job-1", VIEWER)
+
+    assert response.results.not_sampled_count is None
+    assert response.results.unjudgeable_count is None
+    assert response.results.shed_count is None
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_seeds_a_zero_funnel_row_per_leg(monkeypatch: pytest.MonkeyPatch):
+    """A fully covered job never records a skip, so only a row seeded at creation
+    separates 'nothing was skipped' from a job predating the funnel."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    await start_shadow_eval(_start_request(api_key_ids=("key-hash", "key-hash-2")), ADMIN)
+
+    created = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+    leg_ids = sorted(row["id"] for row in created)
+    assert len(leg_ids) == 2 and all(leg_ids)
+    seeded = prisma.db.litellm_shadowevalfunnel.create_many.call_args.kwargs
+    assert sorted(row["job_id"] for row in seeded["data"]) == leg_ids
+    assert seeded["skip_duplicates"] is True
+    group_reads = [
+        call
+        for call in prisma.db.litellm_shadowevaljob.find_many.call_args_list
+        if "group_id" in call.kwargs.get("where", {})
+    ]
+    assert group_reads == []

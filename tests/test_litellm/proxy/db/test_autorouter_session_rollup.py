@@ -218,8 +218,20 @@ class TestFlush:
         sql, params = client.db.calls[0]
         assert sql == UPSERT_AUTOROUTER_SESSION_SQL
         assert params == (
-            "k1", "s1", "live-auto", "complexity", "bedrock/haiku",
-            "2026-08-01T12:00:00", 100, 0.01, 0.02, 1, 0, None, 0, "medium",
+            "k1",
+            "s1",
+            "live-auto",
+            "complexity",
+            "bedrock/haiku",
+            "2026-08-01T12:00:00",
+            100,
+            0.01,
+            0.02,
+            1,
+            0,
+            None,
+            0,
+            "medium",
         )
 
     def test_a_connect_error_retries_the_same_statement(self):
@@ -275,7 +287,12 @@ def test_every_drain_trigger_reads_the_one_queue_census_owner():
     from litellm.proxy import utils as proxy_utils
 
     owner_source = inspect.getsource(proxy_utils._total_queued_spend_transactions)
-    for queue in ("spend_log_transactions", "tool_usage_transactions", "autorouter_turn_transactions"):
+    for queue in (
+        "spend_log_transactions",
+        "tool_usage_transactions",
+        "autorouter_turn_transactions",
+        "pending_shadow_eval_funnel_events",
+    ):
         assert queue in owner_source, queue
     for site in (proxy_utils.update_spend, proxy_utils.update_spend_logs_job, proxy_utils._monitor_spend_logs_queue):
         assert "_total_queued_spend_transactions" in inspect.getsource(site), site.__name__

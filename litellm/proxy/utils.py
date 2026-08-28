@@ -6276,7 +6276,9 @@ async def _total_queued_spend_transactions(prisma_client: PrismaClient) -> int:
         tool_queue_size: Final = len(prisma_client.tool_usage_transactions)
     async with prisma_client._autorouter_turn_transactions_lock:
         autorouter_queue_size: Final = len(prisma_client.autorouter_turn_transactions)
-    return spend_queue_size + tool_queue_size + autorouter_queue_size
+    from litellm.proxy.db.shadow_eval_funnel import pending_shadow_eval_funnel_events
+
+    return spend_queue_size + tool_queue_size + autorouter_queue_size + pending_shadow_eval_funnel_events()
 
 
 async def update_daily_tag_spend(
@@ -6417,6 +6419,13 @@ async def update_spend_logs_job(
             len(autorouter_turns_to_process),
             autorouter_tracking_err,
         )
+
+    try:
+        from litellm.proxy.db.shadow_eval_funnel import flush_shadow_eval_funnel
+
+        await flush_shadow_eval_funnel(prisma_client)
+    except Exception as funnel_err:  # noqa: BLE001  # a drain bug must not abort the spend job
+        verbose_proxy_logger.error("Spend tracking - shadow eval funnel drain failed: %s", funnel_err)
 
 
 MAX_SPEND_LOG_DRAIN_ITERATIONS: Final = 20
