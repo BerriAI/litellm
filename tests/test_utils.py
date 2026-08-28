@@ -1,5 +1,5 @@
-import pytest
 import litellm
+
 
 def test_bedrock_cohere_english_v3_supported_params():
     """Verify cohere.embed-english-v3 routes to BedrockCohereEmbeddingConfig and supports encoding_format."""
@@ -9,4 +9,3 @@ def test_bedrock_cohere_english_v3_supported_params():
         encoding_format="float",
     )
     assert "encoding_format" in optional_params or optional_params.get("encoding_format") == "float"
-
