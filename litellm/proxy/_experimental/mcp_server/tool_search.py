@@ -142,6 +142,7 @@ async def handle_agent_search(query: str, top_k: int, user_api_key_dict: UserAPI
         router=llm_router,
         embedding_model=litellm.agent_search_embedding_model,
         index=global_agent_search_index,
+        user_api_key_dict=user_api_key_dict,
     )
     match outcome:
         case AgentSearchHits(hits):

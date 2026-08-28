@@ -566,6 +566,7 @@ class TestCallToolRestApiVirtualTools:
             result = await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
 
         assert result.isError is False
+        assert mock_search.await_args.kwargs["user_api_key_dict"] is user_api_key_dict
         assert json.loads(result.content[0].text) == [
             {
                 "agent_id": "translator",

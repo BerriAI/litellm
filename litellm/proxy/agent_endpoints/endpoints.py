@@ -231,7 +231,9 @@ def _agent_search_error(status_code: int, error: str, message: str) -> HTTPExcep
     return HTTPException(status_code=status_code, detail=detail)
 
 
-async def _rank_agents_by_query(query: str, agents: Sequence[AgentResponse], top_k: int) -> tuple[AgentResponse, ...]:
+async def _rank_agents_by_query(
+    query: str, agents: Sequence[AgentResponse], top_k: int, user_api_key_dict: UserAPIKeyAuth
+) -> tuple[AgentResponse, ...]:
     from litellm.proxy.proxy_server import llm_router
 
     outcome: Final = await search_agents(
@@ -241,6 +243,7 @@ async def _rank_agents_by_query(query: str, agents: Sequence[AgentResponse], top
         router=llm_router,
         embedding_model=litellm.agent_search_embedding_model,
         index=global_agent_search_index,
+        user_api_key_dict=user_api_key_dict,
     )
     match outcome:
         case AgentSearchHits(hits):
@@ -376,7 +379,7 @@ async def get_agents(
 
         if query is None:
             return returned_agents
-        return await _rank_agents_by_query(query, returned_agents, top_k)
+        return await _rank_agents_by_query(query, returned_agents, top_k, user_api_key_dict)
     except HTTPException:
         raise
     except Exception as e:
