@@ -87,6 +87,22 @@ def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, .
     return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in declared)
 
 
+def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
+    """The levels an entry declares, resolved from the model string a provider config holds rather
+    than from a router deployment's model_info.
+
+    None means the map has no opinion, either because the entry declares nothing or because it
+    describes no such model, so a caller keeps whatever it did before the entry was described. The
+    entry is read straight off the map rather than through get_model_info, which raises for a model
+    it does not know: a provider config runs on the request path for every model it serves, most of
+    which the map never named, and a lookup miss there must not fail the call.
+    """
+    entry: Final = litellm.model_cost.get(f"{custom_llm_provider}/{model}") or litellm.model_cost.get(model)
+    if not isinstance(entry, dict):
+        return None
+    return declared_reasoning_efforts(entry)
+
+
 def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: object) -> bool:
     """Opt-in only where a request path refuses the level. AzureOpenAIGPT5Config raises
     UnsupportedParamsError on reasoning_effort='none' without an explicit true, and it is selected
