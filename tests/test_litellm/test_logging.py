@@ -1,14 +1,14 @@
 import ast
 import asyncio
 import json
+import logging
 import re
 import sys
+from io import StringIO
 from pathlib import Path
 from typing import List
 
 import pytest
-
-import logging
 
 import litellm
 from litellm._logging import (
@@ -32,6 +32,7 @@ from litellm._logging import (
     trace_id_var,
     verbose_logger,
     verbose_proxy_logger,
+    verbose_proxy_stdout_logger,
     verbose_router_logger,
 )
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
@@ -76,6 +77,21 @@ def test_json_mode_emits_one_record_per_logger(capfd):
         assert "message" in obj, "`message` key missing"
         assert "level" in obj, "`level` key missing"
         assert "timestamp" in obj, "`timestamp` key missing"
+
+
+def test_json_mode_routes_invalid_key_record_once_to_stdout(capfd):
+    _turn_on_json()
+
+    verbose_proxy_stdout_logger.warning("invalid virtual key")
+
+    out, err = capfd.readouterr()
+    assert [raw for raw in err.splitlines() if raw.strip()] == []
+    lines = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, f"got {len(lines)} lines, want 1: {lines!r}"
+
+    record = json.loads(lines[0])
+    assert record["message"] == "invalid virtual key"
+    assert record["component"] == verbose_proxy_stdout_logger.name
 
 
 def test_json_formatter_parses_embedded_json_message():
@@ -845,32 +861,121 @@ class _FakeStream:
         return self._tty
 
 
-def test_records_below_warning_go_to_stdout_and_the_rest_to_stderr(capsys):
-    logger = logging.getLogger("test_level_routing")
+def test_invalid_key_warning_routes_as_json_to_stdout(capsys):
+    logger = logging.getLogger("LiteLLM Proxy.stdout")
+    original_handlers = logger.handlers[:]
+    original_propagate = logger.propagate
+    original_level = logger.level
     logger.handlers.clear()
     logger.propagate = False
     logger.setLevel(logging.DEBUG)
     handler = LevelRoutingStreamHandler()
+    handler.setFormatter(JsonFormatter())
+    logger.addHandler(handler)
+
+    try:
+        logger.warning("invalid virtual key")
+    finally:
+        logger.handlers = original_handlers
+        logger.propagate = original_propagate
+        logger.setLevel(original_level)
+
+    out, err = capsys.readouterr()
+    assert err == ""
+    log_record = json.loads(out)
+    assert log_record["message"] == "invalid virtual key"
+    assert log_record["level"] == "WARNING"
+
+
+def test_records_below_warning_and_invalid_key_warnings_go_to_stdout(capsys):
+    logger = logging.getLogger("test_level_routing")
+    invalid_key_logger = logging.getLogger("LiteLLM Proxy.stdout")
+    original_handlers = logger.handlers[:]
+    original_propagate = logger.propagate
+    original_level = logger.level
+    original_invalid_key_handlers = invalid_key_logger.handlers[:]
+    original_invalid_key_propagate = invalid_key_logger.propagate
+    original_invalid_key_level = invalid_key_logger.level
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    invalid_key_logger.handlers.clear()
+    invalid_key_logger.propagate = False
+    invalid_key_logger.setLevel(logging.DEBUG)
+    handler = LevelRoutingStreamHandler()
     handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
     logger.addHandler(handler)
+    invalid_key_logger.addHandler(handler)
 
     try:
         logger.debug("d")
         logger.info("i")
         logger.warning("w")
+        invalid_key_logger.warning("invalid-key-warning")
         logger.error("e")
         logger.critical("c")
     finally:
-        logger.handlers.clear()
+        logger.handlers = original_handlers
+        logger.propagate = original_propagate
+        logger.setLevel(original_level)
+        invalid_key_logger.handlers = original_invalid_key_handlers
+        invalid_key_logger.propagate = original_invalid_key_propagate
+        invalid_key_logger.setLevel(original_invalid_key_level)
 
     out, err = capsys.readouterr()
-    assert out.splitlines() == ["DEBUG d", "INFO i"]
+    assert out.splitlines() == ["DEBUG d", "INFO i", "WARNING invalid-key-warning"]
     assert err.splitlines() == ["WARNING w", "ERROR e", "CRITICAL c"]
 
 
 def test_verbose_loggers_route_records_by_level():
-    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
+    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger, verbose_proxy_stdout_logger):
         assert any(isinstance(h, LevelRoutingStreamHandler) for h in lg.handlers), lg.name
+    assert verbose_proxy_stdout_logger.level == logging.WARNING
+    assert verbose_proxy_stdout_logger.handlers[0].level == logging.WARNING
+
+
+def test_invalid_virtual_key_record_does_not_propagate_to_root_handler():
+    root_logger = logging.getLogger()
+    root_stream = StringIO()
+    root_handler = logging.StreamHandler(root_stream)
+    root_handler.setFormatter(logging.Formatter("ROOT %(levelname)s %(message)s"))
+    root_logger.addHandler(root_handler)
+
+    try:
+        verbose_proxy_stdout_logger.warning("invalid virtual key")
+    finally:
+        root_logger.removeHandler(root_handler)
+
+    assert root_stream.getvalue() == ""
+
+
+def test_turn_on_json_preserves_invalid_key_warning_visibility(monkeypatch, capfd):
+    monkeypatch.setenv("LITELLM_LOG", "ERROR")
+    _turn_on_json()
+
+    verbose_proxy_stdout_logger.warning("invalid virtual key")
+
+    out, err = capfd.readouterr()
+    assert [raw for raw in err.splitlines() if raw.strip()] == []
+    records = [json.loads(raw) for raw in out.splitlines() if raw.strip()]
+    assert len(records) == 1
+    assert records[0]["component"] == verbose_proxy_stdout_logger.name
+    assert records[0]["level"] == "WARNING"
+
+
+def test_ordinary_proxy_records_still_propagate_to_root_handler():
+    root_logger = logging.getLogger()
+    root_stream = StringIO()
+    root_handler = logging.StreamHandler(root_stream)
+    root_handler.setFormatter(logging.Formatter("ROOT %(levelname)s %(message)s"))
+    root_logger.addHandler(root_handler)
+
+    try:
+        verbose_proxy_logger.error("ordinary proxy error")
+    finally:
+        root_logger.removeHandler(root_handler)
+
+    assert "ROOT ERROR ordinary proxy error" in root_stream.getvalue()
 
 
 @pytest.mark.parametrize(

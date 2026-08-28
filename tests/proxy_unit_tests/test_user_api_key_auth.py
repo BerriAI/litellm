@@ -875,6 +875,44 @@ async def test_user_api_key_auth_websocket():
 
 
 @pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_skips_duplicate_invalid_key_log():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_utils import mark_invalid_virtual_key_error
+    from litellm.proxy.auth.user_api_key_auth import WebSocketException, user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer undefined"}
+    mock_websocket.scope = {"headers": [(b"authorization", b"Bearer undefined")]}
+    mock_websocket.url = URL(url="/v1/responses")
+    transformed_invalid_virtual_key = mark_invalid_virtual_key_error(
+        ProxyException(
+            message="Please authenticate again",
+            type="auth_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        ),
+        True,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            side_effect=transformed_invalid_virtual_key,
+            autospec=True,
+        ),
+        patch("litellm.proxy.auth.user_api_key_auth.verbose_proxy_logger.exception") as exception_log,
+        pytest.raises(WebSocketException) as exc_info,
+    ):
+        await user_api_key_auth_websocket(mock_websocket)
+
+    assert exc_info.value.code == status.WS_1008_POLICY_VIOLATION
+    assert exc_info.value.reason == ""
+    exception_log.assert_not_called()
+    mock_websocket.close.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_auth_websocket_carries_asgi_path():
     """
     The synthetic Request must carry the ASGI scope's ``path`` so

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -24,8 +25,7 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_proxy_logger, verbose_proxy_stdout_logger
 from litellm.exceptions import BudgetExceededError
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
@@ -335,9 +335,7 @@ async def test_handle_authentication_error_budget_exceeded():
     # Test with budget exceeded error
     from litellm.exceptions import BudgetExceededError
 
-    budget_error = BudgetExceededError(
-        message="Budget exceeded", current_cost=100, max_budget=100
-    )
+    budget_error = BudgetExceededError(message="Budget exceeded", current_cost=100, max_budget=100)
 
     with pytest.raises(ProxyException) as exc_info:
         await handler._handle_authentication_error(
@@ -705,19 +703,79 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "auth_error,expect_traceback",
+    "auth_error,expected_level,expect_traceback,log_client_error_tracebacks",
     [
         pytest.param(
-            ProxyException(
-                message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401
+            HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.",
             ),
+            logging.WARNING,
             False,
-            id="expected_401_no_traceback",
+            False,
+            id="invalid_virtual_key_logs_at_warning_without_traceback",
         ),
-        pytest.param(ValueError("unexpected internal error"), True, id="unexpected_error_keeps_traceback"),
+        pytest.param(
+            HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.",
+            ),
+            logging.ERROR,
+            True,
+            True,
+            id="invalid_virtual_key_keeps_traceback_opt_in",
+        ),
+        pytest.param(
+            HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication Error",
+            ),
+            logging.ERROR,
+            False,
+            False,
+            id="other_http_401_keeps_error_level_without_traceback",
+        ),
+        pytest.param(
+            ProxyException(
+                message="LiteLLM Virtual Key expected",
+                type=ProxyErrorTypes.auth_error,
+                param=None,
+                code=401,
+            ),
+            logging.WARNING,
+            False,
+            False,
+            id="custom_auth_invalid_virtual_key_logs_at_warning_without_traceback",
+        ),
+        pytest.param(
+            ProxyException(message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401),
+            logging.ERROR,
+            False,
+            False,
+            id="other_expected_401_keeps_error_level_without_traceback",
+        ),
+        pytest.param(
+            ValueError("unexpected internal error"),
+            logging.ERROR,
+            True,
+            False,
+            id="unexpected_error_keeps_traceback",
+        ),
+        pytest.param(
+            HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication database unavailable",
+            ),
+            logging.ERROR,
+            True,
+            False,
+            id="server_error_keeps_traceback",
+        ),
     ],
 )
-async def test_handle_authentication_error_traceback_only_for_unexpected_errors(auth_error, expect_traceback, caplog):
+async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
+    auth_error, expected_level, expect_traceback, log_client_error_tracebacks, caplog
+):
     """Regression for LIT-6043: expected 4xx auth rejections must not format a
     traceback via logger.exception; unexpected errors must keep it."""
     handler = UserAPIKeyAuthExceptionHandler()
@@ -731,17 +789,22 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
         patch(  # test-quality-ok: handler reads proxy_server globals at call time
             "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
         ),
+        patch(  # test-quality-ok: handler reads this global flag at call time
+            "litellm.proxy.auth.auth_exception_handler.litellm.log_client_error_tracebacks",
+            log_client_error_tracebacks,
+        ),
         patch(  # test-quality-ok: handler reads proxy_server globals at call time
             "litellm.proxy.proxy_server.general_settings",
             {"allow_requests_on_db_unavailable": False},
         ),
     ):
         verbose_proxy_logger.propagate = True
+        verbose_proxy_stdout_logger.propagate = True
         try:
             try:
                 raise auth_error
-            except (ProxyException, ValueError) as caught:
-                with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+            except (HTTPException, ProxyException, ValueError) as caught:
+                with caplog.at_level(logging.DEBUG), pytest.raises(ProxyException):
                     await handler._handle_authentication_error(
                         caught,
                         MagicMock(),
@@ -752,7 +815,158 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
                     )
         finally:
             verbose_proxy_logger.propagate = False
+            verbose_proxy_stdout_logger.propagate = False
 
     records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
     assert len(records) == 1
-    assert (records[0].exc_info is not None) is expect_traceback
+    assert records[0].levelno == expected_level
+    assert bool(records[0].exc_info) is expect_traceback
+    assert records[0].name == (
+        verbose_proxy_stdout_logger.name
+        if expected_level == logging.WARNING and not log_client_error_tracebacks
+        else verbose_proxy_logger.name
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transformed_exception",
+    [
+        HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Please authenticate again"),
+        ProxyException(
+            message="Please authenticate again",
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=status.HTTP_401_UNAUTHORIZED,
+        ),
+    ],
+)
+async def test_handle_authentication_error_preserves_invalid_virtual_key_marker_after_callback_transform(
+    caplog,
+    transformed_exception,
+):
+    handler = UserAPIKeyAuthExceptionHandler()
+    original_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.",
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=transformed_exception,
+        ),
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}),
+    ):
+        verbose_proxy_stdout_logger.propagate = True
+        try:
+            with pytest.raises(ProxyException) as exc_info:
+                await handler._handle_authentication_error(
+                    original_exception,
+                    MagicMock(),
+                    {},
+                    "/v1/chat/completions",
+                    None,
+                    "undefined",
+                )
+        finally:
+            verbose_proxy_stdout_logger.propagate = False
+
+    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].name == verbose_proxy_stdout_logger.name
+    assert records[0].levelno == logging.WARNING
+    assert exc_info.value.message == "Please authenticate again"
+    assert getattr(exc_info.value, "_litellm_invalid_virtual_key_error") is True
+    if isinstance(transformed_exception, ProxyException):
+        assert not hasattr(transformed_exception, "_litellm_invalid_virtual_key_error")
+
+
+@pytest.mark.asyncio
+async def test_handle_authentication_error_keeps_unexpected_source_traceback_after_callback_4xx(
+    caplog,
+):
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Please authenticate again",
+            ),
+        ),
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}),
+    ):
+        verbose_proxy_logger.propagate = True
+        try:
+            with pytest.raises(ProxyException) as exc_info:
+                await handler._handle_authentication_error(
+                    ValueError("unexpected internal error"),
+                    MagicMock(),
+                    {},
+                    "/v1/chat/completions",
+                    None,
+                    "sk-bad-key",
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].name == verbose_proxy_logger.name
+    assert records[0].levelno == logging.ERROR
+    assert records[0].exc_info is not None
+    assert "Please authenticate again" in records[0].getMessage()
+    assert exc_info.value.code == str(status.HTTP_401_UNAUTHORIZED)
+
+
+@pytest.mark.asyncio
+async def test_handle_authentication_error_does_not_preserve_invalid_virtual_key_marker_for_callback_503(
+    caplog,
+):
+    handler = UserAPIKeyAuthExceptionHandler()
+    original_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.",
+    )
+    transformed_exception = HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Authentication service temporarily unavailable",
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=transformed_exception,
+        ),
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}),
+    ):
+        verbose_proxy_logger.propagate = True
+        try:
+            with pytest.raises(ProxyException) as exc_info:
+                await handler._handle_authentication_error(
+                    original_exception,
+                    MagicMock(),
+                    {},
+                    "/v1/chat/completions",
+                    None,
+                    "undefined",
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].name == verbose_proxy_logger.name
+    assert records[0].levelno == logging.ERROR
+    assert records[0].exc_info is not None
+    assert "Authentication service temporarily unavailable" in records[0].getMessage()
+    assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
+    assert not hasattr(exc_info.value, "_litellm_invalid_virtual_key_error")

@@ -264,13 +264,16 @@ def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
-    """Writes records below WARNING to stdout and WARNING and above to stderr.
+    """Writes records below WARNING and invalid-key warnings to stdout.
 
     Collectors that derive severity from the stream report every stderr line as an error.
     """
 
     def emit(self, record: logging.LogRecord) -> None:
-        preferred: Final = sys.stdout if record.levelno < logging.WARNING else sys.stderr
+        is_stdout_record: Final = record.levelno < logging.WARNING or (
+            record.levelno == logging.WARNING and record.name == verbose_proxy_stdout_logger.name
+        )
+        preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
             self.stream = sys.stderr  # rebind-ok: fall back to the pre-fix stream rather than raising per record
         else:
@@ -507,19 +510,30 @@ else:
 
     handler.setFormatter(formatter)
 
-verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
-verbose_router_logger = logging.getLogger("LiteLLM Router")
-verbose_logger = logging.getLogger("LiteLLM")
+verbose_proxy_logger: Final = logging.getLogger("LiteLLM Proxy")
+verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
+verbose_router_logger: Final = logging.getLogger("LiteLLM Router")
+verbose_logger: Final = logging.getLogger("LiteLLM")
+
+verbose_proxy_stdout_handler: Final = LevelRoutingStreamHandler()
+verbose_proxy_stdout_handler.setLevel(logging.WARNING)
+verbose_proxy_stdout_handler.setFormatter(handler.formatter)
+verbose_proxy_stdout_handler.addFilter(_secret_filter)
+verbose_proxy_stdout_handler.addFilter(_correlation_filter)
 
 # Add the handler to the loggers
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
+verbose_proxy_stdout_logger.setLevel(logging.WARNING)
+verbose_proxy_stdout_logger.addHandler(verbose_proxy_stdout_handler)
+verbose_proxy_stdout_logger.propagate = False
 verbose_logger.addHandler(handler)
 
 # Filters attached to the logger, not the handler, survive callers swapping in their own
 # handlers (JSON mode, uvicorn log config, a host app's root handler).
 verbose_router_logger.addFilter(_stdout_truncation_filter)
 verbose_proxy_logger.addFilter(_stdout_truncation_filter)
+verbose_proxy_stdout_logger.addFilter(_stdout_truncation_filter)
 verbose_logger.addFilter(_stdout_truncation_filter)
 
 
@@ -578,6 +592,7 @@ ALL_LOGGERS: Final = [
     verbose_logger,
     verbose_router_logger,
     verbose_proxy_logger,
+    verbose_proxy_stdout_logger,
 ]
 
 
@@ -685,6 +700,7 @@ def _turn_on_json():
     handler: Final = LevelRoutingStreamHandler()
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
+    verbose_proxy_stdout_logger.setLevel(logging.WARNING)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
 
@@ -700,12 +716,14 @@ def _disable_debugging():
     verbose_logger.disabled = True
     verbose_router_logger.disabled = True
     verbose_proxy_logger.disabled = True
+    verbose_proxy_stdout_logger.disabled = True
 
 
 def _enable_debugging():
     verbose_logger.disabled = False
     verbose_router_logger.disabled = False
     verbose_proxy_logger.disabled = False
+    verbose_proxy_stdout_logger.disabled = False
 
 
 def print_verbose(print_statement):
