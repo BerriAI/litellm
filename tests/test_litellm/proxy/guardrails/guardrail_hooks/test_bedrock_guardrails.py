@@ -625,13 +625,15 @@ def test_bedrock_guardrail_applies_router_post_filters(monkeypatch: pytest.Monke
     from litellm.proxy import proxy_server
 
     router = MagicMock()
+    # Equal order: the min-order filter runs before exclusion, so an openai row ordered
+    # ahead of bedrock would decide the verdict on its own and never exercise exclusion.
     deployments = [
         {
             "litellm_params": {"custom_llm_provider": "openai", "order": 1},
             "model_info": {"id": "openai"},
         },
         {
-            "litellm_params": {"custom_llm_provider": "bedrock", "order": 2},
+            "litellm_params": {"custom_llm_provider": "bedrock", "order": 1},
             "model_info": {"id": "bedrock"},
         },
     ]
@@ -647,6 +649,9 @@ def test_bedrock_guardrail_applies_router_post_filters(monkeypatch: pytest.Monke
             {"model": "shared-alias", "_excluded_deployment_ids": ["openai"]}
         )
         is True
+    )
+    assert (
+        BedrockGuardrail._router_allows_bedrock({"model": "shared-alias", "_target_order": 2}) is False
     )
 
 
@@ -744,14 +749,16 @@ def test_bedrock_guardrail_ignores_blocked_deployments():
 def test_bedrock_guardrail_filters_alias_deployments_by_team():
     router = MagicMock()
     router.model_group_alias = {"team-alias": "shared-group"}
+    # filter_team_based_models drops by model_info.id, so a row without one takes every
+    # other id-less row down with it.
     router.get_model_list.return_value = [
         {
             "litellm_params": {"custom_llm_provider": "openai"},
-            "model_info": {"team_id": "other-team"},
+            "model_info": {"id": "openai", "team_id": "other-team"},
         },
         {
             "litellm_params": {"custom_llm_provider": "bedrock"},
-            "model_info": {"team_id": "active-team"},
+            "model_info": {"id": "bedrock", "team_id": "active-team"},
         },
     ]
 

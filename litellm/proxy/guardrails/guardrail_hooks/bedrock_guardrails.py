@@ -122,6 +122,18 @@ _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
 # never truncated (truncation would let a user hide content past the limit).
 _BEDROCK_CHECKS_MAX_CONTENT_BLOCKS: Final = 10
 _ROUTER_COOLDOWNS_UNSET: Final = object()
+
+
+class _RouterCandidates(NamedTuple):
+    """What the router would consider for a request, before the eligibility filters."""
+
+    effective_model: str
+    common_result: tuple[object, object] | None
+    model_id_deployment_row: object | None
+    candidate_deployments: Sequence[object]
+    router_matched: bool
+
+
 _BEDROCK_CHECKS_KNOWN_KEYS: Final = frozenset({"contentFilter", "promptAttack", "sensitiveInformation"})
 # Keys in a sensitiveInformation result that pinpoint the PII location. They are
 # stripped before the response is handed to standard logging / telemetry so the
@@ -904,6 +916,347 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return list(deployments)
 
     @staticmethod
+    def _router_candidate_deployments(
+        llm_router: object,
+        request_data: Mapping[str, object],
+        router_kwargs: dict[str, object],  # mutable-ok: the router pops its own routing keys off these kwargs
+        model: str,
+        resolved_team_id: str | None,
+    ) -> _RouterCandidates:
+        """Deployments the router would consider, before any of the eligibility filters."""
+        effective_model: str = model
+        common_result: tuple[object, object] | None = None
+        common_lookup: Final[object] = getattr(llm_router, "_common_checks_available_deployment", None)
+        if callable(common_lookup):
+            try:
+                raw_common_result: Final = common_lookup(
+                    model=effective_model,
+                    request_kwargs=router_kwargs,
+                    specific_deployment=request_data.get("specific_deployment") is True,
+                )
+            except Exception:  # noqa: BLE001  # fall back for lightweight router test doubles
+                raw_common_result = None
+            if (
+                isinstance(raw_common_result, tuple)
+                and len(raw_common_result) == 2
+                and isinstance(raw_common_result[1], (Mapping, list))
+            ):
+                common_result = raw_common_result
+                if isinstance(raw_common_result[0], str):
+                    effective_model = raw_common_result[0]
+
+        if common_result is not None:
+            raw_deployments: Final[object] = common_result[1]
+            model_id_deployment_row: Final[object | None] = (
+                raw_deployments if isinstance(raw_deployments, Mapping) else None
+            )
+            candidate_deployments: Final[list[object]] = (
+                [raw_deployments]
+                if isinstance(raw_deployments, Mapping)
+                else [deployment for deployment in raw_deployments if isinstance(deployment, Mapping)]
+            )
+            router_matched: Final = bool(candidate_deployments)
+        else:
+            model_id_deployment: Final = (
+                llm_router.get_deployment(model_id=effective_model)
+                if llm_router.has_model_id(effective_model) is True
+                else None
+            )
+            model_id_deployment_row: Final = (
+                model_id_deployment.model_dump(exclude_none=True)
+                if model_id_deployment is not None and hasattr(model_id_deployment, "model_dump")
+                else model_id_deployment
+            )
+            specific_deployment_rows: list[object] | None = None
+            deployment_names: Final[object] = getattr(llm_router, "deployment_names", None)
+            specific_lookup: Final[object] = getattr(llm_router, "_get_deployment_by_litellm_model", None)
+            model_group_aliases: Final = getattr(llm_router, "model_group_alias", None)
+            concrete_model_names: Final[object | None] = getattr(llm_router, "model_names", None)
+            is_concrete_model: Final = (
+                isinstance(concrete_model_names, (list, tuple, set, frozenset))
+                and effective_model in concrete_model_names
+            )
+            is_model_alias: Final = isinstance(model_group_aliases, Mapping) and effective_model in model_group_aliases
+            raw_listed_deployments = (
+                []
+                if model_id_deployment_row is not None
+                else (
+                    llm_router.get_model_list(model_name=effective_model, team_id=resolved_team_id) or []
+                    if is_concrete_model or is_model_alias
+                    else []
+                )
+            )
+            if model_id_deployment_row is None and not is_concrete_model and not is_model_alias:
+                pattern_router: Final[object | None] = getattr(llm_router, "pattern_router", None)
+                get_pattern_deployments: Final[object | None] = getattr(
+                    pattern_router, "get_deployments_by_pattern", None
+                )
+                global_pattern_deployments: Final = (
+                    get_pattern_deployments(model=effective_model) if callable(get_pattern_deployments) else None
+                )
+                team_pattern_router: Final[object | None] = (
+                    getattr(llm_router, "team_pattern_routers", {}).get(resolved_team_id)
+                    if resolved_team_id is not None
+                    and isinstance(getattr(llm_router, "team_pattern_routers", None), Mapping)
+                    else None
+                )
+                get_team_pattern_deployments: Final[object | None] = getattr(
+                    team_pattern_router, "get_deployments_by_pattern", None
+                )
+                team_pattern_deployments: Final = (
+                    get_team_pattern_deployments(model=effective_model)
+                    if callable(get_team_pattern_deployments)
+                    else None
+                )
+                if isinstance(global_pattern_deployments, list) and global_pattern_deployments:
+                    raw_listed_deployments = global_pattern_deployments
+                elif isinstance(team_pattern_deployments, list) and team_pattern_deployments:
+                    raw_listed_deployments = team_pattern_deployments
+                else:
+                    default_deployment = getattr(llm_router, "default_deployment", None)
+                    if isinstance(default_deployment, Mapping):
+                        raw_listed_deployments = [default_deployment]
+                    elif (
+                        isinstance(deployment_names, Sequence)
+                        and not isinstance(deployment_names, (str, bytes))
+                        and effective_model in deployment_names
+                        and callable(specific_lookup)
+                    ):
+                        specific_result: Final = specific_lookup(model=effective_model)
+                        specific_deployment_rows = specific_result if isinstance(specific_result, list) else []
+                        raw_listed_deployments = specific_deployment_rows
+                    else:
+                        raw_listed_deployments = (
+                            llm_router.get_model_list(model_name=effective_model, team_id=resolved_team_id) or []
+                        )
+            candidate_deployments = (
+                [model_id_deployment_row]
+                if model_id_deployment_row is not None
+                else [deployment for deployment in raw_listed_deployments if isinstance(deployment, Mapping)]
+            )
+            router_matched = bool(candidate_deployments)
+        return _RouterCandidates(
+            effective_model,
+            common_result,
+            model_id_deployment_row,
+            candidate_deployments,
+            router_matched,
+        )
+
+    @staticmethod
+    def _filter_router_deployments(
+        llm_router: object,
+        request_data: Mapping[str, object],
+        router_kwargs: dict[str, object],  # mutable-ok: the router pops its own routing keys off these kwargs
+        *,
+        effective_model: str,
+        resolved_team_id: str | None,
+        common_result: tuple[object, object] | None,
+        model_id_deployment_row: object | None,
+        candidate_deployments: Sequence[object],
+        cooldown_deployments: Sequence[str] | None | object,
+        apply_tag_filtering: bool,
+    ) -> Sequence[object]:
+        """The router's own eligibility chain, in the router's order.
+
+        Order filtering runs before the weighted-failover exclusion, matching Router
+        so a guardrail verdict cannot disagree with the deployment actually picked.
+        """
+        team_filtered_result: Final = (
+            candidate_deployments
+            if model_id_deployment_row is not None
+            else filter_team_based_models(
+                healthy_deployments=candidate_deployments,
+                request_kwargs=router_kwargs,
+            )
+        )
+        team_filtered_deployments: Final[list[object]] = (
+            team_filtered_result if isinstance(team_filtered_result, list) else candidate_deployments
+        )
+
+        filter_deployments: Final = getattr(llm_router, "_filter_deployments_by_model_access_groups", None)
+        filtered_deployments: Final = (
+            filter_deployments(
+                model=effective_model,
+                healthy_deployments=team_filtered_deployments,
+                request_kwargs=dict(request_data),
+                request_team_id=resolved_team_id,
+            )
+            if callable(filter_deployments)
+            and isinstance(team_filtered_deployments, list)
+            and model_id_deployment_row is None
+            else None
+        )
+        access_filtered_deployments: Final[list[object]] = (
+            filtered_deployments if isinstance(filtered_deployments, list) else team_filtered_deployments
+        )
+        health_filter: Final[object | None] = getattr(llm_router, "_filter_health_check_unhealthy_deployments", None)
+        health_filtered_deployments: Final = (
+            health_filter(
+                healthy_deployments=access_filtered_deployments,
+                parent_otel_span=None,
+            )
+            if (common_result is None or model_id_deployment_row is None) and callable(health_filter)
+            else access_filtered_deployments
+        )
+        healthy_deployments: Final[list[object]] = (
+            health_filtered_deployments
+            if isinstance(health_filtered_deployments, list)
+            else access_filtered_deployments
+        )
+        pre_call_filter: Final[object] = getattr(llm_router, "_pre_call_checks", None)
+        request_messages: Final[object] = request_data.get("messages")
+        request_input: Final[object] = request_data.get("input")
+        if (
+            model_id_deployment_row is None
+            and getattr(llm_router, "enable_pre_call_checks", False) is True
+            and (isinstance(request_messages, list) or isinstance(request_input, (str, list)))
+            and callable(pre_call_filter)
+        ):
+            pre_call_deployments: Final = pre_call_filter(
+                model=effective_model,
+                healthy_deployments=healthy_deployments,
+                messages=request_messages if isinstance(request_messages, list) else None,
+                input=request_input if isinstance(request_input, (str, list)) else None,
+                request_kwargs=router_kwargs,
+            )
+            if isinstance(pre_call_deployments, list):
+                healthy_deployments = pre_call_deployments
+        cooldown_cache: Final[object | None] = getattr(llm_router, "cooldown_cache", None)
+        cooldown_lookup: Final[object | None] = getattr(cooldown_cache, "get_active_cooldowns", None)
+        resolved_cooldown_deployments: Final = (
+            _get_cooldown_deployments(
+                litellm_router_instance=llm_router,
+                parent_otel_span=None,
+            )
+            if cooldown_deployments is _ROUTER_COOLDOWNS_UNSET
+            and (common_result is None or model_id_deployment_row is None)
+            and callable(cooldown_lookup)
+            and callable(getattr(llm_router, "get_model_ids", None))
+            else cooldown_deployments
+            if cooldown_deployments is not _ROUTER_COOLDOWNS_UNSET
+            else []
+        )
+        cooldown_ids: Final[frozenset[str]] = frozenset(
+            deployment_id for deployment_id in (resolved_cooldown_deployments or []) if isinstance(deployment_id, str)
+        )
+        if common_result is not None and model_id_deployment_row is not None:
+            deployments = candidate_deployments
+        else:
+            cooldown_filtered_deployments: Final = [
+                deployment
+                for deployment in healthy_deployments
+                if BedrockGuardrail._router_deployment_field(deployment, "id") not in cooldown_ids
+            ]
+            unblocked_deployments: Final = [
+                deployment
+                for deployment in cooldown_filtered_deployments
+                if BedrockGuardrail._router_deployment_field(deployment, "blocked") is not True
+            ]
+            deployments = (
+                BedrockGuardrail._filter_router_deployments_by_tags(
+                    router=llm_router,
+                    deployments=unblocked_deployments,
+                    request_data=request_data,
+                    model=effective_model,
+                )
+                if apply_tag_filtering
+                else unblocked_deployments
+            )
+        if common_result is not None and model_id_deployment_row is None:
+            web_search_deployments: Final = filter_web_search_deployments(
+                healthy_deployments=deployments,
+                request_kwargs=router_kwargs,
+            )
+            deployments = web_search_deployments if isinstance(web_search_deployments, list) else deployments
+            plugin_filter: Final[object] = getattr(llm_router, "_filter_by_routing_plugin_candidates", None)
+            if callable(plugin_filter):
+                plugin_deployments: Final = plugin_filter(
+                    healthy_deployments=deployments,
+                    request_kwargs=router_kwargs,
+                )
+                if isinstance(plugin_deployments, list):
+                    deployments = plugin_deployments
+            deployments = litellm.utils._get_order_filtered_deployments(
+                deployments,
+                target_order=router_kwargs.pop("_target_order", None),
+            )
+            deployments = litellm.utils._get_excluded_filtered_deployments(
+                deployments,
+                excluded_deployment_ids=router_kwargs.pop("_excluded_deployment_ids", None),
+            )
+        return deployments
+
+    @staticmethod
+    def _router_verdict_without_deployments(
+        llm_router: object,
+        request_data: Mapping[str, object],
+        *,
+        effective_model: str,
+        resolved_team_id: str | None,
+        router_matched: bool,
+        apply_tag_filtering: bool,
+    ) -> bool | None:
+        """Verdict when the filters left nothing: pass-through, default deployment, or fallback."""
+        if router_matched:
+            return False
+        router_settings: Final[object] = getattr(llm_router, "router_general_settings", None)
+        if getattr(router_settings, "pass_through_all_models", False) is True:
+            requested_provider: Final[object] = request_data.get("custom_llm_provider")
+            passthrough_provider: Final[object] = (
+                requested_provider
+                if isinstance(requested_provider, str)
+                else BedrockGuardrail._resolve_model_provider(effective_model)
+            )
+            return (
+                passthrough_provider in ("bedrock", "bedrock_converse")
+                if isinstance(passthrough_provider, str)
+                else None
+            )
+
+        default_deployment: Final[object] = getattr(llm_router, "default_deployment", None)
+        if isinstance(default_deployment, Mapping):
+            default_params: Final[object] = default_deployment.get("litellm_params")
+            configured_provider: Final[object] = (
+                default_params.get("custom_llm_provider")
+                if isinstance(default_params, Mapping)
+                else getattr(default_params, "custom_llm_provider", None)
+            )
+            default_model: Final[object] = (
+                default_params.get("model")
+                if isinstance(default_params, Mapping)
+                else getattr(default_params, "model", None)
+            )
+            default_provider: Final[object] = (
+                configured_provider
+                if isinstance(configured_provider, str)
+                else BedrockGuardrail._resolve_model_provider(default_model)
+                if isinstance(default_model, str)
+                else None
+            )
+            return default_provider in ("bedrock", "bedrock_converse") if isinstance(default_provider, str) else None
+
+        default_fallback_lookup: Final[object] = getattr(llm_router, "_get_first_default_fallback", None)
+        default_fallback_model: Final[object] = default_fallback_lookup() if callable(default_fallback_lookup) else None
+        if isinstance(default_fallback_model, str) and default_fallback_model != effective_model:
+            fallback_deployments: Final = (
+                llm_router.get_model_list(
+                    model_name=default_fallback_model,
+                    team_id=resolved_team_id,
+                )
+                or []
+            )
+            if isinstance(fallback_deployments, list) and fallback_deployments:
+                fallback_request_data: Final = dict(request_data)
+                fallback_request_data["model"] = default_fallback_model
+                return BedrockGuardrail._router_allows_bedrock(
+                    fallback_request_data,
+                    apply_tag_filtering=apply_tag_filtering,
+                )
+
+        return False
+
+    @staticmethod
     def _router_allows_bedrock(
         request_data: Mapping[str, object],
         *,
@@ -937,308 +1290,32 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         try:
             resolved_team_id: Final = team_id if isinstance(team_id, str) else None
             router_kwargs: Final = BedrockGuardrail._get_trusted_router_request_kwargs(request_data)
-            effective_model: str = model
-            common_result: tuple[object, object] | None = None
-            common_lookup: Final[object] = getattr(llm_router, "_common_checks_available_deployment", None)
-            if callable(common_lookup):
-                try:
-                    raw_common_result: Final = common_lookup(
-                        model=effective_model,
-                        request_kwargs=router_kwargs,
-                        specific_deployment=request_data.get("specific_deployment") is True,
-                    )
-                except Exception:  # noqa: BLE001  # fall back for lightweight router test doubles
-                    raw_common_result = None
-                if (
-                    isinstance(raw_common_result, tuple)
-                    and len(raw_common_result) == 2
-                    and isinstance(raw_common_result[1], (Mapping, list))
-                ):
-                    common_result = raw_common_result
-                    if isinstance(raw_common_result[0], str):
-                        effective_model = raw_common_result[0]
-
-            if common_result is not None:
-                raw_deployments: Final[object] = common_result[1]
-                model_id_deployment_row: Final[object | None] = (
-                    raw_deployments if isinstance(raw_deployments, Mapping) else None
-                )
-                candidate_deployments: Final[list[object]] = (
-                    [raw_deployments]
-                    if isinstance(raw_deployments, Mapping)
-                    else [deployment for deployment in raw_deployments if isinstance(deployment, Mapping)]
-                )
-                router_matched: Final = bool(candidate_deployments)
-            else:
-                model_id_deployment: Final = (
-                    llm_router.get_deployment(model_id=effective_model)
-                    if llm_router.has_model_id(effective_model) is True
-                    else None
-                )
-                model_id_deployment_row: Final = (
-                    model_id_deployment.model_dump(exclude_none=True)
-                    if model_id_deployment is not None and hasattr(model_id_deployment, "model_dump")
-                    else model_id_deployment
-                )
-                specific_deployment_rows: list[object] | None = None
-                deployment_names: Final[object] = getattr(llm_router, "deployment_names", None)
-                specific_lookup: Final[object] = getattr(llm_router, "_get_deployment_by_litellm_model", None)
-                model_group_aliases: Final = getattr(llm_router, "model_group_alias", None)
-                concrete_model_names: Final[object | None] = getattr(llm_router, "model_names", None)
-                is_concrete_model: Final = (
-                    isinstance(concrete_model_names, (list, tuple, set, frozenset))
-                    and effective_model in concrete_model_names
-                )
-                is_model_alias: Final = (
-                    isinstance(model_group_aliases, Mapping) and effective_model in model_group_aliases
-                )
-                raw_listed_deployments = (
-                    []
-                    if model_id_deployment_row is not None
-                    else (
-                        llm_router.get_model_list(model_name=effective_model, team_id=resolved_team_id) or []
-                        if is_concrete_model or is_model_alias
-                        else []
-                    )
-                )
-                if model_id_deployment_row is None and not is_concrete_model and not is_model_alias:
-                    pattern_router: Final[object | None] = getattr(llm_router, "pattern_router", None)
-                    get_pattern_deployments: Final[object | None] = getattr(
-                        pattern_router, "get_deployments_by_pattern", None
-                    )
-                    global_pattern_deployments: Final = (
-                        get_pattern_deployments(model=effective_model) if callable(get_pattern_deployments) else None
-                    )
-                    team_pattern_router: Final[object | None] = (
-                        getattr(llm_router, "team_pattern_routers", {}).get(resolved_team_id)
-                        if resolved_team_id is not None
-                        and isinstance(getattr(llm_router, "team_pattern_routers", None), Mapping)
-                        else None
-                    )
-                    get_team_pattern_deployments: Final[object | None] = getattr(
-                        team_pattern_router, "get_deployments_by_pattern", None
-                    )
-                    team_pattern_deployments: Final = (
-                        get_team_pattern_deployments(model=effective_model)
-                        if callable(get_team_pattern_deployments)
-                        else None
-                    )
-                    if isinstance(global_pattern_deployments, list) and global_pattern_deployments:
-                        raw_listed_deployments = global_pattern_deployments
-                    elif isinstance(team_pattern_deployments, list) and team_pattern_deployments:
-                        raw_listed_deployments = team_pattern_deployments
-                    else:
-                        default_deployment = getattr(llm_router, "default_deployment", None)
-                        if isinstance(default_deployment, Mapping):
-                            raw_listed_deployments = [default_deployment]
-                        elif (
-                            isinstance(deployment_names, Sequence)
-                            and not isinstance(deployment_names, (str, bytes))
-                            and effective_model in deployment_names
-                            and callable(specific_lookup)
-                        ):
-                            specific_result: Final = specific_lookup(model=effective_model)
-                            specific_deployment_rows = specific_result if isinstance(specific_result, list) else []
-                            raw_listed_deployments = specific_deployment_rows
-                        else:
-                            raw_listed_deployments = (
-                                llm_router.get_model_list(model_name=effective_model, team_id=resolved_team_id) or []
-                            )
-                candidate_deployments = (
-                    [model_id_deployment_row]
-                    if model_id_deployment_row is not None
-                    else [deployment for deployment in raw_listed_deployments if isinstance(deployment, Mapping)]
-                )
-                router_matched = bool(candidate_deployments)
-            team_filtered_result: Final = (
-                candidate_deployments
-                if model_id_deployment_row is not None
-                else filter_team_based_models(
-                    healthy_deployments=candidate_deployments,
-                    request_kwargs=router_kwargs,
-                )
+            candidates: Final = BedrockGuardrail._router_candidate_deployments(
+                llm_router, request_data, router_kwargs, model, resolved_team_id
             )
-            team_filtered_deployments: Final[list[object]] = (
-                team_filtered_result if isinstance(team_filtered_result, list) else candidate_deployments
+            deployments: Final = BedrockGuardrail._filter_router_deployments(
+                llm_router,
+                request_data,
+                router_kwargs,
+                effective_model=candidates.effective_model,
+                resolved_team_id=resolved_team_id,
+                common_result=candidates.common_result,
+                model_id_deployment_row=candidates.model_id_deployment_row,
+                candidate_deployments=candidates.candidate_deployments,
+                cooldown_deployments=cooldown_deployments,
+                apply_tag_filtering=apply_tag_filtering,
             )
-
-            filter_deployments: Final = getattr(llm_router, "_filter_deployments_by_model_access_groups", None)
-            filtered_deployments: Final = (
-                filter_deployments(
-                    model=effective_model,
-                    healthy_deployments=team_filtered_deployments,
-                    request_kwargs=dict(request_data),
-                    request_team_id=resolved_team_id,
-                )
-                if callable(filter_deployments)
-                and isinstance(team_filtered_deployments, list)
-                and model_id_deployment_row is None
-                else None
-            )
-            access_filtered_deployments: Final[list[object]] = (
-                filtered_deployments if isinstance(filtered_deployments, list) else team_filtered_deployments
-            )
-            health_filter: Final[object | None] = getattr(
-                llm_router, "_filter_health_check_unhealthy_deployments", None
-            )
-            health_filtered_deployments: Final = (
-                health_filter(
-                    healthy_deployments=access_filtered_deployments,
-                    parent_otel_span=None,
-                )
-                if (common_result is None or model_id_deployment_row is None) and callable(health_filter)
-                else access_filtered_deployments
-            )
-            healthy_deployments: Final[list[object]] = (
-                health_filtered_deployments
-                if isinstance(health_filtered_deployments, list)
-                else access_filtered_deployments
-            )
-            pre_call_filter: Final[object] = getattr(llm_router, "_pre_call_checks", None)
-            request_messages: Final[object] = request_data.get("messages")
-            request_input: Final[object] = request_data.get("input")
-            if (
-                model_id_deployment_row is None
-                and getattr(llm_router, "enable_pre_call_checks", False) is True
-                and (isinstance(request_messages, list) or isinstance(request_input, (str, list)))
-                and callable(pre_call_filter)
-            ):
-                pre_call_deployments: Final = pre_call_filter(
-                    model=effective_model,
-                    healthy_deployments=healthy_deployments,
-                    messages=request_messages if isinstance(request_messages, list) else None,
-                    input=request_input if isinstance(request_input, (str, list)) else None,
-                    request_kwargs=router_kwargs,
-                )
-                if isinstance(pre_call_deployments, list):
-                    healthy_deployments = pre_call_deployments
-            cooldown_cache: Final[object | None] = getattr(llm_router, "cooldown_cache", None)
-            cooldown_lookup: Final[object | None] = getattr(cooldown_cache, "get_active_cooldowns", None)
-            resolved_cooldown_deployments: Final = (
-                _get_cooldown_deployments(
-                    litellm_router_instance=llm_router,
-                    parent_otel_span=None,
-                )
-                if cooldown_deployments is _ROUTER_COOLDOWNS_UNSET
-                and (common_result is None or model_id_deployment_row is None)
-                and callable(cooldown_lookup)
-                and callable(getattr(llm_router, "get_model_ids", None))
-                else cooldown_deployments
-                if cooldown_deployments is not _ROUTER_COOLDOWNS_UNSET
-                else []
-            )
-            cooldown_ids: Final[frozenset[str]] = frozenset(
-                deployment_id
-                for deployment_id in (resolved_cooldown_deployments or [])
-                if isinstance(deployment_id, str)
-            )
-            if common_result is not None and model_id_deployment_row is not None:
-                deployments = candidate_deployments
-            else:
-                cooldown_filtered_deployments: Final = [
-                    deployment
-                    for deployment in healthy_deployments
-                    if BedrockGuardrail._router_deployment_field(deployment, "id") not in cooldown_ids
-                ]
-                unblocked_deployments: Final = [
-                    deployment
-                    for deployment in cooldown_filtered_deployments
-                    if BedrockGuardrail._router_deployment_field(deployment, "blocked") is not True
-                ]
-                deployments = (
-                    BedrockGuardrail._filter_router_deployments_by_tags(
-                        router=llm_router,
-                        deployments=unblocked_deployments,
-                        request_data=request_data,
-                        model=effective_model,
-                    )
-                    if apply_tag_filtering
-                    else unblocked_deployments
-                )
-            if common_result is not None and model_id_deployment_row is None:
-                web_search_deployments: Final = filter_web_search_deployments(
-                    healthy_deployments=deployments,
-                    request_kwargs=router_kwargs,
-                )
-                deployments = web_search_deployments if isinstance(web_search_deployments, list) else deployments
-                plugin_filter: Final[object] = getattr(llm_router, "_filter_by_routing_plugin_candidates", None)
-                if callable(plugin_filter):
-                    plugin_deployments: Final = plugin_filter(
-                        healthy_deployments=deployments,
-                        request_kwargs=router_kwargs,
-                    )
-                    if isinstance(plugin_deployments, list):
-                        deployments = plugin_deployments
-                deployments = litellm.utils._get_order_filtered_deployments(
-                    deployments,
-                    target_order=router_kwargs.pop("_target_order", None),
-                )
-                deployments = litellm.utils._get_excluded_filtered_deployments(
-                    deployments,
-                    excluded_deployment_ids=router_kwargs.pop("_excluded_deployment_ids", None),
-                )
         except Exception:  # noqa: BLE001  # optional router state must not break guardrail auth
             return False
         if not deployments:
-            if router_matched:
-                return False
-            router_settings = getattr(llm_router, "router_general_settings", None)
-            if getattr(router_settings, "pass_through_all_models", False) is True:
-                provider = request_data.get("custom_llm_provider")
-                if not isinstance(provider, str):
-                    provider = (
-                        BedrockGuardrail._resolve_model_provider(effective_model)
-                        if isinstance(effective_model, str)
-                        else None
-                    )
-                return provider in ("bedrock", "bedrock_converse") if isinstance(provider, str) else None
-
-            default_deployment = getattr(llm_router, "default_deployment", None)
-            if isinstance(default_deployment, Mapping):
-                default_params: object = (
-                    default_deployment.get("litellm_params")
-                    if isinstance(default_deployment, Mapping)
-                    else getattr(default_deployment, "litellm_params", None)
-                )
-                provider: object = (
-                    default_params.get("custom_llm_provider")
-                    if isinstance(default_params, Mapping)
-                    else getattr(default_params, "custom_llm_provider", None)
-                )
-                if not isinstance(provider, str):
-                    default_model: object = (
-                        default_params.get("model")
-                        if isinstance(default_params, Mapping)
-                        else getattr(default_params, "model", None)
-                    )
-                    provider = (
-                        BedrockGuardrail._resolve_model_provider(default_model)
-                        if isinstance(default_model, str)
-                        else None
-                    )
-                return provider in ("bedrock", "bedrock_converse") if isinstance(provider, str) else None
-
-            default_fallback_lookup: Final[object] = getattr(llm_router, "_get_first_default_fallback", None)
-            default_fallback_model: Final[object] = (
-                default_fallback_lookup() if callable(default_fallback_lookup) else None
+            return BedrockGuardrail._router_verdict_without_deployments(
+                llm_router,
+                request_data,
+                effective_model=candidates.effective_model,
+                resolved_team_id=resolved_team_id,
+                router_matched=candidates.router_matched,
+                apply_tag_filtering=apply_tag_filtering,
             )
-            if isinstance(default_fallback_model, str) and default_fallback_model != effective_model:
-                fallback_deployments: Final = (
-                    llm_router.get_model_list(
-                        model_name=default_fallback_model,
-                        team_id=resolved_team_id,
-                    )
-                    or []
-                )
-                if isinstance(fallback_deployments, list) and fallback_deployments:
-                    fallback_request_data: Final = dict(request_data)
-                    fallback_request_data["model"] = default_fallback_model
-                    return BedrockGuardrail._router_allows_bedrock(
-                        fallback_request_data,
-                        apply_tag_filtering=apply_tag_filtering,
-                    )
-
-            return False
 
         providers: list[str] = []
         for deployment in deployments:
@@ -1247,6 +1324,82 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return False
             providers.append(provider)
         return bool(providers) and all(provider in ("bedrock", "bedrock_converse") for provider in providers)
+
+    @staticmethod
+    async def _async_router_bedrock_verdict(
+        llm_router: object,
+        request_data: Mapping[str, object],
+        router_request_kwargs: dict[str, object],  # mutable-ok: the pre-routing hook writes resolved params back here
+        routing_strategy: object | None,
+    ) -> bool | None:
+        """Whether the router's async healthy-deployment set is all-Bedrock.
+
+        None means no verdict, so the caller falls through to the sync path.
+        """
+        async_lookup: Final[object] = getattr(llm_router, "async_get_healthy_deployments", None)
+        if not callable(async_lookup):
+            return None
+        model: Final[object | None] = request_data.get("model")
+        if not isinstance(model, str):
+            return None
+
+        effective_model = model
+        effective_messages: object | None = (
+            router_request_kwargs.get("messages") if isinstance(router_request_kwargs.get("messages"), list) else None
+        )
+        effective_input: object | None = (
+            router_request_kwargs.get("input") if isinstance(router_request_kwargs.get("input"), (str, list)) else None
+        )
+        try:
+            pre_routing_lookup: Final[object] = getattr(llm_router, "async_pre_routing_hook", None)
+            if callable(pre_routing_lookup):
+                pre_routing_result = pre_routing_lookup(
+                    model=model,
+                    request_kwargs=router_request_kwargs,
+                    messages=effective_messages,
+                    input=effective_input,
+                    specific_deployment=request_data.get("specific_deployment") is True,
+                )
+                if asyncio.iscoroutine(pre_routing_result):
+                    pre_routing_result = await pre_routing_result
+                routed_model: Final[object] = getattr(pre_routing_result, "model", None)
+                if isinstance(routed_model, str):
+                    effective_model = routed_model
+                    routed_messages: Final[object] = getattr(pre_routing_result, "messages", None)
+                    effective_messages = routed_messages if isinstance(routed_messages, list) else None
+                    routed_params: Final[object] = getattr(pre_routing_result, "litellm_params", None)
+                    if isinstance(routed_params, Mapping):
+                        router_request_kwargs.update(routed_params)
+            healthy_deployments: Final = await async_lookup(
+                model=effective_model,
+                request_kwargs=router_request_kwargs,
+                messages=effective_messages,
+                input=effective_input,
+                specific_deployment=request_data.get("specific_deployment") is True,
+            )
+        except Exception as exc:  # noqa: BLE001  # fall back to the sync compatibility path
+            verbose_proxy_logger.debug("Bedrock guardrail: async router lookup failed, using the sync path: %s", exc)
+            return None
+
+        deployments: list[object] = (
+            [healthy_deployments]
+            if isinstance(healthy_deployments, Mapping)
+            else healthy_deployments
+            if isinstance(healthy_deployments, list)
+            else []
+        )
+        if routing_strategy == "simple-shuffle":
+            deployments = BedrockGuardrail._router_deployments_for_provider_check(deployments)
+        if not deployments:
+            return None
+
+        providers: list[str] = []
+        for deployment in deployments:
+            provider: Final[str | None] = BedrockGuardrail._router_deployment_provider(deployment)
+            if provider is None:
+                return False
+            providers.append(provider)
+        return all(provider in ("bedrock", "bedrock_converse") for provider in providers)
 
     @staticmethod
     async def _async_get_bedrock_api_key(request_data: Mapping[str, object] | None) -> str | None:
@@ -1286,71 +1439,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 if router_allows_bedrock is not None:
                     return api_key if router_allows_bedrock else None
 
-            async_lookup: Final[object] = getattr(llm_router, "async_get_healthy_deployments", None)
-            if callable(async_lookup):
-                model: Final[object | None] = request_data.get("model")
-                if isinstance(model, str):
-                    effective_model = model
-                    effective_messages: object | None = (
-                        router_request_kwargs.get("messages")
-                        if isinstance(router_request_kwargs.get("messages"), list)
-                        else None
-                    )
-                    effective_input: object | None = (
-                        router_request_kwargs.get("input")
-                        if isinstance(router_request_kwargs.get("input"), (str, list))
-                        else None
-                    )
-                    try:
-                        pre_routing_lookup: Final[object] = getattr(llm_router, "async_pre_routing_hook", None)
-                        if callable(pre_routing_lookup):
-                            pre_routing_result = pre_routing_lookup(
-                                model=model,
-                                request_kwargs=router_request_kwargs,
-                                messages=effective_messages,
-                                input=effective_input,
-                                specific_deployment=request_data.get("specific_deployment") is True,
-                            )
-                            if asyncio.iscoroutine(pre_routing_result):
-                                pre_routing_result = await pre_routing_result
-                            routed_model: Final[object] = getattr(pre_routing_result, "model", None)
-                            if isinstance(routed_model, str):
-                                effective_model = routed_model
-                                routed_messages: Final[object] = getattr(pre_routing_result, "messages", None)
-                                effective_messages = routed_messages if isinstance(routed_messages, list) else None
-                                routed_params: Final[object] = getattr(pre_routing_result, "litellm_params", None)
-                                if isinstance(routed_params, Mapping):
-                                    router_request_kwargs.update(routed_params)
-                        healthy_deployments: Final = await async_lookup(
-                            model=effective_model,
-                            request_kwargs=router_request_kwargs,
-                            messages=effective_messages,
-                            input=effective_input,
-                            specific_deployment=request_data.get("specific_deployment") is True,
-                        )
-                        deployments: list[object] = (
-                            [healthy_deployments]
-                            if isinstance(healthy_deployments, Mapping)
-                            else healthy_deployments
-                            if isinstance(healthy_deployments, list)
-                            else []
-                        )
-                        if routing_strategy == "simple-shuffle":
-                            deployments = BedrockGuardrail._router_deployments_for_provider_check(deployments)
-                        if deployments:
-                            providers: list[str] = []
-                            for deployment in deployments:
-                                provider: Final[str | None] = BedrockGuardrail._router_deployment_provider(deployment)
-                                if provider is None:
-                                    return None
-                                providers.append(provider)
-                            return (
-                                api_key
-                                if all(provider in ("bedrock", "bedrock_converse") for provider in providers)
-                                else None
-                            )
-                    except Exception:  # noqa: BLE001  # fall back to the sync compatibility path
-                        pass
+            async_verdict: Final = await BedrockGuardrail._async_router_bedrock_verdict(
+                llm_router,
+                request_data,
+                router_request_kwargs,
+                routing_strategy,
+            )
+            if async_verdict is not None:
+                return api_key if async_verdict else None
 
         router_allows_bedrock: Final = BedrockGuardrail._router_allows_bedrock(
             request_data,
