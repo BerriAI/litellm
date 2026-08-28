@@ -4487,7 +4487,7 @@ def _post_user_data_file() -> httpx.Response:
     )
 
 
-def _setup_create_file_over_pre_call_hook(mocker, monkeypatch, llm_router, hook):
+def _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, hook):
     setup_proxy_logging_object(monkeypatch, llm_router)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     monkeypatch.setattr(litellm, "callbacks", [hook])
@@ -4495,23 +4495,24 @@ def _setup_create_file_over_pre_call_hook(mocker, monkeypatch, llm_router, hook)
         "litellm.proxy.openai_files_endpoints.files_endpoints.files_config",
         [{"custom_llm_provider": "openai", "api_key": "sk-test"}],
     )
-    return mocker.patch(
-        "litellm.proxy.openai_files_endpoints.files_endpoints.litellm.acreate_file",
-        new=mocker.AsyncMock(
-            return_value=OpenAIFileObject(
-                id="file-hooked",
-                object="file",
-                bytes=23,
-                created_at=1234567890,
-                filename="labels.jsonl",
-                purpose="user_data",
-                status="uploaded",
-            )
-        ),
+    return respx.post("https://api.openai.com/v1/files").mock(
+        return_value=respx.MockResponse(
+            status_code=200,
+            json={
+                "id": "file-hooked",
+                "object": "file",
+                "bytes": 23,
+                "created_at": 1234567890,
+                "filename": "labels.jsonl",
+                "purpose": "user_data",
+                "status": "uploaded",
+            },
+        )
     )
 
 
-def test_create_file_triggers_async_pre_call_hook(mocker: MockerFixture, monkeypatch, llm_router: Router):
+@respx.mock
+def test_create_file_triggers_async_pre_call_hook(monkeypatch, llm_router: Router):
     """`POST /v1/files` must run `async_pre_call_hook` so a hook can inspect the upload
     before it reaches the provider (LIT-5916)."""
     from litellm.integrations.custom_logger import CustomLogger
@@ -4524,7 +4525,7 @@ def test_create_file_triggers_async_pre_call_hook(mocker: MockerFixture, monkeyp
             recorded["purpose"] = data.get("purpose")
             recorded["file"] = data.get("file")
 
-    provider_create = _setup_create_file_over_pre_call_hook(mocker, monkeypatch, llm_router, RecordingHook())
+    provider_route = _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, RecordingHook())
 
     response = _post_user_data_file()
 
@@ -4532,15 +4533,14 @@ def test_create_file_triggers_async_pre_call_hook(mocker: MockerFixture, monkeyp
     assert recorded["call_type"] == "acreate_file"
     assert recorded["purpose"] == "user_data"
     assert recorded["file"]["filename"] == "labels.jsonl"
-    provider_create.assert_awaited_once()
-    forwarded = provider_create.await_args.kwargs
-    assert forwarded["purpose"] == "user_data"
-    assert forwarded["file"][0] == "labels.jsonl"
+    assert provider_route.call_count == 1
+    forwarded_body = provider_route.calls.last.request.content
+    assert b"user_data" in forwarded_body
+    assert b"labels.jsonl" in forwarded_body
 
 
-def test_create_file_async_pre_call_hook_rejection_blocks_upload(
-    mocker: MockerFixture, monkeypatch, llm_router: Router
-):
+@respx.mock
+def test_create_file_async_pre_call_hook_rejection_blocks_upload(monkeypatch, llm_router: Router):
     """A hook rejecting the upload must 400 before the file reaches the provider."""
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -4548,10 +4548,10 @@ def test_create_file_async_pre_call_hook_rejection_blocks_upload(
         async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
             return "file upload not allowed"
 
-    provider_create = _setup_create_file_over_pre_call_hook(mocker, monkeypatch, llm_router, RejectingHook())
+    provider_route = _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, RejectingHook())
 
     response = _post_user_data_file()
 
     assert response.status_code == 400, response.text
     assert "file upload not allowed" in response.text
-    provider_create.assert_not_awaited()
+    assert provider_route.call_count == 0
