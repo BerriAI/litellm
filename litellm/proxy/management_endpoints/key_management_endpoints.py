@@ -5221,7 +5221,7 @@ def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple
     """
     if not budget_limits:
         return ()
-    raw_windows: Final = budget_limits if isinstance(budget_limits, list) else json.loads(budget_limits)
+    raw_windows: Final = json.loads(budget_limits) if isinstance(budget_limits, str) else budget_limits
     return tuple(raw_window if isinstance(raw_window, dict) else raw_window.model_dump() for raw_window in raw_windows)
 
 
