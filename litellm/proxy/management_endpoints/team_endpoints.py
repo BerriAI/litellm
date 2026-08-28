@@ -3318,7 +3318,9 @@ async def team_member_delete(
         existing_user_rows: Final = await member_tx.litellm_usertable.find_many(where=key_val)
 
         # Also clean up any existing team membership rows for this user and team
-        user_ids_to_delete: Final = addressed_user_ids.union(user.user_id for user in existing_user_rows if user.user_id)
+        user_ids_to_delete: Final = addressed_user_ids.union(
+            user.user_id for user in existing_user_rows if user.user_id
+        )
 
         # A user row can outlive its roster entry, and until the team is off user.teams the user
         # still sees it and still fails key creation against it, so removal has to clear it too
