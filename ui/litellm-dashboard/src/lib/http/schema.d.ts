@@ -34892,10 +34892,42 @@ export interface components {
             by_key: components["schemas"]["ShadowEvalSlice"][];
             /** By Tier */
             by_tier: components["schemas"]["ShadowEvalSlice"][];
+            /**
+             * Not Sampled Count
+             * @description Eligible requests the sampling dice skipped, summed over legs: the judged rows stand for judged + this many requests. None for jobs from before the funnel existed
+             */
+            not_sampled_count?: number | null;
             /** Overall Shadow Win Rate Pct */
             overall_shadow_win_rate_pct: number;
             /** Overall Tie Rate Pct */
             overall_tie_rate_pct: number;
+            /**
+             * Sampled Real Spend
+             * @description USD the real arm billed across all judged turns, cache-served turns excluded
+             * @default 0
+             */
+            sampled_real_spend: number;
+            /**
+             * Sampled Shadow Spend
+             * @description USD the shadow arm billed across the same turns, judge excluded, like for like
+             * @default 0
+             */
+            sampled_shadow_spend: number;
+            /**
+             * Shed Count
+             * @description Sampled requests dropped by the per-pod concurrency cap, so quiet periods are overweighted
+             */
+            shed_count?: number | null;
+            /**
+             * Unjudgeable Count
+             * @description Sampled requests whose shape could not be judged (tool-final turn, empty text)
+             */
+            unjudgeable_count?: number | null;
+            /**
+             * Withheld Count
+             * @description Sampled requests the pipeline declined to spend on: no database to record into, an over-budget key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job crosses max_budget lands here rather than vanishing from coverage)
+             */
+            withheld_count?: number | null;
         };
         /**
          * ShadowEvalSlice
@@ -34905,13 +34937,31 @@ export interface components {
         ShadowEvalSlice: {
             /** Avg Judge Confidence */
             avg_judge_confidence: number;
+            /**
+             * Cache Hit Turns
+             * @description Judged turns litellm's response cache served, excluded from both spends: an adopted router would be served by the same cache, so those turns cost the same either way
+             * @default 0
+             */
+            cache_hit_turns: number;
             /** Group */
             group: string;
+            /**
+             * Real Spend
+             * @description USD the real arm billed on this slice's judged turns, completion plus its own routing classifier when it routed, excluding turns litellm's response cache served for free
+             * @default 0
+             */
+            real_spend: number;
             /**
              * Real Win Rate Pct
              * @description Share of judged turns the real arm won, meaning the response the caller actually received: the key's own model in forward mode, the router's pick in reverse
              */
             real_win_rate_pct: number;
+            /**
+             * Shadow Spend
+             * @description USD the shadow arm billed on the same turns, completion plus its own routing classifier, excluding the judge and the same cache-served turns, so the two spends compare like for like
+             * @default 0
+             */
+            shadow_spend: number;
             /**
              * Shadow Win Rate Pct
              * @description Share of judged turns the shadow arm won, meaning the duplicated response nobody was served: the router's pick in forward mode, baseline_model in reverse
