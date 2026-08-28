@@ -213,13 +213,19 @@ def resolve_success_event_metadata_variable_name(
     real, populated `metadata` dict for a standard (non
     LITELLM_METADATA_ROUTES) request, so the key-presence check always picks
     `litellm_metadata` there and silently reads no tags/identity at all.
-    Requiring the value to actually be a populated dict, matching
-    `_get_request_tags`'s own truthiness check in litellm_logging.py, only
+
+    A plain truthiness check on `litellm_metadata` isn't enough either: a
+    caller can populate it with unrelated, non-empty content on a route where
+    `metadata` is the field the proxy actually wrote identity into, and
+    truthiness alone would still misresolve to the caller-controlled bucket.
+    `add_user_api_key_auth_to_request_metadata` (litellm_pre_call_utils.py)
+    unconditionally stamps a `user_api_key_auth` key into whichever bucket it
+    resolved as authoritative, overwriting anything a caller pre-populated
+    there -- so requiring that marker's presence, not mere truthiness, only
     ever prefers `litellm_metadata` when it is genuinely the field the proxy
-    wrote identity/tags into (LITELLM_METADATA_ROUTES pre-seed it before
-    admission runs, so it is always a populated dict by success time there)."""
+    wrote identity/tags into."""
     litellm_metadata: Final = litellm_params_for_metadata.get("litellm_metadata")
-    if isinstance(litellm_metadata, Mapping) and litellm_metadata:
+    if isinstance(litellm_metadata, Mapping) and "user_api_key_auth" in litellm_metadata:
         return "litellm_metadata"
     return "metadata"
 
