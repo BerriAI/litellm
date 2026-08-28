@@ -7303,11 +7303,11 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     )
 
     with (
-        patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,
-        patch(
+        patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
+        patch(  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
             "litellm.proxy.management_endpoints.key_management_endpoints._check_proxy_or_team_admin_for_key"
         ) as mock_check_admin,
-        patch(
+        patch(  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
         ) as mock_delete_cache,
     ):
@@ -7412,11 +7412,11 @@ async def test_reset_key_spend_no_budget_limits_skips_window_reset(monkeypatch):
     )
 
     with (
-        patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,
-        patch(
+        patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
+        patch(  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
             "litellm.proxy.management_endpoints.key_management_endpoints._check_proxy_or_team_admin_for_key"
         ) as mock_check_admin,
-        patch(
+        patch(  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
         ) as mock_delete_cache,
     ):
@@ -7430,13 +7430,14 @@ async def test_reset_key_spend_no_budget_limits_skips_window_reset(monkeypatch):
             user_id="admin-user",
         )
 
-        await reset_key_spend_fn(
+        response = await reset_key_spend_fn(
             key="sk-test-key",
             data=ResetSpendRequest(reset_to=0.0),
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=None,
         )
 
+    assert response["spend"] == 0.0
     mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
 
 
@@ -7449,21 +7450,27 @@ async def test_delete_cache_key_object_broadcasts_invalidation(monkeypatch):
     spend) keeps serving it until its own local TTL expires, even though this
     worker's own cache and the DB have already moved on.
     """
-    mock_user_api_key_cache = MagicMock()
+    real_user_api_key_cache = UserApiKeyCache()
+    await real_user_api_key_cache.async_set_cache(
+        key="hashed-broadcast-key",
+        value=UserAPIKeyAuth(api_key="sk-broadcast", spend=100.0),
+        model_type=UserAPIKeyAuth,
+    )
     mock_proxy_logging_obj = MagicMock()
     mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
-    with patch(
+    with patch(  # test-quality-ok: pub/sub broadcast to other workers has no HTTP boundary to fake
         "litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation"
     ) as mock_publish:
         mock_publish.return_value = None
         await _delete_cache_key_object(
             hashed_token="hashed-broadcast-key",
-            user_api_key_cache=mock_user_api_key_cache,
+            user_api_key_cache=real_user_api_key_cache,
             proxy_logging_obj=mock_proxy_logging_obj,
         )
 
-    mock_user_api_key_cache.delete_cache.assert_called_once_with(key="hashed-broadcast-key")
+    # Real, observable state: the cache object itself no longer holds the entry.
+    assert real_user_api_key_cache.get_cache(key="hashed-broadcast-key") is None
     mock_publish.assert_awaited_once_with(cache_key="hashed-broadcast-key")
 
 
