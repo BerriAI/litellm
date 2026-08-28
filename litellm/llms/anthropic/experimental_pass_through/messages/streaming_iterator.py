@@ -367,12 +367,6 @@ class BaseAnthropicMessagesStreamingIterator:
         deferred_dispatch_armed: Final = (
             getattr(self.litellm_logging_obj, "_on_deferred_stream_complete", None) is not None
         )
-        # Post-call guardrails run their end-of-stream scan AFTER this iterator
-        # is exhausted, so enqueueing now would build the spend log before the
-        # scan writes guardrail_information. Park the coroutine instead; the
-        # proxy fires it via _fire_deferred_stream_logging once the guardrail
-        # chain drains. Teardown (client disconnect) keeps enqueueing
-        # immediately: the scan never runs there and billing must not be lost.
         if deferred_dispatch_armed and not stream_teardown:
             self.litellm_logging_obj._deferred_stream_complete_args = (logging_coroutine,)
             return
