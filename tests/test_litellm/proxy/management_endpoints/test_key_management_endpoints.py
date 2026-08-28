@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 import litellm
 import pytest
@@ -26,7 +27,7 @@ from litellm.proxy._types import (
     ResetSpendRequest,
     UpdateKeyRequest,
 )
-from litellm.proxy.auth.auth_checks import _project_cache_key
+from litellm.proxy.auth.auth_checks import _delete_cache_key_object, _project_cache_key
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -7222,9 +7223,248 @@ async def test_reset_key_spend_success(monkeypatch):
         assert response["max_budget"] == 200.0
         mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
         mock_delete_cache.assert_awaited_once()
-        mock_spend_counter_cache.in_memory_cache.set_cache.assert_called_once_with(
+        mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
             key=f"spend:key:{hashed_key}", value=50.0, ttl=60
         )
+        # spend_db_floor marker is also set to the reset value (LIT-3803 pattern),
+        # so a request landing on a pod with a warm pre-reset floor marker cannot
+        # re-derive and re-apply the stale spend.
+        mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+            key=f"spend_db_floor:spend:key:{hashed_key}", value=50.0, ttl=5
+        )
+
+
+@pytest.mark.asyncio
+async def test_reset_key_spend_resets_budget_windows(monkeypatch):
+    """
+    Regression test: a key with an extra time-windowed budget (`budget_limits`,
+    e.g. a daily cap layered on top of the lifetime max_budget) must have that
+    window's own Redis counter reset too, and its `reset_at` advanced, not just
+    the lifetime spend/counter.
+
+    Before the fix, reset_key_spend_fn only reset spend:key:{hash}, leaving
+    spend:key:{hash}:window:{duration} at its pre-reset value. Since
+    get_current_spend always re-derives a window counter from real
+    LiteLLM_SpendLogs rows inside the still-open window, merely zeroing that
+    counter without also advancing reset_at is not durable either: the very
+    next request would re-sum the unchanged historical spend and put the
+    counter right back above the window's max_budget, so
+    _virtual_key_multi_budget_check kept raising BudgetExceededError (429) on
+    every request even though the key's own reported spend read $0.
+    """
+    mock_prisma_client = MagicMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    hashed_key = "hashed-window-budget-key"
+    key_in_db = LiteLLM_VerificationToken(
+        token=hashed_key,
+        user_id="test-user",
+        spend=80.0,
+        max_budget=1000.0,
+        litellm_budget_table=None,
+        budget_limits=[
+            {
+                "budget_duration": "1d",
+                "max_budget": 50.0,
+                "reset_at": "2020-01-01T00:00:00+00:00",
+            }
+        ],
+    )
+    updated_key = LiteLLM_VerificationToken(
+        token=hashed_key,
+        user_id="test-user",
+        spend=0.0,
+        max_budget=1000.0,
+        budget_reset_at=None,
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_in_db
+    )
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=updated_key
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+
+    mock_spend_counter_cache = MagicMock()
+    mock_spend_counter_cache.redis_cache = MagicMock()
+    mock_spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.spend_counter_cache",
+        mock_spend_counter_cache,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_proxy_or_team_admin_for_key"
+        ) as mock_check_admin,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
+        ) as mock_delete_cache,
+    ):
+        mock_hash_token.return_value = hashed_key
+        mock_check_admin.return_value = None
+        mock_delete_cache.return_value = None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin-user",
+        )
+
+        before_call = datetime.now(timezone.utc)
+        response = await reset_key_spend_fn(
+            key="sk-test-key",
+            data=ResetSpendRequest(reset_to=0.0),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+        after_call = datetime.now(timezone.utc)
+
+    assert response["spend"] == 0.0
+
+    window_counter_key = f"spend:key:{hashed_key}:window:1d"
+    mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key=window_counter_key, value=0.0, ttl=60
+    )
+    mock_spend_counter_cache.redis_cache.async_set_cache.assert_any_call(
+        key=window_counter_key, value=0.0, ttl=60
+    )
+    mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key=f"spend_db_floor:{window_counter_key}", value=0.0, ttl=5
+    )
+
+    # The window's DB row must be advanced past the historical spend that
+    # triggered the block, or the next authoritative-floor recompute re-sums
+    # the still-open window's spend logs and silently re-inflates the counter.
+    # reset_at must land at (roughly) now + 1 day: get_budget_window_start
+    # derives window_start as reset_at - budget_duration, so this is what
+    # makes window_start land at "now" and exclude the historical spend that
+    # triggered the block. The next *calendar-aligned* midnight (what a naive
+    # get_budget_reset_time("1d") call would give) is the wrong value here --
+    # it would put window_start at the start of the day already in progress,
+    # which still covers that spend.
+    assert mock_prisma_client.db.litellm_verificationtoken.update.call_count == 2
+    window_update_call = mock_prisma_client.db.litellm_verificationtoken.update.call_args_list[1]
+    assert window_update_call.kwargs["where"] == {"token": hashed_key}
+    persisted_windows = json.loads(window_update_call.kwargs["data"]["budget_limits"])
+    assert len(persisted_windows) == 1
+    assert persisted_windows[0]["budget_duration"] == "1d"
+    assert persisted_windows[0]["max_budget"] == 50.0
+    persisted_reset_at = datetime.fromisoformat(persisted_windows[0]["reset_at"])
+    assert before_call + timedelta(days=1) <= persisted_reset_at <= after_call + timedelta(days=1)
+
+
+@pytest.mark.asyncio
+async def test_reset_key_spend_no_budget_limits_skips_window_reset(monkeypatch):
+    """A key with no budget_limits must not trigger any extra DB write beyond
+    the lifetime spend update; _reset_key_budget_windows should be a no-op."""
+    mock_prisma_client = MagicMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    hashed_key = "hashed-no-window-key"
+    key_in_db = LiteLLM_VerificationToken(
+        token=hashed_key,
+        user_id="test-user",
+        spend=100.0,
+        max_budget=200.0,
+        litellm_budget_table=None,
+        budget_limits=None,
+    )
+    updated_key = LiteLLM_VerificationToken(
+        token=hashed_key,
+        user_id="test-user",
+        spend=0.0,
+        max_budget=200.0,
+        budget_reset_at=None,
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_in_db
+    )
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=updated_key
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+
+    mock_spend_counter_cache = MagicMock()
+    mock_spend_counter_cache.redis_cache = None
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.spend_counter_cache",
+        mock_spend_counter_cache,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_proxy_or_team_admin_for_key"
+        ) as mock_check_admin,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
+        ) as mock_delete_cache,
+    ):
+        mock_hash_token.return_value = hashed_key
+        mock_check_admin.return_value = None
+        mock_delete_cache.return_value = None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin-user",
+        )
+
+        await reset_key_spend_fn(
+            key="sk-test-key",
+            data=ResetSpendRequest(reset_to=0.0),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_cache_key_object_broadcasts_invalidation(monkeypatch):
+    """
+    Regression test (LIT-3803 pattern applied to keys): evicting a key's
+    cached auth object must broadcast the invalidation to every other worker,
+    or a worker that already cached the pre-mutation object (e.g. pre-reset
+    spend) keeps serving it until its own local TTL expires, even though this
+    worker's own cache and the DB have already moved on.
+    """
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation"
+    ) as mock_publish:
+        mock_publish.return_value = None
+        await _delete_cache_key_object(
+            hashed_token="hashed-broadcast-key",
+            user_api_key_cache=mock_user_api_key_cache,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+
+    mock_user_api_key_cache.delete_cache.assert_called_once_with(key="hashed-broadcast-key")
+    mock_publish.assert_awaited_once_with(cache_key="hashed-broadcast-key")
 
 
 @pytest.mark.asyncio
