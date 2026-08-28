@@ -187,11 +187,7 @@ def test_transform_request_unsafe_body(client, auth_as, monkeypatch):
 
 
 def test_token_counter_fallback_counts_tools_system_and_anthropic_blocks(client, auth_as, monkeypatch):
-    """
-    Without a provider counter the route falls back to ``litellm.token_counter``. That count
-    must include the request's tools and system prompt, and Anthropic ``image`` and ``document``
-    blocks must be counted instead of turning the whole request into a 500.
-    """
+    """The ``litellm.token_counter`` fallback counts the request's tools and system prompt, and Anthropic ``image``/``document`` blocks, instead of 500ing."""
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
     system = [{"type": "text", "text": "You are a terse assistant. Answer in one sentence."}]
@@ -232,12 +228,7 @@ def test_token_counter_fallback_counts_tools_system_and_anthropic_blocks(client,
 
 
 def test_token_counter_fallback_prompt_with_tools_does_not_500(client, auth_as, monkeypatch):
-    """
-    Regression: a raw-text ``prompt`` request that also carries ``tools`` (no ``messages``) must
-    still count. ``litellm.token_counter`` rejects tools on the text path, so the fallback route
-    only attaches tools when it is counting messages; otherwise this 500'd instead of returning
-    the plain text count.
-    """
+    """Regression: a ``prompt`` request carrying ``tools`` but no ``messages`` still counts, because the fallback attaches tools only when counting messages (``token_counter`` rejects tools on the text path)."""
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
     prompt = "count the tokens in this sentence please"

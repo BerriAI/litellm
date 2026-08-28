@@ -656,11 +656,6 @@ def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
 def _anthropic_image_source_data(
     source: AnthropicContentParamSource | AnthropicContentParamSourceUrl | AnthropicContentParamSourceFileId,
 ) -> str:
-    """
-    Resolve an Anthropic image `source` to the data string `calculate_img_tokens` prices.
-
-    Returns "" for a `file` source, whose bytes the proxy cannot resolve locally.
-    """
     if source["type"] == "base64":
         data: Final = source.get("data")
         if not data:
@@ -678,12 +673,6 @@ def _count_document_tokens(
     use_default_image_token_count: bool,
     default_token_count: int | None,
 ) -> int:
-    """
-    Count an Anthropic `document` block: its title and context text, plus the source itself.
-
-    Text-bearing sources (`text`, `content`) count their text; opaque ones (`base64`, `url`,
-    `file`) are priced like an image, since their bytes cannot be tokenized locally.
-    """
     source: Final = document["source"]
     metadata_tokens: Final = sum(
         count_function(text) for text in (document.get("title"), document.get("context")) if text
@@ -765,13 +754,7 @@ def _count_content_list(
     use_default_image_token_count: bool,
     default_token_count: int | None,
 ) -> int:
-    """
-    Recursively count tokens from a list of content blocks.
-
-    The block union is wider than OpenAI's: the proxy's Anthropic endpoints count
-    their native blocks through this same helper, so an `image` block is as much
-    an input here as OpenAI's `image_url`.
-    """
+    """Recursively count tokens from a list of content blocks."""
     try:
         num_tokens = 0
         for c in content_list:
