@@ -24,6 +24,8 @@ from litellm.proxy.agent_endpoints.auth.agent_permission_handler import Restrict
 from litellm.proxy.agent_endpoints.endpoints import router, user_api_key_auth
 from litellm.types.agents import AgentResponse
 
+CALLER: Final = UserAPIKeyAuth(api_key="hashed-caller-key", team_id="team-1", user_id="user-1")
+
 TRANSLATOR: Final = AgentResponse(
     agent_id="translator",
     agent_name="document-translator",
@@ -150,21 +152,23 @@ class TestSearchAgents:
     @pytest.mark.asyncio
     async def test_no_embedding_model_is_not_configured(self) -> None:
         outcome = await search_agents(
-            "q", AGENTS, 5, router=MagicMock(), embedding_model=None, index=AgentSearchIndex()
+            "q", AGENTS, 5, router=MagicMock(), embedding_model=None, index=AgentSearchIndex(), user_api_key_dict=CALLER
         )
         assert isinstance(outcome, AgentSearchNotConfigured)
         assert "agent_search_embedding_model" in outcome.reason
 
     @pytest.mark.asyncio
     async def test_no_router_is_not_configured(self) -> None:
-        outcome = await search_agents("q", AGENTS, 5, router=None, embedding_model="m", index=AgentSearchIndex())
+        outcome = await search_agents(
+            "q", AGENTS, 5, router=None, embedding_model="m", index=AgentSearchIndex(), user_api_key_dict=CALLER
+        )
         assert isinstance(outcome, AgentSearchNotConfigured)
 
     @pytest.mark.asyncio
     async def test_router_embeddings_are_read_from_the_response(self) -> None:
         router = MagicMock()
         router.aembedding = AsyncMock(
-            side_effect=lambda model, input: litellm.EmbeddingResponse(
+            side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
                 model=model,
                 data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
             )
@@ -176,10 +180,34 @@ class TestSearchAgents:
             router=router,
             embedding_model="text-embedding-3-small",
             index=AgentSearchIndex(),
+            user_api_key_dict=CALLER,
         )
         assert isinstance(outcome, AgentSearchHits)
         assert [hit.agent.agent_id for hit in outcome.hits] == ["translator"]
         assert router.aembedding.await_args.kwargs["model"] == "text-embedding-3-small"
+
+    @pytest.mark.asyncio
+    async def test_embedding_spend_is_attributed_to_the_calling_key(self) -> None:
+        router = MagicMock()
+        router.aembedding = AsyncMock(
+            side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
+                model=model,
+                data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
+            )
+        )
+        await search_agents(
+            "language translation",
+            AGENTS,
+            1,
+            router=router,
+            embedding_model="text-embedding-3-small",
+            index=AgentSearchIndex(),
+            user_api_key_dict=CALLER,
+        )
+        metadata = router.aembedding.await_args.kwargs["metadata"]
+        assert metadata["user_api_key"] == "hashed-caller-key"
+        assert metadata["user_api_key_team_id"] == "team-1"
+        assert metadata["user_api_key_user_id"] == "user-1"
 
 
 def _client(role: LitellmUserRoles) -> TestClient:
@@ -205,7 +233,7 @@ def registry(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 def embedding_router(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     router = MagicMock()
     router.aembedding = AsyncMock(
-        side_effect=lambda model, input: litellm.EmbeddingResponse(
+        side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
             model=model,
             data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
         )
@@ -231,6 +259,7 @@ class TestGetAgentsQuery:
         body = response.json()
         assert [agent["agent_id"] for agent in body] == ["translator", "trip"]
         assert body[0]["search_score"] > body[1]["search_score"]
+        assert embedding_router.aembedding.await_args.kwargs["metadata"]["user_api_key_user_id"] == "u"
 
     def test_without_query_the_list_is_unchanged_and_unscored(
         self, registry: MagicMock, embedding_router: MagicMock, no_db: None

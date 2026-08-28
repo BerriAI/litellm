@@ -16,6 +16,7 @@ from litellm.exceptions import BudgetExceededError
 from litellm.types.agents import AgentResponse
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
 DEFAULT_AGENT_SEARCH_TOP_K: Final = 5
@@ -122,10 +123,21 @@ def cosine_similarity(left: Vector, right: Vector) -> float:
     return dot / norms if norms else 0.0
 
 
-def router_embedder(router: Router, embedding_model: str) -> Embedder:
+def embedding_spend_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    return {  # mutable-ok: the router mutates the metadata dict it is handed
+        **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
+        "user_api_key": user_api_key_dict.api_key,
+    }
+
+
+def router_embedder(router: Router, embedding_model: str, user_api_key_dict: UserAPIKeyAuth) -> Embedder:
     async def embed(texts: Sequence[str]) -> Sequence[Vector]:
         batch: Final = list(texts)  # mutable-ok: Router.aembedding accepts only str | list input
-        response: Final = await router.aembedding(model=embedding_model, input=batch)
+        response: Final = await router.aembedding(
+            model=embedding_model, input=batch, metadata=embedding_spend_metadata(user_api_key_dict)
+        )
         return tuple(item.embedding for item in _EmbeddingData.model_validate(response.model_dump()).data)
 
     return embed
@@ -174,6 +186,7 @@ async def search_agents(
     router: Router | None,
     embedding_model: str | None,
     index: AgentSearchIndex,
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> AgentSearchOutcome:
     if embedding_model is None:
         return AgentSearchNotConfigured(
@@ -181,4 +194,4 @@ async def search_agents(
         )
     if router is None:
         return AgentSearchNotConfigured(reason="agent search needs a model_list so the embedding model can be called")
-    return await index.search(query, agents, top_k, router_embedder(router, embedding_model))
+    return await index.search(query, agents, top_k, router_embedder(router, embedding_model, user_api_key_dict))
