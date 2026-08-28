@@ -387,6 +387,31 @@ def token_counter(
     if use_default_image_token_count is None:
         use_default_image_token_count = False
 
+    if custom_tokenizer is None and not use_default_image_token_count:
+        from litellm.rust_bridge.token_counter import try_rust_token_counter
+
+        rust_text: str | None = None
+        if isinstance(text, list):
+            rust_text = "".join(t for t in text if isinstance(t, str))
+        elif isinstance(text, str):
+            rust_text = text
+
+        rust_messages = None
+        if messages is not None:
+            rust_messages = cast(list[AllMessageValues], convert_list_message_to_dict(messages))
+
+        rust_result = try_rust_token_counter(
+            model=model,
+            text=rust_text,
+            messages=rust_messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            count_response_tokens=count_response_tokens or False,
+            default_token_count=default_token_count,
+        )
+        if rust_result is not None:
+            return rust_result
+
     if text is not None:
         if tools or tool_choice:
             raise ValueError("tools or tool_choice cannot be set if using text")
