@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Any, Final, NoReturn, cast
 
@@ -194,11 +197,13 @@ async def reserve_budget_for_request(
     )
 
     current_spend_by_counter_key: Final[dict[str, float]] = {}
-    reservation_cost = estimate_request_max_cost(
-        request_body=request_body,
-        route=route,
-        llm_router=llm_router,
-        input_token_counts=input_token_counts,
+    reservation_cost = cap_reservation_cost(  # rebind-ok: admission policy may resize to remaining budget
+        reservation_cost=estimate_request_max_cost(
+            request_body=request_body,
+            route=route,
+            llm_router=llm_router,
+            input_token_counts=input_token_counts,
+        ),
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -267,7 +272,13 @@ async def reserve_budget_for_request(
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
-        "input_cost": min(float(input_cost or 0.0), reservation_cost),
+        # True input-token cost, deliberately NOT clamped to the (possibly
+        # capped) reservation: cancel-path reconcile lands this cost on the
+        # counter via the actual - reserved delta, so clamping it would
+        # under-record a cancelled request below what the provider already
+        # billed whenever the true input cost exceeds the cap (very large
+        # contexts). reserved_cost stays the capped pre-occupation.
+        "input_cost": float(input_cost or 0.0),
     }
 
 
@@ -920,6 +931,71 @@ def _coerce_datetime(value: Any) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+@lru_cache(maxsize=1)
+def reservation_cost_cap() -> float | None:
+    """Opt-in per-request budget-reservation cap, in USD.
+
+    Parsed once per worker (invalid-value warnings are emitted once at startup/
+    first use, not once per request). Disabled unless
+    ``LITELLM_BUDGET_RESERVATION_MAX_COST_USD`` is set to a
+    positive, finite number; unset values and values <= 0 both disable the
+    cap, and non-finite values are treated as unset (with a warning) rather
+    than poisoning the spend counters.
+
+    ⚠️ The cap is an operations availability trade-off, NOT a strict budget
+    upper bound: clients with large contexts and high max_tokens (coding
+    agents) yield worst-case estimates of several dollars, so a moderately
+    concurrent burst can pre-fill the counter to exactly max_budget and 429
+    every request while recorded spend stays near zero. A capped reservation
+    under-reserves, so the worst-case concurrent overshoot against a budget
+    is the sum of max(actual_cost - cap, 0) over capped in-flight requests.
+    Post-call reconcile still records true spend, so enforcement resumes as
+    soon as the counter reflects it — but a burst can transiently exceed the
+    budget by that amount. Strict per-request bounds require leaving the cap
+    disabled.
+    """
+    raw: Final = os.getenv("LITELLM_BUDGET_RESERVATION_MAX_COST_USD")
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value: Final = float(raw)
+    except ValueError:
+        verbose_proxy_logger.warning(
+            "Invalid LITELLM_BUDGET_RESERVATION_MAX_COST_USD=%r (must be a number); disabling the reservation cap",
+            raw,
+        )
+        return None
+    if not math.isfinite(value):
+        verbose_proxy_logger.warning(
+            "Invalid LITELLM_BUDGET_RESERVATION_MAX_COST_USD=%r (must be finite); disabling the reservation cap",
+            raw,
+        )
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def cap_reservation_cost(reservation_cost: float | None) -> float | None:
+    """Clamp a worst-case reservation estimate to the configured cap, if any.
+
+    ``None`` (unknown-cost route) passes through unchanged so the caller keeps
+    its read-time-enforcement fallback. The cap only shrinks the in-flight
+    pre-occupation; post-call reconcile records the request's true cost.
+    """
+    if reservation_cost is None:
+        return None
+    cap: Final = reservation_cost_cap()
+    if cap is None or reservation_cost <= cap:
+        return reservation_cost
+    verbose_proxy_logger.debug(
+        "Budget reservation capped: estimate=%.4f -> cap=%.4f",
+        reservation_cost,
+        cap,
+    )
+    return cap
 
 
 def estimate_request_max_cost(
