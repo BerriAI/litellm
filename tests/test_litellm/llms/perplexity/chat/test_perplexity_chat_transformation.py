@@ -21,15 +21,21 @@ class TestPerplexityChatTransformation:
         ("headers", "expected"),
         [({}, "litellm"), ({"x-pplx-integration": "custom"}, "custom")],
     )
-    def test_integration_header_default_is_caller_overridable(self, headers, expected):
-        headers = PerplexityChatConfig().validate_environment(
+    def test_integration_header_default_is_caller_overridable(
+        self, headers: dict[str, str], expected: str
+    ):
+        validated_headers = PerplexityChatConfig().validate_environment(
             headers=headers,
             model="sonar",
             messages=[],
             optional_params={},
             litellm_params={},
         )
-        request = httpx.Request("POST", "https://api.perplexity.ai/chat/completions", headers=headers)
+        request = httpx.Request(
+            "POST",
+            "https://api.perplexity.ai/chat/completions",
+            headers=validated_headers,
+        )
 
         assert request.headers.get_list("x-pplx-integration") == [expected]
 
