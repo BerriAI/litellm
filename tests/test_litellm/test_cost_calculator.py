@@ -3977,6 +3977,74 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
 
 
+def _together_chat_response(model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-together-cache",
+        choices=[{"finish_reason": "stop", "index": 0, "message": {"content": "acknowledged", "role": "assistant"}}],
+        created=1756164000,
+        model=model,
+        object="chat.completion",
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
+
+
+def test_completion_cost_prices_together_cached_tokens_at_cache_read_rate(_local_model_cost_map):
+    """Regression: Together reports prompt_tokens_details.cached_tokens but no together_ai
+    registry entry carried cache_read_input_token_cost, so cache-hit tokens were priced at
+    0.0 and spend on cache-heavy workloads was understated."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="deepseek-ai/DeepSeek-V4-Flash-0731", prompt_tokens=7864, completion_tokens=16, cached_tokens=7863
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(1 * 1.4e-07 + 7863 * 3e-08 + 16 * 2.8e-07, rel=1e-9)
+
+
+def test_completion_cost_together_mapped_model_skips_size_bucket(_local_model_cost_map):
+    """Regression: any together model whose name matches (\\d+b) was rewritten to a
+    together-ai-* size bucket before the registry lookup, so mapped models like
+    Muse-Glimmer-30B never used their per-model rates, cache fields included."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="meta-models/Muse-Glimmer-30B", prompt_tokens=63, completion_tokens=16, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(63 * 3.5e-07 + 16 * 1.5e-06, rel=1e-9)
+
+
+def test_completion_cost_together_unmapped_model_still_uses_size_bucket(_local_model_cost_map):
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="qwen/Qwen2-72B-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 9e-07, rel=1e-9)
+
+
+def test_completion_cost_together_metadata_only_model_still_uses_size_bucket(_local_model_cost_map):
+    assert "input_cost_per_token" not in litellm.model_cost["together_ai/togethercomputer/CodeLlama-34b-Instruct"]
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="togethercomputer/CodeLlama-34b-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 8e-07, rel=1e-9)
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
     """A router-facing model_name alias containing "/" whose leading segment is NOT a
     registered provider must not be double-prefixed into a non-existent cost key.

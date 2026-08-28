@@ -5274,3 +5274,74 @@ async def test_terminal_failure_logs_usage_and_cost_of_prior_passed_chunks(monke
     assert logged["guardrail_cost"] == pytest.approx(0.0003)
     assert logged["guardrail_response"]["usage"] == {"contentPolicyUnits": 2, "wordPolicyUnits": 1}
     assert "error" in logged["guardrail_response"]
+
+
+def test_load_credentials_assumes_role_with_external_id():
+    """A trust policy requiring sts:ExternalId must be satisfied by the guardrail's aws_external_id."""
+    import datetime
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    class FakeSTSClient:
+        """STS that mirrors a cross-account role whose trust policy requires an ExternalId."""
+
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-123":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAASSUMEDROLEKEY",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-external-id",
+        event_hook=GuardrailEventHooks.pre_call,
+        guardrailIdentifier="gr-1",
+        guardrailVersion="DRAFT",
+        aws_region_name="us-east-1",
+        aws_access_key_id="AKIAPODCALLERKEY",
+        aws_secret_access_key="pod-caller-secret",
+        aws_role_name="arn:aws:iam::999999999999:role/litellm-guardrail-role",
+        aws_session_name="litellm-session",
+        aws_external_id="external-id-123",
+    )
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        credentials, aws_region_name = guardrail._load_credentials()
+
+    assert credentials.access_key == "ASIAASSUMEDROLEKEY"
+    assert credentials.token == "assumed-session-token"
+    assert aws_region_name == "us-east-1"
+
+
+def test_initialize_bedrock_forwards_aws_external_id():
+    """aws_external_id configured on the guardrail must survive LitellmParams and the initializer."""
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_bedrock
+    from litellm.types.guardrails import LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="bedrock",
+        mode="pre_call",
+        guardrailIdentifier="gr-1",
+        guardrailVersion="DRAFT",
+        aws_region_name="us-east-1",
+        aws_role_name="arn:aws:iam::999999999999:role/litellm-guardrail-role",
+        aws_external_id="external-id-123",
+    )
+
+    guardrail = initialize_bedrock(litellm_params, {"guardrail_name": "bedrock-external-id"})
+    try:
+        assert guardrail.optional_params["aws_external_id"] == "external-id-123"
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, guardrail)

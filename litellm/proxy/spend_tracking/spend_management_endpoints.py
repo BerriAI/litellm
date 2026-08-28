@@ -158,6 +158,7 @@ class _SessionSpendRow(TypedDict):
     session_total_spend: float
     mcp_tool_call_count: int
     mcp_tool_call_spend: float
+    session_cache_hit_count: ReadOnly[int]
 
 
 class _SpendSumAggregate(TypedDict, total=False):
@@ -4135,7 +4136,8 @@ async def _build_ui_spend_logs_response(
                        )::int AS mcp_tool_call_count,
                        COALESCE(SUM(spend) FILTER (
                            WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
-                       ), 0)::double precision AS mcp_tool_call_spend
+                       ), 0)::double precision AS mcp_tool_call_spend,
+                       COUNT(*) FILTER (WHERE LOWER(cache_hit) = 'true')::int AS session_cache_hit_count
                 FROM "LiteLLM_SpendLogs"
                 WHERE session_id = ANY($1::text[])
                   AND api_key = ANY($2::text[])
@@ -4149,6 +4151,7 @@ async def _build_ui_spend_logs_response(
                     "session_total_spend": float(row.get("session_total_spend") or 0.0),
                     "mcp_tool_call_count": int(row.get("mcp_tool_call_count") or 0),
                     "mcp_tool_call_spend": float(row.get("mcp_tool_call_spend") or 0.0),
+                    "session_cache_hit_count": int(row.get("session_cache_hit_count") or 0),
                 }
                 for row in rows
                 if row.get("session_id")
@@ -4171,6 +4174,7 @@ async def _build_ui_spend_logs_response(
                 if session_stats["mcp_tool_call_count"]:
                     row_dict["mcp_tool_call_count"] = session_stats["mcp_tool_call_count"]
                     row_dict["mcp_tool_call_spend"] = session_stats["mcp_tool_call_spend"]
+                row_dict["session_cache_hit_count"] = session_stats["session_cache_hit_count"]
             enriched.append(row_dict)
         response_data: list = enriched
     else:

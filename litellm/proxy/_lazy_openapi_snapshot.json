@@ -2689,6 +2689,11 @@
               "title": "Total Flat Cost",
               "type": "number"
             },
+            "total_gateway_injected_caching_savings_spend": {
+              "default": 0.0,
+              "title": "Total Gateway Injected Caching Savings Spend",
+              "type": "number"
+            },
             "total_pages": {
               "default": 1,
               "title": "Total Pages",
@@ -3173,6 +3178,11 @@
             "flat_cost": {
               "default": 0.0,
               "title": "Flat Cost",
+              "type": "number"
+            },
+            "gateway_injected_caching_savings_spend": {
+              "default": 0.0,
+              "title": "Gateway Injected Caching Savings Spend",
               "type": "number"
             },
             "prompt_caching_savings_spend": {
@@ -8744,7 +8754,7 @@
                 }
               ],
               "default": true,
-              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
+              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
             "guard_name": {
@@ -10238,6 +10248,18 @@
               "description": "AWS Bedrock runtime endpoint URL",
               "title": "Aws Bedrock Runtime Endpoint"
             },
+            "aws_external_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "External ID required by the target role's trust policy on sts:AssumeRole",
+              "title": "Aws External Id"
+            },
             "aws_profile_name": {
               "anyOf": [
                 {
@@ -10753,7 +10775,7 @@
                 }
               ],
               "default": true,
-              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
+              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
             "grounding_check": {
@@ -11351,6 +11373,18 @@
               ],
               "description": "Path to a JSON file containing ad-hoc recognizers for Presidio",
               "title": "Presidio Ad Hoc Recognizers"
+            },
+            "presidio_analyze_chunk_size_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. Longer texts are split into overlapping chunks of at most this size and the merged results are remapped onto the original text. Defaults to 500000; set it below your analyzer deployment's request body limit, leaving headroom for the rest of the analyze payload.",
+              "title": "Presidio Analyze Chunk Size Bytes"
             },
             "presidio_analyzer_api_base": {
               "anyOf": [
@@ -15038,6 +15072,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -17518,6 +17563,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -20352,6 +20408,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -23699,6 +23766,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -25193,6 +25271,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionImageObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionToolReferenceObject"
                       }
                     ]
                   },
@@ -25278,6 +25359,26 @@
             "name"
           ],
           "title": "ChatCompletionToolParamFunctionChunk",
+          "type": "object"
+        },
+        "ChatCompletionToolReferenceObject": {
+          "description": "Anthropic tool-search result block, carried through untouched so it survives a round trip.",
+          "properties": {
+            "tool_name": {
+              "title": "Tool Name",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_reference",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool_name"
+          ],
+          "title": "ChatCompletionToolReferenceObject",
           "type": "object"
         },
         "ChatCompletionUserMessage": {
