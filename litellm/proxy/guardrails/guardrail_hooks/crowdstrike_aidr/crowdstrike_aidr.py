@@ -334,7 +334,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             if transformed_signal:
                 raise HTTPException(
                     status_code=500,
-                    detail={
+                    detail={  # mutable-ok: one-shot HTTPException detail payload, never mutated after construction
                         "error": "CrowdStrike AIDR returned a transformed response litellm could not parse; "
                         "failing closed instead of dropping the delivered redactions",
                         "guardrail_name": self.guardrail_name,
