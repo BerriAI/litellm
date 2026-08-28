@@ -12071,19 +12071,11 @@ export interface paths {
         /**
          * Public Model Hub List
          * @description The public model groups this proxy publishes, paged, sortable, searchable and
-         *     filterable, for the public Model Hub page.
+         *     filterable, for the public Model Hub page. No authentication.
          *
-         *     No authentication. The older `/public/model_hub` answers with every public model
-         *     group as a bare array, which is a multi-megabyte response and an unusable page
-         *     once a proxy publishes a few thousand of them.
-         *
-         *     `sort` takes a comma-separated list of `model_group`, `mode`, `max_input_tokens`,
-         *     `max_output_tokens`, `input_cost_per_token` or `output_cost_per_token`, each
-         *     optionally prefixed with `-` for descending, and defaults to `model_group`
-         *     ascending. `model_group` is appended to every sort as the tiebreaker. `q` is a
-         *     case-insensitive substring match on `model_group`. `page_size` defaults to 50 and
-         *     is capped at 100. Filters are `filter[mode]`, `filter[mode][in]` and
-         *     `filter[providers][contains]`.
+         *     A rejected request answers with the parameters, sort fields and filter operators
+         *     it would have accepted, so the accepted set stays discoverable from the endpoint
+         *     itself rather than from a copy of the spec kept here.
          *
          *     Example curl:
          *     ```
