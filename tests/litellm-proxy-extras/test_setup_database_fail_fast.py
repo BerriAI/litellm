@@ -396,8 +396,11 @@ def test_v2_exhausted_retries_report_the_prisma_error(monkeypatch, tmp_path, cap
 
 
 def test_v2_db_push_retries_transient_failures(monkeypatch, tmp_path):
-    """v2: `prisma db push` retries a transient failure like v1 did, so the
-    default flip does not cost --use_prisma_db_push its retries."""
+    """v2: `prisma db push` retries a transient failure like v1 did.
+
+    Reached from the migrations Job (USE_PRISMA_DB_PUSH=true), not from the
+    proxy CLI, whose --use_prisma_db_push has its own loop in prisma_client.
+    """
     _prepare_v2_resolver(monkeypatch, tmp_path)
 
     pushes = {"n": 0}
