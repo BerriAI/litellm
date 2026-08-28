@@ -34,6 +34,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         aws_role_name=litellm_params.aws_role_name,
         aws_web_identity_token=litellm_params.aws_web_identity_token,
         aws_sts_endpoint=litellm_params.aws_sts_endpoint,
+        aws_external_id=litellm_params.aws_external_id,
         aws_bedrock_runtime_endpoint=litellm_params.aws_bedrock_runtime_endpoint,
         experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
         only_scan_new_messages=litellm_params.only_scan_new_messages or False,

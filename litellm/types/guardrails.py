@@ -496,6 +496,9 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_role_name: str | None = Field(default=None, description="AWS role name for assuming roles")
     aws_web_identity_token: str | None = Field(default=None, description="Web identity token for AWS role assumption")
     aws_sts_endpoint: str | None = Field(default=None, description="AWS STS endpoint URL")
+    aws_external_id: str | None = Field(
+        default=None, description="External ID required by the target role's trust policy on sts:AssumeRole"
+    )
     aws_bedrock_runtime_endpoint: str | None = Field(default=None, description="AWS Bedrock runtime endpoint URL")
     checks: BedrockChecksConfigModel | None = Field(
         default=None,

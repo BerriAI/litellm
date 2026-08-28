@@ -10238,6 +10238,18 @@
               "description": "AWS Bedrock runtime endpoint URL",
               "title": "Aws Bedrock Runtime Endpoint"
             },
+            "aws_external_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "External ID required by the target role's trust policy on sts:AssumeRole",
+              "title": "Aws External Id"
+            },
             "aws_profile_name": {
               "anyOf": [
                 {
@@ -15038,6 +15050,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -17518,6 +17541,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -20352,6 +20386,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -23699,6 +23744,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -25193,6 +25249,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionImageObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionToolReferenceObject"
                       }
                     ]
                   },
@@ -25278,6 +25337,26 @@
             "name"
           ],
           "title": "ChatCompletionToolParamFunctionChunk",
+          "type": "object"
+        },
+        "ChatCompletionToolReferenceObject": {
+          "description": "Anthropic tool-search result block, carried through untouched so it survives a round trip.",
+          "properties": {
+            "tool_name": {
+              "title": "Tool Name",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_reference",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool_name"
+          ],
+          "title": "ChatCompletionToolReferenceObject",
           "type": "object"
         },
         "ChatCompletionUserMessage": {
