@@ -2670,7 +2670,7 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker, user_rows):
 
 
 @pytest.mark.asyncio
-async def test_user_info_v2_returns_rate_limits(mocker):
+async def test_user_info_v2_returns_rate_limits(mocker, user_rows):
     """
     The Admin UI seeds its edit form from this response, so a limit missing here reads
     to the operator as "not set" and a save silently wipes it.
@@ -2679,21 +2679,17 @@ async def test_user_info_v2_returns_rate_limits(mocker):
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
-    mock_prisma_client = mocker.MagicMock()
-
-    mock_user_row = mocker.MagicMock()
-    mock_user_row.model_dump.return_value = {
-        "user_id": "limited-user",
-        "tpm_limit": 12000,
-        "rpm_limit": 60,
-        "max_parallel_requests": 3,
-        "teams": [],
-    }
-
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
-        return_value=mock_user_row
+    user_rows(
+        **{
+            "limited-user": {
+                "user_id": "limited-user",
+                "tpm_limit": 12000,
+                "rpm_limit": 60,
+                "max_parallel_requests": 3,
+                "teams": [],
+            }
+        }
     )
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     response = await user_info_v2(
         request=mocker.MagicMock(spec=Request),

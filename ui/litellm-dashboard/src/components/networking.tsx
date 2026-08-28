@@ -1082,8 +1082,17 @@ export interface UserInfoV2Response {
  */
 export type UserPatchRequest = components["schemas"]["UserPatchRequest"];
 
-/** The user row as the patch wrote it. Narrower than UserInfoV2Response: no keys, teams or usage. */
-export type UserPatchResponse = components["schemas"]["UserItem"];
+/**
+ * The user row as the patch wrote it. Narrower than UserInfoV2Response: no keys, teams or usage.
+ *
+ * The two JSON columns are re-stated as the shapes the rest of the dashboard reads them as. The
+ * generated spec calls them free-form objects, which is true of the column and useless to a caller,
+ * and it is the same claim /v2/user/info already makes about the same two columns.
+ */
+export type UserPatchResponse = Omit<components["schemas"]["UserItem"], "metadata" | "model_max_budget"> & {
+  metadata?: Record<string, any>;
+  model_max_budget?: ModelMaxBudget;
+};
 
 /**
  * Partially update one internal user. Unlike userUpdateUserCall, a null here actually clears.
