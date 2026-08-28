@@ -4478,6 +4478,55 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
 
     assert result is not None
     assert result._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
+    assembled = litellm.stream_chunk_builder(chunks=[result])
+    assert assembled is not None
+    assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
+
+
+def test_chunk_creator_keeps_provider_model_private_across_stream():
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="requested-route",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+    selected_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="selected-model",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello"),
+            )
+        ],
+    )
+    terminal_chunk = ModelResponseStream(
+        id="chunk-1",
+        model=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(),
+            )
+        ],
+    )
+
+    first_result = wrapper.chunk_creator(chunk=selected_chunk)
+    terminal_result = wrapper.chunk_creator(chunk=terminal_chunk)
+
+    assert first_result is not None
+    assert terminal_result is not None
+    assert first_result.model == "requested-route"
+    assert terminal_result.model == "requested-route"
+    assert first_result._hidden_params["provider_response_model"] == "selected-model"
+    assert terminal_result._hidden_params["provider_response_model"] == "selected-model"
+
+    assembled = litellm.stream_chunk_builder(chunks=[first_result, terminal_result])
+    assert assembled is not None
+    assert assembled.model == "requested-route"
+    assert assembled._hidden_params["provider_response_model"] == "selected-model"
 
 
 @pytest.mark.asyncio
