@@ -260,6 +260,27 @@ describe("AllModelsTab", () => {
     expect(within(table).queryByText("gpt-4")).not.toBeInTheDocument();
   });
 
+  it("queries the server for the selected model group so deployments beyond the first page are found", () => {
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
+
+    expect(lastModelsInfoCall().search).toBe("claude-opus");
+  });
+
+  it.each(["all", "wildcard"])("does not seed the server search from the %s pseudo group", (group) => {
+    render(<AllModelsTab {...defaultProps} selectedModelGroup={group} />);
+
+    expect(lastModelsInfoCall().search).toBeUndefined();
+  });
+
+  it("lets a typed search override the selected model group in the server query", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
+
+    await user.type(screen.getByPlaceholderText("Search model names…"), "gpt");
+
+    await waitFor(() => expect(lastModelsInfoCall().search).toBe("gpt"));
+  });
+
   it("resets search, filters, team and sorting from the drawer reset button", async () => {
     const user = userEvent.setup();
     render(<AllModelsTab {...defaultProps} selectedModelGroup="gpt-4" />);
