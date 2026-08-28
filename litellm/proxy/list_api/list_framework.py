@@ -85,9 +85,13 @@ class IsNull:
 
 @dataclass(frozen=True, slots=True)
 class AnyOf:
-    """Disjunction of its clauses. `?q=` is the only producer today."""
+    """Disjunction of its clauses. `?q=` is the only producer.
 
-    clauses: tuple["Predicate", ...]
+    Holding leaves rather than predicates keeps the disjunction one level deep by type, so
+    neither the SQL renderer nor an in-memory executor has to walk a tree to evaluate it.
+    """
+
+    clauses: tuple[Compare, ...]
 
 
 Predicate = Compare | Within | IsNull | AnyOf

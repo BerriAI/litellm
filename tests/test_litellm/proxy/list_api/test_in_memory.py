@@ -161,6 +161,28 @@ async def test_ordering_comparisons_work_across_the_cell_types():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "op,expected",
+    [
+        ("eq", ["mid"]),
+        ("not", ["low", "high"]),
+        ("gt", ["high"]),
+        ("gte", ["mid", "high"]),
+        ("lt", ["low"]),
+        ("lte", ["low", "mid"]),
+    ],
+)
+async def test_every_comparison_operator_selects_the_rows_sql_would(op: str, expected: list[str]):
+    """The endpoint only exposes eq/in/contains today, so without this the ordering
+    operators are live code no test evaluates."""
+    executor = _executor(Row("low", size=1.0), Row("mid", size=2.0), Row("high", size=3.0))
+
+    where = (Compare(field="size", op=op, value=2.0),)
+
+    assert sorted(await _names(executor, _plan(where=where))) == sorted(expected)
+
+
+@pytest.mark.asyncio
 async def test_a_value_of_the_wrong_type_matches_nothing_rather_than_raising():
     executor = _executor(Row("a", size=1.0))
 

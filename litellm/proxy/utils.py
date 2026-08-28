@@ -5853,7 +5853,7 @@ class PrismaClient:
                     {"checked_at": "desc"},
                 ],
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # health decorates a list; a driver error must not fail the page
             verbose_proxy_logger.error("Error getting latest health checks for models: %s", e)
             return []
 

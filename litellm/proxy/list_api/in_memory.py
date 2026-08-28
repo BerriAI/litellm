@@ -75,7 +75,7 @@ def _any_cell(cells: Cells, name: str, matches: Callable[[Cell], bool]) -> bool:
     return matches(cell)
 
 
-def _holds(predicate: Predicate, cells: Cells) -> bool:
+def _leaf_holds(predicate: Compare | Within | IsNull, cells: Cells) -> bool:
     match predicate:
         case Compare(field=name, op=op, value=value):
             return _any_cell(cells, name, lambda cell: _matches(cell, op, value))
@@ -83,10 +83,14 @@ def _holds(predicate: Predicate, cells: Cells) -> bool:
             return _any_cell(cells, name, lambda cell: cell is not None and cell in values)
         case IsNull(field=name, negated=negated):
             return _any_cell(cells, name, lambda cell: (cell is None) != negated)
-        case AnyOf(clauses=clauses):
-            return any(_holds(clause, cells) for clause in clauses)
         case _:
             assert_never(predicate)
+
+
+def _holds(predicate: Predicate, cells: Cells) -> bool:
+    if isinstance(predicate, AnyOf):
+        return any(_leaf_holds(clause, cells) for clause in predicate.clauses)
+    return _leaf_holds(predicate, cells)
 
 
 def _sort_key(cells: Cells, key: SortKey) -> tuple[bool, Cell | tuple[Cell, ...]]:
