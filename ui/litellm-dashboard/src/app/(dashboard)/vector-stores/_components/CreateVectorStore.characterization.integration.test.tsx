@@ -13,55 +13,6 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 
-vi.mock("@/components/vector_store_providers", () => ({
-  VectorStoreProviders: {
-    BEDROCK: "Amazon Bedrock",
-    S3Vectors: "AWS S3 Vectors",
-    PGVECTOR: "PG Vector",
-  },
-  vectorStoreProviderMap: {
-    BEDROCK: "bedrock",
-    S3Vectors: "s3_vectors",
-    PGVECTOR: "pg_vector",
-  },
-  vectorStoreProviderLogoMap: {
-    "Amazon Bedrock": "https://example.com/bedrock.png",
-    "AWS S3 Vectors": "https://example.com/aws.png",
-    "PG Vector": "https://example.com/pg.png",
-  },
-  getProviderSpecificFields: vi.fn((provider: string) => {
-    if (provider === "pg_vector") {
-      return [
-        {
-          name: "api_base",
-          label: "API Base",
-          tooltip: "Base URL of the pgvector server",
-          placeholder: "http://localhost:8000",
-          required: true,
-          type: "text",
-        },
-        {
-          name: "api_key",
-          label: "API Key",
-          tooltip: "Secret for the pgvector server",
-          placeholder: "sk-...",
-          required: false,
-          type: "password",
-        },
-        {
-          name: "embedding_model",
-          label: "Embedding Model",
-          tooltip: "Model used to embed documents",
-          placeholder: "text-embedding-3-small",
-          required: false,
-          type: "select",
-        },
-      ];
-    }
-    return [];
-  }),
-}));
-
 const uploadFile = async (name = "test.pdf") => {
   const file = new File(["test content"], name, { type: "application/pdf" });
   const uploadInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -75,7 +26,7 @@ const pickProvider = async (label: string) => {
   const user = userEvent.setup();
   const trigger = screen.getAllByRole("combobox")[0];
   await user.click(trigger);
-  const option = await screen.findByText(label);
+  const option = await screen.findByRole("option", { name: label });
   await user.click(option);
 };
 
@@ -138,26 +89,27 @@ describe("CreateVectorStore submit payload characterization", () => {
     );
   });
 
-  it("accumulates provider-specific fields into the providerParams argument", async () => {
+  it("submits OpenAI ingestion using a stored credential name without raw credentials", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
     await uploadFile();
-    await pickProvider("PG Vector");
+    await pickProvider("OpenAI");
 
-    fireEvent.change(screen.getByPlaceholderText("http://localhost:8000"), {
-      target: { value: "http://pg.internal:8000" },
+    fireEvent.change(screen.getByRole("textbox", { name: "Stored Credential Name" }), {
+      target: { value: "openai-ingestion" },
     });
-    fireEvent.change(screen.getByPlaceholderText("sk-..."), { target: { value: "sk-secret" } });
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API Base")).not.toBeInTheDocument();
     await clickCreate();
 
     await waitFor(() => expect(networking.ragIngestCall).toHaveBeenCalledTimes(1));
     expect(networking.ragIngestCall).toHaveBeenCalledWith(
       "test-token",
       expect.any(File),
-      "pg_vector",
+      "openai",
       undefined,
       undefined,
       undefined,
-      { api_base: "http://pg.internal:8000", api_key: "sk-secret" },
+      { litellm_credential_name: "openai-ingestion" },
     );
   });
 
@@ -170,7 +122,7 @@ describe("CreateVectorStore submit payload characterization", () => {
     const user = userEvent.setup();
     render(<CreateVectorStore accessToken="test-token" />);
     await uploadFile();
-    await pickProvider("AWS S3 Vectors");
+    await pickProvider("Amazon S3 Vectors");
 
     const modelInput = screen.getAllByRole("combobox").at(-1) as HTMLElement;
     await user.click(modelInput);
@@ -179,28 +131,49 @@ describe("CreateVectorStore submit payload characterization", () => {
 
     fireEvent.change(modelInput, { target: { value: "large" } });
     await user.click((await screen.findAllByText("text-embedding-3-large")).at(-1) as HTMLElement);
+    fireEvent.change(screen.getByLabelText(/Vector Bucket Name/), { target: { value: "test-bucket" } });
+    fireEvent.change(screen.getByLabelText(/AWS Region/), { target: { value: "us-west-2" } });
     await clickCreate();
 
     await waitFor(() => expect(networking.ragIngestCall).toHaveBeenCalledTimes(1));
     expect(vi.mocked(networking.ragIngestCall).mock.calls.at(-1)?.[6]).toEqual({
       embedding_model: "text-embedding-3-large",
+      vector_bucket_name: "test-bucket",
+      aws_region_name: "us-west-2",
     });
   });
 
   it("blocks the submit when a required provider field is missing", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
     await uploadFile();
-    await pickProvider("PG Vector");
+    await pickProvider("Amazon S3 Vectors");
     await clickCreate();
 
     expect(networking.ragIngestCall).not.toHaveBeenCalled();
   });
 
-  it("renders the password provider field as a masked input", async () => {
+  it("clears provider settings when switching providers", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
-    await pickProvider("PG Vector");
+    await uploadFile();
+    await pickProvider("Amazon S3 Vectors");
+    fireEvent.change(screen.getByRole("textbox", { name: "Stored Credential Name" }), {
+      target: { value: "aws-ingestion" },
+    });
+    fireEvent.change(screen.getByLabelText(/Vector Bucket Name/), { target: { value: "test-bucket" } });
+    await pickProvider("OpenAI");
+    await clickCreate();
 
-    expect(screen.getByPlaceholderText("sk-...")).toHaveAttribute("type", "password");
+    await waitFor(() =>
+      expect(networking.ragIngestCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.any(File),
+        "openai",
+        undefined,
+        undefined,
+        undefined,
+        {},
+      ),
+    );
   });
 
   it("reuses the vector store id returned by the first ingest for later documents", async () => {

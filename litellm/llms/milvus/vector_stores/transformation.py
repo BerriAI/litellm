@@ -40,8 +40,8 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
     """
     Configuration for Milvus Vector Store
 
-    This implementation uses the Azure AI Search API for vector store operations.
-    Supports vector search with embeddings generated via litellm.embeddings.
+    Searches via the Milvus REST API (/v2/vectordb/entities/search) with
+    query embeddings generated via litellm.embedding.
     """
 
     def __init__(self):
@@ -125,31 +125,22 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         extra_body: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """
-        Transform search request for Azure AI Search API
+        Transform search request for the Milvus REST API
 
-        Generates embeddings using litellm.embeddings and constructs Azure AI Search request
+        Generates embeddings using litellm.embedding and constructs the Milvus search request
         """
-        # Convert query to string if it's a list
         if isinstance(query, list):
             query = " ".join(query)
 
-        # Get embedding model from litellm_params (required)
         embedding_model: Final = litellm_params.get("litellm_embedding_model")
         if not embedding_model:
             raise ValueError(
-                "embedding_model is required in litellm_params for Milvus. You can call any litellm embedding model."
-                "Example: litellm_params['embedding_model'] = 'azure/text-embedding-3-large'"
+                "litellm_embedding_model is required in litellm_params for Milvus. You can call any litellm embedding model."
+                "Example: litellm_params['litellm_embedding_model'] = 'azure/text-embedding-3-large'"
             )
 
-        embedding_config: Final = litellm_params.get("litellm_embedding_config", {})
-        if not embedding_config:
-            raise ValueError(
-                "embedding_config is required in litellm_params for Milvus. You can call any litellm embedding model."
-                "Example: litellm_params['embedding_config'] = {'api_base': 'https://krris-mh44uf7y-eastus2.cognitiveservices.azure.com/', 'api_key': 'os.environ/AZURE_API_KEY', 'api_version': '2025-09-01'}"
-            )
+        embedding_config: Final = litellm_params.get("litellm_embedding_config") or {}
 
-        # Get top_k (number of results to return)
-        # Generate embedding for the query using litellm.embeddings
         try:
             embedding_response: Final = litellm.embedding(
                 model=embedding_model,
@@ -160,11 +151,9 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         except Exception as e:
             raise Exception(f"Failed to generate embedding for query: {e}")
 
-        # Azure AI Search endpoint for search
-        index_name: Final = vector_store_id  # vector_store_id is the index name
+        index_name: Final = vector_store_id  # vector_store_id is the collection name
         url: Final = f"{api_base}/v2/vectordb/entities/search"
 
-        # Build the request body for Azure AI Search with vector search
         request_body: Final[dict[str, Any]] = {
             "collectionName": index_name,
             "data": [query_vector],
@@ -192,14 +181,15 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         """
-        Transform Azure AI Search API response to standard vector store search response
+        Transform a Milvus REST search response to the standard vector store search response
 
-        Handles the format from Azure AI Search which returns:
+        Handles the Milvus format:
         {
-            "value": [
+            "code": 0,
+            "data": [
                 {
                     "id": "...",
-                    "content": "...",
+                    "<text_field>": "...",
                     "distance": 0.95,
                 }
             ]
@@ -208,7 +198,6 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         try:
             response_json: Final = response.json()
 
-            # Extract results from Azure AI Search API response
             results: Final = response_json.get("data", [])
 
             # Try to get text_field from optional_params first, then litellm_params

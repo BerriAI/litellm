@@ -9,60 +9,8 @@ vi.mock("@/components/networking", () => ({
   ragIngestCall: vi.fn(),
 }));
 
-// Mock vector_store_providers
-vi.mock("@/components/vector_store_providers", () => ({
-  VectorStoreProviders: {
-    BEDROCK: "Amazon Bedrock",
-    OPENAI: "OpenAI",
-    AZURE_OPENAI: "Azure OpenAI",
-    S3Vectors: "AWS S3 Vectors",
-    Valkey: "Valkey",
-  },
-  vectorStoreProviderMap: {
-    BEDROCK: "bedrock",
-    OPENAI: "openai",
-    AZURE_OPENAI: "azure_openai",
-    S3Vectors: "s3_vectors",
-    Valkey: "valkey",
-  },
-  vectorStoreProviderLogoMap: {
-    "Amazon Bedrock": "https://example.com/bedrock.png",
-    OpenAI: "https://example.com/openai.png",
-    "Azure OpenAI": "https://example.com/azure.png",
-    "AWS S3 Vectors": "https://example.com/aws.png",
-    Valkey: "https://example.com/valkey.svg",
-  },
-  getProviderSpecificFields: vi.fn((provider: string) => {
-    if (provider === "s3_vectors") {
-      return [
-        {
-          name: "vector_bucket_name",
-          label: "Vector Bucket Name",
-          tooltip: "S3 bucket name for vector storage",
-          placeholder: "my-vector-bucket",
-          required: true,
-          type: "text",
-        },
-        {
-          name: "aws_region_name",
-          label: "AWS Region",
-          tooltip: "AWS region",
-          placeholder: "us-west-2",
-          required: true,
-          type: "text",
-        },
-        {
-          name: "embedding_model",
-          label: "Embedding Model",
-          tooltip: "Embedding model to use",
-          placeholder: "text-embedding-3-small",
-          required: true,
-          type: "select",
-        },
-      ];
-    }
-    return [];
-  }),
+vi.mock("@/components/llm_calls/fetch_models", () => ({
+  fetchAvailableModels: vi.fn(async () => []),
 }));
 
 describe("CreateVectorStore", () => {
@@ -93,9 +41,9 @@ describe("CreateVectorStore", () => {
     expect(providerSelect).toHaveTextContent("Amazon Bedrock");
 
     await user.click(providerSelect);
-    await user.click(await screen.findByText("AWS S3 Vectors"));
+    await user.click(await screen.findByText("Amazon S3 Vectors"));
 
-    expect(screen.getByRole("combobox", { name: /Provider/ })).toHaveTextContent("AWS S3 Vectors");
+    expect(screen.getByRole("combobox", { name: /Provider/ })).toHaveTextContent("Amazon S3 Vectors");
   });
 
   it("should have provider selection dropdown", () => {
@@ -215,7 +163,7 @@ describe("CreateVectorStore", () => {
     });
   });
 
-  it("should exclude valkey from the provider dropdown since it has no RAG ingestion", async () => {
+  it("only offers providers with RAG ingestion support", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
 
     const providerSelect = screen.getByRole("combobox");
@@ -225,9 +173,14 @@ describe("CreateVectorStore", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("AWS S3 Vectors")).toBeInTheDocument();
+      expect(screen.getByText("Amazon S3 Vectors")).toBeInTheDocument();
     });
-    expect(screen.queryByText("Valkey")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Amazon Bedrock",
+      "Amazon S3 Vectors",
+      "Vertex AI RAG Engine",
+      "OpenAI",
+    ]);
   });
 
   it("should display S3 Vectors provider-specific fields when selected", async () => {
@@ -239,7 +192,7 @@ describe("CreateVectorStore", () => {
     await userEvent.click(providerSelect);
 
     // Wait for dropdown options to appear
-    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
+    await userEvent.click(await screen.findByText("Amazon S3 Vectors"));
 
     // Check if S3-specific fields are displayed
     await waitFor(() => {
@@ -271,7 +224,7 @@ describe("CreateVectorStore", () => {
 
     await userEvent.click(providerSelect);
 
-    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
+    await userEvent.click(await screen.findByText("Amazon S3 Vectors"));
 
     // Try to create without filling required fields
     const createButton = screen.getByRole("button", { name: /Create Vector Store/i });

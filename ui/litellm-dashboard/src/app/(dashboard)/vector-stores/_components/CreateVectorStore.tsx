@@ -11,7 +11,6 @@ import {
   vectorStoreProviderLogoMap,
   vectorStoreProviderMap,
   getProviderSpecificFields,
-  VectorStoreFieldConfig,
 } from "@/components/vector_store_providers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -36,10 +35,10 @@ const ACCEPTED_DOCUMENT_TYPES = [
 
 const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 
-const RAG_INGEST_UNSUPPORTED_PROVIDERS = new Set(["valkey"]);
+const RAG_INGEST_SUPPORTED_PROVIDERS = new Set(["openai", "bedrock", "gemini", "s3_vectors", "vertex_ai"]);
 
 const providerItems = Object.entries(VectorStoreProviders)
-  .filter(([providerEnum]) => !RAG_INGEST_UNSUPPORTED_PROVIDERS.has(vectorStoreProviderMap[providerEnum]))
+  .filter(([providerEnum]) => RAG_INGEST_SUPPORTED_PROVIDERS.has(vectorStoreProviderMap[providerEnum]))
   .map(([providerEnum, providerDisplayName]) => ({
     value: vectorStoreProviderMap[providerEnum],
     label: providerDisplayName,
@@ -145,7 +144,10 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     }
 
     // Validate provider-specific required fields
-    const requiredFields = getProviderSpecificFields(selectedProvider).filter((field) => field.required);
+    const requiredFields =
+      selectedProvider === "s3_vectors"
+        ? getProviderSpecificFields(selectedProvider).filter((field) => field.required)
+        : [];
     for (const field of requiredFields) {
       if (!providerParams[field.name]) {
         toast.warning(`Please provide ${field.label}`);
@@ -337,20 +339,43 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                 <Select
                   items={providerItems}
                   value={selectedProvider}
-                  onValueChange={(value: string | null) => value !== null && setSelectedProvider(value)}
+                  onValueChange={(value: string | null) => {
+                    if (value !== null) {
+                      setSelectedProvider(value);
+                      setProviderParams({});
+                    }
+                  }}
                 >
                   <SelectTrigger id="vector-store-provider" className="w-full">
                     <SelectValue placeholder="Select a provider" />
                   </SelectTrigger>
                   <SelectContent>
                     {providerItems.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>
+                      <SelectItem key={item.value} value={item.value} aria-label={item.label}>
                         <Logo src={vectorStoreProviderLogoMap[item.label]} label={item.label} className="w-5 h-5" />
                         <span>{item.label}</span>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-sm text-muted-foreground">
+                  Only providers that support document ingestion are listed. To search an existing Milvus store, use Add
+                  Vector Store. Milvus search requires a REST endpoint.
+                </p>
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor="vector-store-credential-name">Stored Credential Name</FieldLabel>
+                <Input
+                  id="vector-store-credential-name"
+                  value={asText(providerParams.litellm_credential_name)}
+                  onChange={(e) => setProviderParams((prev) => ({ ...prev, litellm_credential_name: e.target.value }))}
+                  placeholder="Optional: a credential configured on the proxy"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Configure credentials and API endpoints on the server. Leave blank to use provider environment
+                  credentials.
+                </p>
               </Field>
 
               {/* S3 Vectors Configuration */}
@@ -361,23 +386,6 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                   onParamsChange={setProviderParams}
                 />
               )}
-
-              {/* Other Provider-specific fields */}
-              {selectedProvider !== "s3_vectors" &&
-                getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => (
-                  <Field key={field.name}>
-                    <FieldLabel htmlFor={`vector-store-${field.name}`}>
-                      {labelWithHint(field.label, field.tooltip)}
-                    </FieldLabel>
-                    <Input
-                      id={`vector-store-${field.name}`}
-                      type={field.type === "password" ? "password" : "text"}
-                      value={asText(providerParams[field.name])}
-                      onChange={(e) => setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))}
-                      placeholder={field.placeholder}
-                    />
-                  </Field>
-                ))}
             </FieldGroup>
 
             <div className="flex justify-end">

@@ -1,6 +1,9 @@
+import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import Request
 
@@ -502,56 +505,7 @@ async def test_update_request_data_with_litellm_managed_vector_store_registry():
 
 
 @pytest.mark.asyncio
-async def test_update_request_data_resolves_embedding_config_at_use_time():
-    """When the persisted vector store row carries only a
-    ``litellm_embedding_model`` reference (the new behaviour after
-    moving the auto-resolve out of write time), the request-handling
-    layer must resolve the embedding config so the downstream embed
-    call still has ``api_key`` / ``api_base`` / ``api_version``. The
-    resolved config lives in this per-request data dict only — never
-    persisted."""
-    mock_vector_store: LiteLLM_ManagedVectorStore = {
-        "vector_store_id": "test_store",
-        "custom_llm_provider": "azure_ai",
-        "litellm_params": {
-            "litellm_embedding_model": "azure/text-embedding-3-large",
-            # Note: no litellm_embedding_config persisted
-        },
-    }
-
-    mock_registry = MagicMock()
-    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = (
-        mock_vector_store
-    )
-
-    resolved = {
-        "api_key": "use-time-resolved-key",
-        "api_base": "https://my-azure.example",
-        "api_version": "2024-09-01",
-    }
-
-    with (
-        patch.object(litellm, "vector_store_registry", mock_registry),
-        patch(
-            "litellm.proxy.vector_store_endpoints.endpoints._resolve_embedding_config",
-            new=AsyncMock(return_value=resolved),
-        ),
-    ):
-        result = await _update_request_data_with_litellm_managed_vector_store_registry(
-            data={}, vector_store_id="test_store"
-        )
-
-    assert result["litellm_embedding_model"] == "azure/text-embedding-3-large"
-    assert result["litellm_embedding_config"] == resolved
-
-
-@pytest.mark.asyncio
 async def test_update_request_data_passes_through_legacy_embedding_config():
-    """A vector store row created by an older proxy version may already
-    carry a fully-resolved ``litellm_embedding_config`` in its persisted
-    ``litellm_params`` (the very leak this PR closes). Those legacy rows
-    must still work — the use-time resolver skips re-resolution when
-    the config is already present so the embed call keeps succeeding."""
     legacy_config = {
         "api_key": "legacy-cleartext-key",
         "api_base": "https://legacy-azure.example",
@@ -571,7 +525,7 @@ async def test_update_request_data_passes_through_legacy_embedding_config():
         mock_vector_store
     )
 
-    resolve_mock = AsyncMock()
+    resolve_mock = AsyncMock(return_value=None)
 
     with (
         patch.object(litellm, "vector_store_registry", mock_registry),
@@ -585,7 +539,125 @@ async def test_update_request_data_passes_through_legacy_embedding_config():
         )
 
     assert result["litellm_embedding_config"] == legacy_config
-    resolve_mock.assert_not_awaited()
+    resolve_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_provider", [False, True])
+@pytest.mark.parametrize("legacy_config", [False, True])
+async def test_milvus_search_resolves_embedding_alias(explicit_provider: bool, legacy_config: bool) -> None:
+    from litellm.llms.milvus.vector_stores.transformation import MilvusVectorStoreConfig
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    deployment_params: Final = {
+        "model": "multilingual-e5-large" if explicit_provider else "openai/multilingual-e5-large",
+        "api_key": "embedding-key",
+        "api_base": "https://embeddings.example/v1",
+        **({"custom_llm_provider": "openai"} if explicit_provider else {}),
+    }
+    embedding_router: Final = litellm.Router(
+        model_list=[{"model_name": "multilingual-e5-large", "litellm_params": deployment_params}]
+    )
+    stored_params: Final = {
+        "api_key": "milvus-key",
+        "api_base": "https://milvus.example",
+        "litellm_embedding_model": "multilingual-e5-large",
+        **({"litellm_embedding_config": {"api_key": "legacy-embedding-key"}} if legacy_config else {}),
+    }
+    registry: Final = VectorStoreRegistry(
+        vector_stores=[
+            {
+                "vector_store_id": "books",
+                "custom_llm_provider": "milvus",
+                "litellm_params": stored_params,
+            }
+        ]
+    )
+    resolved_config: Final = _resolve_embedding_config_from_router("multilingual-e5-large", embedding_router)
+
+    def embedding_http_response(request: httpx.Request, *, stream: bool = False) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "data": [{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}],
+                "model": "multilingual-e5-large",
+                "object": "list",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+
+    with (
+        patch.object(litellm, "vector_store_registry", registry),
+        patch(
+            "litellm.proxy.vector_store_endpoints.endpoints._resolve_embedding_config",
+            new=AsyncMock(return_value=resolved_config),
+        ),
+        patch("httpx.Client.send", side_effect=embedding_http_response) as embedding_http,
+    ):
+        request_params: Final = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={}, vector_store_id="books"
+        )
+        url, body = MilvusVectorStoreConfig().transform_search_vector_store_request(
+            vector_store_id="books",
+            query="hello",
+            vector_store_search_optional_params={},
+            api_base=request_params["api_base"],
+            litellm_logging_obj=MagicMock(),
+            litellm_params=request_params,
+        )
+
+    embedding_request: Final = embedding_http.call_args.args[0]
+    embedding_payload: Final = json.loads(embedding_request.content)
+    assert str(embedding_request.url) == "https://embeddings.example/v1/embeddings"
+    assert embedding_payload["model"] == "multilingual-e5-large"
+    assert embedding_payload["input"] == ["hello"]
+    assert embedding_request.headers["authorization"] == (
+        "Bearer legacy-embedding-key" if legacy_config else "Bearer embedding-key"
+    )
+    assert url == "https://milvus.example/v2/vectordb/entities/search"
+    assert body["data"] == [[0.1, 0.2]]
+    assert request_params["custom_llm_provider"] == "milvus"
+    assert stored_params == {
+        "api_key": "milvus-key",
+        "api_base": "https://milvus.example",
+        "litellm_embedding_model": "multilingual-e5-large",
+        **({"litellm_embedding_config": {"api_key": "legacy-embedding-key"}} if legacy_config else {}),
+    }
+
+
+def test_milvus_search_embedding_config_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.milvus.vector_stores.transformation import MilvusVectorStoreConfig
+
+    monkeypatch.setenv("OPENAI_API_KEY", "env-embedding-key")
+
+    def embedding_http_response(request: httpx.Request, *, stream: bool = False) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "data": [{"embedding": [0.3, 0.4], "index": 0, "object": "embedding"}],
+                "model": "multilingual-e5-large",
+                "object": "list",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+
+    with patch("httpx.Client.send", side_effect=embedding_http_response) as embedding_http:
+        url, body = MilvusVectorStoreConfig().transform_search_vector_store_request(
+            vector_store_id="books",
+            query="hello",
+            vector_store_search_optional_params={},
+            api_base="https://milvus.example",
+            litellm_logging_obj=MagicMock(),
+            litellm_params={"litellm_embedding_model": "openai/multilingual-e5-large"},
+        )
+
+    embedding_request: Final = embedding_http.call_args.args[0]
+    assert json.loads(embedding_request.content)["model"] == "multilingual-e5-large"
+    assert embedding_request.headers["authorization"] == "Bearer env-embedding-key"
+    assert url == "https://milvus.example/v2/vectordb/entities/search"
+    assert body["data"] == [[0.3, 0.4]]
 
 
 class TestCheckVectorStorePermission:
@@ -2010,6 +2082,8 @@ async def test_resolve_embedding_config_from_db():
     # Mock database model with litellm_params
     mock_db_model = MagicMock()
     mock_db_model.litellm_params = {
+        "model": "multilingual-e5-large",
+        "custom_llm_provider": "openai",
         "api_key": "test-api-key",
         "api_base": "https://api.openai.com",
         "api_version": "2024-01-01",
@@ -2028,6 +2102,8 @@ async def test_resolve_embedding_config_from_db():
         )
 
     assert result is not None
+    assert result["model"] == "multilingual-e5-large"
+    assert result["custom_llm_provider"] == "openai"
     assert result["api_key"] == "test-api-key"
     assert result["api_base"] == "https://api.openai.com"
     assert result["api_version"] == "2024-01-01"
@@ -2160,7 +2236,7 @@ def test_resolve_embedding_config_from_router():
     mock_router = MagicMock()
 
     # Create a mock deployment with litellm_params
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
+    mock_litellm_params = LiteLLM_Params(model="openai/text-embedding-3-small")
     mock_litellm_params.api_key = "config-api-key"
     mock_litellm_params.api_base = "https://config-api-base.com"
     mock_litellm_params.api_version = "2024-02-01"
@@ -2193,7 +2269,7 @@ def test_resolve_embedding_config_from_router_with_provider_prefix():
     mock_router = MagicMock()
 
     # Create a mock deployment
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
+    mock_litellm_params = LiteLLM_Params(model="openai/text-embedding-3-small")
     mock_litellm_params.api_key = "azure-api-key"
     mock_litellm_params.api_base = "https://azure-endpoint.openai.azure.com"
     mock_litellm_params.api_version = "2024-02-15"
@@ -2235,7 +2311,7 @@ def test_resolve_embedding_config_from_router_handles_os_environ():
 
     mock_router = MagicMock()
 
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
+    mock_litellm_params = LiteLLM_Params(model="openai/text-embedding-3-small")
     mock_litellm_params.api_key = "os.environ/OPENAI_API_KEY"
     mock_litellm_params.api_base = "https://direct-url.com"
     mock_litellm_params.api_version = None
@@ -2270,7 +2346,7 @@ async def test_resolve_embedding_config_tries_router_then_db():
     mock_router = MagicMock()
 
     # Router has the model
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
+    mock_litellm_params = LiteLLM_Params(model="openai/text-embedding-3-small")
     mock_litellm_params.api_key = "router-api-key"
     mock_litellm_params.api_base = "https://router-api-base.com"
     mock_litellm_params.api_version = None
@@ -2306,7 +2382,7 @@ async def test_resolve_embedding_config_caches_result():
     mock_prisma_client = MagicMock()
     mock_router = MagicMock()
 
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
+    mock_litellm_params = LiteLLM_Params(model="openai/text-embedding-3-small")
     mock_litellm_params.api_key = "router-api-key"
     mock_litellm_params.api_base = "https://router-api-base.com"
     mock_litellm_params.api_version = None
@@ -2391,7 +2467,7 @@ async def test_new_vector_store_auto_resolves_from_router():
 
     # Mock router with the model
     mock_router = MagicMock()
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
+    mock_litellm_params = LiteLLM_Params(model="openai/text-embedding-3-small")
     mock_litellm_params.api_key = "router-resolved-api-key"
     mock_litellm_params.api_base = "https://router-resolved-base.com"
     mock_litellm_params.api_version = "2024-03-01"

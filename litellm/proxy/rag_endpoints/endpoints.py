@@ -8,11 +8,12 @@ Provides:
 
 import base64
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, NoReturn
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse, StreamingResponse
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -37,12 +38,22 @@ from litellm.proxy.rag_endpoints.upload_security import (
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
+from litellm.rag.main import get_ingestion_class
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
+
+
+class _RAGIngestErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+def _raise_invalid_rag_ingest(message: str) -> NoReturn:
+    detail: Final[_RAGIngestErrorDetail] = {"error": message}
+    raise HTTPException(status_code=400, detail=detail)
 
 
 def _raise_vector_store_scan_depth_exceeded() -> None:
@@ -417,16 +428,21 @@ async def parse_rag_ingest_request(
         "api_base",
     }
     vector_store_opts: Final[object] = ingest_options.get("vector_store", {})
-    if isinstance(vector_store_opts, dict):
-        for field in _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS:
-            if field in vector_store_opts:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"'{field}' cannot be set in ingest_options.vector_store. "
-                        "Credentials must be configured server-side."
-                    },
-                )
+    if not isinstance(vector_store_opts, dict):
+        _raise_invalid_rag_ingest("ingest_options.vector_store must be an object")
+    for field in _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS:
+        if field in vector_store_opts:
+            _raise_invalid_rag_ingest(
+                f"'{field}' cannot be set in ingest_options.vector_store. Credentials must be configured server-side."
+            )
+
+    provider: Final = vector_store_opts.get("custom_llm_provider", "openai")
+    if not isinstance(provider, str):
+        _raise_invalid_rag_ingest("custom_llm_provider must be a string")
+    try:
+        get_ingestion_class(provider)
+    except ValueError as error:
+        _raise_invalid_rag_ingest(str(error))
 
     return ingest_options, secured_file_data, file_url, file_id
 

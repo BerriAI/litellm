@@ -6,6 +6,8 @@ Covers:
 """
 
 import io
+import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,6 +47,52 @@ def client_internal_user():
         yield TestClient(app)
     finally:
         app.dependency_overrides = original_overrides
+
+
+@pytest.mark.parametrize("provider", ["milvus", "valkey", "pg_vector", "azure", "vertex_ai/search_api"])
+@pytest.mark.parametrize("multipart", [False, True])
+def test_rag_ingest_rejects_unsupported_provider(
+    client_internal_user: TestClient, provider: str, multipart: bool
+) -> None:
+    payload: Final = {"ingest_options": {"vector_store": {"custom_llm_provider": provider}}}
+    request_args: Final = (
+        {
+            "files": {"file": ("sample.txt", b"test content", "text/plain")},
+            "data": {"request": json.dumps(payload)},
+        }
+        if multipart
+        else {"json": {**payload, "file_id": "file-test"}}
+    )
+    response: Final = client_internal_user.post("/v1/rag/ingest", **request_args)
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": {
+            "error": f"Provider '{provider}' is not supported for RAG ingestion. "
+            "Supported providers: openai, bedrock, gemini, s3_vectors, vertex_ai"
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("vector_store", "error"),
+    [
+        (None, "ingest_options.vector_store must be an object"),
+        ([], "ingest_options.vector_store must be an object"),
+        ({"custom_llm_provider": None}, "custom_llm_provider must be a string"),
+        ({"custom_llm_provider": []}, "custom_llm_provider must be a string"),
+    ],
+)
+def test_rag_ingest_rejects_malformed_vector_store(
+    client_internal_user: TestClient, vector_store: object, error: str
+) -> None:
+    response: Final = client_internal_user.post(
+        "/v1/rag/ingest",
+        json={"ingest_options": {"vector_store": vector_store}, "file_id": "file-test"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": {"error": error}}
 
 
 def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(
