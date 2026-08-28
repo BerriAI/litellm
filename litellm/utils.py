@@ -5866,6 +5866,7 @@ def _get_model_info_helper(
                 supports_response_schema=_model_info.get("supports_response_schema", None),
                 supports_vision=_model_info.get("supports_vision", None),
                 supports_function_calling=_model_info.get("supports_function_calling", None),
+                supports_parallel_function_calling=_model_info.get("supports_parallel_function_calling", None),
                 supports_tool_choice=_model_info.get("supports_tool_choice", None),
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
