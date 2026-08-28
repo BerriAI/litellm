@@ -140,20 +140,19 @@ describe("UsageTab", () => {
     // Total caching and the LiteLLM-injected share deliberately differ so these
     // assertions pin which one each figure uses: the caching headline and the
     // Total-saved tile take the injected share, the secondary keeps the total.
-    const { getByText } = renderWith([
-      day("2026-07-12", {
-        compression_savings_spend: 0.04,
-        prompt_caching_savings_spend: 0.006,
-        gateway_injected_caching_savings_spend: 0.004,
-        compression_saved_tokens: 40000,
-      }),
-      day("2026-07-13", {
-        compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.01,
-        gateway_injected_caching_savings_spend: 0.006,
-        compression_saved_tokens: 100000,
-      }),
-    ]);
+    const firstDay: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.04,
+      prompt_caching_savings_spend: 0.006,
+      gateway_injected_caching_savings_spend: 0.004,
+      compression_saved_tokens: 40000,
+    };
+    const secondDay: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.1,
+      prompt_caching_savings_spend: 0.01,
+      gateway_injected_caching_savings_spend: 0.006,
+      compression_saved_tokens: 100000,
+    };
+    const { getByText } = renderWith([day("2026-07-12", firstDay), day("2026-07-13", secondDay)]);
 
     expect(getByText("$0.1500")).toBeInTheDocument();
     expect(getByText("$0.1400")).toBeInTheDocument();

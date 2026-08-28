@@ -6,32 +6,30 @@ import SummaryCard from "@/components/shared/SummaryCard";
 import {
   autorouterOf,
   cachingOf,
-  gatewayAttributedCachingOf,
   compressionOf,
+  gatewayAttributedCachingOf,
+  SAVINGS_DRIVERS,
   savedTokensOf,
+  sumOverDays,
   usd,
 } from "@/app/(dashboard)/cost-optimization/_components/costOptimizationUtils";
 import { DailyData } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
-// Exported because the by-driver donut has to slice the same numbers the tiles print, and two
-// totalling paths over the same rows is how a chart and the tile above it end up disagreeing.
-export const useSavingsTotals = (results: DailyData[]) =>
-  useMemo(() => {
-    const sumOf = (of: (metrics: DailyData["metrics"]) => number) => results.reduce((sum, d) => sum + of(d.metrics), 0);
-    const compression = sumOf(compressionOf);
-    const caching = sumOf(cachingOf);
-    const autorouter = sumOf(autorouterOf);
-    const gatewayAttributedCaching = sumOf(gatewayAttributedCachingOf);
-    return {
-      compression,
-      caching,
-      autorouter,
-      gatewayAttributedCaching,
-      savedTokens: sumOf(savedTokensOf),
-      total: compression + gatewayAttributedCaching + autorouter,
-    };
-  }, [results]);
+// The total sums SAVINGS_DRIVERS, so it is by construction the sum of what the
+// charts plot; the donut and timelines derive from the same list in costOptimizationUtils.
+const useSavingsTotals = (results: DailyData[]) =>
+  useMemo(
+    () => ({
+      compression: sumOverDays(results, compressionOf),
+      caching: sumOverDays(results, cachingOf),
+      autorouter: sumOverDays(results, autorouterOf),
+      gatewayAttributedCaching: sumOverDays(results, gatewayAttributedCachingOf),
+      savedTokens: sumOverDays(results, savedTokensOf),
+      total: SAVINGS_DRIVERS.reduce((sum, { of }) => sum + sumOverDays(results, of), 0),
+    }),
+    [results],
+  );
 
 const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading: boolean }) => {
   const totals = useSavingsTotals(results);
