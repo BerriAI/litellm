@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -2372,6 +2372,26 @@ class ProxyBaseLLMRequestProcessing:
                         )
 
                     logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
+                elif (
+                    _post_call_guardrails_active
+                    and route_type == "anthropic_messages"
+                    and self._is_streaming_response(response)
+                ):
+                    # Native /v1/messages SSE streams bypass CSW, so the raw
+                    # iterator parks its logging coroutine at stream end (see
+                    # BaseAnthropicMessagesStreamingIterator._handle_streaming_logging)
+                    # and _fire_deferred_stream_logging hands it here after the
+                    # guardrail end-of-stream scans complete.
+                    from litellm.litellm_core_utils.logging_worker import (
+                        GLOBAL_LOGGING_WORKER,
+                    )
+
+                    async def _on_deferred_native_stream_complete(
+                        logging_coroutine: Coroutine[object, object, object],
+                    ) -> None:
+                        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+
+                    logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
 
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
