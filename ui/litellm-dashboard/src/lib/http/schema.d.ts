@@ -14138,6 +14138,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tag/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tag Daily Activity Aggregated
+         * @description Daily activity for tags over the whole range in one response, with per-tag breakdown.
+         *
+         *     One SQL GROUPING SETS pass reads the range from a single snapshot, so callers never
+         *     walk pages of LiteLLM_DailyTagSpend and never re-count rows that the tag spend
+         *     scheduler shifted across a page boundary mid-walk. Same response shape as the
+         *     paginated endpoint with page metadata pinned to a single page.
+         *
+         *     Args:
+         *         tags (Optional[str]): Comma-separated list of tags to filter by. If not provided, returns data for all tags.
+         *         start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+         *         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+         *         model (Optional[str]): Filter by model name.
+         *         api_key (Optional[str]): Filter by API key.
+         *         timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+         *
+         *     Returns:
+         *         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
+         */
+        get: operations["get_tag_daily_activity_aggregated_tag_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tag/dau": {
         parameters: {
             query?: never;
@@ -55665,6 +55701,42 @@ export interface operations {
                 api_key?: string | null;
                 page?: number;
                 page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_daily_activity_aggregated_tag_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                tags?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                timezone?: number | null;
             };
             header?: never;
             path?: never;

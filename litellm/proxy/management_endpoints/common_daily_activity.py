@@ -482,6 +482,26 @@ async def get_api_key_metadata(
     return result
 
 
+MAX_AGGREGATED_RANGE_DAYS: Final = 400
+
+
+def aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
+    """The aggregated endpoints have no pagination to bound their work, so malformed
+    dates and ranges wider than the UI ever requests are rejected before querying."""
+    if start_date is None or end_date is None:
+        return "Please provide start_date and end_date"
+    try:
+        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "start_date and end_date must be valid YYYY-MM-DD dates"
+    if parsed_end < parsed_start:
+        return "end_date must be on or after start_date"
+    if (parsed_end - parsed_start).days > MAX_AGGREGATED_RANGE_DAYS:
+        return f"Date range must be at most {MAX_AGGREGATED_RANGE_DAYS} days"
+    return None
+
+
 def _adjust_dates_for_timezone(
     start_date: str,
     end_date: str,

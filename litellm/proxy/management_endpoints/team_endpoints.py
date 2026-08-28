@@ -94,6 +94,7 @@ from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    aggregated_date_range_error,
     get_daily_activity_aggregated,
 )
 from litellm.proxy.management_endpoints.common_utils import (
@@ -6116,26 +6117,6 @@ async def get_team_daily_activity(
     )
 
 
-_MAX_AGGREGATED_RANGE_DAYS: Final = 400
-
-
-def _aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
-    """The aggregated endpoint has no pagination to bound its work, so malformed
-    dates and ranges wider than the UI ever requests are rejected before querying."""
-    if start_date is None or end_date is None:
-        return "Please provide start_date and end_date"
-    try:
-        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return "start_date and end_date must be valid YYYY-MM-DD dates"
-    if parsed_end < parsed_start:
-        return "end_date must be on or after start_date"
-    if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
-        return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
-    return None
-
-
 @router.get(
     "/team/daily/activity/aggregated",
     response_model=SpendAnalyticsPaginatedResponse,
@@ -6178,7 +6159,7 @@ async def get_team_daily_activity_aggregated(
     if prisma_client is None:
         raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    range_error: Final = aggregated_date_range_error(start_date, end_date)
     if range_error is not None:
         raise _daily_activity_error(status_code=400, message=range_error)
 

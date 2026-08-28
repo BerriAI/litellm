@@ -784,6 +784,7 @@ class LiteLLMRoutes(enum.Enum):
             # Tag usage endpoints scope internal users to tags produced by
             # their own keys in tag_management_endpoints.py.
             "/tag/daily/activity",
+            "/tag/daily/activity/aggregated",
             "/tag/list",
             "/v1/models/{model_id}",
             "/models/{model_id}",
@@ -808,6 +809,7 @@ class LiteLLMRoutes(enum.Enum):
             # Tag usage endpoints scope internal viewers to tags produced by
             # their own keys in tag_management_endpoints.py.
             "/tag/daily/activity",
+            "/tag/daily/activity/aggregated",
             "/tag/list",
         ]
     )
@@ -895,6 +897,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
             "/tag/daily/activity",
+            "/tag/daily/activity/aggregated",
             "/tag/list",
             "/audit",
             "/audit/{id}",

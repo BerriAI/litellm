@@ -1451,6 +1451,31 @@ export const tagDailyActivityCall = async (
   });
 };
 
+export const tagDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  tags: string[] | null = null,
+) => {
+  /**
+   * Get aggregated daily tag activity with per-tag breakdown (no pagination)
+   */
+  try {
+    return await apiClient.get(`/tag/daily/activity/aggregated`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        tags: tags && tags.length > 0 ? tags.join(",") : undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch aggregated tag daily activity:", error);
+    throw error;
+  }
+};
+
 export const teamDailyActivityCall = async (
   accessToken: string,
   startTime: Date,

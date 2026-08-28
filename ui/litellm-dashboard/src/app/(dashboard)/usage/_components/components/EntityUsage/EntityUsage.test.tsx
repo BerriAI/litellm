@@ -19,6 +19,7 @@ beforeAll(() => {
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
   tagDailyActivityCall: vi.fn(),
+  tagDailyActivityAggregatedCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
   teamDailyActivityAggregatedCall: vi.fn(),
   organizationDailyActivityCall: vi.fn(),
@@ -93,6 +94,7 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
 
 describe("EntityUsage", () => {
   const mockTagDailyActivityCall = vi.mocked(networking.tagDailyActivityCall);
+  const mockTagDailyActivityAggregatedCall = vi.mocked(networking.tagDailyActivityAggregatedCall);
   const mockTeamDailyActivityCall = vi.mocked(networking.teamDailyActivityCall);
   const mockTeamDailyActivityAggregatedCall = vi.mocked(networking.teamDailyActivityAggregatedCall);
   const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
@@ -395,6 +397,7 @@ describe("EntityUsage", () => {
 
   beforeEach(() => {
     mockTagDailyActivityCall.mockClear();
+    mockTagDailyActivityAggregatedCall.mockClear();
     mockTeamDailyActivityCall.mockClear();
     mockTeamDailyActivityAggregatedCall.mockClear();
     mockOrganizationDailyActivityCall.mockClear();
@@ -402,6 +405,7 @@ describe("EntityUsage", () => {
     mockAgentDailyActivityCall.mockClear();
     mockUserDailyActivityCall.mockClear();
     mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockTagDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
     mockOrganizationDailyActivityCall.mockResolvedValue(mockSpendData);
@@ -421,7 +425,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
@@ -515,7 +519,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
@@ -564,7 +568,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     act(() => {
@@ -616,12 +620,12 @@ describe("EntityUsage", () => {
       },
     };
 
-    mockTagDailyActivityCall.mockResolvedValue(emptyData);
+    mockTagDailyActivityAggregatedCall.mockResolvedValue(emptyData);
 
     render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(await screen.findByText("Tag Spend Overview")).toBeInTheDocument();
@@ -634,7 +638,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="tag" />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(screen.getByText("Model Activity")).toBeInTheDocument();
@@ -654,7 +658,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="tag" />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
@@ -664,7 +668,7 @@ describe("EntityUsage", () => {
     const { container } = render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     act(() => {
@@ -705,7 +709,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityList={customEntityList} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     await waitFor(() => {
@@ -719,7 +723,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityList={customEntityList} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     await waitFor(() => {
@@ -731,7 +735,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityList={null} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     await waitFor(() => {
@@ -753,7 +757,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="tag" />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(screen.queryByText("Agent Activity")).not.toBeInTheDocument();
@@ -773,7 +777,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="tag" />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(screen.queryByText("Top Agents Driving Spend")).not.toBeInTheDocument();
@@ -797,7 +801,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="tag" />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     expect(mockAgentDailyActivityCall).not.toHaveBeenCalled();
@@ -839,12 +843,12 @@ describe("EntityUsage", () => {
       ],
     };
 
-    mockTagDailyActivityCall.mockResolvedValue(spendDataWithoutAlias);
+    mockTagDailyActivityAggregatedCall.mockResolvedValue(spendDataWithoutAlias);
 
     render(<EntityUsage {...defaultProps} entityList={null} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     await waitFor(() => {
@@ -856,7 +860,7 @@ describe("EntityUsage", () => {
     const { container } = render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     await waitFor(() => {
@@ -976,7 +980,7 @@ describe("EntityUsage", () => {
       render(<EntityUsage {...defaultProps} entityType="tag" userRole="Internal User" />);
 
       await waitFor(() => {
-        expect(mockTagDailyActivityCall).toHaveBeenCalled();
+        expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
       });
       expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
     });
@@ -997,7 +1001,7 @@ describe("EntityUsage", () => {
         },
       ],
     };
-    mockTagDailyActivityCall.mockResolvedValue(spendDataUnknownProvider);
+    mockTagDailyActivityAggregatedCall.mockResolvedValue(spendDataUnknownProvider);
 
     render(<EntityUsage {...defaultProps} />);
 
@@ -1050,6 +1054,33 @@ describe("EntityUsage", () => {
       expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
     });
     expect(mockTeamDailyActivityCall).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("$100.50").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("uses the aggregated tag endpoint and never drains paginated pages for tags", async () => {
+    render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+    expect(mockTagDailyActivityCall).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("$100.50").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("falls back to the paginated tag endpoint when the aggregated call fails", async () => {
+    mockTagDailyActivityAggregatedCall.mockRejectedValue(new Error("aggregated unavailable"));
+
+    render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
 
     await waitFor(() => {
       expect(screen.getAllByText("$100.50").length).toBeGreaterThan(0);

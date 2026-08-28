@@ -30,6 +30,7 @@ import {
   agentDailyActivityCall,
   customerDailyActivityCall,
   organizationDailyActivityCall,
+  tagDailyActivityAggregatedCall,
   tagDailyActivityCall,
   teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
@@ -100,6 +101,7 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
 // Single-shot endpoints returning the whole range in one response; entity types
 // without one fall back to page-draining the paginated endpoint.
 const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, (...args: any[]) => Promise<any>>> = {
+  tag: tagDailyActivityAggregatedCall,
   team: teamDailyActivityAggregatedCall,
 };
 
