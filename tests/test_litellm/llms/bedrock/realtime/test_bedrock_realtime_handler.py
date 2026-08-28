@@ -104,6 +104,26 @@ class RealtimeClientWS:
         self.closed = True
 
 
+class ScriptedBedrockReceiver:
+    def __init__(self, payloads):
+        self._payloads = list(payloads)
+
+    async def receive(self):
+        if not self._payloads:
+            return None
+        payload = self._payloads.pop(0)
+        return SimpleNamespace(value=SimpleNamespace(bytes_=payload.encode("utf-8")))
+
+
+class ScriptedBedrockStream:
+    def __init__(self, payloads):
+        self.input_stream = FakeInputStream()
+        self._receiver = ScriptedBedrockReceiver(payloads)
+
+    async def await_output(self):
+        return (None, self._receiver)
+
+
 class ImmediatelyEndingBedrockStream:
     def __init__(self):
         self.input_stream = FakeInputStream()
@@ -270,6 +290,34 @@ class TestBedrockRealtimeHandler:
         event_names = [next(iter(event["event"])) for event in sent_events]
         assert "sessionEnd" in event_names
         assert stream.input_stream.closed
+
+    @pytest.mark.asyncio
+    async def test_forwarded_events_are_collected_for_spend_logging(self):
+        handler = BedrockRealtime()
+        stream = ScriptedBedrockStream(
+            [
+                json.dumps({"event": {"userSpeechStart": {}}}),
+                json.dumps({"event": {"userSpeechEnd": {}}}),
+            ]
+        )
+        client_ws = RealtimeClientWS()
+        logged_events = []
+
+        await handler._forward_bedrock_to_client(
+            stream,
+            client_ws,
+            BedrockRealtimeConfig(),
+            "amazon.nova-sonic-v1:0",
+            FakeLogging(),
+            {},
+            logged_events,
+        )
+
+        assert [event["type"] for event in logged_events] == [
+            "input_audio_buffer.speech_started",
+            "input_audio_buffer.speech_stopped",
+        ]
+        assert client_ws.closed
 
     @pytest.mark.asyncio
     async def test_bedrock_stream_end_closes_client_websocket(self):

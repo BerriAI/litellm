@@ -13,6 +13,8 @@ from pydantic import TypeAdapter
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.llms.openai import OpenAIRealtimeEvents
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
@@ -154,6 +156,7 @@ class BedrockRealtime(BaseAWSLLM):
                 )
             )
 
+            logged_events: Final[list[OpenAIRealtimeEvents]] = []  # mutable-ok: events accumulate across stream loop iterations for spend logging
             bedrock_to_client_task: Final = asyncio.create_task(
                 self._forward_bedrock_to_client(
                     bedrock_stream,
@@ -162,6 +165,7 @@ class BedrockRealtime(BaseAWSLLM):
                     model,
                     logging_obj,
                     session_state,
+                    logged_events,
                 )
             )
 
@@ -171,6 +175,11 @@ class BedrockRealtime(BaseAWSLLM):
                 bedrock_to_client_task,
                 return_exceptions=True,
             )
+
+            if logged_events:
+                GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                    logging_obj.dispatch_success_handlers(logged_events, prefer_async_handlers=True)
+                )
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in BedrockRealtime.async_realtime: %s", e)
@@ -252,6 +261,7 @@ class BedrockRealtime(BaseAWSLLM):
         model: str,
         logging_obj: LiteLLMLogging,
         session_state: dict,
+        logged_events: "list[OpenAIRealtimeEvents] | None" = None,
     ):
         """Forward messages from Bedrock stream to client WebSocket."""
         try:
@@ -304,6 +314,8 @@ class BedrockRealtime(BaseAWSLLM):
                     # Send transformed messages to client
                     openai_messages = transformed_response.get("response", [])
                     for openai_message in openai_messages:
+                        if logged_events is not None and isinstance(openai_message, dict):
+                            logged_events.append(openai_message)
                         message_json = json.dumps(openai_message)
                         await client_ws.send_text(message_json)
                         verbose_proxy_logger.debug("Bedrock Realtime: Sent to client: %s", message_json[:200])
