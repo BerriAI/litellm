@@ -1,3 +1,4 @@
+import base64
 from typing import Any, cast
 
 import pytest
@@ -11,9 +12,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
+    _bedrock_converse_messages_pt,
 )
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
+    AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
     create_tool_name_mapping,
     truncate_tool_name,
@@ -359,6 +362,48 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
+    """Reasoning-aware chat providers read reasoning_content, so thinking text must land there.
+
+    Without it Moonshot and DeepSeek fill in a single-space placeholder and the model gets
+    a blank where its own prior reasoning belongs.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Which city is best for a picnic?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "Denver is dry in August.", "signature": "sig1"},
+                {"type": "thinking", "thinking": "San Francisco is foggy.", "signature": "sig2"},
+                {"type": "redacted_thinking", "data": "REDACTED"},
+                {"type": "text", "text": "Denver."},
+            ],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert result[1]["reasoning_content"] == "Denver is dry in August.\nSan Francisco is foggy."
+    assert result[1]["content"] == "Denver."
+
+
+def test_translate_anthropic_messages_to_openai_sets_no_reasoning_content_without_thinking():
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "text", "text": "Denver."}],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert "reasoning_content" not in result[0]
+
+
 def test_translate_anthropic_messages_to_openai_tool_message_placement():
     """Test that tool result messages are placed before user messages in the conversation order."""
 
@@ -635,7 +680,7 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
 
 
 def _translate_with_metadata(
-    model: str, metadata: dict[str, Any], custom_llm_provider: str | None
+    model: str, metadata: dict[str, str], custom_llm_provider: str | None
 ) -> dict[str, Any]:
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         anthropic_message_request={
@@ -965,6 +1010,35 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     assert result[0]["thinking"] == "I need to summar"
     assert result[0]["signature"] == "sigsig"
     assert result[1]["type"] == "redacted_thinking"
+    assert result[1]["data"] == "REDACTED"
+
+
+def test_translate_openai_content_to_anthropic_drops_empty_thinking_blocks():
+    """LIT-6357 non-streaming producer half: a bridged reasoning model whose
+    thinking_blocks entry has empty or whitespace-only text (signed or not)
+    must not surface as {"type": "thinking", "thinking": ""} — clients replay
+    it as history and Anthropic 400s with "each thinking block must contain
+    thinking". Non-empty thinking and redacted_thinking pass through."""
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content="the answer",
+                thinking_blocks=[
+                    {"type": "thinking", "thinking": "", "signature": "sig_abc"},
+                    {"type": "thinking", "thinking": " \n "},
+                    {"type": "thinking", "thinking": "real plan", "signature": "sigsig"},
+                    {"type": "redacted_thinking", "data": "REDACTED"},
+                ],
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert [b["type"] for b in result] == ["thinking", "redacted_thinking", "text"]
+    assert result[0]["thinking"] == "real plan"
     assert result[1]["data"] == "REDACTED"
 
 
@@ -1942,8 +2016,13 @@ def test_adaptive_thinking_output_config_effort_preserved_for_claude_model(model
     backend. On Bedrock Converse, adaptive thinking without effort streams zero reasoning
     blocks. The `format` subkey must still be excluded (it is translated to
     `response_format` separately).
+
+    Bedrock keeps taking the tier as `output_config`, which attaches it without disturbing
+    `thinking`. Driving the translated request through the provider's own param mapping is what
+    makes the second half a claim about the wire rather than about an intermediate key.
     """
     from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
 
     anthropic_request = AnthropicMessagesRequest(
         model=model,
@@ -1961,7 +2040,17 @@ def test_adaptive_thinking_output_config_effort_preserved_for_claude_model(model
 
     assert openai_request["thinking"] == {"type": "adaptive"}
     assert openai_request["output_config"] == {"effort": "max"}
+    assert "reasoning_effort" not in openai_request
     assert "response_format" in openai_request
+
+    on_the_wire = get_optional_params(
+        model=model,
+        custom_llm_provider="bedrock",
+        thinking=openai_request["thinking"],
+        output_config=openai_request["output_config"],
+    )
+
+    assert on_the_wire["output_config"] == {"effort": "max"}
 
 
 def test_adaptive_thinking_format_only_output_config_not_forwarded_for_claude_model():
@@ -1985,13 +2074,16 @@ def test_adaptive_thinking_format_only_output_config_not_forwarded_for_claude_mo
 
 
 def test_adaptive_thinking_output_config_not_forwarded_for_non_bedrock_claude_model():
-    """`output_config` is forwarded only for Bedrock-destined Claude models. Other
-    Claude-through-bridge providers (e.g. openrouter) accept `thinking` but reject a raw
-    `output_config` param with UnsupportedParamsError when drop_params is off."""
+    """`output_config` is never forwarded raw to a bridged provider: openrouter and friends accept
+    `thinking` but reject that param with UnsupportedParamsError when drop_params is off.
+
+    Regression: the tier used to be dropped along with it, so an openrouter Claude deployment got a
+    bare adaptive `thinking` block and the caller's effort did nothing, byte-identical for `max` and
+    `minimal`. It now travels as `reasoning_effort`, which that provider does accept."""
     from litellm.types.llms.anthropic import AnthropicMessagesRequest
 
     anthropic_request = AnthropicMessagesRequest(
-        model="openrouter/anthropic/claude-opus-4-7",
+        model="openrouter/anthropic/claude-opus-4.7",
         max_tokens=1024,
         messages=[{"role": "user", "content": "hi"}],
         thinking={"type": "adaptive"},
@@ -1999,10 +2091,75 @@ def test_adaptive_thinking_output_config_not_forwarded_for_non_bedrock_claude_mo
     )
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request, custom_llm_provider="openrouter"
+    )
 
     assert openai_request["thinking"] == {"type": "adaptive"}
     assert "output_config" not in openai_request
+    assert openai_request["reasoning_effort"] == "max"
+
+
+@pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high", "xhigh", "max"])
+def test_every_adaptive_effort_tier_reaches_a_bridged_claude_target(effort):
+    """The tier the caller asked for is the tier the bridge carries, for every level. The bug was
+    invisible per-request because each call returned 200; only comparing two tiers showed the
+    upstream body was the same either way."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="openrouter/anthropic/claude-opus-4.7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive"},
+            output_config={"effort": effort},
+        ),
+        custom_llm_provider="openrouter",
+    )
+
+    assert openai_request["reasoning_effort"] == effort
+
+
+def test_adaptive_thinking_without_a_tier_leaves_a_claude_target_on_its_own_default():
+    """Adaptive with no `output_config.effort` must stay bare, so the provider's own adaptive
+    default still decides. Inventing a tier here would silently override it."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="openrouter/anthropic/claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive"},
+        )
+    )
+
+    assert openai_request["thinking"] == {"type": "adaptive"}
+    assert "reasoning_effort" not in openai_request
+    assert "output_config" not in openai_request
+
+
+def test_budgeted_thinking_on_a_claude_target_keeps_its_budget_and_gains_no_tier():
+    """`enabled` + `budget_tokens` is more precise than any tier, so the bridge must forward it
+    untouched rather than coarsening it into a `reasoning_effort` bucket."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="openrouter/anthropic/claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "enabled", "budget_tokens": 8000},
+            output_config={"effort": "max"},
+        )
+    )
+
+    assert openai_request["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+    assert "reasoning_effort" not in openai_request
 
 
 def test_stop_sequences_translated_to_stop_for_non_claude_model():
@@ -2261,6 +2418,53 @@ def test_translate_anthropic_tools_to_openai_fills_missing_tool_name():
     result, _ = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
     assert result[0]["function"]["name"] == "litellm_unnamed_tool_0"
     assert result[1]["function"]["name"] == "litellm_unnamed_tool_1"
+
+
+def test_translate_anthropic_tools_to_openai_passes_provider_native_tool_dicts_through():
+    """Deployment-level provider-native tools (e.g. Gemini googleMaps) must reach the provider transformation verbatim (LIT-6286)."""
+    tools = [
+        {"googleMaps": {}},
+        {"googleSearch": {}},
+        {
+            "name": "get_weather",
+            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+        },
+    ]
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
+    assert result[0] == {"googleMaps": {}}
+    assert result[1] == {"googleSearch": {}}
+    assert result[2]["function"]["name"] == "get_weather"
+    assert tool_name_mapping == {}
+
+
+def test_translate_anthropic_tools_to_openai_passes_openai_function_tools_through():
+    """A tool already in OpenAI function format must pass through unchanged instead of becoming litellm_unnamed_tool_N."""
+    openai_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+        },
+    }
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, _ = adapter.translate_anthropic_tools_to_openai(tools=[openai_tool], model=None)
+    assert result == [openai_tool]
+
+
+def test_translate_completion_input_params_keeps_provider_native_tools():
+    """/v1/messages request translation must keep router-merged provider-native tools in kwargs['tools'] (LIT-6286)."""
+    adapter = AnthropicAdapter()
+    translated = adapter.translate_completion_input_params(
+        {
+            "model": "gemini/gemini-2.5-flash",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "coffee shops near Union Square"}],
+            "tools": [{"googleMaps": {}}],
+        }
+    )
+    assert translated is not None
+    assert translated["tools"] == [{"googleMaps": {}}]
 
 
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
@@ -3830,6 +4034,75 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert _image_urls_in_user_messages(result) == []
 
 
+TOOL_RESULT_PDF_B64 = base64.b64encode(b"%PDF-1.4 minimal regression fixture").decode()
+
+
+def _base64_pdf_block():
+    return {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": TOOL_RESULT_PDF_B64},
+    }
+
+
+def test_tool_result_single_document_kept_as_pdf_data_url():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    translated = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [_base64_pdf_block()]}),
+        ]
+    )
+
+    tool_messages = [m for m in translated if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}"},
+        }
+    ]
+
+
+def test_tool_result_text_and_document_reach_bedrock_converse_tool_result():
+    """Claude Code >= 2.1.245 sends Read-tool PDF output as a document block inside
+    tool_result; dropping it left bedrock converse models blind to the PDF content."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    translated = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            AnthropicMessagesUserMessageParam(role="user", content="Read pong.pdf"),
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn(
+                {
+                    "toolu_01": [
+                        {"type": "text", "text": "PDF file read: pong.pdf (579 bytes)"},
+                        _base64_pdf_block(),
+                    ]
+                }
+            ),
+        ]
+    )
+
+    converse_messages = _bedrock_converse_messages_pt(
+        messages=translated,
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    tool_results = [
+        block["toolResult"]
+        for message in converse_messages
+        for block in message["content"]
+        if "toolResult" in block
+    ]
+    assert len(tool_results) == 1
+    documents = [part["document"] for part in tool_results[0]["content"] if "document" in part]
+    assert len(documents) == 1
+    assert documents[0]["format"] == "pdf"
+    assert documents[0]["source"]["bytes"] == TOOL_RESULT_PDF_B64
+    texts = [part["text"] for part in tool_results[0]["content"] if "text" in part]
+    assert texts == ["PDF file read: pong.pdf (579 bytes)"]
+
+
 def test_translate_anthropic_to_openai_carries_prompt_cache_breakpoint_on_system_and_user_blocks():
     explicit = {"mode": "explicit"}
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
@@ -3884,3 +4157,471 @@ def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_ca
     assert result == [
         {"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}
     ]
+
+
+def _tool_reference_block(tool_name="WebFetch"):
+    return {"type": "tool_reference", "tool_name": tool_name}
+
+
+def test_tool_result_tool_reference_is_carried_through_untouched():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [_tool_reference_block()]}),
+        ]
+    )
+
+    assert [m["role"] for m in result] == ["assistant", "tool"]
+    assert result[1]["tool_call_id"] == "toolu_01"
+    assert result[1]["content"] == [{"type": "tool_reference", "tool_name": "WebFetch"}]
+
+
+def test_tool_result_text_beside_tool_reference_keeps_both_parts_in_order():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn(
+                {"toolu_01": [{"type": "text", "text": "loaded"}, _tool_reference_block("Grep")]}
+            ),
+        ]
+    )
+
+    assert result[1]["content"] == [
+        {"type": "text", "text": "loaded"},
+        {"type": "tool_reference", "tool_name": "Grep"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "tool_result_content",
+    [
+        [],
+        None,
+        "",
+        {"not": "a list"},
+        [{"type": "future_block", "payload": 1}],
+        [{"type": "search_result", "source": "https://example.com", "title": "t", "content": []}],
+    ],
+    ids=["empty_list", "null", "empty_string", "non_list", "unknown_block", "search_result_only"],
+)
+def test_tool_result_without_translatable_content_still_answers_its_tool_use(tool_result_content):
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}],
+            },
+        ]
+    )
+
+    assert result == [
+        result[0],
+        {"role": "tool", "tool_call_id": "toolu_01", "content": ""},
+    ]
+    assert result[0]["role"] == "assistant"
+
+
+def _openai_response_with_usage(usage: Usage) -> ModelResponse:
+    return ModelResponse(
+        id="resp_web_search",
+        model="gemini-3-flash-preview",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(role="assistant", content="searched"),
+            )
+        ],
+        usage=usage,
+    )
+
+
+def test_translate_openai_response_to_anthropic_maps_gemini_web_search_usage():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=385,
+        completion_tokens=566,
+        total_tokens=951,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=385, web_search_requests=2),
+    )
+
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(usage)
+    )
+
+    assert anthropic_response["usage"]["server_tool_use"] == {"web_search_requests": 2}
+
+
+def test_translate_openai_response_to_anthropic_maps_server_tool_use_web_search_usage():
+    from litellm.types.utils import ServerToolUse
+
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=40,
+        total_tokens=140,
+        server_tool_use=ServerToolUse(web_search_requests=3),
+    )
+
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(usage)
+    )
+
+    assert anthropic_response["usage"]["server_tool_use"] == {"web_search_requests": 3}
+
+
+def test_translate_openai_response_to_anthropic_omits_server_tool_use_without_web_search():
+    usage = Usage(prompt_tokens=100, completion_tokens=40, total_tokens=140)
+
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(usage)
+    )
+
+    assert "server_tool_use" not in anthropic_response["usage"]
+
+
+def test_completion_cost_on_translated_anthropic_response_includes_web_search():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    with_search = adapter.translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(
+            Usage(
+                prompt_tokens=385,
+                completion_tokens=566,
+                total_tokens=951,
+                prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=385, web_search_requests=2),
+            )
+        )
+    )
+    without_search = adapter.translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(Usage(prompt_tokens=385, completion_tokens=566, total_tokens=951))
+    )
+
+    cost_with_search = litellm.completion_cost(
+        completion_response=with_search,
+        model="gemini/gemini-3-flash-preview",
+        call_type="anthropic_messages",
+    )
+    cost_without_search = litellm.completion_cost(
+        completion_response=without_search,
+        model="gemini/gemini-3-flash-preview",
+        call_type="anthropic_messages",
+    )
+
+    per_query_cost = litellm.model_cost["gemini/gemini-3-flash-preview"]["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    assert per_query_cost > 0
+    assert cost_with_search - cost_without_search == pytest.approx(2 * per_query_cost)
+
+
+@pytest.mark.parametrize(
+    "model, provider, carried",
+    [
+        ("databricks/databricks-claude-opus-4-7", "databricks", "max"),
+        ("openrouter/anthropic/claude-opus-4.7", "openrouter", "xhigh"),
+    ],
+)
+def test_a_summary_bearing_adaptive_request_still_delivers_its_tier(model, provider, carried):
+    """The summary rides inside the forwarded `thinking` block for a Claude target, so the tier must
+    stay a plain string. Wrapping it into `{"effort": ..., "summary": ...}` made databricks raise
+    `Invalid reasoning_effort` and made bedrock drop `output_config` altogether, losing the tier on
+    exactly the path this translator exists to serve.
+
+    Each case names the exact tier that provider ends up sending, not merely that something arrived:
+    bedrock and databricks rebuild `output_config`, and openrouter applies its own max to xhigh
+    remap, so asserting presence alone would pass on a mapping that silently changed the tier."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive", "summary": "detailed"},
+            output_config={"effort": "max"},
+        ),
+        custom_llm_provider=provider,
+    )
+
+    assert openai_request["reasoning_effort"] == "max"
+
+    on_the_wire = get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        thinking=openai_request["thinking"],
+        reasoning_effort=openai_request["reasoning_effort"],
+    )
+    on_the_wire_tier = on_the_wire.get("output_config", {}).get("effort") or on_the_wire.get("reasoning_effort")
+
+    assert on_the_wire_tier == carried
+
+
+ARN_MODEL = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+
+
+def test_an_inference_profile_arn_keeps_taking_its_tier_as_output_config():
+    """Regression: an ARN contains neither `anthropic` nor `claude`, so it reaches this branch only
+    through `is_bedrock_arn_model`. Bedrock resolves no chat config for one, so `reasoning_effort`
+    is dropped there and the tier vanishes; `output_config` is what survives."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model=ARN_MODEL,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive"},
+            output_config={"effort": "max"},
+        )
+    )
+
+    assert openai_request["output_config"] == {"effort": "max"}
+    assert "reasoning_effort" not in openai_request
+
+    on_the_wire = get_optional_params(
+        model=ARN_MODEL,
+        custom_llm_provider="bedrock",
+        thinking=openai_request["thinking"],
+        output_config=openai_request["output_config"],
+    )
+
+    assert on_the_wire["output_config"] == {"effort": "max"}
+
+
+def test_a_bedrock_target_keeps_a_caller_set_thinking_display():
+    """`output_config` attaches the tier without touching `thinking`, so a caller who asked for
+    `display: omitted` still gets it. Carrying the tier as `reasoning_effort` instead lets the
+    provider mapping rewrite that block."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
+
+    thinking = {"type": "adaptive", "display": "omitted"}
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking=thinking,
+            output_config={"effort": "max"},
+        )
+    )
+
+    on_the_wire = get_optional_params(
+        model="converse/us.anthropic.claude-opus-4-7",
+        custom_llm_provider="bedrock",
+        thinking=openai_request["thinking"],
+        output_config=openai_request["output_config"],
+    )
+
+    assert on_the_wire["thinking"] == thinking
+    assert on_the_wire["output_config"] == {"effort": "max"}
+
+
+def test_a_non_claude_target_keeps_its_summary_wrapping():
+    """The negative class: a target that gets no `thinking` block has nowhere else to put the
+    summary, so the wrapped dict is still the right shape there."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="gpt-5-mini",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive", "summary": "detailed"},
+            output_config={"effort": "max"},
+        )
+    )
+
+    assert openai_request["reasoning_effort"] == {"effort": "max", "summary": "detailed"}
+    assert "thinking" not in openai_request
+
+
+def test_a_databricks_target_trades_its_thinking_display_for_the_tier():
+    """The one accepted cost of carrying the tier as `reasoning_effort`: databricks rebuilds the
+    thinking block while mapping it, so a caller-set `display` is replaced. Pinned rather than left
+    silent. It only takes `output_config` when litellm sends one, which this bridge cannot do for a
+    provider whose own supported-params list omits it, so the tier is the thing worth keeping here.
+    Bedrock avoids this entirely by taking `output_config` directly."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="databricks/databricks-claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive", "display": "omitted"},
+            output_config={"effort": "max"},
+        ),
+        custom_llm_provider="databricks",
+    )
+
+    on_the_wire = get_optional_params(
+        model="databricks-claude-opus-4-7",
+        custom_llm_provider="databricks",
+        thinking=openai_request["thinking"],
+        reasoning_effort=openai_request["reasoning_effort"],
+    )
+
+    assert on_the_wire["output_config"] == {"effort": "max"}
+    assert on_the_wire["thinking"]["display"] == "summarized"
+
+
+@pytest.mark.parametrize(
+    "thinking, output_config",
+    [
+        ({"type": "adaptive"}, {"effort": "max"}),
+        ({"type": "adaptive"}, {"effort": "minimal"}),
+        ({"type": "adaptive", "summary": "detailed"}, {"effort": "high"}),
+        ({"type": "adaptive", "display": "omitted"}, {"effort": "high"}),
+    ],
+)
+def test_a_target_declaring_no_reasoning_effort_is_sent_none(thinking, output_config):
+    """Regression: snowflake serves Claude over the Anthropic dialect and declares `thinking`
+    alone, so storing the tier raised `UnsupportedParamsError` in `get_optional_params` before the
+    request reached the wire. Every adaptive shape carrying a tier turned a 200 into a 400.
+
+    Being Claude-family is a fact about the model, not about the params the provider in front of
+    it accepts. The tier stays behind and the caller's `thinking` block travels untouched."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="snowflake/claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking=thinking,
+            output_config=output_config,
+        ),
+        custom_llm_provider="snowflake",
+    )
+
+    assert "reasoning_effort" not in openai_request
+    assert "output_config" not in openai_request
+    assert openai_request["thinking"] == thinking
+
+    on_the_wire = get_optional_params(
+        model="snowflake/claude-sonnet-4-6",
+        custom_llm_provider="snowflake",
+        thinking=openai_request["thinking"],
+    )
+
+    assert on_the_wire["thinking"] == thinking
+
+
+def test_a_target_declaring_reasoning_effort_still_gets_its_tier():
+    """The negative class for the gate. Same request shape, a provider that does declare the
+    param, so the tier must still travel: the gate must drop it for snowflake alone, not for
+    every Claude target, or it would undo the fix it is protecting."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="databricks/databricks-claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive"},
+            output_config={"effort": "max"},
+        ),
+        custom_llm_provider="databricks",
+    )
+
+    assert openai_request["reasoning_effort"] == "max"
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["snowflake/claude-sonnet-4-6", "databricks/databricks-claude-opus-4-7", "github_copilot/claude-sonnet-4"],
+)
+def test_a_caller_that_names_no_provider_carries_no_tier(model):
+    """`translate_anthropic_to_openai` is also called without a provider, by `adapter_completion`
+    and by the shadow-eval logger. There is no declaration to read there, so the tier stays behind
+    rather than being offered to a target that may reject it, which is what this bridge sent
+    before it carried a tier at all.
+
+    The databricks arm is the cost of that, stated rather than hidden: a provider that does take
+    the tier does not get one from these two callers. The copilot arm is why the cost is worth
+    paying, and why this must not be "fixed" by resolving the provider from the model prefix.
+    That resolution runs an OAuth device flow for copilot and chatgpt, which would block this
+    call for minutes, and one of the two callers is a logging callback. A test asserting the
+    absence here is also a test that this stays fast."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive"},
+            output_config={"effort": "max"},
+        )
+    )
+
+    assert openai_request["thinking"] == {"type": "adaptive"}
+    assert "reasoning_effort" not in openai_request
+
+
+def test_a_chained_litellm_proxy_target_still_takes_the_tier():
+    """The one place this deliberately parts company with `_supports_prompt_cache_key`, which
+    excludes a provider that proxies an unknown backend. That exclusion is right for a derived
+    cache key and wrong here: the downstream proxy declares this param and resolves the real
+    target itself, so excluding it would drop a tier that arrives perfectly well."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="litellm_proxy/claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive"},
+            output_config={"effort": "max"},
+        ),
+        custom_llm_provider="litellm_proxy",
+    )
+
+    assert openai_request["reasoning_effort"] == "max"
+    assert openai_request["thinking"] == {"type": "adaptive"}
+
+
+def test_a_bedrock_target_still_takes_output_config_not_the_declared_gate():
+    """Bedrock declares both carriers, so the gate must not change which one it gets: the tier
+    rides in `output_config`, which leaves `thinking` alone, and `reasoning_effort` is never
+    stored alongside it."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive", "display": "omitted"},
+            output_config={"effort": "max"},
+        ),
+        custom_llm_provider="bedrock",
+    )
+
+    assert openai_request["output_config"] == {"effort": "max"}
+    assert "reasoning_effort" not in openai_request
+    assert openai_request["thinking"] == {"type": "adaptive", "display": "omitted"}

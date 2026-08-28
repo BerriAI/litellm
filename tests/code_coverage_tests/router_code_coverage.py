@@ -80,6 +80,7 @@ ignored_function_names = [
     "_override_vector_store_methods_for_router",  # No-op placeholder, called during Router init
     "_merge_tools_from_deployment",  # Tested indirectly via _update_kwargs_with_deployment (test files lack "router" in name)
     "_invalidate_access_groups_cache",  # Tested indirectly via set_model_list, upsert_model etc. (test files lack "router" in name)
+    "has_buffered_provider_output",  # Property, so its reads in test_router.py are never an ast.Call
 ]
 
 

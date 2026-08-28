@@ -235,6 +235,40 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_key_otel_service_name_outranks_team_metadata_merge():
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"otel_service_name": "key-svc"},
+        team_metadata={"otel_service_name": "team-svc", "other_setting": "team-val"},
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    auth_metadata = updated_data["metadata"]["user_api_key_auth_metadata"]
+    assert auth_metadata["otel_service_name"] == "key-svc"
+    assert auth_metadata["other_setting"] == "team-val"
+
+
+@pytest.mark.asyncio
 async def test_stamped_auth_object_reflects_header_derived_identity():
     """
     Regression (LIT-5487): the stamped object is a copy taken partway through request setup,
@@ -920,6 +954,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_policies": ["spoofed-policy"],
         "policy_sources": {"spoofed-policy": "request"},
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
+        "litellm_gateway_injected_cache": "forged-deployment-id",
         "_session_deployment_affinity_ttl": 999999,
         "internal_call_origin": "autorouter_classifier",
         "_guardrail_pipelines": [{"name": "spoofed"}],
@@ -934,6 +969,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "disable_global_guardrails": True,
         "enable_prompt_caching": True,
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
+        "litellm_gateway_injected_cache": "forged-deployment-id",
         "metadata": copy.deepcopy(malicious_metadata),
         "litellm_metadata": copy.deepcopy(malicious_metadata),
     }
@@ -952,6 +988,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "disable_global_guardrails" not in updated
     assert "enable_prompt_caching" not in updated
     assert "routing_decision" not in updated
+    assert "litellm_gateway_injected_cache" not in updated
 
     stripped_keys = {
         "disable_global_guardrails",
@@ -966,6 +1003,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_policies",
         "policy_sources",
         "routing_decision",
+        "litellm_gateway_injected_cache",
         "_session_deployment_affinity_ttl",
         "internal_call_origin",
         "_guardrail_pipelines",

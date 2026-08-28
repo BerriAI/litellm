@@ -190,6 +190,15 @@ class GuardrailSpanData:
     guardrail_id: str | None = None
     policy_template: str | None = None
     detection_method: str | None = None
+    # Provider-reported billable usage counters (JSON-serialized) and the USD cost
+    # priced from them by the provider hook (``guardrail_usage`` /
+    # ``guardrail_cost`` on ``StandardLoggingGuardrailInformation``).
+    usage_json: str | None = None
+    cost: float | None = None
+    # Whether ``cost`` participates in the request's billed spend (absent means
+    # billed, the default; False means report-only). Mirrors
+    # ``guardrail_cost_in_spend`` so trace consumers can avoid double-counting.
+    cost_in_spend: bool | None = None
     # Set when the guardrail intervened/blocked or failed, so the emitter marks
     # the span ERROR — a blocking guardrail is an error outcome for that span.
     error: SpanError | None = None
@@ -209,6 +218,8 @@ class GuardrailSpanData:
         get: Final = cast(Mapping[str, object], entry).get
         status: Final = as_str(get("guardrail_status"))
         response: Final = get("guardrail_response")
+        usage: Final = get("guardrail_usage")
+        in_spend: Final = get("guardrail_cost_in_spend")
         error: Final = (
             SpanError(error_type=status, message=as_str(get("guardrail_action")))
             if status in cls._ERROR_STATUSES
@@ -231,6 +242,9 @@ class GuardrailSpanData:
             guardrail_id=as_str(get("guardrail_id")),
             policy_template=as_str(get("policy_template")),
             detection_method=as_str(get("detection_method")),
+            usage_json=_json_or_none(usage) if usage is not None else None,
+            cost=as_float(get("guardrail_cost")),
+            cost_in_spend=in_spend if isinstance(in_spend, bool) else None,
             error=error,
         )
 

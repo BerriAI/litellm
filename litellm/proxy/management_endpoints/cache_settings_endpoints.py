@@ -43,7 +43,8 @@ router: Final = APIRouter()
 
 
 class _CacheConfigRow(Protocol):
-    cache_settings: str | Mapping[str, object] | None
+    @property
+    def cache_settings(self) -> str | Mapping[str, object] | None: ...
 
 
 class _CacheConfigTable(Protocol):

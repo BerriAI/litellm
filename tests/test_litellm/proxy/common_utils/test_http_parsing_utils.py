@@ -5,6 +5,7 @@ import orjson
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
+from starlette.datastructures import FormData
 
 
 
@@ -68,7 +69,7 @@ async def test_form_data_parsing():
     test_data = {"name": "test_user", "message": "hello world"}
 
     # Mock the form method to return the test data as an awaitable
-    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.form = AsyncMock(return_value=FormData(test_data))
     mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
     mock_request.scope = {}
     mock_request.state._cached_headers = None
@@ -119,7 +120,7 @@ async def test_form_data_with_json_metadata():
     }
 
     # Mock the form method to return the test data as an awaitable
-    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.form = AsyncMock(return_value=FormData(test_data))
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
     mock_request.state._cached_headers = None
@@ -160,7 +161,7 @@ async def test_form_data_with_invalid_json_metadata():
     }
 
     # Mock the form method to return the test data
-    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.form = AsyncMock(return_value=FormData(test_data))
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
     mock_request.state._cached_headers = None
@@ -183,7 +184,7 @@ async def test_form_data_without_metadata():
     test_data = {"model": "whisper-1", "file": "audio.mp3", "language": "en"}
 
     # Mock the form method to return the test data
-    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.form = AsyncMock(return_value=FormData(test_data))
     mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
     mock_request.scope = {}
     mock_request.state._cached_headers = None
@@ -214,7 +215,7 @@ async def test_form_data_with_empty_metadata():
     }
 
     # Mock the form method to return the test data
-    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.form = AsyncMock(return_value=FormData(test_data))
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
     mock_request.state._cached_headers = None
@@ -249,7 +250,7 @@ async def test_form_data_with_dict_metadata():
     }
 
     # Mock the form method to return the test data
-    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.form = AsyncMock(return_value=FormData(test_data))
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
     mock_request.state._cached_headers = None
@@ -280,7 +281,7 @@ async def test_form_data_with_none_metadata():
     }
 
     # Mock the form method to return the test data
-    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.form = AsyncMock(return_value=FormData(test_data))
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
     mock_request.state._cached_headers = None
@@ -495,33 +496,29 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_form_data():
     """
-    Test that get_form_data correctly handles form data with array notation.
-    Tests audio transcription parameters as a specific example.
+    A repeated `foo[]` key is how the OpenAI SDKs send a list, so every value has to
+    survive. `FormData`, not a dict: a dict cannot even hold the duplicate key.
     """
-    # Create a mock request with transcription form data
     mock_request = MagicMock()
+    mock_request.form = AsyncMock(
+        return_value=FormData(
+            [
+                ("file", "file_object"),
+                ("model", "gpt-4o-transcribe"),
+                ("include[]", "logprobs"),
+                ("language", "en"),
+                ("prompt", "Transcribe this audio file"),
+                ("response_format", "json"),
+                ("stream", "false"),
+                ("temperature", "0.2"),
+                ("timestamp_granularities[]", "word"),
+                ("timestamp_granularities[]", "segment"),
+            ]
+        )
+    )
 
-    # Create mock form data with array notation for timestamp_granularities
-    mock_form_data = {
-        "file": "file_object",  # In a real request this would be an UploadFile
-        "model": "gpt-4o-transcribe",
-        "include[]": "logprobs",  # Array notation
-        "language": "en",
-        "prompt": "Transcribe this audio file",
-        "response_format": "json",
-        "stream": "false",
-        "temperature": "0.2",
-        "timestamp_granularities[]": "word",  # First array item
-        "timestamp_granularities[]": "segment",  # Second array item (would overwrite in dict, but handled by the function)
-    }
-
-    # Mock the form method to return the test data
-    mock_request.form = AsyncMock(return_value=mock_form_data)
-
-    # Call the function being tested
     result = await get_form_data(mock_request)
 
-    # Verify regular form fields are preserved
     assert result["file"] == "file_object"
     assert result["model"] == "gpt-4o-transcribe"
     assert result["language"] == "en"
@@ -529,17 +526,8 @@ async def test_get_form_data():
     assert result["response_format"] == "json"
     assert result["stream"] == "false"
     assert result["temperature"] == "0.2"
-
-    # Verify array fields are correctly parsed
-    assert "include" in result
-    assert isinstance(result["include"], list)
-    assert "logprobs" in result["include"]
-
-    assert "timestamp_granularities" in result
-    assert isinstance(result["timestamp_granularities"], list)
-    # Note: In a real MultiDict, both values would be present
-    # But in our mock dictionary the second value overwrites the first
-    assert "segment" in result["timestamp_granularities"]
+    assert result["include"] == ["logprobs"]
+    assert result["timestamp_granularities"] == ["word", "segment"]
 
 
 def test_get_tags_from_request_body_with_metadata_tags():
@@ -953,7 +941,7 @@ class TestReadRequestBodyNonCanonicalContentType:
 
         mock_request = MagicMock()
         mock_request.body = AsyncMock(return_value=orjson.dumps(payload))
-        mock_request.form = AsyncMock(return_value={})
+        mock_request.form = AsyncMock(return_value=FormData({}))
         mock_request.headers = {"content-type": content_type}
         mock_request.scope = {}
 
@@ -964,7 +952,7 @@ class TestReadRequestBodyNonCanonicalContentType:
     @pytest.mark.asyncio
     async def test_real_form_post_still_parsed_as_form(self):
         mock_request = MagicMock()
-        mock_request.form = AsyncMock(return_value={"k": "v"})
+        mock_request.form = AsyncMock(return_value=FormData({"k": "v"}))
         mock_request.body = AsyncMock(return_value=b"")
         mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
         mock_request.scope = {}
@@ -1020,7 +1008,7 @@ class TestGetRequestBody:
         mock_request = MagicMock()
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
-        mock_request.form = AsyncMock(return_value={"k": "v"})
+        mock_request.form = AsyncMock(return_value=FormData({"k": "v"}))
         mock_request.scope = {}
 
         result = await get_request_body(mock_request)
