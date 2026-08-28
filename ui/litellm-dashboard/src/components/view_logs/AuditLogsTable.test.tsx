@@ -1,7 +1,7 @@
 import type { ColumnFiltersState, PaginationState } from "@tanstack/react-table";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuditLogsTable } from "./AuditLogsTable";
 import type { AuditLogEntry } from "./AuditLogsTableColumns";
@@ -52,6 +52,10 @@ function renderTable(overrides: Partial<React.ComponentProps<typeof AuditLogsTab
 }
 
 describe("AuditLogsTable", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it("renders each audit column with the migrated shared cells", () => {
     renderTable();
 
@@ -169,5 +173,30 @@ describe("AuditLogsTable", () => {
 
     expect(action).toHaveTextContent("Created");
     expect(table).toHaveTextContent("Teams");
+  });
+});
+
+describe("AuditLogsTable column visibility", () => {
+  const header = (columnId: string) => document.querySelector(`th[data-header-id="${columnId}"]`);
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("hides an audit column chosen in the Columns menu", async () => {
+    const user = userEvent.setup();
+    renderTable();
+
+    expect(header("changed_by_api_key")).not.toBeNull();
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-changed_by_api_key"));
+    await waitFor(() => expect(header("changed_by_api_key")).toBeNull());
+  });
+
+  it("keeps its preference under its own key, untouched by the request logs table", () => {
+    localStorage.setItem("litellm_request_logs_column_visibility", '{"changed_by_api_key":false}');
+    renderTable();
+
+    expect(header("changed_by_api_key")).not.toBeNull();
   });
 });

@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, DataTableViewOptions } from "@/components/shared/DataTable";
 
 import type { LogEntry } from "./columns";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
@@ -132,5 +132,44 @@ describe("TTFT column", () => {
     ]);
 
     expect(screen.getByText("1.00")).toBeInTheDocument();
+  });
+});
+
+describe("Columns menu", () => {
+  const EXPECTED_LABELS: [string, string][] = [
+    ["startTime", "Time"],
+    ["type", "Type"],
+    ["status", "Status"],
+    ["session_id", "Session ID"],
+    ["request_id", "Request ID"],
+    ["spend", "Cost"],
+    ["request_duration_ms", "Duration (s)"],
+    ["ttft_ms", "TTFT (s)"],
+    ["team_alias", "Team Name"],
+    ["key_hash", "Key Hash"],
+    ["key_alias", "Key Alias"],
+    ["model", "Model"],
+    ["total_tokens", "Tokens"],
+    ["user", "Internal User"],
+    ["end_user", "End User"],
+    ["request_tags", "Tags"],
+  ];
+
+  it("labels every column with its header text rather than the raw column id", async () => {
+    const user = userEvent.setup();
+    render(
+      <DataTable
+        data={[logEntry({})]}
+        columns={getRequestLogsTableColumns(noopDeps)}
+        getRowId={(row) => row.request_id}
+        size="compact"
+        toolbar={(table) => <DataTableViewOptions table={table} />}
+      />,
+    );
+
+    await user.click(screen.getByTestId("view-options-trigger"));
+
+    const items = await screen.findAllByRole("menuitemcheckbox");
+    expect(items.map((item) => item.textContent)).toEqual(EXPECTED_LABELS.map(([, label]) => label));
   });
 });

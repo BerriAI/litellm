@@ -9,6 +9,7 @@ import {
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableToolbar,
+  useColumnVisibilityPreference,
 } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -27,6 +28,8 @@ interface AuditLogsTableProps {
   onRefresh: () => void;
   onViewLog: (log: AuditLogEntry) => void;
 }
+
+const COLUMN_VISIBILITY_STORAGE_KEY = "litellm_audit_logs_column_visibility";
 
 const ALL_VALUE = "all";
 
@@ -107,6 +110,10 @@ export function AuditLogsTable({
 }: AuditLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const columns = useMemo(() => getAuditLogsTableColumns({ onViewLog }), [onViewLog]);
+  const [columnVisibility, onColumnVisibilityChange] = useColumnVisibilityPreference(
+    COLUMN_VISIBILITY_STORAGE_KEY,
+    columns,
+  );
 
   return (
     <DataTable
@@ -120,6 +127,8 @@ export function AuditLogsTable({
       filterMode="server"
       columnFilters={columnFilters}
       onColumnFiltersChange={onColumnFiltersChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       isLoading={isLoading}
       loadingMessage="Loading audit logs…"
       noDataMessage={<AuditLogsEmptyState filtered={columnFilters.length > 0} />}
@@ -133,7 +142,6 @@ export function AuditLogsTable({
             onOpenFilters={() => setFiltersOpen(true)}
             filterLabels={FILTER_LABELS}
             formatFilterValue={formatFilterValue}
-            showViewOptions={false}
           />
           <DataTableFilterDrawer
             table={table}

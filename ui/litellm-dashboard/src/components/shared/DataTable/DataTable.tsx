@@ -439,6 +439,8 @@ function useDataTableInstance<TData extends RowData, TValue>(
     onGlobalFilterChange,
     enableColumnResizing = false,
     columnResizeMode = "onEnd",
+    columnVisibility,
+    onColumnVisibilityChange,
     defaultColumnVisibility,
     getRowCanExpand,
     renderSubComponent,
@@ -462,7 +464,11 @@ function useDataTableInstance<TData extends RowData, TValue>(
   const globalFilterState = useControllable<string>(globalFilter, onGlobalFilterChange, "");
   const expandedState = useControllable<ExpandedState>(expanded, onExpandedChange, {});
   const rowSelectionState = useControllable<RowSelectionState>(rowSelection, onRowSelectionChange, {});
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(defaultColumnVisibility ?? {});
+  const columnVisibilityState = useControllable<VisibilityState>(
+    columnVisibility,
+    onColumnVisibilityChange,
+    defaultColumnVisibility ?? {},
+  );
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const columnPinning = React.useMemo(() => derivePinning(columns), [columns]);
   const expansionGuard = renderSubComponent !== undefined ? getRowCanExpand : undefined;
@@ -477,7 +483,7 @@ function useDataTableInstance<TData extends RowData, TValue>(
       globalFilter: globalFilterState.value,
       expanded: expandedState.value,
       rowSelection: rowSelectionState.value,
-      columnVisibility,
+      columnVisibility: columnVisibilityState.value,
       columnSizing,
     },
     initialState: { columnPinning },
@@ -493,7 +499,7 @@ function useDataTableInstance<TData extends RowData, TValue>(
     onGlobalFilterChange: globalFilterState.onChange,
     onExpandedChange: expandedState.onChange,
     onRowSelectionChange: rowSelectionState.onChange,
-    onColumnVisibilityChange: setColumnVisibility,
+    onColumnVisibilityChange: columnVisibilityState.onChange,
     onColumnSizingChange: setColumnSizing,
     getCoreRowModel: getCoreRowModel(),
     ...buildRowModels(sortingMode, paginationMode, filterMode, expansionGuard),

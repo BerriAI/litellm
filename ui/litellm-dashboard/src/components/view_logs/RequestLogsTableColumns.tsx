@@ -46,6 +46,7 @@ export const getRequestLogsTableColumns = ({
     header: ({ column }) => <DataTableSortHeader column={column} title="Time" variant="dropdown-tristate" />,
     size: 200,
     enableSorting: true,
+    meta: { title: "Time" },
     cell: ({ row }) => <DateCell value={row.original.startTime} />,
   },
   {
@@ -128,7 +129,7 @@ export const getRequestLogsTableColumns = ({
     header: ({ column }) => <DataTableSortHeader column={column} title="Cost" variant="dropdown-tristate" />,
     size: 110,
     enableSorting: true,
-    meta: { numeric: true, skeleton: "twoLine" },
+    meta: { numeric: true, skeleton: "twoLine", title: "Cost" },
     cell: ({ row }) => {
       const log = row.original;
       const mcpCount = log.mcp_tool_call_count || 0;
@@ -159,7 +160,7 @@ export const getRequestLogsTableColumns = ({
     accessorKey: "request_duration_ms",
     header: ({ column }) => <DataTableSortHeader column={column} title="Duration (s)" variant="dropdown-tristate" />,
     enableSorting: true,
-    meta: { numeric: true },
+    meta: { numeric: true, title: "Duration (s)" },
     cell: ({ row }) => {
       const ms = row.original.request_duration_ms;
       if (ms == null) return <span>-</span>;
@@ -176,7 +177,7 @@ export const getRequestLogsTableColumns = ({
     accessorKey: "completionStartTime",
     header: ({ column }) => <DataTableSortHeader column={column} title="TTFT (s)" variant="dropdown-tristate" />,
     enableSorting: true,
-    meta: { numeric: true },
+    meta: { numeric: true, title: "TTFT (s)" },
     cell: ({ row }) => {
       const log = row.original;
       const completionStartTime = log.completionStartTime;
@@ -221,6 +222,7 @@ export const getRequestLogsTableColumns = ({
     header: ({ column }) => <DataTableSortHeader column={column} title="Model" variant="dropdown-tristate" />,
     size: 200,
     enableSorting: true,
+    meta: { title: "Model" },
     cell: ({ row }) => {
       const log = row.original;
       const provider = log.custom_llm_provider;
@@ -248,7 +250,7 @@ export const getRequestLogsTableColumns = ({
     header: ({ column }) => <DataTableSortHeader column={column} title="Tokens" variant="dropdown-tristate" />,
     size: 140,
     enableSorting: true,
-    meta: { numeric: true },
+    meta: { numeric: true, title: "Tokens" },
     cell: ({ row }) => {
       const log = row.original;
       return (

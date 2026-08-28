@@ -134,6 +134,7 @@ describe("RequestLogsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionStorage.clear();
+    localStorage.clear();
     testQueryClient.clear();
     respondWith([]);
   });
@@ -482,6 +483,62 @@ describe("RequestLogsPanel", () => {
       await user.click(screen.getByRole("button", { name: "Stop" }));
 
       expect(screen.queryByText("Auto-refreshing every 15 seconds")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("column visibility preference", () => {
+    const header = (columnId: string) => document.querySelector(`th[data-header-id="${columnId}"]`);
+    const ALL_COLUMN_IDS = [
+      "startTime",
+      "type",
+      "status",
+      "session_id",
+      "request_id",
+      "spend",
+      "request_duration_ms",
+      "ttft_ms",
+      "team_alias",
+      "key_hash",
+      "key_alias",
+      "model",
+      "total_tokens",
+      "user",
+      "end_user",
+      "request_tags",
+    ];
+
+    it("shows every column on a first visit, before anyone has customised the table", async () => {
+      respondWith([logEntry({})]);
+      renderPanel();
+
+      await waitFor(() => expect(header("startTime")).not.toBeNull());
+      const missing = ALL_COLUMN_IDS.filter((columnId) => header(columnId) === null);
+      expect(missing).toEqual([]);
+    });
+
+    it("remembers a column hidden through the menu across a remount", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({})]);
+      const view = renderPanel();
+
+      await waitFor(() => expect(header("key_hash")).not.toBeNull());
+      await user.click(screen.getByTestId("view-options-trigger"));
+      await user.click(await screen.findByTestId("view-option-key_hash"));
+      await waitFor(() => expect(header("key_hash")).toBeNull());
+
+      view.unmount();
+      renderPanel();
+
+      await waitFor(() => expect(header("startTime")).not.toBeNull());
+      expect(header("key_hash")).toBeNull();
+    });
+
+    it("falls back to every column when the stored preference is malformed", async () => {
+      localStorage.setItem("litellm_request_logs_column_visibility", "{not json");
+      respondWith([logEntry({})]);
+      renderPanel();
+
+      await waitFor(() => expect(header("key_hash")).not.toBeNull());
     });
   });
 });

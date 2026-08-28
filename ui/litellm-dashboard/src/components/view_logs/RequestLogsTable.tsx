@@ -4,13 +4,20 @@ import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } fr
 import { ScrollText } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
-import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components/shared/DataTable";
+import {
+  DataTable,
+  DataTableFilterDrawer,
+  DataTableToolbar,
+  useColumnVisibilityPreference,
+} from "@/components/shared/DataTable";
 
 import type { Team } from "../key_team_helpers/key_list";
 import type { LogEntry } from "./columns";
 import { LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
+
+const COLUMN_VISIBILITY_STORAGE_KEY = "litellm_request_logs_column_visibility";
 
 interface RequestLogsTableProps {
   data: LogEntry[];
@@ -78,6 +85,11 @@ export function RequestLogsTable({
     return getRequestLogsTableColumns(deps);
   }, [onKeyHashClick, onSessionClick]);
 
+  const [columnVisibility, onColumnVisibilityChange] = useColumnVisibilityPreference(
+    COLUMN_VISIBILITY_STORAGE_KEY,
+    columns,
+  );
+
   const isFiltered = columnFilters.length > 0 || searchValue !== "";
 
   return (
@@ -95,6 +107,8 @@ export function RequestLogsTable({
       filterMode="server"
       columnFilters={columnFilters}
       onColumnFiltersChange={onColumnFiltersChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       isLoading={isLoading}
       loadingMessage="Loading request logs…"
       noDataMessage={<RequestLogsEmptyState filtered={isFiltered} />}
@@ -111,7 +125,6 @@ export function RequestLogsTable({
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}
             filterLabels={LOG_FILTER_LABELS}
-            showViewOptions={false}
           >
             {toolbarChildren}
           </DataTableToolbar>
