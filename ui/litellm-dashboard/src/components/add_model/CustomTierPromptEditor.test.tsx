@@ -99,9 +99,7 @@ describe("CustomTierPromptEditor", () => {
 
     resolveFirst("assembled from the stale draft");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(screen.getByLabelText("Assembled classifier prompt")).toHaveTextContent(
-      "assembled from the edited draft",
-    );
+    expect(screen.getByLabelText("Assembled classifier prompt")).toHaveTextContent("assembled from the edited draft");
   });
 
   it("keeps the editor usable when the preview cannot be fetched", async () => {
