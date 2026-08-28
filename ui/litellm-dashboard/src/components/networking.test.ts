@@ -9,15 +9,6 @@ vi.mock("@/utils/cookieUtils", () => ({
   storeLoginToken: vi.fn(),
 }));
 
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    info: vi.fn(),
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 describe("networking - expired session handling", () => {
   const originalFetch = global.fetch;
 
@@ -31,10 +22,10 @@ describe("networking - expired session handling", () => {
 
   it("should call clearTokenCookies on expired session", async () => {
     const errorData = "Authentication Error - Expired Key";
-    const { default: NotificationsManager } = await import("./molecules/notifications_manager");
+    const { toast } = await import("@/lib/toast");
 
     if (errorData.includes("Authentication Error - Expired Key")) {
-      NotificationsManager.info("UI Session Expired. Logging out.");
+      toast.info("UI Session Expired. Logging out.");
       clearTokenCookies();
     }
 
@@ -468,6 +459,64 @@ describe("teamInfoCall", () => {
   });
 });
 
+describe("uiSpendLogsCall exclude_internal_health_checks serialization", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockOkFetch = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, page_size: 50, total_pages: 0 }),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const callWith = (params: Parameters<typeof Networking.uiSpendLogsCall>[0]["params"]) =>
+    Networking.uiSpendLogsCall({
+      accessToken: "token",
+      start_date: "2026-01-01 00:00:00",
+      end_date: "2026-01-02 00:00:00",
+      params,
+    });
+
+  const lastUrl = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL(url as string, "http://example.com");
+  };
+
+  it("appends exclude_internal_health_checks=true when the toggle is on", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({ exclude_internal_health_checks: true });
+
+    expect(lastUrl(mockFetch).searchParams.get("exclude_internal_health_checks")).toBe("true");
+  });
+
+  it("omits exclude_internal_health_checks when the toggle is off", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({ exclude_internal_health_checks: false });
+
+    expect(lastUrl(mockFetch).searchParams.has("exclude_internal_health_checks")).toBe(false);
+  });
+
+  it("omits exclude_internal_health_checks when the param is absent", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({});
+
+    expect(lastUrl(mockFetch).searchParams.has("exclude_internal_health_checks")).toBe(false);
+  });
+});
+
 describe("sessionSpendLogsCall", () => {
   const originalFetch = global.fetch;
 
@@ -634,5 +683,87 @@ describe("getAutoRouterClassifierDefaultPromptCall", () => {
 
     expect(requestedUrl(mockFetch)).not.toContain("tier_labels");
     expect(String(mockFetch.mock.calls[1][0])).not.toContain("tier_labels");
+  });
+});
+
+describe("daily activity api_key filter", () => {
+  const originalFetch = global.fetch;
+
+  const captureFetch = () => {
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ results: [], metadata: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    global.fetch = mockFetch;
+    return mockFetch;
+  };
+
+  const requestedUrl = (mockFetch: ReturnType<typeof captureFetch>): string => String(mockFetch.mock.calls[0][0]);
+
+  const start = new Date("2025-01-01T00:00:00Z");
+  const end = new Date("2025-01-31T00:00:00Z");
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("sends the key hash as api_key from the paginated caller", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.userDailyActivityCall("sk-key", start, end, 1, null, false, "hash-abc");
+
+    expect(requestedUrl(mockFetch)).toContain("api_key=hash-abc");
+  });
+
+  it("sends the key hash as api_key from the aggregated caller", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.userDailyActivityAggregatedCall("sk-key", start, end, null, false, "hash-abc");
+
+    expect(requestedUrl(mockFetch)).toContain("api_key=hash-abc");
+  });
+
+  // The two wrappers serialize the same optional filters through different transports, so an
+  // absent key has to drop the param in both. Dropping it on one side and sending it empty on
+  // the other would widen a key-scoped read into an unscoped one.
+  it.each([
+    ["paginated", () => Networking.userDailyActivityCall("sk-key", start, end, 1, null, false, null)],
+    ["aggregated", () => Networking.userDailyActivityAggregatedCall("sk-key", start, end, null, false, null)],
+  ])("omits api_key entirely from the %s caller when no key is given", async (_label, call) => {
+    const mockFetch = captureFetch();
+
+    await call();
+
+    expect(requestedUrl(mockFetch)).not.toContain("api_key");
+  });
+
+  // An empty key must not be coerced into "no filter". Dropping it would turn a key-scoped read
+  // into a proxy-wide one and report every key's savings as this key's, so both callers send it
+  // through and let the filter match nothing instead.
+  it.each([
+    ["paginated", () => Networking.userDailyActivityCall("sk-key", start, end, 1, null, false, "")],
+    ["aggregated", () => Networking.userDailyActivityAggregatedCall("sk-key", start, end, null, false, "")],
+  ])("keeps an empty api_key as a filter rather than widening the %s read", async (_label, call) => {
+    const mockFetch = captureFetch();
+
+    await call();
+
+    expect(requestedUrl(mockFetch)).toContain("api_key=");
+  });
+
+  // user_id rides the same two transports and widens the same way, so it gets the same guard.
+  // The aggregated caller used to drop "" via `||`; without this the two filters could drift
+  // apart again on one side only.
+  it.each([
+    ["paginated", () => Networking.userDailyActivityCall("sk-key", start, end, 1, "", false, null)],
+    ["aggregated", () => Networking.userDailyActivityAggregatedCall("sk-key", start, end, "", false, null)],
+  ])("keeps an empty user_id as a filter rather than widening the %s read", async (_label, call) => {
+    const mockFetch = captureFetch();
+
+    await call();
+
+    expect(requestedUrl(mockFetch)).toContain("user_id=");
   });
 });

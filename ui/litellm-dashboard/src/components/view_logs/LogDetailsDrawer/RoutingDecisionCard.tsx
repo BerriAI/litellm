@@ -26,6 +26,7 @@ export interface RoutingDecision {
   classifier_model?: string;
   escalated?: boolean;
   tier_boundaries?: RoutingDecisionTierBoundaries;
+  reasoning_override_min_score?: number;
 }
 
 const ROUTER_TYPE_LABELS: Record<string, string> = {
@@ -59,34 +60,54 @@ function describeScoreAgainstBoundaries(
   return named(`at or above ${complexReasoning}`, "REASONING");
 }
 
+function describePlanModeFloor(matchedKeyword: string | undefined): string {
+  if (matchedKeyword === "exit_plan_mode") return "Plan-mode floor (exit_plan_mode tool)";
+  if (matchedKeyword) return `Plan-mode floor: "${matchedKeyword}"`;
+  return "Plan-mode floor";
+}
+
+/** Rows logged before the floor was recorded name what it tracked back then instead of a number. */
+function describeReasoningOverride(tierLabel: string | undefined, floor: number | undefined): string {
+  const stated = floor === undefined ? "the Simple to Medium boundary" : String(floor);
+  return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers, score of at least ${stated})`;
+}
+
+const CONSTANT_CAUSE_LABELS: Record<string, string> = {
+  heuristic_scorer: "Heuristic scorer",
+  heuristic_first_short_circuit: "Heuristic scorer, classifier skipped",
+  classifier_plugin: "Custom classifier plugin",
+  semantic_keyword_match: "Semantic keyword match",
+  session_affinity_pin: "Pinned to session",
+  session_affinity_escalation: "Escalated from session pin",
+  quality_tier: "Quality tier mapping",
+  bandit: "Adaptive bandit",
+  default_fallback: "Default model, no route matched",
+  classifier_fallback: "Fallback tier, LLM classifier failed",
+  default_model_fallback: "Default model, LLM classifier failed",
+};
+
 function describeCause(decision: RoutingDecision): string {
-  const { cause, classifier_model: classifierModel, matched_keyword: matchedKeyword, tier_label: tierLabel } = decision;
+  const {
+    cause,
+    classifier_model: classifierModel,
+    matched_keyword: matchedKeyword,
+    tier_label: tierLabel,
+    reasoning_override_min_score: overrideFloor,
+  } = decision;
+
+  const constant = cause ? CONSTANT_CAUSE_LABELS[cause] : undefined;
+  if (constant) return constant;
 
   switch (cause) {
-    case "heuristic_scorer":
-      return "Heuristic scorer";
     case "reasoning_override":
-      return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers)`;
+      return describeReasoningOverride(tierLabel, overrideFloor);
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
     case "literal_keyword_match":
-      return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
-    case "semantic_keyword_match":
-      return "Semantic keyword match";
-    case "session_affinity_pin":
-      return "Pinned to session";
-    case "session_affinity_escalation":
-      return "Escalated from session pin";
-    case "quality_tier":
-      return "Quality tier mapping";
     case "keyword":
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
-    case "bandit":
-      return "Adaptive bandit";
-    case "default_fallback":
-      return "Default model, no route matched";
-    case "default_model_fallback":
-      return "Default model, LLM classifier failed";
+    case "plan_mode":
+      return describePlanModeFloor(matchedKeyword);
     default:
       return cause ?? "Unknown";
   }
@@ -139,12 +160,12 @@ export function RoutingDecisionCard({
   // boundary would claim something untrue. Keyed off the cause rather than a marker
   // inside `signals`, which redaction can remove.
   const scoreExplanation =
-    score !== undefined && decision.cause !== "reasoning_override"
+    score !== undefined && decision.cause !== "reasoning_override" && decision.cause !== "plan_mode"
       ? describeScoreAgainstBoundaries(score, tierBoundaries, tierLabel !== undefined)
       : null;
 
   return (
-    <div className={cn("mb-6 w-full max-w-full overflow-hidden rounded-lg bg-white shadow-sm", className)}>
+    <div className={cn("mb-6 w-full max-w-full overflow-hidden rounded-lg bg-card shadow-sm", className)}>
       <div className="border-b px-4 py-2.5 text-sm font-medium">Routing</div>
       <div className="px-4 py-3">
         {routerModelName && (

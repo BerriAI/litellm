@@ -16,12 +16,13 @@ class LangfuseOtelConfig(BaseModel):
 
 class LangfuseSpanAttributes(str, Enum):
     LANGFUSE_ENVIRONMENT = "langfuse.environment"
+    VERSION = "langfuse.version"
+    RELEASE = "langfuse.release"
 
     # ---- Generation-level metadata ----
     GENERATION_NAME = "langfuse.generation.name"
     GENERATION_ID = "langfuse.generation.id"
     PARENT_OBSERVATION_ID = "langfuse.generation.parent_observation_id"
-    GENERATION_VERSION = "langfuse.generation.version"
     MASK_INPUT = "langfuse.generation.mask_input"
     MASK_OUTPUT = "langfuse.generation.mask_output"
 
@@ -36,8 +37,6 @@ class LangfuseSpanAttributes(str, Enum):
     TRACE_NAME = "langfuse.trace.name"
     TRACE_ID = "langfuse.trace.id"
     TRACE_METADATA = "langfuse.trace.metadata"
-    TRACE_VERSION = "langfuse.trace.version"
-    TRACE_RELEASE = "langfuse.trace.release"
     EXISTING_TRACE_ID = "langfuse.trace.existing_id"
     UPDATE_TRACE_KEYS = "langfuse.trace.update_keys"
 

@@ -66,6 +66,27 @@ describe("BlogDropdown", () => {
       expect(screen.getByRole("button", { name: /blog/i })).toBeInTheDocument();
     });
 
+    it("should not render menu content before the trigger is hovered", () => {
+      mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS.slice(0, 1) } };
+      renderWithProviders(<BlogDropdown />);
+
+      expect(screen.queryByRole("link", { name: /view all posts/i })).not.toBeInTheDocument();
+      expect(screen.queryByText("Post One")).not.toBeInTheDocument();
+    });
+
+    it("should open the menu on hover", async () => {
+      mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS.slice(0, 1) } };
+      renderWithProviders(<BlogDropdown />);
+
+      expect(screen.queryByText("Post One")).not.toBeInTheDocument();
+
+      await openDropdown();
+
+      await waitFor(() => {
+        expect(screen.getByText("Post One")).toBeInTheDocument();
+      });
+    });
+
     describe("loading state", () => {
       it("should show a loading spinner", async () => {
         mockUseBlogPostsResult = { ...mockUseBlogPostsResult, isLoading: true };
@@ -74,7 +95,7 @@ describe("BlogDropdown", () => {
         await openDropdown();
 
         await waitFor(() => {
-          expect(document.querySelector(".anticon-loading")).toBeInTheDocument();
+          expect(screen.getByRole("img", { name: /loading/i })).toBeInTheDocument();
         });
       });
     });
@@ -176,12 +197,10 @@ describe("BlogDropdown", () => {
 
         await openDropdown();
 
-        await waitFor(() => {
-          const link = screen.getByRole("link", { name: /post one/i });
-          expect(link).toHaveAttribute("href", "https://example.com/1");
-          expect(link).toHaveAttribute("target", "_blank");
-          expect(link).toHaveAttribute("rel", "noopener noreferrer");
-        });
+        const link = await screen.findByRole("link", { name: /post one/i });
+        expect(link).toHaveAttribute("href", "https://example.com/1");
+        expect(link).toHaveAttribute("rel", "noopener noreferrer");
+        expect(link).toHaveAttribute("target", "_blank");
       });
 
       it("should render formatted post dates", async () => {
@@ -205,12 +224,10 @@ describe("BlogDropdown", () => {
 
         await openDropdown();
 
-        await waitFor(() => {
-          const viewAllLink = screen.getByRole("link", { name: /view all posts/i });
-          expect(viewAllLink).toHaveAttribute("href", "https://docs.litellm.ai/blog");
-          expect(viewAllLink).toHaveAttribute("target", "_blank");
-          expect(viewAllLink).toHaveAttribute("rel", "noopener noreferrer");
-        });
+        const viewAllLink = await screen.findByRole("link", { name: /view all posts/i });
+        expect(viewAllLink).toHaveAttribute("href", "https://docs.litellm.ai/blog");
+        expect(viewAllLink).toHaveAttribute("rel", "noopener noreferrer");
+        expect(viewAllLink).toHaveAttribute("target", "_blank");
       });
     });
 

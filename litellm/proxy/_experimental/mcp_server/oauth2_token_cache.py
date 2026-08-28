@@ -7,6 +7,7 @@ with ``client_id``, ``client_secret``, and ``token_url``.
 
 import asyncio
 import hashlib
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -67,7 +68,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
         rest of the identity rather than stored in a key."""
         material: Final = "\x00".join(
             (
-                server.token_url or "",
+                server.effective_token_url or "",
                 server.client_id or "",
                 server.client_secret or "",
                 " ".join(server.scopes or ()),
@@ -82,7 +83,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
 
     @staticmethod
     def _has_client_credentials_config(server: "MCPServer") -> bool:
-        return bool(server.client_id and server.client_secret and server.token_url)
+        return bool(server.client_id and server.client_secret and server.effective_token_url)
 
     async def async_get_token(self, server: "MCPServer") -> str | None:
         """Return a valid access token, fetching or refreshing as needed.
@@ -112,19 +113,20 @@ class MCPOAuth2TokenCache(InMemoryCache):
             return token
 
     async def _fetch_token(self, server: "MCPServer") -> tuple[str, int]:
-        """POST to ``token_url`` with ``grant_type=client_credentials``.
+        """POST to ``effective_token_url`` with ``grant_type=client_credentials``.
 
         Returns ``(access_token, ttl_seconds)`` where ttl accounts for the
         expiry buffer so the cache entry expires before the real token does.
         """
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
-        if not server.client_id or not server.client_secret or not server.token_url:
+        token_url: Final = server.effective_token_url
+        if not server.client_id or not server.client_secret or not token_url:
             raise ValueError(
                 f"MCP server '{server.server_id}' missing required OAuth2 fields: "
                 f"client_id={bool(server.client_id)}, "
                 f"client_secret={bool(server.client_secret)}, "
-                f"token_url={bool(server.token_url)}"
+                f"token_url={bool(token_url)}"
             )
 
         token_request: Final = build_upstream_oauth2_token_request(
@@ -145,9 +147,8 @@ class MCPOAuth2TokenCache(InMemoryCache):
             server.server_id,
         )
 
-        post_kwargs: Final = {"data": data, **({"headers": token_request.headers} if token_request.headers else {})}
         try:
-            response: Final = await client.post(server.token_url, **post_kwargs)
+            response: Final = await client.post(token_url, data=data, headers=token_request.headers or None)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ValueError(
@@ -313,9 +314,26 @@ async def resolve_mcp_auth(
     1. ``mcp_auth_header`` — per-request/per-user override
     2. OAuth2 client_credentials token — auto-fetched and cached
     3. ``server.authentication_token`` — static token from config/DB
+
+    ``resolved_token_header`` answers, for the same two inputs, which header the value belongs in.
     """
     if mcp_auth_header:
         return mcp_auth_header
     if server.has_client_credentials:
         return await mcp_oauth2_token_cache.async_get_token(server)
     return server.authentication_token
+
+
+def resolved_token_header(
+    server: "MCPServer",
+    mcp_auth_header: str | Mapping[str, str] | None = None,
+) -> str | None:
+    """Which upstream header the value ``resolve_mcp_auth`` just returned belongs in.
+
+    ``None`` means keep the auth_type default. A caller-supplied ``mcp_auth_header`` is the caller's
+    own credential aimed at the slot the upstream normally uses, so it never moves; only the values
+    the gateway resolved from its own config (the minted M2M token, the static token) follow
+    ``upstream_token_header``. Same inputs and same branch order as ``resolve_mcp_auth``, so the two
+    cannot disagree about which case they are in.
+    """
+    return None if mcp_auth_header else server.upstream_token_header

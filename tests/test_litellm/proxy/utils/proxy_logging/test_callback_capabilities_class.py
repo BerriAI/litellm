@@ -181,7 +181,7 @@ def test_has_streaming_callbacks_error_when_resolution_fails(monkeypatch):
         "get_custom_logger_compatible_class",
         lambda *a, **kw: (_ for _ in ()).throw(ValueError("nope")),
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="nope"):
         ProxyLogging.has_streaming_callbacks()
 
 
