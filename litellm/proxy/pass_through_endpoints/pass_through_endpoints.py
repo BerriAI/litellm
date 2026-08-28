@@ -1209,14 +1209,19 @@ async def pass_through_request(
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
-                    stream=PassThroughStreamingHandler.chunk_processor(
-                        response=response,
-                        request_body=_parsed_body,
-                        litellm_logging_obj=logging_obj,
-                        endpoint_type=endpoint_type,
-                        start_time=start_time,
-                        passthrough_success_handler_obj=pass_through_endpoint_logging,
-                        url_route=str(url),
+                    stream=_own_streamed_managed_ids(
+                        stream=PassThroughStreamingHandler.chunk_processor(
+                            response=response,
+                            request_body=_parsed_body,
+                            litellm_logging_obj=logging_obj,
+                            endpoint_type=endpoint_type,
+                            start_time=start_time,
+                            passthrough_success_handler_obj=pass_through_endpoint_logging,
+                            url_route=str(url),
+                        ),
+                        managed_id_provider=_managed_id_provider,
+                        request=request,
+                        user_api_key_dict=user_api_key_dict,
                     ),
                     ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
                     upstream_headers=response.headers,
@@ -1285,14 +1290,19 @@ async def pass_through_request(
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
-                    stream=PassThroughStreamingHandler.chunk_processor(
-                        response=response,
-                        request_body=_parsed_body,
-                        litellm_logging_obj=logging_obj,
-                        endpoint_type=endpoint_type,
-                        start_time=start_time,
-                        passthrough_success_handler_obj=pass_through_endpoint_logging,
-                        url_route=str(url),
+                    stream=_own_streamed_managed_ids(
+                        stream=PassThroughStreamingHandler.chunk_processor(
+                            response=response,
+                            request_body=_parsed_body,
+                            litellm_logging_obj=logging_obj,
+                            endpoint_type=endpoint_type,
+                            start_time=start_time,
+                            passthrough_success_handler_obj=pass_through_endpoint_logging,
+                            url_route=str(url),
+                        ),
+                        managed_id_provider=_managed_id_provider,
+                        request=request,
+                        user_api_key_dict=user_api_key_dict,
                     ),
                     ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
                     upstream_headers=response.headers,
@@ -2439,6 +2449,36 @@ def _is_streaming_response(response: httpx.Response) -> bool:
     if _content_type is not None and "text/event-stream" in _content_type:
         return True
     return False
+
+
+def _own_streamed_managed_ids(
+    stream: AsyncGenerator[bytes, None],
+    managed_id_provider: str | None,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> AsyncGenerator[bytes, None]:
+    from litellm.proxy.proxy_server import general_settings, prisma_client, proxy_logging_obj
+
+    if (
+        managed_id_provider is None
+        or not general_settings.get("passthrough_managed_object_ids", False)
+        or prisma_client is None
+        or proxy_logging_obj.get_proxy_hook("managed_files") is None
+    ):
+        return stream
+    from litellm.proxy.auth.auth_utils import get_request_route
+    from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+        rewrite_streamed_response_ids,
+    )
+
+    return rewrite_streamed_response_ids(
+        stream=stream,
+        provider=managed_id_provider,
+        method=request.method,
+        route=get_request_route(request),
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
 
 
 def _should_buffer_passthrough_response(response: httpx.Response) -> bool:

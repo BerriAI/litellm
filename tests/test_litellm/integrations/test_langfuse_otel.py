@@ -137,6 +137,32 @@ class TestLangfuseOtelIntegration:
                     mock_span, "langfuse.environment", test_env
                 )
 
+    def test_set_langfuse_environment_attribute_prefers_dynamic_param(self):
+        """Per-key/team langfuse_environment beats the deployment env var."""
+
+        class _RecordingSpan:
+            def __init__(self):
+                self.attributes = {}
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        span = _RecordingSpan()
+        mock_kwargs = {
+            "standard_callback_dynamic_params": {
+                "langfuse_environment": "team-a-env"
+            }
+        }
+
+        with patch.dict(
+            os.environ, {"LANGFUSE_TRACING_ENVIRONMENT": "deployment-wide"}
+        ):
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                span, mock_kwargs, {}
+            )
+
+        assert span.attributes["langfuse.environment"] == "team-a-env"
+
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
         metadata_in = {"generation_name": "my-gen", "custom": "data"}

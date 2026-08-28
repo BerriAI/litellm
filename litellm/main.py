@@ -1219,6 +1219,7 @@ def _register_custom_pricing_for_request(
             shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
         },
         persist_across_reloads=False,
+        warning_display_name=shared_key,
     )
 
 
@@ -8013,7 +8014,7 @@ def speech(
 
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(metadata=metadata, api_key=api_key or dynamic_api_key, **kwargs)
 
     # Get provider-specific text-to-speech config and map parameters
     text_to_speech_provider_config = ProviderConfigManager.get_provider_text_to_speech_config(

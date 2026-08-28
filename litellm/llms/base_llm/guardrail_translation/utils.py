@@ -209,9 +209,20 @@ def openai_tool_name(tool: object) -> str | None:
     return flat_name if isinstance(flat_name, str) else None
 
 
+def anthropic_tool_names(tool: object) -> tuple[str, ...]:
+    """Every name a /v1/messages tool dict can act under: the flat Anthropic ``name`` plus
+    ``function.name`` for OpenAI-format tools the bridge forwards verbatim. Allowlist checks
+    must see both, or a decoy flat name could smuggle a disallowed ``function.name`` through."""
+    if not isinstance(tool, dict):
+        return ()
+    function: Final = tool.get("function") if tool.get("type") == "function" else None
+    function_name: Final = function.get("name") if isinstance(function, dict) else None
+    return tuple(name for name in (tool.get("name"), function_name) if isinstance(name, str) and name)
+
+
 def anthropic_tool_name(tool: object) -> str | None:
-    name: Final = tool.get("name") if isinstance(tool, dict) else None
-    return name if isinstance(name, str) else None
+    names: Final = anthropic_tool_names(tool)
+    return names[0] if names else None
 
 
 def merge_returned_tools_into_request_tools(

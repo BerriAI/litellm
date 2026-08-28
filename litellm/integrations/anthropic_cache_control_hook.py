@@ -104,6 +104,13 @@ def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
 
 
+# Set by a caller whose message list is not the one that goes upstream -- today the
+# Responses API layer, whose `instructions` only becomes a system message further down.
+# Tells this hook to hand role-targeted points to the pass holding the final messages
+# rather than spending them on a list that is still missing some of their targets.
+CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_points"
+
+
 class AnthropicCacheControlHook(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
@@ -128,6 +135,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         - non_default_params: dict - params with any global cache controls
         """
         # Extract cache control injection points
+        carry_unmatched: Final = bool(non_default_params.pop(CARRY_UNMATCHED_MESSAGE_POINTS, False))
         injection_points: Final[list[CacheControlInjectionPoint]] = non_default_params.pop(
             "cache_control_injection_points", []
         )
@@ -161,12 +169,25 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 non_default_params.get("prompt_cache_options"),
             )
         )
+        # A provisional message list defers every role-targeted point to the pass holding
+        # the final one: a role with no message here may have one there, and settling all
+        # of them in one pass is what lets config order decide the shared breakpoint
+        # budget. An ordinal names a different message once a later layer builds its own
+        # list, so it is placed here or not at all.
+        carried_message_points: Final[Sequence[CacheControlMessageInjectionPoint]] = (
+            tuple(point for point in message_points if point.get("index") is None) if carry_unmatched else ()
+        )
+        applied_message_points: Final[Sequence[CacheControlMessageInjectionPoint]] = (
+            tuple(point for point in message_points if point.get("index") is not None)
+            if carry_unmatched
+            else tuple(message_points)
+        )
         reserved_blocks: Final = (
             1 if not openai_dialect and any(p.get("location") == "tool_config" for p in remaining_points) else 0
         )
         breakpoints_before: Final = AnthropicCacheControlHook._count_request_cache_breakpoints(processed_messages)
         processed_messages = self._apply_message_injections(
-            points=message_points,
+            points=applied_message_points,
             messages=processed_messages,
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
             openai_dialect=openai_dialect,
@@ -177,10 +198,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         ):
             non_default_params.setdefault("prompt_cache_options", PromptCacheOptions(mode="explicit"))
 
-        # Pass through non-message injection points for provider-specific handling
-        if remaining_points:
+        # Points this pass did not place: non-message ones for the provider transform, and
+        # the deferred role-targeted ones. Deferring is what reaches the Responses API's
+        # `instructions`, which is only a system message once the bridge builds one. The
+        # judged stamp is what makes it safe: the next pass must not re-judge points
+        # against messages this pass already marked (see `_should_stand_down`).
+        carried_points: Final[Sequence[CacheControlInjectionPoint]] = (*remaining_points, *carried_message_points)
+        if carried_points:
             non_default_params["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_as_judged(
-                remaining_points
+                carried_points
             )
 
         return model, processed_messages, non_default_params
@@ -218,7 +244,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _apply_message_injections(
-        points: list[CacheControlMessageInjectionPoint],
+        points: Sequence[CacheControlMessageInjectionPoint],
         messages: list[AllMessageValues],
         max_blocks: int,
         openai_dialect: bool = False,
@@ -350,7 +376,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # 2. list of objects - only apply to last item per Anthropic spec
         elif isinstance(message_content, list):
             if len(message_content) > 0 and isinstance(message_content[-1], dict):
-                message_content[-1]["cache_control"] = control
+                message_content[-1]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
         return message
 
     @staticmethod

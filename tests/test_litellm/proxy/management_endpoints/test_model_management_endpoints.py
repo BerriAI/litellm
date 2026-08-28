@@ -20,6 +20,7 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
     _get_team_deployments,
+    _raise_if_rate_limits_required_but_missing,
     clear_cache,
     delete_team_models,
 )
@@ -4105,6 +4106,72 @@ class TestStrategyRouterWriteValidation:
             assert "requires" in str(exc_info.value.message)
             mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
 
+    def test_settings_written_beside_the_config_rejected(self):
+        """A setting one level above complexity_router_config configures nothing, and the alias
+        marker forwards it onto every outbound call, so the provider rejects the request with an
+        error naming an internal config key. The write is the last boundary that can refuse it."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+
+        violation = _strategy_router_write_violation(
+            incoming_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                complexity_router_config={"tiers": {"SIMPLE": ["gpt-4o-mini"]}},
+                tier_boundaries={"simple_medium": 0.1},
+                token_thresholds={"medium": 100},
+            ),
+            existing_params=None,
+        )
+        assert violation is not None
+        assert "tier_boundaries" in violation
+        assert "token_thresholds" in violation
+
+    @pytest.mark.parametrize(
+        "stored_field",
+        ["complexity_router_config", "complexity_router_default_model"],
+    )
+    def test_settings_beside_the_config_rejected_on_a_patch_of_a_stored_router(self, stored_field):
+        """The patch carries only the stray key, so scope has to come from the stored deployment:
+        the stored model is encrypted at rest and cannot be classified here. Either field names a
+        complexity router on its own, which is what the load requires, so either has to be scope."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        stored = {
+            "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
+            "complexity_router_default_model": "gpt-4o-mini",
+        }[stored_field]
+
+        violation = _strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(tier_boundaries={"simple_medium": 0.1}),
+            existing_params=LiteLLM_Params(model="auto_router/complexity_router", **{stored_field: stored}),
+        )
+        assert violation is not None
+        assert "tier_boundaries" in violation
+
+    def test_documented_nesting_still_accepted(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+
+        assert (
+            _strategy_router_write_violation(
+                incoming_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    complexity_router_default_model="gpt-4o-mini",
+                    complexity_router_config={
+                        "tiers": {"SIMPLE": ["gpt-4o-mini"]},
+                        "tier_boundaries": {"simple_medium": 0.1},
+                    },
+                ),
+                existing_params=None,
+            )
+            is None
+        )
+
     @pytest.mark.asyncio
     async def test_update_model_rejects_prefix_strip(self):
         from litellm.proxy._types import ProxyException
@@ -4256,3 +4323,41 @@ class TestAutoRouterClassifierDefaultPrompt:
         for empty in (None, "", "{}"):
             response = await get_auto_router_classifier_default_prompt(context_window_size=5, tier_labels=empty)
             assert response.system_prompt == classification_system_prompt(5)
+
+
+class TestEnforceRpmTpmOnModelAdd:
+    def test_passes_when_disabled_even_without_limits(self):
+        assert (
+            _raise_if_rate_limits_required_but_missing(
+                litellm_params=LiteLLM_Params(model="azure/gpt-5.2"),
+                enforced=False,
+            )
+            is None
+        )
+
+    def test_passes_when_enabled_and_both_set(self):
+        assert (
+            _raise_if_rate_limits_required_but_missing(
+                litellm_params=LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=1000),
+                enforced=True,
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        "params, expected_missing",
+        [
+            (LiteLLM_Params(model="azure/gpt-5.2"), "rpm and tpm"),
+            (LiteLLM_Params(model="azure/gpt-5.2", rpm=10), "tpm"),
+            (LiteLLM_Params(model="azure/gpt-5.2", tpm=1000), "rpm"),
+            (LiteLLM_Params(model="azure/gpt-5.2", rpm=0, tpm=1000), "rpm"),
+            (LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=-1), "tpm"),
+        ],
+    )
+    def test_raises_when_enabled_and_missing(self, params, expected_missing):
+        from litellm.proxy._types import ProxyException
+
+        with pytest.raises(ProxyException) as exc_info:
+            _raise_if_rate_limits_required_but_missing(litellm_params=params, enforced=True)
+        assert expected_missing in str(exc_info.value.message)
+        assert exc_info.value.code == "400"

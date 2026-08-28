@@ -1458,7 +1458,7 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
     budget = _budget_row(budget_id="budget-1", budget_duration="7d")
     mock_prisma_client.data["budget"] = [budget]
     mock_prisma_client.data["enduser"] = [
-        type("EndUser", (), {"spend": 5.0, "litellm_budget_table": budget, "user_id": "enduser-1"})
+        type("EndUser", (), {"spend": 5.0, "litellm_budget_table": budget, "user_id": "enduser-1", "budget_id": "budget-1"})
     ]
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
@@ -1948,14 +1948,14 @@ class FakePodLockManager:
         if self.redis_cache is not None:
             self.redis_cache.async_get_cache = AsyncMock(return_value="another-pod" if held_by_other else None)
         self._acquired = acquired
-        self.acquire_calls: List[Dict[str, Any]] = []
+        self.acquire_calls: List[Dict[str, str | int | None]] = []
         self.release_calls: List[str] = []
 
     @staticmethod
     def get_redis_lock_key(cronjob_id: str) -> str:
         return f"cronjob_lock:{cronjob_id}"
 
-    async def acquire_lock(self, cronjob_id: str, ttl: Any = None) -> bool:
+    async def acquire_lock(self, cronjob_id: str, ttl: int | None = None) -> bool:
         self.acquire_calls.append({"cronjob_id": cronjob_id, "ttl": ttl})
         return self._acquired
 
@@ -2588,3 +2588,303 @@ def test_ambiguous_commit_replay_does_not_erase_newly_accrued_spend(
     assert client.key_spend == expected_spend
     assert client.commit_attempts == expected_commits
     assert client.reconnect_reasons == expected_reconnects
+
+
+# ---------------------------------------------------------------------------
+# Budget rollover (LIT-3085): overage beyond max_budget carries into the next
+# window instead of being forgiven
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def rollover_enabled(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "budget_rollover", True)
+
+
+@pytest.mark.parametrize(
+    "run_phase, table, id_field, id_value, row_factory",
+    [
+        (
+            lambda job: job.reset_budget_for_litellm_keys(),
+            "key",
+            "token",
+            "tok-roll",
+            lambda now: type(
+                "Key",
+                (),
+                {
+                    "spend": 150.0,
+                    "max_budget": 100.0,
+                    "budget_duration": "1d",
+                    "budget_reset_at": now,
+                    "token": "tok-roll",
+                },
+            ),
+        ),
+        (
+            lambda job: job.reset_budget_for_litellm_users(),
+            "user",
+            "user_id",
+            "user-roll",
+            lambda now: type(
+                "User",
+                (),
+                {
+                    "spend": 150.0,
+                    "max_budget": 100.0,
+                    "budget_duration": "30d",
+                    "budget_reset_at": now,
+                    "user_id": "user-roll",
+                },
+            ),
+        ),
+        (
+            lambda job: job.reset_budget_for_litellm_teams(),
+            "team",
+            "team_id",
+            "team-roll",
+            lambda now: type(
+                "Team",
+                (),
+                {
+                    "spend": 150.0,
+                    "max_budget": 100.0,
+                    "budget_duration": "1mo",
+                    "budget_reset_at": now,
+                    "team_id": "team-roll",
+                },
+            ),
+        ),
+    ],
+)
+def test_direct_reset_carries_overage_when_rollover_enabled(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch, run_phase, table, id_field, id_value, row_factory
+):
+    """spend=150 against max_budget=100 must decrement by the cap (leaving 50)
+    rather than zero the row, and the spend counter must be seeded with 50."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data[table] = [row_factory(now)]
+
+    asyncio.run(run_phase(reset_budget_job))
+
+    writes = _batch_writes(mock_prisma_client, table)
+    assert len(writes) == 1
+    assert writes[0]["where"] == {id_field: id_value}
+    assert writes[0]["data"]["spend"] == {"decrement": 100.0}
+    assert writes[0]["data"]["budget_reset_at"] > now
+    counter_prefix = {"key": "spend:key", "user": "spend:user", "team": "spend:team"}[table]
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key=f"{counter_prefix}:{id_value}", value=50.0, ttl=60)
+
+
+def test_direct_reset_zeroes_under_budget_row_even_with_rollover(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
+):
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["key"] = [
+        type(
+            "Key",
+            (),
+            {"spend": 40.0, "max_budget": 100.0, "budget_duration": "1d", "budget_reset_at": now, "token": "tok-under"},
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    assert _batch_writes(mock_prisma_client, "key")[0]["data"]["spend"] == 0
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:tok-under", value=0.0, ttl=60)
+
+
+def test_direct_reset_zeroes_row_without_max_budget_even_with_rollover(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """No cap means nothing to carry against: reset to zero as before."""
+    _make_counter_invalidation_job(monkeypatch)
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["key"] = [
+        type(
+            "Key",
+            (),
+            {"spend": 150.0, "max_budget": None, "budget_duration": "1d", "budget_reset_at": now, "token": "tok-nocap"},
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    assert _batch_writes(mock_prisma_client, "key")[0]["data"]["spend"] == 0
+
+
+def test_budget_cascade_carries_overage_per_tier_when_rollover_enabled(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """A team member 5 over the tier cap keeps a spend of 5 in the next window:
+    the cascade decrements over-cap rows by the cap, zeroes the rest, and seeds
+    the spend counter with the carried amount."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    budget = _budget_row(budget_id="budget-roll", budget_duration="7d", max_budget=10.0)
+    mock_prisma_client.data["budget"] = [budget]
+    membership = type(
+        "Membership",
+        (),
+        {"user_id": "member-1", "team_id": "team-1", "spend": 15.0, "budget_id": "budget-roll"},
+    )
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results([membership])
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    membership_writes = _batch_writes(mock_prisma_client, "team_membership")
+    assert {
+        "table": "team_membership",
+        "op": "update_many",
+        "where": {"budget_id": "budget-roll", "spend": {"gt": 10.0}},
+        "data": {"spend": {"decrement": 10.0}},
+    } in membership_writes
+    assert {
+        "table": "team_membership",
+        "op": "update_many",
+        "where": {"budget_id": "budget-roll", "spend": {"gt": 0, "lte": 10.0}},
+        "data": {"spend": 0},
+    } in membership_writes
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:team_member:member-1:team-1", value=5.0, ttl=60)
+
+
+def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
+):
+    _make_counter_invalidation_job(monkeypatch)
+    budget = _budget_row(budget_id="budget-roll", budget_duration="1d", max_budget=10.0)
+    mock_prisma_client.data["budget"] = [budget]
+    mock_prisma_client.data["enduser"] = [
+        type(
+            "EndUser",
+            (),
+            {"spend": 15.0, "litellm_budget_table": budget, "user_id": "enduser-roll", "budget_id": "budget-roll"},
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    enduser_writes = _batch_writes(mock_prisma_client, "enduser")
+    assert {
+        "table": "enduser",
+        "op": "update_many",
+        "where": {"user_id": {"in": ["enduser-roll"]}, "spend": {"gt": 10.0}},
+        "data": {"spend": {"decrement": 10.0}},
+    } in enduser_writes
+    assert {
+        "table": "enduser",
+        "op": "update_many",
+        "where": {"user_id": {"in": ["enduser-roll"]}, "spend": {"lte": 10.0}},
+        "data": {"spend": 0},
+    } in enduser_writes
+
+
+def _replay_spend_writes(writes, spend):
+    """Apply the queued update_many statements in order, the way the DB
+    transaction executes them, and return the row's final spend."""
+    for write in writes:
+        condition = write["where"].get("spend")
+        if isinstance(condition, dict):
+            if "gt" in condition and not spend > condition["gt"]:
+                continue
+            if "lte" in condition and not spend <= condition["lte"]:
+                continue
+        payload = write["data"]["spend"]
+        spend = payload if not isinstance(payload, dict) else spend - payload["decrement"]
+    return spend
+
+
+@pytest.mark.parametrize("table", ["team_membership", "enduser"])
+def test_cascade_rollover_writes_survive_sequential_execution(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch, table
+):
+    """The statements run one after another inside a transaction, so a
+    decrement-then-zero order would re-match the decremented row (now in the
+    0..cap range) and erase the carried spend. Replaying the writes in queue
+    order must leave the overage, for any spend between cap and twice the cap."""
+    _make_counter_invalidation_job(monkeypatch)
+    budget = _budget_row(budget_id="budget-roll", budget_duration="7d", max_budget=10.0)
+    mock_prisma_client.data["budget"] = [budget]
+    membership = type(
+        "Membership",
+        (),
+        {"user_id": "member-1", "team_id": "team-1", "spend": 15.0, "budget_id": "budget-roll"},
+    )
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results([membership])
+    mock_prisma_client.data["enduser"] = [
+        type(
+            "EndUser",
+            (),
+            {"spend": 15.0, "litellm_budget_table": budget, "user_id": "enduser-roll", "budget_id": "budget-roll"},
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    writes = _batch_writes(mock_prisma_client, table)
+    assert _replay_spend_writes(writes, 15.0) == 5.0
+    assert _replay_spend_writes(writes, 8.0) == 0
+    assert _replay_spend_writes(writes, 25.0) == 15.0
+
+
+def test_budget_cascade_zeroes_everything_when_rollover_disabled(reset_budget_job, mock_prisma_client, monkeypatch):
+    """Control: with the flag off the cascade keeps the plain zeroing writes."""
+    _make_counter_invalidation_job(monkeypatch)
+    budget = _budget_row(budget_id="budget-off", budget_duration="7d", max_budget=10.0)
+    mock_prisma_client.data["budget"] = [budget]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    membership_writes = _batch_writes(mock_prisma_client, "team_membership")
+    assert membership_writes == [
+        {
+            "table": "team_membership",
+            "op": "update_many",
+            "where": {"budget_id": {"in": ["budget-off"]}},
+            "data": {"spend": 0},
+        }
+    ]
+
+
+def test_window_reset_carries_counter_overage_when_rollover_enabled(rollover_enabled, monkeypatch):
+    """A per-window counter at 130 against a 100 cap restarts the window at 30."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=5)).isoformat() + "Z"
+    key_rows = [
+        {
+            "token": "sk-roll",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired, "max_budget": 100.0}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+    spend_counter_cache.async_get_cache = AsyncMock(return_value=130.0)
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-roll:window:1d", value=30.0)
+
+
+def test_window_reset_zeroes_counter_when_rollover_disabled(monkeypatch):
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=5)).isoformat() + "Z"
+    key_rows = [
+        {
+            "token": "sk-off",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired, "max_budget": 100.0}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+    spend_counter_cache.async_get_cache = AsyncMock(return_value=130.0)
+
+    asyncio.run(job.reset_budget_windows())
+
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-off:window:1d", value=0.0)
+    spend_counter_cache.async_get_cache.assert_not_awaited()
