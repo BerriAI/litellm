@@ -212,9 +212,9 @@ async def _read_user_model_max_budget(
     user_id: str | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
-    parent_otel_span: object,
+    parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging,
-) -> dict | None:
+) -> Mapping[str, object] | None:
     """The user row's `model_max_budget`, or None when the row cannot be read.
 
     A user whose row is missing must not be refused: this is a budget lookup,
@@ -228,13 +228,13 @@ async def _read_user_model_max_budget(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
-            parent_otel_span=parent_otel_span,  # pyright: ignore[reportArgumentType]  # Span is a runtime union, not usable in an annotation here
+            parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
     except Exception as e:  # noqa: BLE001  # mirrors the main path's tolerance
         verbose_logger.debug("Unable to read user for the per-model budget check: %s", e)
         return None
-    return getattr(user_obj, "model_max_budget", None)
+    return user_obj.model_max_budget if user_obj is not None else None
 
 
 async def _check_user_model_budget(
@@ -1769,7 +1769,12 @@ async def _user_api_key_auth_builder(
 
             return valid_token
 
-        if valid_token is not None and isinstance(valid_token, UserAPIKeyAuth) and valid_token.team_id is not None:
+        if (
+            valid_token is not None
+            and isinstance(valid_token, UserAPIKeyAuth)
+            and valid_token.team_id is not None
+            and valid_token.team_id != UI_TEAM_ID
+        ):
             ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
             try:
                 team_obj: Final[LiteLLM_TeamTableCachedObj] = await get_team_object(
@@ -2149,6 +2154,8 @@ async def _user_api_key_auth_builder(
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
                 try:
+                    if valid_token.team_id == UI_TEAM_ID:
+                        raise TeamNotFoundError(team_id=UI_TEAM_ID)
                     with tracer.trace("litellm.proxy.auth.get_team_object"):
                         _team_obj = await get_team_object(
                             team_id=valid_token.team_id,
@@ -2443,7 +2450,7 @@ async def _run_centralized_common_checks(
         )
 
     fetch_coros: Final = []
-    if user_api_key_auth_obj.team_id is not None:
+    if user_api_key_auth_obj.team_id is not None and user_api_key_auth_obj.team_id != UI_TEAM_ID:
         fetch_coros.append(
             _safe_fetch(
                 "team",
@@ -2567,7 +2574,9 @@ async def _run_centralized_common_checks(
         else:
             raise team_result
     else:
-        team_object = team_result
+        team_object = (
+            _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id == UI_TEAM_ID else team_result
+        )
 
     user_object: LiteLLM_UserTable | None = None if isinstance(user_result, BaseException) else user_result
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
@@ -3267,8 +3276,7 @@ async def _run_post_custom_auth_checks(
     # loaded the user row yet. The attach is unconditional because the post-call
     # spend hook reads this field off the token: gating it on the same condition
     # as enforcement would leave the user's counter uncharged whenever this
-    # request was not itself enforceable, which is the untracked-spend bug this
-    # PR exists to fix.
+    # request was not itself enforceable, so its spend would go untracked.
     user_budget: Final = await _read_user_model_max_budget(
         user_id=valid_token.user_id,
         prisma_client=prisma_client,

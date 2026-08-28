@@ -556,7 +556,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               <SelectTrigger className="w-full" aria-label="Template">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 <SelectGroup>
                   <SelectLabel>STANDARD</SelectLabel>
                   {TEMPLATE_ITEMS.map((template) => (

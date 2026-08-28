@@ -120,6 +120,15 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
     assert generalized["supports_adaptive_thinking"] is True
 
 
+def test_get_model_info_surfaces_supported_endpoints(local_model_cost_map):
+    """supported_endpoints ships in the cost map and is declared on ModelInfoBase,
+    but the constructor never copied it, so get_model_info always returned None.
+    The realtime health check reads it to spot GA-only transcription models
+    (LIT-6240)."""
+    info = litellm.get_model_info(model="gpt-realtime-whisper", custom_llm_provider="azure")
+    assert info["supported_endpoints"] == ["/v1/realtime", "/v1/realtime/transcription_sessions"]
+
+
 def test_potential_model_names_keeps_provider_prefixed_candidate():
     """A provider whose own model ids repeat the litellm provider name (Perplexity's
     Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
@@ -845,6 +854,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {
                     "type": "number"
                 },
+                "cache_creation_input_token_cost_above_272k_tokens_priority": {
+                    "type": "number"
+                },
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
@@ -862,6 +874,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
+                "google_maps_grounding_cost_per_query": {"type": "number"},
                 "input_cost_per_audio_token": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_character": {"type": "number"},
@@ -1001,6 +1014,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
+                "reasoning_effort_levels": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
+                },
                 "supports_adaptive_thinking": {"type": "boolean"},
                 "supports_legacy_thinking": {"type": "boolean"},
                 "thinking_always_on": {"type": "boolean"},
@@ -4254,7 +4271,11 @@ class TestGetOptionalParamsTencent:
     """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
 
     def test_tencent_supports_thinking_param(self):
-        """Verify get_optional_params for tencent accepts the 'thinking' param."""
+        """Verify get_optional_params for tencent accepts the 'thinking' param.
+
+        `thinking` must be nested in extra_body: tencent routes through the
+        OpenAI SDK's chat.completions.create(), which rejects unknown kwargs.
+        """
         from unittest.mock import patch
 
         from litellm.utils import get_optional_params
@@ -4268,7 +4289,8 @@ class TestGetOptionalParamsTencent:
                 custom_llm_provider="tencent",
                 thinking={"type": "enabled"},
             )
-        assert result.get("thinking") == {"type": "enabled"}
+        assert "thinking" not in result
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_tencent_supports_reasoning_effort(self):
         """Verify get_optional_params for tencent converts reasoning_effort to thinking."""
@@ -4285,7 +4307,8 @@ class TestGetOptionalParamsTencent:
                 custom_llm_provider="tencent",
                 reasoning_effort="medium",
             )
-        assert result.get("thinking") == {"type": "enabled"}
+        assert "thinking" not in result
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_tencent_supported_params_includes_thinking_and_reasoning_effort(self):
         """Verify get_supported_openai_params for tencent includes custom params."""
@@ -4440,14 +4463,101 @@ def test_get_prompt_cache_min_tokens_resolves_per_model(
     assert get_prompt_cache_min_tokens(model=model) == expected_min_tokens
 
 
-def test_get_prompt_cache_min_tokens_differs_per_platform_for_same_model(local_model_cost_map: None) -> None:
-    """The same model can carry a different minimum per platform, so the threshold must come from
-    the platform's own cost-map entry rather than being derived from the model family name."""
-    assert get_prompt_cache_min_tokens(model="claude-fable-5") == 512
-    assert get_prompt_cache_min_tokens(model="anthropic.claude-fable-5") == 1024
-    assert get_prompt_cache_min_tokens(model="claude-fable-5") != get_prompt_cache_min_tokens(
-        model="anthropic.claude-fable-5"
-    )
+def test_get_prompt_cache_min_tokens_uniform_for_fable_5_across_platforms(local_model_cost_map: None) -> None:
+    """Anthropic removed the Amazon Bedrock override for Claude Fable 5, so its 512-token minimum
+    now applies on every platform. The Bedrock entries carried the old 1024 and the re-export
+    entries carried nothing, so the router judged 512-1023-token prefixes uncacheable and skipped
+    prompt-cache-affinity routing for prompts the provider demonstrably caches (issue #35011)."""
+    wrong: Final = {
+        model: get_prompt_cache_min_tokens(model=model)
+        for model, info in litellm.model_cost.items()
+        if "fable-5" in model
+        and info.get("supports_prompt_caching")
+        and get_prompt_cache_min_tokens(model=model) != 512
+    }
+    assert not wrong, f"every Claude Fable 5 entry must carry prompt_cache_min_tokens 512: {wrong}"
+
+
+ANTHROPIC_REEXPORT_CACHE_MIN: Final = {
+    "azure_ai/claude-fable-5": 512,
+    "azure_ai/claude-haiku-4-5": 4096,
+    "azure_ai/claude-opus-4-1": 1024,
+    "azure_ai/claude-opus-4-5": 4096,
+    "azure_ai/claude-opus-4-6": 4096,
+    "azure_ai/claude-opus-4-7": 2048,
+    "azure_ai/claude-opus-4-8": 1024,
+    "azure_ai/claude-sonnet-4-5": 1024,
+    "azure_ai/claude-sonnet-4-6": 1024,
+    "azure_ai/claude-sonnet-5": 1024,
+    "databricks/databricks-claude-haiku-4-5": 4096,
+    "databricks/databricks-claude-opus-4": 1024,
+    "databricks/databricks-claude-opus-4-1": 1024,
+    "databricks/databricks-claude-opus-4-5": 4096,
+    "databricks/databricks-claude-opus-4-6": 4096,
+    "databricks/databricks-claude-sonnet-4": 1024,
+    "databricks/databricks-claude-sonnet-4-5": 1024,
+    "databricks/databricks-claude-sonnet-4-6": 1024,
+    "openrouter/anthropic/claude-haiku-4.5": 4096,
+    "openrouter/anthropic/claude-opus-4": 1024,
+    "openrouter/anthropic/claude-opus-4.1": 1024,
+    "openrouter/anthropic/claude-opus-4.5": 4096,
+    "openrouter/anthropic/claude-opus-4.6": 4096,
+    "openrouter/anthropic/claude-opus-4.7": 2048,
+    "openrouter/anthropic/claude-sonnet-4": 1024,
+    "openrouter/anthropic/claude-sonnet-4.5": 1024,
+    "openrouter/anthropic/claude-sonnet-4.6": 1024,
+    "replicate/anthropic/claude-4-sonnet": 1024,
+    "replicate/anthropic/claude-4.5-haiku": 4096,
+    "replicate/anthropic/claude-4.5-sonnet": 1024,
+    "snowflake/claude-4-opus": 1024,
+    "snowflake/claude-4-sonnet": 1024,
+    "snowflake/claude-haiku-4-5": 4096,
+    "snowflake/claude-sonnet-4-5": 1024,
+    "snowflake/claude-sonnet-4-6": 1024,
+    "vercel_ai_gateway/anthropic/claude-haiku-4.5": 4096,
+    "vercel_ai_gateway/anthropic/claude-opus-4": 1024,
+    "vercel_ai_gateway/anthropic/claude-opus-4.1": 1024,
+    "vercel_ai_gateway/anthropic/claude-opus-4.5": 4096,
+    "vercel_ai_gateway/anthropic/claude-opus-4.6": 4096,
+    "vercel_ai_gateway/anthropic/claude-sonnet-4": 1024,
+    "vercel_ai_gateway/anthropic/claude-sonnet-4.5": 1024,
+    "vertex_ai/claude-fable-5": 512,
+    "vertex_ai/claude-fable-5@default": 512,
+}
+
+
+def test_anthropic_reexport_entries_carry_explicit_prompt_cache_min_tokens(local_model_cost_map: None) -> None:
+    """Regression for issue #35011: these re-export entries carried no prompt_cache_min_tokens, so
+    they silently inherited the 1024 default. That skipped cache-affinity routing for Fable 5's
+    512-1023-token prefixes and reported 1024-4095-token prompts as cacheable on the 2048/4096
+    models. The entry must be explicit so a default change can never re-break them, which is why
+    this asserts the cost-map value itself and not just the resolver's answer."""
+    wrong: Final = {
+        model: (litellm.model_cost[model].get("prompt_cache_min_tokens"), get_prompt_cache_min_tokens(model=model))
+        for model, expected in ANTHROPIC_REEXPORT_CACHE_MIN.items()
+        if litellm.model_cost[model].get("prompt_cache_min_tokens") != expected
+        or get_prompt_cache_min_tokens(model=model) != expected
+    }
+    assert not wrong, f"(cost-map value, resolved value) diverge from Anthropic's published minimums: {wrong}"
+
+
+def test_anthropic_reexport_cache_minimums_present_in_root_cost_map() -> None:
+    """The root map ships to the CDN independently of the bundled backup, so both must carry the
+    minimum or proxies reading one of them regress to the 1024 default."""
+    root_map_path: Final = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
+    with open(root_map_path) as f:
+        root_map: Final = json.load(f)
+    wrong: Final = {
+        model: root_map[model].get("prompt_cache_min_tokens")
+        for model, expected in ANTHROPIC_REEXPORT_CACHE_MIN.items()
+        if root_map[model].get("prompt_cache_min_tokens") != expected
+    }
+    fable_5_wrong: Final = {
+        model: info.get("prompt_cache_min_tokens")
+        for model, info in root_map.items()
+        if "fable-5" in model and info.get("supports_prompt_caching") and info.get("prompt_cache_min_tokens") != 512
+    }
+    assert not wrong and not fable_5_wrong, f"root cost map diverges: {wrong | fable_5_wrong}"
 
 
 GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(
