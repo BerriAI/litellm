@@ -2047,3 +2047,54 @@ async def test_spend_counters_keep_every_granted_group_when_the_deployment_is_un
     )
 
     assert charged == ("premium", "tier0")
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_uses_standard_logging_key_hash_when_metadata_missing(monkeypatch):
+    """
+    When metadata.user_api_key is missing but standard_logging_object has
+    user_api_key_hash, the cost callback must still pass that hash as token
+    so LiteLLM_VerificationToken.spend is updated (issue #37144).
+    """
+    logger = _ProxyDBLogger()
+    hashed_token = "d" * 64
+    kwargs = {
+        "model": "custom_openai/test-model",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_user_id": "user-1",
+                "user_api_key_team_id": "team-1",
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": 0.05,
+            "metadata": {"user_api_key_hash": hashed_token},
+        },
+        "stream": False,
+    }
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+    mock_proxy_logging.failed_tracking_alert = AsyncMock()
+    mock_increment = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.increment_spend_counters", mock_increment)
+    monkeypatch.setattr("litellm.proxy.proxy_server.update_cache", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+
+    await logger._PROXY_track_cost_callback(
+        kwargs=kwargs,
+        completion_response=MagicMock(),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
+    call_kwargs = (
+        mock_proxy_logging.db_spend_update_writer.update_database.call_args[1]
+    )
+    assert call_kwargs["token"] == hashed_token
+    mock_increment.assert_awaited_once()
+    assert mock_increment.call_args[1]["token"] == hashed_token
