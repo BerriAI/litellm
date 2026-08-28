@@ -4412,6 +4412,37 @@ class TestVertexEmbeddingEncodingFormat:
         assert optional_params.get("outputDimensionality") == 256
 
 
+class TestBedrockCohereEmbeddingDispatch:
+    """All bedrock cohere.embed models must route to BedrockCohereEmbeddingConfig,
+    not just multilingual-v3/v4: english-v3 was falling into the unmapped
+    else-branch and rejecting encoding_format. Issue #38659."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.embed-english-v3",
+            "cohere.embed-multilingual-v3",
+            "cohere.embed-v4:0",
+        ],
+    )
+    def test_cohere_embed_models_accept_encoding_format(self, model):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model=model,
+            encoding_format="float",
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("embedding_types") == ["float"]
+
+    def test_cohere_embed_english_v3_maps_dimensions(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="cohere.embed-english-v3",
+            encoding_format="float",
+            dimensions=512,
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("output_dimension") == 512
+
+
 @pytest.mark.parametrize(
     "model",
     [
