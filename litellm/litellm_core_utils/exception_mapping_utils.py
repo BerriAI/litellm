@@ -541,6 +541,16 @@ def _map_anthropic_exception(
             model=model,
             llm_provider="anthropic",
         )
+    elif ExceptionCheckers.is_error_str_rate_limit(
+        error_str, status_code=getattr(original_exception, "status_code", None)
+    ):
+        raise RateLimitError(
+            message=f"AnthropicException - {error_str}",
+            model=model,
+            llm_provider="anthropic",
+            response=getattr(original_exception, "response", None),
+            litellm_debug_info=extra_information,
+        )
     if "Invalid API Key" in error_str:
         raise AuthenticationError(
             message=f"AnthropicError - {error_str}",
@@ -891,6 +901,16 @@ def _map_bedrock_exception(
             model=model,
             llm_provider="bedrock",
         )
+    elif ExceptionCheckers.is_error_str_rate_limit(
+        error_str, status_code=getattr(original_exception, "status_code", None)
+    ):
+        raise RateLimitError(
+            message=f"BedrockException - {error_str}",
+            model=model,
+            llm_provider="bedrock",
+            response=getattr(original_exception, "response", None),
+            litellm_debug_info=extra_information,
+        )
     elif "Conversation blocks and tool result blocks cannot be provided in the same turn." in error_str:
         raise BadRequestError(
             message=f"BedrockException - {error_str}\n. Enable 'litellm.modify_params=True' (for PROXY do: `litellm_settings::modify_params: True`) to insert a dummy assistant message and fix this error.",
@@ -1221,6 +1241,9 @@ def _map_vertex_exception(
         or "Resource exhausted" in error_str
         or "IndexError: list index out of range" in error_str
         or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
+        or ExceptionCheckers.is_error_str_rate_limit(
+            error_str, status_code=getattr(original_exception, "status_code", None)
+        )
     ):
         raise RateLimitError(
             message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
@@ -1741,6 +1764,16 @@ def _map_together_ai_exception(
             message=f"TogetherAIException - {error_str}",
             model=model,
             llm_provider="together_ai",
+        )
+    elif ExceptionCheckers.is_error_str_rate_limit(
+        error_str, status_code=getattr(original_exception, "status_code", None)
+    ):
+        raise RateLimitError(
+            message=f"TogetherAIException - {error_str}",
+            model=model,
+            llm_provider="together_ai",
+            response=getattr(original_exception, "response", None),
+            litellm_debug_info=extra_information,
         )
     elif (
         "error" in error_response
