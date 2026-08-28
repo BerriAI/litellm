@@ -93,6 +93,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
+    independent_snapshot,
     is_expected_client_error,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -452,63 +453,6 @@ def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[s
         if managed
         else frozenset()
     )
-
-
-def _independent_snapshot(
-    data: dict,  # mutable-ok: same request-payload shape as every other guardrail snapshot in this file
-) -> dict:  # mutable-ok: same request-payload shape as every other guardrail snapshot in this file
-    """
-    A copy of ``data`` whose top-level keys are deep-copied independently
-    where possible -- always attempted, regardless of
-    ``litellm.safe_memory_mode``. Unlike ``safe_deep_copy``, which can return
-    the *original* object outright under that mode (defeating any isolation
-    guarantee for every key, not just the ones that need it), this never
-    skips copying wholesale.
-
-    Real proxy requests carry ``data["litellm_logging_obj"]`` (a ``Logging``
-    instance nesting a live OTel span with a real lock) by the time
-    ``pre_call_hook`` runs, which can never be deep-copied -- and
-    scan_raw_request doesn't need it to be. Any individual key that fails to
-    deep-copy falls back to sharing its original reference, same crash
-    tolerance as ``safe_deep_copy``'s own per-key fallback; only the keys
-    that scan_raw_request actually reads for its block decision or writes
-    for bookkeeping (``messages``/``input``, ``metadata``/``litellm_metadata``)
-    need to be genuinely independent, and those are plain, cleanly-copyable
-    structures.
-    """
-    sanitized: Final = {  # mutable-ok: same request-payload shape as data
-        key: (
-            {  # mutable-ok: same request-payload shape as data
-                inner_key: ("placeholder" if inner_key == "litellm_parent_otel_span" else inner_value)
-                for inner_key, inner_value in value.items()
-            }
-            if key in ("metadata", "litellm_metadata") and isinstance(value, dict)
-            else value
-        )
-        for key, value in data.items()
-    }
-
-    def _copied_value(key: str, sanitized_value: object) -> object:
-        try:
-            copied_value: Final = copy.deepcopy(sanitized_value)
-        except Exception:  # noqa: BLE001  # any unpicklable value falls back to the original reference for this key only
-            return data.get(key)
-        original_value: Final = data.get(key)
-        if (
-            key in ("metadata", "litellm_metadata")
-            and isinstance(copied_value, dict)
-            and isinstance(original_value, dict)
-            and "litellm_parent_otel_span" in original_value
-        ):
-            return {  # mutable-ok: same request-payload shape as data
-                **copied_value,
-                "litellm_parent_otel_span": original_value["litellm_parent_otel_span"],
-            }
-        return copied_value
-
-    return {  # mutable-ok: same request-payload shape as data
-        key: _copied_value(key, value) for key, value in sanitized.items()
-    }
 
 
 def _prompt_block_text(block: object) -> str:
@@ -1475,7 +1419,7 @@ class ProxyLogging:
         scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
         should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
         input_data: Final = (  # mutable-ok: same request-payload shape as data
-            _independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
+            independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
         )
         # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
         # successful run, which unconditionally stamps bookkeeping metadata onto
@@ -1487,7 +1431,7 @@ class ProxyLogging:
         # own content mutation from this bookkeeping noise without risking a
         # premature marker write into shared state.
         expected_if_unmutated: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
-            _independent_snapshot(input_data) if scans_raw_request else None
+            independent_snapshot(input_data) if scans_raw_request else None
         )
         if expected_if_unmutated is not None:
             callback.mark_pre_call_hook_ran(expected_if_unmutated)
@@ -1511,7 +1455,16 @@ class ProxyLogging:
                 "to mask/rewrite content.",
                 getattr(callback, "guardrail_name", None) or callback.__class__.__name__,
             )
-        if result is None or scans_raw_request:
+        if scans_raw_request:
+            if result is not None:
+                # _process_guardrail_callback only stamped input_data (a throwaway
+                # snapshot copy), never the live data returned here -- without this,
+                # a deployment-level guardrail sharing this name would see no marker
+                # via _pre_call_hook_already_ran and re-run the same guardrail a
+                # second time on live kwargs.
+                callback.mark_pre_call_hook_ran(data)
+            return data
+        if result is None:
             return data
         return result
 
@@ -1623,12 +1576,18 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         event_hook: str,
+        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
     ) -> dict:
         """
         Execute guardrail pipelines if any are configured for this request.
 
         Checks metadata for pipelines resolved by the policy engine
         and executes them. Handles the result (allow/block/modify_response).
+
+        ``raw_request_snapshot`` (taken before any guardrail or pipeline ran)
+        is forwarded so a pipeline step whose guardrail opted into
+        ``scan_raw_request`` evaluates the pristine request, not whatever an
+        earlier ``pass_data`` step in the same pipeline already rewrote.
 
         Returns the (possibly modified) data dict.
         """
@@ -1647,6 +1606,7 @@ class ProxyLogging:
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 policy_name=policy_name,
+                raw_request_snapshot=raw_request_snapshot,
             )
 
             data = self._handle_pipeline_result(
@@ -1813,7 +1773,7 @@ class ProxyLogging:
         # not) that masks/rewrites content can't hide a violation from a later
         # one that opted into scanning the original request. Only computed
         # when at least one registered guardrail actually opted in, and via
-        # _independent_snapshot (not safe_deep_copy) since this isolation
+        # independent_snapshot (not safe_deep_copy) since this isolation
         # guarantee must hold even under litellm.safe_memory_mode, which
         # otherwise makes deep copies return the original object.
         needs_raw_request_snapshot: Final = any(
@@ -1821,7 +1781,7 @@ class ProxyLogging:
             for cb in ProxyLogging._callback_capabilities().resolved_callbacks
         )
         raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
-            _independent_snapshot(data) if needs_raw_request_snapshot else None
+            independent_snapshot(data) if needs_raw_request_snapshot else None
         )
 
         try:
@@ -1831,6 +1791,7 @@ class ProxyLogging:
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 event_hook="pre_call",
+                raw_request_snapshot=raw_request_snapshot,
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
@@ -1978,7 +1939,7 @@ class ProxyLogging:
         def _input_for(callback: CustomGuardrail) -> dict:  # mutable-ok: same request-payload shape as data
             if not getattr(callback, "scan_raw_request", False) or raw_request_snapshot is None:
                 return data
-            return _independent_snapshot(raw_request_snapshot)
+            return independent_snapshot(raw_request_snapshot)
 
         results: Final = await asyncio.gather(
             *(
@@ -1993,6 +1954,19 @@ class ProxyLogging:
             ),
             return_exceptions=True,
         )
+        for callback, result in zip(guardrails, results, strict=True):
+            # _process_guardrail_callback stamped mark_pre_call_hook_ran on
+            # _input_for's throwaway snapshot copy for a scan_raw_request
+            # guardrail, never on the live, shared `data` -- without this, a
+            # deployment-level guardrail sharing this name would see no marker
+            # via _pre_call_hook_already_ran and re-run it a second time on
+            # live kwargs.
+            if (
+                getattr(callback, "scan_raw_request", False)
+                and not isinstance(result, BaseException)
+                and result is not None
+            ):
+                callback.mark_pre_call_hook_ran(data)
         raised: Final = tuple(result for result in results if isinstance(result, BaseException))
         blocking: Final = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
         if blocking is not None:

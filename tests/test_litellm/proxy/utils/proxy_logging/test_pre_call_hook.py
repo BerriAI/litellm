@@ -656,7 +656,7 @@ async def test_scan_raw_request_snapshot_taken_before_pipelines(
     scan_raw_request blocker still sees the pre-pipeline raw content.
     """
 
-    async def fake_pipelines(self, data, user_api_key_dict, call_type, event_hook):
+    async def fake_pipelines(self, data, user_api_key_dict, call_type, event_hook, raw_request_snapshot=None):
         for msg in data.get("messages", []):
             if "SECRET" in msg.get("content", ""):
                 msg["content"] = msg["content"].replace("SECRET", "[REDACTED]")
@@ -742,6 +742,54 @@ async def test_scan_raw_request_baseline_does_not_leak_marker_under_safe_memory_
         call_type="completion",
     )
     assert callback._pre_call_hook_already_ran(out) is False
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_stamps_live_request_when_guardrail_actually_ran(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Bugbot finding on BerriAI/litellm#34940: a scan_raw_request guardrail only
+    stamped mark_pre_call_hook_ran on its own throwaway snapshot copies, never
+    on the live request returned to the caller. A later
+    async_pre_call_deployment_hook (router-level guardrail re-check) reads
+    that marker via _pre_call_hook_already_ran on the live kwargs to decide
+    whether to skip re-running the same guardrail -- since it was never
+    stamped there, the guardrail runs a second time on live data, doubling
+    the external call and re-applying whatever scan_raw_request's contract
+    says should be discarded. The live output must carry the marker whenever
+    the guardrail actually ran (not skipped).
+    """
+    callback = _BlockOnSecretGuardrail(scan_raw_request=True)
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"role": "user", "content": "nothing flagged here"}], "model": "m"},
+        call_type="completion",
+    )
+    assert callback._pre_call_hook_already_ran(out) is True
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_stamps_live_request_in_parallel_path(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Same Bugbot finding, parallel branch: a guardrail with both
+    run_in_parallel=True and scan_raw_request=True is dispatched through
+    _run_parallel_pre_call_guardrails, which only stamped the throwaway
+    snapshot _input_for built, never the live, shared data object.
+    """
+    callback = _BlockOnSecretGuardrail(scan_raw_request=True, run_in_parallel=True)
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"role": "user", "content": "nothing flagged here"}], "model": "m"},
+        call_type="completion",
+    )
+    assert callback._pre_call_hook_already_ran(out) is True
 
 
 @pytest.mark.asyncio
