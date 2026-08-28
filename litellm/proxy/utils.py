@@ -5832,6 +5832,31 @@ class PrismaClient:
             verbose_proxy_logger.error("Error getting all latest health checks: %s", e)
             return []
 
+    async def get_latest_health_checks_for_models(
+        self, model_names: "Sequence[str]"
+    ) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
+        """
+        Get the latest health check for each of the named models.
+
+        Same DISTINCT ON as ``get_all_latest_health_checks``, bounded to the models asked
+        about, so a paged caller reads health for its page instead of for the whole table.
+        """
+        if not model_names:
+            return []
+        try:
+            return await HealthCheckRepository(self).table.find_many(
+                where={"model_name": {"in": list(model_names)}},
+                distinct=["model_id", "model_name"],
+                order=[
+                    {"model_id": "asc"},
+                    {"model_name": "asc"},
+                    {"checked_at": "desc"},
+                ],
+            )
+        except Exception as e:
+            verbose_proxy_logger.error("Error getting latest health checks for models: %s", e)
+            return []
+
 
 ### HELPER FUNCTIONS ###
 

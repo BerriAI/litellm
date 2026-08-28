@@ -9,6 +9,7 @@ Symbols pinned here:
   - ``PrismaClient.save_health_check_result``
   - ``PrismaClient.get_health_check_history``
   - ``PrismaClient.get_all_latest_health_checks``
+  - ``PrismaClient.get_latest_health_checks_for_models``
   - ``PrismaClient._is_sha256_hex`` (a nested helper inside
     ``migrate_passwords_to_scrypt_async``; the pin list assigns it to this
     cluster as a documentation artifact)
@@ -290,3 +291,40 @@ async def test_get_all_latest_health_checks_db_error_returns_empty_list(
         side_effect=RuntimeError("oops")
     )
     assert await prisma_client.get_all_latest_health_checks() == []
+
+
+@pytest.mark.asyncio
+async def test_get_latest_health_checks_for_models_bounds_the_query_to_those_models(
+    prisma_client: PrismaClient,
+) -> None:
+    """A paged caller reads health for its page; an unbounded read is the bug this exists to avoid."""
+    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[])
+    await prisma_client.get_latest_health_checks_for_models(["gpt-5", "claude-opus"])
+    kwargs = prisma_client.db.litellm_healthchecktable.find_many.await_args.kwargs
+    actual = {
+        "where": kwargs["where"],
+        "distinct": kwargs["distinct"],
+        "order": kwargs["order"],
+    }
+    assert actual == {
+        "where": {"model_name": {"in": ["gpt-5", "claude-opus"]}},
+        "distinct": ["model_id", "model_name"],
+        "order": [{"model_id": "asc"}, {"model_name": "asc"}, {"checked_at": "desc"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_latest_health_checks_for_models_does_not_query_for_an_empty_page(
+    prisma_client: PrismaClient,
+) -> None:
+    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[])
+    assert await prisma_client.get_latest_health_checks_for_models([]) == []
+    assert prisma_client.db.litellm_healthchecktable.find_many.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_latest_health_checks_for_models_db_error_returns_empty_list(
+    prisma_client: PrismaClient,
+) -> None:
+    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(side_effect=RuntimeError("oops"))
+    assert await prisma_client.get_latest_health_checks_for_models(["gpt-5"]) == []
