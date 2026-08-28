@@ -226,6 +226,21 @@ class TestChatGPTResponsesAPITransformation:
         assert request["parallel_tool_calls"] is False
         assert request["reasoning"] == {"context": "all_turns"}
 
+    def test_chatgpt_unrelated_headers_do_not_trigger_lite_normalization(self):
+        """Ordinary outbound headers (auth etc.) without the Lite marker must
+        leave the request untouched."""
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={"Authorization": "Bearer token", "originator": "codex_cli_rs"},
+        )
+
+        assert "parallel_tool_calls" not in request
+        assert "reasoning" not in request
+
     @pytest.mark.parametrize("header_value", ["false", "0", "no", ""])
     def test_chatgpt_responses_lite_falsy_header_is_ignored(self, header_value):
         config = ChatGPTResponsesAPIConfig()
