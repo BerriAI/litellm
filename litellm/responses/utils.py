@@ -1183,11 +1183,15 @@ class ResponseAPILoggingUtils:
 
         from litellm.cost_calculator import BaseTokenUsageProcessor
 
-        usage_objects: Final = [
-            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(cast(Mapping[str, object], usage))
+        usage_objects: Final = tuple(
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                usage if isinstance(usage, (dict, ResponseAPIUsage)) else None
+            )
             for usage in raw_usages
-        ]
-        combined: Final = BaseTokenUsageProcessor.combine_usage_objects(usage_objects)
+        )
+        combined: Final = BaseTokenUsageProcessor.combine_usage_objects(
+            list(usage_objects)  # mutable-ok: combine_usage_objects expects list
+        )
 
         input_tokens_details: Final = (
             InputTokensDetails(
@@ -1226,11 +1230,11 @@ class ResponseAPILoggingUtils:
         the HTTP /v1/responses path.
         """
         terminal_responses: Final = tuple(
-            cast(Mapping[str, object], event["response"])
+            resp
             for event in events
             if isinstance(event, dict)
             and event.get("type") in ("response.completed", "response.incomplete")
-            and isinstance(event.get("response"), dict)
+            and isinstance((resp := event.get("response")), dict)
         )
         if not terminal_responses:
             return None
@@ -1240,13 +1244,24 @@ class ResponseAPILoggingUtils:
         )
         last_response: Final = terminal_responses[-1]
         response_dict: Final = (
-            {"id": "", "created_at": 0, "output": [], **last_response, "usage": combined_usage}
+            {  # mutable-ok: dict payload for model_validate
+                "id": "",
+                "created_at": 0,
+                "output": (),
+                **last_response,
+                "usage": combined_usage,
+            }
             if combined_usage is not None
-            else {"id": "", "created_at": 0, "output": [], **last_response}
+            else {  # mutable-ok: dict payload for model_validate
+                "id": "",
+                "created_at": 0,
+                "output": (),
+                **last_response,
+            }
         )
 
         try:
-            return ResponsesAPIResponse(**response_dict)
+            return ResponsesAPIResponse.model_validate(response_dict)
         except ValidationError as e:
             verbose_logger.debug("could not build ResponsesAPIResponse from websocket events: %s", e)
             return None
