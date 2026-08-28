@@ -32,7 +32,7 @@ jobs:
             echo "An open sync PR already exists on branch $open_pr; skipping this run."
           fi
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
       - name: Run the sync
         if: steps.existing.outputs.open_pr == ''
         run: |
@@ -65,4 +65,4 @@ jobs:
             --head "$branch" \
             --base litellm_internal_staging
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
