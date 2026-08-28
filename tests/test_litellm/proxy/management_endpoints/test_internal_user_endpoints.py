@@ -2589,8 +2589,32 @@ async def test_user_update_rejects_silent_create_for_non_proxy_admin(mocker):
 # =====================================================================
 
 
+@pytest.fixture
+def user_rows(mocker):
+    """Seed the user table `/v2/user/info` reads, keyed by user_id, and return nothing for the rest.
+
+    One seam for the whole `user_info_v2` group, so a test says which rows exist and nothing else.
+    """
+
+    def _seed(**rows):
+        prisma_client = mocker.MagicMock()
+
+        async def find_unique(*args, **kwargs):
+            row = rows.get(kwargs.get("where", {}).get("user_id"))
+            if row is None:
+                return None
+            stub = mocker.MagicMock()
+            stub.model_dump.return_value = row
+            return stub
+
+        prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=find_unique)
+        mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+
+    return _seed
+
+
 @pytest.mark.asyncio
-async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
+async def test_user_info_v2_proxy_admin_can_query_any_user(mocker, user_rows):
     """
     Test that proxy admin can query any user via /v2/user/info.
     """
@@ -2599,36 +2623,26 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
     from litellm.proxy._types import UserInfoV2Response
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
-    mock_prisma_client = mocker.MagicMock()
-
-    mock_user_row = mocker.MagicMock()
-    mock_user_row.model_dump.return_value = {
-        "user_id": "target-user-123",
-        "user_email": "target@example.com",
-        "user_alias": "Target User",
-        "user_role": "internal_user",
-        "spend": 42.5,
-        "max_budget": 100.0,
-        "models": ["gpt-4"],
-        "budget_duration": "30d",
-        "budget_reset_at": None,
-        "metadata": {"team": "engineering"},
-        "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
-        "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
-        "sso_user_id": "sso-abc",
-        "teams": ["team-1", "team-2"],
-    }
-
-    async def mock_find_unique(*args, **kwargs):
-        if kwargs.get("where", {}).get("user_id") == "target-user-123":
-            return mock_user_row
-        return None
-
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
-        side_effect=mock_find_unique
+    user_rows(
+        **{
+            "target-user-123": {
+                "user_id": "target-user-123",
+                "user_email": "target@example.com",
+                "user_alias": "Target User",
+                "user_role": "internal_user",
+                "spend": 42.5,
+                "max_budget": 100.0,
+                "models": ["gpt-4"],
+                "budget_duration": "30d",
+                "budget_reset_at": None,
+                "metadata": {"team": "engineering"},
+                "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
+                "sso_user_id": "sso-abc",
+                "teams": ["team-1", "team-2"],
+            }
+        }
     )
-
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
 
@@ -2744,7 +2758,7 @@ def test_build_user_info_response_redacts_scim_enterprise_metadata():
 
 
 @pytest.mark.asyncio
-async def test_user_info_v2_internal_user_can_query_self(mocker):
+async def test_user_info_v2_internal_user_can_query_self(mocker, user_rows):
     """
     Test that an internal user can query their own info.
     """
@@ -2753,36 +2767,26 @@ async def test_user_info_v2_internal_user_can_query_self(mocker):
     from litellm.proxy._types import UserInfoV2Response
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
-    mock_prisma_client = mocker.MagicMock()
-
-    mock_user_row = mocker.MagicMock()
-    mock_user_row.model_dump.return_value = {
-        "user_id": "self-user",
-        "user_email": "self@example.com",
-        "user_alias": None,
-        "user_role": "internal_user",
-        "spend": 10.0,
-        "max_budget": None,
-        "models": [],
-        "budget_duration": None,
-        "budget_reset_at": None,
-        "metadata": None,
-        "created_at": None,
-        "updated_at": None,
-        "sso_user_id": None,
-        "teams": [],
-    }
-
-    async def mock_find_unique(*args, **kwargs):
-        if kwargs.get("where", {}).get("user_id") == "self-user":
-            return mock_user_row
-        return None
-
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
-        side_effect=mock_find_unique
+    user_rows(
+        **{
+            "self-user": {
+                "user_id": "self-user",
+                "user_email": "self@example.com",
+                "user_alias": None,
+                "user_role": "internal_user",
+                "spend": 10.0,
+                "max_budget": None,
+                "models": [],
+                "budget_duration": None,
+                "budget_reset_at": None,
+                "metadata": None,
+                "created_at": None,
+                "updated_at": None,
+                "sso_user_id": None,
+                "teams": [],
+            }
+        }
     )
-
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
 

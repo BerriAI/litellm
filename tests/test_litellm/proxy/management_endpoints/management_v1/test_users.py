@@ -107,21 +107,20 @@ def caller():
 
 @pytest.fixture
 def prisma(mocker):
-    """A prisma double whose `update_data` call is what the assertions inspect."""
+    """A prisma double whose `update_data` call is what the assertions inspect.
+
+    `UserRepository.table` reads straight off `prisma_client.db`, so seeding that is enough and the
+    repository itself stays real. The module global is the one seam the route has: it imports
+    `prisma_client` from `proxy_server` at call time.
+    """
+    table = MagicMock()
+    table.find_first = AsyncMock(return_value=_user_row())
     client = MagicMock()
     client.update_data = AsyncMock(return_value={"user_id": TARGET_ID, "data": _user_row()})
     client.get_data = AsyncMock(return_value=[])
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", client)
-    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
-    mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", AsyncMock())
-    table = MagicMock()
-    table.find_first = AsyncMock(return_value=_user_row())
-    mocker.patch(
-        "litellm.repositories.user_repository.UserRepository.table",
-        new_callable=mocker.PropertyMock,
-        return_value=table,
-    )
+    client.db.litellm_usertable = table
     client.table = table
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", client)
     return client
 
 
