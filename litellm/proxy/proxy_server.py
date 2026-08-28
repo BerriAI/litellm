@@ -702,8 +702,7 @@ from litellm.types.secret_managers.main import (
 )
 from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.utils import _add_custom_logger_callback_to_specific_event
-from litellm.utils import register_config_custom_logger_callback
+from litellm.utils import _add_custom_logger_callback_to_specific_event, register_config_custom_logger_callback
 
 
 try:
