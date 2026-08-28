@@ -20612,7 +20612,9 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "gemini_native_audio": true
+        "gemini_native_audio": true,
+        "rpm": 100000,
+        "tpm": 8000000
     },
     "gemini-live-2.5-flash-preview-native-audio-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
