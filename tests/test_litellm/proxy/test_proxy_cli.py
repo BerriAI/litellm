@@ -879,42 +879,25 @@ class TestProxyInitializationHelpers:
             assert appended_params["pgbouncer"] == "true"
             assert appended_params["statement_cache_size"] == 0
 
-    def test_build_db_connection_url_params_includes_idle_lifetime(self):
-        from litellm.proxy.proxy_cli import _build_db_connection_url_params
-
-        params = _build_db_connection_url_params(
-            connection_limit=10,
-            pool_timeout=60,
-            idle_connection_lifetime=60,
-        )
-        assert params["max_idle_connection_lifetime"] == 60
-
-    def test_build_db_connection_url_params_omits_none_idle_lifetime(self):
-        from litellm.proxy.proxy_cli import _build_db_connection_url_params
-
-        params = _build_db_connection_url_params(
-            connection_limit=10,
-            pool_timeout=60,
-            idle_connection_lifetime=None,
-        )
-        assert "max_idle_connection_lifetime" not in params
-
-    def test_build_db_connection_url_params_extra_overrides_idle_lifetime(self):
-        from litellm.proxy.proxy_cli import _build_db_connection_url_params
-
-        params = _build_db_connection_url_params(
-            connection_limit=10,
-            pool_timeout=60,
-            idle_connection_lifetime=60,
-            extra_params={"max_idle_connection_lifetime": 300},
-        )
-        assert params["max_idle_connection_lifetime"] == 300
-
     @pytest.mark.parametrize(
-        "general_settings, expected_idle_lifetime",
+        "general_settings, database_url, expected_idle_lifetime",
         [
-            ({}, 60),
-            ({"database_connection_idle_lifetime": 30}, 30),
+            ({}, "postgresql://test:test@localhost:5432/test", "60"),
+            (
+                {"database_connection_idle_lifetime": 30},
+                "postgresql://test:test@localhost:5432/test",
+                "30",
+            ),
+            (
+                {"database_connection_idle_lifetime": None},
+                "postgresql://test:test@localhost:5432/test",
+                None,
+            ),
+            (
+                {},
+                "postgresql://test:test@localhost:5432/test?max_idle_connection_lifetime=300",
+                "300",
+            ),
         ],
     )
     @patch("subprocess.run")
@@ -930,6 +913,7 @@ class TestProxyInitializationHelpers:
         mock_atexit_register,
         mock_subprocess_run,
         general_settings,
+        database_url,
         expected_idle_lifetime,
     ):
         from click.testing import CliRunner
@@ -948,7 +932,7 @@ class TestProxyInitializationHelpers:
         mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
             return_value={
                 "general_settings": {
-                    "database_url": "postgresql://test:test@localhost:5432/test",
+                    "database_url": database_url,
                     **general_settings,
                 }
             }
@@ -972,10 +956,6 @@ class TestProxyInitializationHelpers:
             patch(  # test-quality-ok: keeps the boot test from binding a real port, same as sibling boot tests
                 "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
             ) as mock_get_args,
-            patch(  # test-quality-ok: capture point for the assembled URL params, same as sibling boot tests
-                "litellm.proxy.proxy_cli.append_query_params",
-                side_effect=lambda url, params: str(url),
-            ) as mock_append_query_params,
         ):
             mock_get_args.return_value = {
                 "app": "litellm.proxy.proxy_server:app",
@@ -991,9 +971,13 @@ class TestProxyInitializationHelpers:
             assert (
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
-            mock_append_query_params.assert_called()
-            appended_params = mock_append_query_params.call_args.args[1]
-            assert appended_params["max_idle_connection_lifetime"] == expected_idle_lifetime
+            final_query = dict(
+                urlparse.parse_qsl(urlparse.urlparse(os.environ["DATABASE_URL"]).query)
+            )
+            if expected_idle_lifetime is None:
+                assert "max_idle_connection_lifetime" not in final_query
+            else:
+                assert final_query["max_idle_connection_lifetime"] == expected_idle_lifetime
 
     def test_build_db_connection_url_params_disable_prepared_statements(self):
         from litellm.proxy.proxy_cli import _build_db_connection_url_params
