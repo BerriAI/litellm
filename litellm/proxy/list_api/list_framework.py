@@ -1,4 +1,4 @@
-"""Generic list handling for `/management/v1` collection routes.
+"""Generic list handling for LiteLLM-defined collection routes.
 
 A resource declares a `ListSpec`; `build_query_plan` turns query parameters into a
 `QueryPlan` or an RFC 9457 problem without touching a database, and `handle_list`
@@ -24,7 +24,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.management_endpoints.management_v1.common import (
+from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
     build_list_links,
@@ -85,9 +85,13 @@ class IsNull:
 
 @dataclass(frozen=True, slots=True)
 class AnyOf:
-    """Disjunction of its clauses. `?q=` is the only producer today."""
+    """Disjunction of its clauses. `?q=` is the only producer.
 
-    clauses: tuple["Predicate", ...]
+    Holding leaves rather than predicates keeps the disjunction one level deep by type, so
+    neither the SQL renderer nor an in-memory executor has to walk a tree to evaluate it.
+    """
+
+    clauses: tuple[Compare, ...]
 
 
 Predicate = Compare | Within | IsNull | AnyOf
@@ -367,6 +371,19 @@ def _parse_sort(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> tuple[
             "Invalid sort field",
             400,
             f"Cannot sort {spec.resource} by: {', '.join(repr(field) for field in rejected)}.",
+            tuple(spec.sortable),
+        )
+    # A repeated field cannot change the ordering, but an executor that sorts once per key
+    # does the work anyway. Rejecting repeats bounds that to the size of `sortable`, which
+    # matters because an unauthenticated caller can otherwise name one field a thousand times.
+    fields: Final = tuple(key.field for key in keys)
+    repeated: Final = tuple(sorted(frozenset(field for field in fields if fields.count(field) > 1)))
+    if repeated:
+        return _problem(
+            "duplicate-sort-field",
+            "Duplicate sort field",
+            400,
+            f"Sort field(s) named more than once: {', '.join(repeated)}. Each may appear once.",
             tuple(spec.sortable),
         )
     return keys

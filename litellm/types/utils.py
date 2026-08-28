@@ -164,6 +164,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: bool | None
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
+    reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -2831,6 +2833,11 @@ RoutingDecisionCause = Literal[
     # keyword rule, or session pin), or the floor was already the top configured tier and the
     # classifier was skipped. The matched sentinel rides in matched_keyword.
     "plan_mode",
+    # A client housekeeping sentinel (a coding agent's conversation-title prompt) was detected on
+    # the newest ask, so the request routed to the cheapest configured tier and the classifier was
+    # never called. The matched sentinel rides in matched_keyword. Distinct from the keyword causes,
+    # which are operator-authored rules; these sentinels ship with the router.
+    "housekeeping",
     "session_affinity_pin",
     "session_affinity_escalation",
     "default_fallback",

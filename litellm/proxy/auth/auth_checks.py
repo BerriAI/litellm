@@ -2596,6 +2596,11 @@ async def _delete_cache_key_object(
     dropped before the Redis round trip. Letting a cache-backend error raise here therefore reports
     failure for work that succeeded without making the cache any less stale; the leftover Redis
     entry expires at its TTL either way.
+
+    Also broadcasts the eviction to every other worker (LIT-3803): auth serves this object
+    cache-first with no freshness check, so a worker that never receives the broadcast keeps
+    admitting requests against the pre-mutation object (e.g. a just-reset spend) until its own
+    copy's TTL expires.
     """
     key: Final = hashed_token
 
@@ -2612,6 +2617,8 @@ async def _delete_cache_key_object(
             e,
         )
 
+    await publish_auth_cache_invalidation(cache_key=key)
+
 
 async def delete_cache_key_objects(
     hashed_tokens: Sequence[str],
@@ -2623,8 +2630,9 @@ async def delete_cache_key_objects(
     `/key/delete`. Auth resolves a cached key object without re-reading its team, so a key left
     cached after its row is gone keeps buying access until its TTL expires.
 
-    Evicting locally only reaches this worker, so each token is also broadcast: a deleted key left
-    in a peer worker's in-memory cache still authenticates there until its TTL expires.
+    Evicting locally only reaches this worker; `_delete_cache_key_object` itself broadcasts each
+    token, so a deleted key left in a peer worker's in-memory cache still authenticates there until
+    its TTL expires.
 
     Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
     cache backend must not abort the caller partway through its own cascade.
@@ -2648,7 +2656,6 @@ async def delete_cache_key_objects(
                 hashed_token,
                 result,
             )
-        await publish_auth_cache_invalidation(cache_key=hashed_token)
 
 
 class _TeamNotFoundDetail(TypedDict):

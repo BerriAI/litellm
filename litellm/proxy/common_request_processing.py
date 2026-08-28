@@ -417,15 +417,6 @@ def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
     return supported_params is not None and "stream_options" in supported_params
 
 
-def _deployment_litellm_model(deployment: Mapping[str, object]) -> str | None:
-    litellm_params: Final = deployment.get("litellm_params")
-    if isinstance(litellm_params, Mapping):
-        litellm_model = litellm_params.get("model")
-    else:
-        litellm_model = getattr(litellm_params, "model", None)
-    return litellm_model if isinstance(litellm_model, str) else None
-
-
 def _model_deployments_support_stream_options(
     model: object,
     llm_router: Router | None,
@@ -433,11 +424,8 @@ def _model_deployments_support_stream_options(
 ) -> bool:
     if not isinstance(model, str):
         return False
-    deployments = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router is not None else None
-    deployment_models: Final = tuple(
-        litellm_model
-        for deployment in deployments or ()
-        if (litellm_model := _deployment_litellm_model(deployment)) is not None
+    deployment_models: Final = (
+        llm_router.resolved_litellm_models(model, team_id=team_id) if llm_router is not None else ()
     )
     candidate_models: Final = deployment_models if deployment_models else (model,)
     return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
@@ -2563,16 +2551,6 @@ class ProxyBaseLLMRequestProcessing:
                     except Exception as e:
                         verbose_proxy_logger.exception("Error in orphaned streaming async logging: %s", e)
 
-        # Always return the client-requested model name (not provider-prefixed internal identifiers)
-        # for OpenAI-compatible responses.
-        if requested_model_from_client:
-            _override_openai_response_model(
-                response_obj=response,
-                requested_model=requested_model_from_client,
-                log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
-                return_raw_model_name=_should_return_raw_model_name(self.data),
-            )
-
         hidden_params = get_hidden_params_dict(response)  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
@@ -2597,6 +2575,16 @@ class ProxyBaseLLMRequestProcessing:
             if guardrail_cost_for_headers > 0
             else llm_cost_for_headers
         )
+
+        # Always return the client-requested model name (not provider-prefixed internal identifiers)
+        # for OpenAI-compatible responses.
+        if requested_model_from_client:
+            _override_openai_response_model(
+                response_obj=response,
+                requested_model=requested_model_from_client,
+                log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+                return_raw_model_name=_should_return_raw_model_name(self.data),
+            )
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
