@@ -85,6 +85,8 @@ from litellm.router_strategy.complexity_router import (
 )
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
+    carries_complexity_router_settings,
+    validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
@@ -226,14 +228,19 @@ def _strategy_router_write_violation(
     )
     if config_violation is not None:
         return config_violation
-    if incoming_params.model is None:
-        return None
     present_fields: Final = frozenset(
         field
         for field in STRATEGY_ROUTER_PARAM_FIELDS
         for source in (incoming_params, existing_params)
         if source is not None and getattr(source, field, None) is not None
     )
+    # Scope reads the incoming model because the stored one is encrypted at rest.
+    if carries_complexity_router_settings(incoming_params.model, present_fields):
+        placement_violation: Final = validate_complexity_router_config_placement(incoming_params.model_extra)
+        if placement_violation is not None:
+            return placement_violation
+    if incoming_params.model is None:
+        return None
     return validate_strategy_router_model_write(model=incoming_params.model, present_fields=present_fields)
 
 
