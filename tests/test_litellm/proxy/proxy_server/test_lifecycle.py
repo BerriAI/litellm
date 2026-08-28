@@ -205,6 +205,31 @@ async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
         await proxy_shutdown_event()
 
 
+@pytest.mark.asyncio
+async def test_proxy_shutdown_event_cache_disconnect_error_does_not_abort_shutdown(monkeypatch):
+    """A cache backend failing to disconnect must not skip the jwt_handler close
+    that runs after it, unlike a prisma disconnect failure which does abort.
+    """
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    fake_cache = MagicMock()
+    fake_cache.disconnect = AsyncMock(side_effect=RuntimeError("redis gone"))
+    monkeypatch.setattr(litellm, "cache", fake_cache, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert fake_cache.disconnect.await_count == 1
+    assert fake_jwt.close.await_count == 1
+
+
 # ---------------------------------------------------------------------------
 # _flush_spend_logs_queue_on_shutdown
 # ---------------------------------------------------------------------------
