@@ -1,11 +1,14 @@
 """Live e2e: Together AI through the gateway on /chat/completions and /v1/messages.
 
 The reasoning and tool-calling backend is the cheapest live ``together_ai/`` chat row
-in the proxy's own cost map that carries both capability flags. Two backends are
-pinned because the registry has no flag for what they prove: ``enable_thinking`` is a
-Qwen chat-template contract, and MiniMax-M3 is the serverless model whose template
-renders a replayed ``reasoning_content`` back into the prompt (Qwen and DeepSeek
-silently drop it). MiniMax-M3 honors that replayed field on nearly every call, not
+in the proxy's own cost map that carries both capability flags; the structured-output
+and cache-pricing backends are likewise the cheapest rows carrying
+``supports_response_schema`` and a ``cache_read_input_token_cost``. Two backends are
+pinned because the registry has no flag for what they prove: ``enable_thinking`` and
+the ``{"reasoning": {"enabled": false}}`` toggle that ``reasoning_effort="none"`` maps
+to are Qwen hybrid-model contracts, and MiniMax-M3 is the serverless model whose
+template renders a replayed ``reasoning_content`` back into the prompt (Qwen and
+DeepSeek silently drop it). MiniMax-M3 honors that replayed field on nearly every call, not
 every call (one miss in dozens of otherwise identical calls), so the replay case asks
 up to ``REPLAY_ATTEMPTS`` times and fails only when no answer carries the secret, which
 a proxy that strips the field guarantees. Requires TOGETHER_API_KEY on the proxy; no
@@ -50,7 +53,7 @@ from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
-TEMPLATE_KWARGS_BACKEND = "together_ai/Qwen/Qwen3.5-9B"
+HYBRID_REASONING_BACKEND = "together_ai/Qwen/Qwen3.5-9B"
 REASONING_REPLAY_BACKEND = "together_ai/MiniMaxAI/MiniMax-M3"
 
 SECRET_PROMPT = "Remember this for later and reply with just OK."
@@ -59,6 +62,23 @@ SECRET_QUESTION = "What is my favorite color? Answer with one word."
 REPLAY_ATTEMPTS: Final = 3
 
 ARITHMETIC_PROMPT = "What is 17 + 26? Answer with just the number."
+PERSON_PROMPT = "Invent a fictional person."
+CACHE_PREFIX_FACTS: Final = 600
+CACHE_ATTEMPTS: Final = 3
+
+PERSON_RESPONSE_FORMAT: dict[str, object] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "person",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+            "required": ["name", "age"],
+            "additionalProperties": False,
+        },
+    },
+}
 WEATHER_PROMPT = "What is the weather in Paris? Use the tool."
 WEATHER_REPORT = "Paris: 22 degrees Celsius, clear skies, wind from the northwest at 9 km/h"
 COUNTING_PROMPT = "Count from 1 to 20, one number per line."
@@ -89,6 +109,13 @@ MESSAGES_WEATHER_TOOL = AnthropicCustomTool(
 class _Needs:
     function_calling: bool = False
     reasoning: bool = False
+    response_schema: bool = False
+    cache_read_pricing: bool = False
+
+
+class _Person(BaseModel):
+    name: str
+    age: int
 
 
 class _WeatherArgs(BaseModel):
@@ -145,6 +172,8 @@ def _cheapest_together_chat_model(registry: Mapping[str, CostMapEntry], needs: _
             and (entry.output_cost_per_token or 0.0) > 0
             and (not needs.function_calling or bool(entry.supports_function_calling))
             and (not needs.reasoning or bool(entry.supports_reasoning))
+            and (not needs.response_schema or bool(entry.supports_response_schema))
+            and (not needs.cache_read_pricing or (entry.cache_read_input_token_cost or 0.0) > 0)
         )
 
     candidates = sorted(
@@ -228,6 +257,54 @@ def _weather_call_ids(message: OutMessage) -> tuple[str, ...]:
     the model chose to make is the model's business."""
     assert message.tool_calls, f"Together dropped the tool call: {message}"
     return tuple(_validated_weather_call_id(call) for call in message.tool_calls)
+
+
+def _cache_prefix(marker: str) -> str:
+    facts = " ".join(f"Fact {i}: the {marker} ledger row {i} holds value {i * 7}." for i in range(CACHE_PREFIX_FACTS))
+    return f"Reference document {marker}:\n{facts}"
+
+
+def _cached_tokens(response: ChatResponse) -> int:
+    usage = response.usage
+    if usage is None or usage.prompt_tokens_details is None:
+        return 0
+    return usage.prompt_tokens_details.cached_tokens or 0
+
+
+def _primed_calls_until_cache_hit(client: PassthroughClient, key: str, model: str) -> Iterator[StreamingResponse]:
+    """Together's prefix cache is best-effort, so each attempt primes a brand-new
+    prefix (fresh marker = fresh cache identity) and re-asks with a different
+    trailing question; a new marker per attempt keeps a stale attempt's prefix from
+    polluting the next one."""
+    for _ in range(CACHE_ATTEMPTS):
+        prefix = _cache_prefix(unique_marker())
+        _ = _message(
+            unwrap(
+                client.proxy.chat(
+                    key,
+                    ChatBody(
+                        model=model,
+                        messages=[ChatMessage(role="user", content=f"{prefix}\n\nReply with just OK.")],
+                        max_tokens=16,
+                    ),
+                )
+            )
+        )
+        result = client.proxy.transport.send(
+            "/chat/completions",
+            headers=client.proxy.transport.bearer(key),
+            json=ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"{prefix}\n\nWhat is the marker id? Answer with one word.")
+                ],
+                max_tokens=32,
+            ),
+        )
+        require_successful_call(result)
+        yield result
+        if _cached_tokens(ChatResponse.model_validate_json(result.body)) > 0:
+            return
 
 
 def _weather_call(client: PassthroughClient, key: str, model: str) -> OutMessage:
@@ -370,7 +447,7 @@ class TestTogetherChatCompletions:
     def test_chat_template_kwargs_reach_together(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        model, key = _register(client, resources, TEMPLATE_KWARGS_BACKEND)
+        model, key = _register(client, resources, HYBRID_REASONING_BACKEND)
 
         def ask(chat_template_kwargs: dict[str, bool] | None) -> OutMessage:
             return _message(
@@ -389,7 +466,7 @@ class TestTogetherChatCompletions:
 
         control = ask(None)
         assert control.reasoning_content, (
-            f"control: {TEMPLATE_KWARGS_BACKEND} returned no reasoning_content by default, "
+            f"control: {HYBRID_REASONING_BACKEND} returned no reasoning_content by default, "
             f"so the disable assertion below cannot be trusted: {control}"
         )
         treatment = ask({"enable_thinking": False})
@@ -470,6 +547,121 @@ class TestTogetherChatCompletions:
         assert priced, f"no priced spend row landed for key {key}; got {rows}"
         row = priced[0]
         assert row.custom_llm_provider == "together_ai", f"spend row misattributed: {row}"
+        assert row.spend is not None and _approx_equal(row.spend, header_cost), (
+            f"logged spend {row.spend} disagrees with the x-litellm-response-cost header {header_cost}"
+        )
+
+    @pytest.mark.covers("llm.chat_completions.together_ai.thinking.nonstream.effort_none_disables")
+    def test_reasoning_effort_none_reaches_together(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model, key = _register(client, resources, HYBRID_REASONING_BACKEND)
+
+        def ask(reasoning_effort: str | None) -> OutMessage:
+            return _message(
+                unwrap(
+                    client.proxy.chat(
+                        key,
+                        ChatBody(
+                            model=model,
+                            messages=[ChatMessage(role="user", content=ARITHMETIC_PROMPT)],
+                            max_tokens=1024,
+                            reasoning_effort=reasoning_effort,
+                        ),
+                    )
+                )
+            )
+
+        control = ask(None)
+        assert control.reasoning_content, (
+            f"control: {HYBRID_REASONING_BACKEND} returned no reasoning_content by default, "
+            f"so the disable assertion below cannot be trusted: {control}"
+        )
+        treatment = ask("none")
+        assert not treatment.reasoning_content, (
+            "reasoning_effort='none' never reached Together as {'reasoning': {'enabled': false}}: "
+            f"reasoning_content is still present: {treatment}"
+        )
+        assert treatment.content and "43" in treatment.content, f"answer lost: {treatment}"
+
+    @pytest.mark.covers("llm.chat_completions.together_ai.structured_output.nonstream.works")
+    def test_response_format_json_schema_shapes_the_reply(
+        self, client: PassthroughClient, resources: ResourceManager, registry: dict[str, CostMapEntry]
+    ) -> None:
+        backend = _cheapest_together_chat_model(registry, _Needs(response_schema=True))
+        model, key = _register(client, resources, backend)
+
+        message = _message(
+            unwrap(
+                client.proxy.chat(
+                    key,
+                    ChatBody(
+                        model=model,
+                        messages=[ChatMessage(role="user", content=PERSON_PROMPT)],
+                        max_tokens=1024,
+                        response_format=PERSON_RESPONSE_FORMAT,
+                    ),
+                )
+            )
+        )
+        assert message.content, f"{backend} returned no content: {message}"
+        person = _Person.model_validate_json(message.content)
+        assert person.name, f"schema-shaped reply carries an empty name: {message.content!r}"
+
+    @pytest.mark.covers("llm.chat_completions.together_ai.prompt_cache_5m.nonstream.cost_logged")
+    def test_cache_read_tokens_bill_at_the_cache_read_rate(
+        self,
+        client: PassthroughClient,
+        resources: ResourceManager,
+        registry: dict[str, CostMapEntry],
+    ) -> None:
+        backend = _cheapest_together_chat_model(registry, _Needs(cache_read_pricing=True))
+        model, key = _register(client, resources, backend)
+        price = registry[backend]
+        assert price.input_cost_per_token and price.output_cost_per_token
+        cache_read_rate = price.cache_read_input_token_cost
+        assert cache_read_rate, f"{backend} lost its cache-read price mid-test: {price}"
+
+        results = tuple(_primed_calls_until_cache_hit(client, key, model))
+        result = results[-1]
+        response = ChatResponse.model_validate_json(result.body)
+        cached = _cached_tokens(response)
+        assert cached > 0, (
+            f"Together reported no cached tokens on {backend} in {len(results)} primed attempts, "
+            f"so cache-read billing cannot be proven: {response.usage}"
+        )
+        usage = response.usage
+        assert usage is not None and usage.prompt_tokens and usage.completion_tokens, (
+            f"response carries no usage, so the cost cannot be real: {result.body[:300]}"
+        )
+        assert cached <= usage.prompt_tokens, f"cached tokens exceed the prompt: {usage}"
+
+        header_cost = result.response_cost
+        assert header_cost is not None and header_cost > 0, (
+            f"x-litellm-response-cost header missing or non-positive: {result.headers}"
+        )
+        expected = (
+            (usage.prompt_tokens - cached) * price.input_cost_per_token
+            + cached * cache_read_rate
+            + usage.completion_tokens * price.output_cost_per_token
+        )
+        discount = cached * (price.input_cost_per_token - cache_read_rate)
+        assert discount > abs(expected) * 1e-2, (
+            f"the cache-read discount {discount} sits inside the cost tolerance, so this test "
+            f"could not tell discounted from full-price billing: {usage}"
+        )
+        assert _approx_equal(header_cost, expected), (
+            f"header cost {header_cost} disagrees with the cache-read-discounted registry price for "
+            f"{backend} at {usage}: expected {expected}"
+        )
+
+        assert response.id, f"response carries no id, so its spend row cannot be found: {result.body[:200]}"
+
+        def _priced(rows: list[SpendLogRow]) -> bool:
+            return any(row.spend is not None for row in rows)
+
+        rows = client.proxy.poll_logs_for_request_id(response.id, predicate=_priced)
+        row = rows[0]
         assert row.spend is not None and _approx_equal(row.spend, header_cost), (
             f"logged spend {row.spend} disagrees with the x-litellm-response-cost header {header_cost}"
         )
