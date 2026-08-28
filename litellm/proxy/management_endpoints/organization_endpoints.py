@@ -1034,6 +1034,12 @@ async def list_organization(
         )
     # if internal user - get orgs they are a member of (with optional filters)
     else:
+        # Keys that are not tied to a user - team and service keys - reach this
+        # branch with user_id set to None. Prisma rejects that filter with
+        # MissingRequiredValueError, which surfaces as HTTP 500. Such a key is a
+        # member of no organization, so the correct response is an empty list.
+        if user_api_key_dict.user_id is None:
+            return []
         org_memberships: Final = await _table(OrganizationMembershipRepository(prisma_client)).find_many(
             where={"user_id": user_api_key_dict.user_id}
         )

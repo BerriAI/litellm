@@ -9,7 +9,6 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 
-
 @pytest.mark.asyncio
 async def test_organization_update_object_permissions_existing_permission(monkeypatch):
     """
@@ -1063,3 +1062,33 @@ async def test_find_member_if_email_missing_row_raises_documented_400():
             "non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
         )
     }
+
+
+@pytest.mark.asyncio
+async def test_list_organization_returns_empty_for_key_without_user(monkeypatch):
+    """
+    Keys that are not tied to a user - team and service keys - have user_id set to None.
+
+    The non-admin branch of /organization/list filtered organization memberships by
+    that value, and Prisma rejects a null filter with MissingRequiredValueError, so the
+    endpoint answered HTTP 500 instead of denying or returning nothing. A key with no
+    user belongs to no organization, so the expected response is an empty list.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        list_organization,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # A team key: authenticated, but with no user behind it.
+    team_key = UserAPIKeyAuth(
+        api_key="sk-team-key",
+        user_id=None,
+        team_id="team-abc",
+    )
+
+    response = await list_organization(user_api_key_dict=team_key)
+
+    assert response == []
