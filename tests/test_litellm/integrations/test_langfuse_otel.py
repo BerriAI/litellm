@@ -1041,7 +1041,7 @@ class TestLangfuseOtelResponsesAPI:
 
         mock_span = MagicMock()
 
-        with patch(
+        with patch(  # test-quality-ok: the span attribute sink is the observable boundary; sibling tests in this class stub the same seam
             "litellm.integrations.arize._utils.safe_set_attribute"
         ) as mock_safe_set_attribute:
             LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
