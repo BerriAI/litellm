@@ -28,8 +28,12 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
+    ChatCompletionReasoningItem,
+    ChatCompletionReasoningSummaryTextBlock,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionTextObject,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
@@ -466,6 +470,8 @@ def update_messages_with_model_file_ids(
     from litellm.proxy.openai_files_endpoints.common_utils import (
         _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
+        get_original_file_id,
+        is_model_embedded_id,
     )
 
     for message in messages:
@@ -504,6 +510,8 @@ def update_messages_with_model_file_ids(
                                 unified_file_id = convert_b64_uid_to_unified_uid(file_id)
                                 if "llm_output_file_id," in unified_file_id:
                                     provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+                            if not provider_file_id and is_model_embedded_id(file_id):
+                                provider_file_id = get_original_file_id(file_id)
                             file_object_file_field["file_id"] = provider_file_id or file_id
                         if format:
                             file_object_file_field["format"] = format
@@ -531,6 +539,8 @@ def update_responses_input_with_model_file_ids(
     from litellm.proxy.openai_files_endpoints.common_utils import (
         _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
+        get_original_file_id,
+        is_model_embedded_id,
     )
 
     if isinstance(input, str):
@@ -573,6 +583,10 @@ def update_responses_input_with_model_file_ids(
 
                                 updated_content_item = content_item.copy()
                                 updated_content_item["file_id"] = provider_file_id
+                                updated_content.append(updated_content_item)
+                            elif is_model_embedded_id(file_id):
+                                updated_content_item = content_item.copy()
+                                updated_content_item["file_id"] = get_original_file_id(file_id)
                                 updated_content.append(updated_content_item)
                             else:
                                 # Not a managed file, keep as-is
@@ -1549,6 +1563,44 @@ def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     return None, message_content
 
 
+def _readable_thinking_text(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+) -> str:
+    """The text a chat model can read back, empty for redacted blocks and malformed ones."""
+    if block.get("type") != "thinking":
+        return ""
+    thinking: Final = cast(ChatCompletionThinkingBlock, block).get("thinking")  # cast-ok: narrowed by the type tag
+    return str(thinking or "")
+
+
+def reasoning_content_from_thinking_blocks(
+    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+) -> str:
+    """Flatten Anthropic thinking blocks into the `reasoning_content` string chat models expect.
+
+    Redacted blocks carry no readable text, so they contribute nothing.
+    """
+    return "\n".join(text for block in thinking_blocks if (text := _readable_thinking_text(block)))
+
+
+def responses_reasoning_item_from_thinking_blocks(
+    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+) -> ChatCompletionReasoningItem | None:
+    """Build a Responses API `reasoning` input item from Anthropic thinking blocks.
+
+    The item carries no `id`: the Responses API rejects an empty one and 404s on any id it
+    did not mint itself, while an item without an id is always accepted.
+    """
+    summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
+        ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
+        for block in thinking_blocks
+        if (text := _readable_thinking_text(block))
+    ]
+    if not summary:
+        return None
+    return ChatCompletionReasoningItem(type="reasoning", summary=summary)
+
+
 def _parse_content_for_reasoning(
     message_text: str | None,
 ) -> tuple[str | None, str | None]:
@@ -1693,6 +1745,46 @@ def hoist_images_from_tool_messages(
         for is_tool_run, run in groupby(messages, key=lambda message: message.get("role") == "tool")
         for rewritten_message in (_hoist_images_in_tool_message_run(run) if is_tool_run else run)
     ]
+
+
+def _is_tool_reference_part(part: object) -> bool:
+    return isinstance(part, dict) and part.get("type") == "tool_reference"
+
+
+def _tool_message_carries_tool_reference(message: AllMessageValues) -> bool:
+    if message.get("role") != "tool":
+        return False
+    content = message.get("content")
+    return isinstance(content, list) and any(_is_tool_reference_part(part) for part in content)
+
+
+def _drop_tool_reference_parts(message: AllMessageValues) -> AllMessageValues:
+    if not _tool_message_carries_tool_reference(message):
+        return message
+    content = cast(list, message.get("content"))  # cast-ok: shape checked by _tool_message_carries_tool_reference
+    remaining_parts = [  # mutable-ok: tool message content must stay a json list
+        part for part in content if not _is_tool_reference_part(part)
+    ]
+    new_content = remaining_parts if remaining_parts else ""
+    rewritten = {**message, "content": new_content}  # mutable-ok: chat messages are plain json dicts
+    return cast(AllMessageValues, rewritten)  # cast-ok: dict spread keeps keys like cache_control
+
+
+def drop_tool_reference_parts_from_tool_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    """
+    Remove tool_reference content parts from role:"tool" messages.
+
+    The OpenAI chat spec only accepts text in tool messages, so a tool_reference
+    part carried through the Anthropic adapter makes strict providers reject the
+    request. The reference names an already-declared tool rather than carrying
+    content, so it is dropped; a reference-only result keeps its tool message with
+    empty text so the preceding tool_call stays answered.
+    """
+    if not any(_tool_message_carries_tool_reference(message) for message in messages):
+        return messages
+    return [_drop_tool_reference_parts(message) for message in messages]  # mutable-ok: pipelines mutate message lists
 
 
 def _attempt_json_repair(s: str) -> Any | None:

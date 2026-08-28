@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -19,6 +19,7 @@ from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
@@ -50,6 +51,7 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE: Final = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
@@ -220,6 +222,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "policy_sources",
     "guardrail_scan_ids",
     "routing_decision",
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
     "pillar_response_headers",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
@@ -274,6 +277,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "policy_sources",
     "guardrail_scan_ids",
     "routing_decision",
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -309,6 +313,10 @@ _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.mod
 # into response_cost and spend; a client seeding it forges (even negative)
 # guardrail cost.
 _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
+# ``attempted_fallbacks`` and ``original_model_group`` are written by the router
+# and read by spend logs as fact; a client value has no legitimate meaning and no
+# key or team setting keeps it, so the strip is never gated.
+_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset({"attempted_fallbacks", "original_model_group"})
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
 
 # Request fields whose value, when URL-valued, becomes the outbound destination
@@ -532,6 +540,20 @@ def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
             "metadata to keep these values.",
             ", ".join(stripped),
         )
+
+
+def _strip_router_reserved_metadata(
+    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    """Drop the router-owned fallback stamps from any client-supplied metadata bucket."""
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if not isinstance(metadata := data.get(metadata_key), dict):
+            continue
+        for field in _ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
+            metadata.pop(field)
+            verbose_proxy_logger.debug(
+                "Stripped router-reserved metadata field from request body: %s.%s", metadata_key, field
+            )
 
 
 def _get_metadata_variable_name(request: Request) -> str:
@@ -1629,7 +1651,7 @@ class LiteLLMProxyRequestSetup:
 
 
 def refresh_proxy_server_request_body_snapshot(
-    data: dict,  # mutable-ok: mutates proxy_server_request.body in place on the shared request dict
+    data: MutableMapping[str, object],
 ) -> None:
     """
     Re-snapshot ``data["proxy_server_request"]["body"]`` from the current state of ``data``.
@@ -1878,6 +1900,7 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
+    _strip_router_reserved_metadata(data)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
@@ -2000,6 +2023,19 @@ async def add_litellm_data_to_request(
     data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
         data=data,
         management_endpoint_metadata=team_metadata,
+        _metadata_variable_name=_metadata_variable_name,
+    )
+
+    # A key's OTel service name outranks its team's, so the key's values are
+    # re-applied after the last-writer-wins team metadata merge above
+    _key_otel_service_names: Final = {
+        field: value
+        for field, value in (key_metadata or {}).items()
+        if field in OTEL_SERVICE_NAME_METADATA_KEYS and isinstance(value, str) and value.strip()
+    }
+    data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
+        data=data,
+        management_endpoint_metadata=_key_otel_service_names,
         _metadata_variable_name=_metadata_variable_name,
     )
 

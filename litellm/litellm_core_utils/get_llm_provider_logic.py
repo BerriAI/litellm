@@ -2,7 +2,7 @@ from typing import Final, cast
 from urllib.parse import urlparse
 
 import litellm
-from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO, REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
@@ -125,6 +125,18 @@ def handle_anthropic_text_model_custom_llm_provider(
             return _model, "anthropic_text"
 
     return model, custom_llm_provider
+
+
+def declared_authenticating_provider(model: str, custom_llm_provider: str | None = None) -> str | None:
+    """The authenticating provider this pair already names, or None.
+
+    get_llm_provider runs the OAuth device flow for github_copilot and chatgpt, because their
+    provider info includes the key it unlocks. For a metadata question that flow is pure hazard,
+    and for a declared pair the resolver's answer is the declaration itself, so metadata callers
+    adopt the declaration instead of resolving.
+    """
+    declared: Final = custom_llm_provider or model.split("/", 1)[0]
+    return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
 def get_llm_provider(
@@ -272,6 +284,14 @@ def get_llm_provider(
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
+                    elif endpoint == "api.together.ai/v1" or endpoint == "api.together.xyz/v1":
+                        custom_llm_provider = "together_ai"
+                        dynamic_api_key = api_key or (
+                            get_secret_str("TOGETHER_API_KEY")
+                            or get_secret_str("TOGETHER_AI_API_KEY")
+                            or get_secret_str("TOGETHERAI_API_KEY")
+                            or get_secret_str("TOGETHER_AI_TOKEN")
+                        )
                     elif endpoint == "ollama.com":
                         custom_llm_provider = "ollama"
                         dynamic_api_key = get_secret_str("OLLAMA_API_KEY")
@@ -707,7 +727,7 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.ZAIChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "together_ai":
-        api_base = api_base or get_secret_str("TOGETHER_AI_API_BASE") or "https://api.together.xyz/v1"
+        api_base = api_base or get_secret_str("TOGETHER_AI_API_BASE") or "https://api.together.ai/v1"
         dynamic_api_key = api_key or (
             get_secret_str("TOGETHER_API_KEY")
             or get_secret_str("TOGETHER_AI_API_KEY")
