@@ -101,8 +101,9 @@ class LLMUsage:
     @classmethod
     def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> LLMUsage:
         # Cache token counts only exist on the raw provider usage object under metadata
-        metadata: Final = cast(Mapping[str, object], payload.get("metadata") or {})
-        usage_object: Final = cast(Mapping[str, object], metadata.get("usage_object") or {})
+        metadata: Final[Mapping[str, object]] = payload.get("metadata") or {}
+        raw_usage: Final = metadata.get("usage_object")
+        usage_object: Final[Mapping[str, object]] = raw_usage if isinstance(raw_usage, Mapping) else {}
         return cls(
             input_tokens=as_int(payload.get("prompt_tokens")),
             output_tokens=as_int(payload.get("completion_tokens")),
