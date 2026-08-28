@@ -2422,9 +2422,7 @@ class PrometheusLogger(CustomLogger):
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
                 custom_metadata_labels=get_custom_labels_from_metadata(
-                    metadata=_get_combined_custom_metadata_from_standard_logging_payload(
-                        {"metadata": _standard_metadata}
-                    )
+                    metadata=_get_combined_custom_metadata_from_standard_logging_metadata(_standard_metadata)
                 ),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
@@ -3205,7 +3203,7 @@ class PrometheusLogger(CustomLogger):
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
             custom_metadata_labels=get_custom_labels_from_metadata(
-                metadata=_get_combined_custom_metadata_from_standard_logging_payload({"metadata": standard_metadata})
+                metadata=_get_combined_custom_metadata_from_standard_logging_metadata(standard_metadata)
             ),
         )
         PrometheusLogger._inc_labeled_counter(
@@ -3249,7 +3247,7 @@ class PrometheusLogger(CustomLogger):
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
             custom_metadata_labels=get_custom_labels_from_metadata(
-                metadata=_get_combined_custom_metadata_from_standard_logging_payload({"metadata": standard_metadata})
+                metadata=_get_combined_custom_metadata_from_standard_logging_metadata(standard_metadata)
             ),
         )
 
@@ -4275,10 +4273,19 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
     user_api_key_project_alias, user_api_key_team_alias) so they are accessible
     via custom_prometheus_metadata_labels configuration.
     """
-    if not isinstance(standard_logging_payload, dict):
-        return {}
+    return _get_combined_custom_metadata_from_standard_logging_metadata(
+        standard_logging_payload.get("metadata") if isinstance(standard_logging_payload, dict) else None
+    )
 
-    standard_logging_metadata: Final = standard_logging_payload.get("metadata") or {}
+
+def _get_combined_custom_metadata_from_standard_logging_metadata(
+    standard_logging_metadata: dict | None,
+) -> dict[str, object]:
+    """
+    Same combination, for emitters holding the standard logging metadata itself
+    rather than a whole payload: the fallback emitters and the proxy failure hook
+    build it with StandardLoggingPayloadSetup.get_standard_logging_metadata.
+    """
     if not isinstance(standard_logging_metadata, dict):
         return {}
 
