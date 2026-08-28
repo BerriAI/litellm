@@ -10882,3 +10882,68 @@ def test_permission_denied_error_is_retried_when_other_deployments_exist():
         )
         is True
     )
+
+
+class _AllowlistFallbackAccessCheck:
+    def __init__(self, allowed_models: frozenset[str]):
+        self.allowed_models = allowed_models
+        self.checked_models = []
+
+    async def __call__(self, *, model, request_kwargs, llm_router):
+        self.checked_models.append(model)
+        return model in self.allowed_models
+
+
+def _router_with_failing_primary(fallback_access_check) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "k",
+                    "mock_response": Exception("primary is down"),
+                },
+            },
+            {
+                "model_name": "secret-fallback",
+                "litellm_params": {
+                    "model": "openai/secret",
+                    "api_key": "k",
+                    "mock_response": "served by secret-fallback",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["secret-fallback"]}],
+        num_retries=0,
+        fallback_access_check=fallback_access_check,
+    )
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_blocks_config_fallback_the_caller_cannot_use():
+    access_check = _AllowlistFallbackAccessCheck(allowed_models=frozenset())
+    router = _router_with_failing_primary(access_check)
+
+    with pytest.raises(Exception, match="primary is down"):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert access_check.checked_models == ["secret-fallback"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_lets_an_authorized_config_fallback_through():
+    router = _router_with_failing_primary(_AllowlistFallbackAccessCheck(allowed_models=frozenset({"secret-fallback"})))
+
+    response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "served by secret-fallback"
+
+
+@pytest.mark.asyncio
+async def test_router_without_fallback_access_check_attempts_every_config_fallback():
+    router = _router_with_failing_primary(None)
+
+    response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "served by secret-fallback"
