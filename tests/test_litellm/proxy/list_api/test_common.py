@@ -9,8 +9,8 @@ import pytest
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.testclient import TestClient
 
-import litellm.proxy.management_endpoints.management_v1.common as common_module
-from litellm.proxy.management_endpoints.management_v1.common import (
+import litellm.proxy.list_api.common as common_module
+from litellm.proxy.list_api.common import (
     PROBLEM_CONTENT_TYPE,
     ManagementProblem,
     _declared_query_params,
@@ -106,7 +106,17 @@ def test_declared_query_params_is_empty_when_the_route_has_no_dependant():
 # `fastapi>=0.136.3,<1.0`. Add a name here whenever a supported release drops one.
 FASTAPI_NAMES_REMOVED_IN_0_140_7 = frozenset({"get_flat_dependant"})
 
-MANAGEMENT_V1_PACKAGE = Path(str(common_module.__file__)).parent
+LIST_API_PACKAGE = Path(str(common_module.__file__)).parent
+PROXY_PACKAGE = LIST_API_PACKAGE.parent
+GUARDED_PACKAGES = (
+    LIST_API_PACKAGE,
+    PROXY_PACKAGE / "management_endpoints" / "management_v1",
+    PROXY_PACKAGE / "public_endpoints" / "public_v1",
+)
+FRAMEWORK_SOURCE_FILES = sorted(
+    (path for package in GUARDED_PACKAGES for path in package.glob("*.py")),
+    key=lambda path: (path.parent.name, path.name),
+)
 
 
 def _public_names(module: ModuleType) -> frozenset[str]:
@@ -123,17 +133,15 @@ def _fastapi_names_imported_by(source_file: Path) -> frozenset[str]:
     )
 
 
-@pytest.mark.parametrize(
-    "source_file", sorted(MANAGEMENT_V1_PACKAGE.glob("*.py")), ids=lambda path: path.name
-)
+@pytest.mark.parametrize("source_file", FRAMEWORK_SOURCE_FILES, ids=lambda path: f"{path.parent.name}/{path.name}")
 def test_no_module_imports_a_fastapi_name_removed_in_a_supported_release(source_file: Path):
     """`pyproject.toml` allows fastapi up to <1.0, but CI only ever resolves 0.136.3.
 
     Every other test here passes just as well against a module importing a name
     fastapi has since deleted, because the pinned fastapi still has it. On a user's
-    fastapi>=0.140.7 that import is an ImportError, and `proxy_server` imports this
-    package unguarded at module level, so it takes the whole proxy down rather than
-    just these routes. Globbing the package means a new module is covered on sight.
+    fastapi>=0.140.7 that import is an ImportError, and `proxy_server` imports every one
+    of these packages unguarded at module level, so it takes the whole proxy down rather
+    than just these routes. Globbing them means a new module is covered on sight.
     """
     assert not _fastapi_names_imported_by(source_file) & FASTAPI_NAMES_REMOVED_IN_0_140_7
 
@@ -148,7 +156,7 @@ def test_common_still_imports_when_fastapi_has_dropped_those_names(monkeypatch: 
     for name in FASTAPI_NAMES_REMOVED_IN_0_140_7:
         monkeypatch.delattr(fastapi_dependency_utils, name, raising=False)
     spec = importlib.util.spec_from_file_location(
-        "management_v1_common__simulated_fastapi", Path(str(common_module.__file__))
+        "list_api_common__simulated_fastapi", Path(str(common_module.__file__))
     )
     assert spec is not None and spec.loader is not None
     reimported = importlib.util.module_from_spec(spec)
