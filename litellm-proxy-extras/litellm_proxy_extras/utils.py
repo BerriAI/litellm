@@ -732,9 +732,6 @@ class ProxyExtrasDBManager:
                             stderr,
                         )
                         time.sleep(random.randrange(5, 15))
-                raise RuntimeError(
-                    f"prisma db push failed after {_PRISMA_ATTEMPTS} attempts."
-                )
             finally:
                 os.chdir(original_dir)
 
