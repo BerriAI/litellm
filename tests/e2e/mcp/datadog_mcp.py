@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 
 from e2e_config import datadog_mcp_url, unique_marker
 from lifecycle import ResourceManager
@@ -35,7 +36,11 @@ def register_datadog_mcp(
     resources: ResourceManager,
     *,
     mcp_access_groups: list[str] | None = None,
+    allowed_tools: Sequence[str] | None = (SEARCH_LOGS_TOOL,),
 ) -> str:
+    """Register the Datadog remote MCP server. `allowed_tools` defaults to the
+    search-logs slice; pass None to expose the full core toolset (needed when a
+    test must prove narrowing, so a second tool has to exist to be denied)."""
     assert_dd_mcp_creds()
     name = f"e2e_dd_mcp_{unique_marker()}"
     server_id = client.register_server(
@@ -47,7 +52,7 @@ def register_datadog_mcp(
             "DD-API-KEY": _dd_api_key(),
             "DD-APPLICATION-KEY": _dd_app_key(),
         },
-        allowed_tools=[SEARCH_LOGS_TOOL],
+        allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
         mcp_access_groups=mcp_access_groups,
     )
     resources.defer(lambda: client.delete_server(server_id))

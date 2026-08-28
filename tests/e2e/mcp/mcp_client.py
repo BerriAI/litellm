@@ -20,7 +20,19 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from e2e_config import settle_propagation
 from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
-from models import KeyGenerateBody, ObjectPermission
+from models import (
+    KeyGenerateBody,
+    ObjectPermission,
+    OrgDeleteBody,
+    OrgNewBody,
+    OrgNewResponse,
+    TeamDeleteBody,
+    TeamNewBody,
+    TeamNewResponse,
+    UserDeleteBody,
+    UserNewBody,
+    UserNewResponse,
+)
 from proxy_client import ProxyClient
 
 McpToolArg = str | int | float | bool | list[str] | dict[str, str]
@@ -44,6 +56,20 @@ class McpServerNewBody(BaseModel):
 
 class McpServerNewResponse(BaseModel):
     server_id: str
+
+
+class McpToolsetToolSpec(BaseModel):
+    server_id: str
+    tool_name: str
+
+
+class McpToolsetNewBody(BaseModel):
+    toolset_name: str
+    tools: list[McpToolsetToolSpec]
+
+
+class McpToolsetNewResponse(BaseModel):
+    toolset_id: str
 
 
 class McpServerRow(BaseModel):
@@ -74,9 +100,7 @@ class McpToolsListResponse(BaseModel):
 
     def tool_names_for_server(self, server_id: str) -> frozenset[str]:
         return frozenset(
-            tool.name
-            for tool in self.tools
-            if tool.mcp_info is not None and tool.mcp_info.server_id == server_id
+            tool.name for tool in self.tools if tool.mcp_info is not None and tool.mcp_info.server_id == server_id
         )
 
     def tool_name_containing(self, server_id: str, needle: str) -> str | None:
@@ -225,6 +249,7 @@ class McpClient:
         mcp_servers: list[str] | None,
         mcp_access_groups: list[str] | None = None,
         models: list[str] | None = None,
+        team_id: str | None = None,
     ) -> str:
         object_permission = (
             ObjectPermission(mcp_servers=mcp_servers, mcp_access_groups=mcp_access_groups)
@@ -235,8 +260,112 @@ class McpClient:
             KeyGenerateBody(
                 models=models if models is not None else [],
                 user_id=user_id,
+                team_id=team_id,
                 object_permission=object_permission,
             )
+        )
+
+    def create_toolset(self, *, name: str, server_id: str, tool_names: list[str]) -> str:
+        """Create a named toolset over `server_id` (admin), returning its id."""
+        return unwrap(
+            self.proxy.transport.post(
+                "/v1/mcp/toolset",
+                headers=self.proxy.transport.master,
+                json=McpToolsetNewBody(
+                    toolset_name=name,
+                    tools=[McpToolsetToolSpec(server_id=server_id, tool_name=tool) for tool in tool_names],
+                ),
+                response_type=McpToolsetNewResponse,
+            )
+        ).toolset_id
+
+    def delete_toolset(self, toolset_id: str) -> None:
+        _ = self.proxy.transport.delete(
+            f"/v1/mcp/toolset/{toolset_id}",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+
+    def create_team(
+        self,
+        *,
+        alias: str,
+        object_permission: ObjectPermission | None = None,
+        organization_id: str | None = None,
+    ) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/team/new",
+                headers=self.proxy.transport.master,
+                json=TeamNewBody(
+                    team_alias=alias,
+                    organization_id=organization_id,
+                    object_permission=object_permission,
+                ),
+                response_type=TeamNewResponse,
+            )
+        ).team_id
+
+    def delete_team(self, team_id: str) -> None:
+        _ = self.proxy.transport.post(
+            "/team/delete",
+            headers=self.proxy.transport.master,
+            json=TeamDeleteBody(team_ids=[team_id]),
+            response_type=NoBody,
+        )
+
+    def create_org(
+        self,
+        *,
+        alias: str,
+        object_permission: ObjectPermission | None = None,
+    ) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/organization/new",
+                headers=self.proxy.transport.master,
+                json=OrgNewBody(
+                    organization_alias=alias,
+                    object_permission=object_permission,
+                ),
+                response_type=OrgNewResponse,
+            )
+        ).organization_id
+
+    def delete_org(self, organization_id: str) -> None:
+        _ = self.proxy.transport.delete(
+            "/organization/delete",
+            headers=self.proxy.transport.master,
+            json=OrgDeleteBody(organization_ids=[organization_id]),
+            response_type=NoBody,
+        )
+
+    def create_user(
+        self,
+        *,
+        user_email: str,
+        object_permission: ObjectPermission | None = None,
+    ) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/user/new",
+                headers=self.proxy.transport.master,
+                json=UserNewBody(
+                    user_email=user_email,
+                    user_role="internal_user",
+                    object_permission=object_permission,
+                ),
+                response_type=UserNewResponse,
+            )
+        ).user_id
+
+    def delete_user(self, user_id: str) -> None:
+        _ = self.proxy.transport.post(
+            "/user/delete",
+            headers=self.proxy.transport.master,
+            json=UserDeleteBody(user_ids=[user_id]),
+            response_type=NoBody,
         )
 
     def list_tools(self, key: str) -> Result[McpToolsListResponse]:
@@ -316,13 +445,10 @@ class McpClient:
             if isinstance(last, UnknownApiError) and last.status_code == 403:
                 return last
             if not _is_mcp_not_synced(last, tool_name=name):
-                raise AssertionError(
-                    f"ungranted key's tools/call was not 403 access_denied: {last}"
-                )
+                raise AssertionError(f"ungranted key's tools/call was not 403 access_denied: {last}")
             if time.monotonic() >= deadline:
                 raise AssertionError(
-                    f"ungranted key never got 403 for {name!r} within {self.proxy.poll_timeout}s; "
-                    f"last result: {last}"
+                    f"ungranted key never got 403 for {name!r} within {self.proxy.poll_timeout}s; last result: {last}"
                 )
             time.sleep(self.proxy.poll_interval)
 
@@ -368,9 +494,7 @@ class McpClient:
         return self.proxy.transport.post(
             "/mcp-rest/tools/call",
             headers=ApiKeyHeaders(x_litellm_api_key=key),
-            json=McpCallToolBody(
-                name=name, arguments=dict(arguments), server_id=server_id
-            ),
+            json=McpCallToolBody(name=name, arguments=dict(arguments), server_id=server_id),
             response_type=McpCallToolResponse,
         )
 
@@ -403,9 +527,7 @@ def _is_mcp_not_synced(
 
     # Gateway: "Tool search_datadog_logs not found" (optionally inside a longer message)
     if tool_name is not None:
-        return (
-            re.search(rf"\btool\s+{re.escape(tool_name)}\s+not found\b", body_l) is not None
-        )
+        return re.search(rf"\btool\s+{re.escape(tool_name)}\s+not found\b", body_l) is not None
     return re.search(r"\btool\s+\S+\s+not found\b", body_l) is not None
 
 

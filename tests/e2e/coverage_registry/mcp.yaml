@@ -119,3 +119,57 @@
   assertions: [succeeds]
   source: "server.py:1089"
   rationale: Smoke; rarely used; same auth model as tools
+- id: mcp.list_tools.api_key.team_toolset_scoped
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions: [toolset_scoped]
+  source: "auth/user_api_key_auth_mcp.py:2453"
+  rationale: "A toolset attached to a team's object_permission narrows the team key's tools/list to exactly the tools it names (LIT-5749: stored but inert before the fix)"
+  fail_before_fix: proven
+- id: mcp.call_tool.api_key.team_toolset_denied_outside
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions: [denied_outside_toolset]
+  source: "mcp_server_manager.py:4925"
+  rationale: "A team key calling a tool on the granted server but outside the team's toolset is refused; the named tool stays callable (LIT-5749)"
+  fail_before_fix: proven
+- id: mcp.list_tools.api_key.org_toolset_scoped
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [toolset_scoped]
+  source: "auth/user_api_key_auth_mcp.py:1449"
+  rationale: "A toolset on an org's object_permission caps a member team's key that declares no MCP grants of its own (LIT-5749: the org substitution amplifier)"
+  fail_before_fix: proven
+- id: mcp.call_tool.api_key.org_toolset_denied_outside
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [denied_outside_toolset]
+  source: "mcp_server_manager.py:4925"
+  rationale: "An org-inherited key calling outside the org's toolset is refused while the named tool stays callable (LIT-5749)"
+  fail_before_fix: proven
+- id: mcp.list_tools.api_key.user_toolset_scoped
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [toolset_scoped]
+  source: "auth/user_api_key_auth_mcp.py:2859"
+  rationale: "A toolset on an internal user's row ceils the servers the user's own key grants; user-level toolsets narrow, never grant (LIT-5749)"
+  fail_before_fix: proven
+- id: mcp.call_tool.api_key.user_toolset_denied_outside
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions: [denied_outside_toolset]
+  source: "mcp_server_manager.py:4925"
+  rationale: "A key whose user row holds a toolset is refused calling outside it even though the key itself grants the whole server (LIT-5749)"
+  fail_before_fix: proven
