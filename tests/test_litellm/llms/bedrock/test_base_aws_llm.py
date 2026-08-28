@@ -743,18 +743,14 @@ def test_bearer_token_skips_boto_credential_resolution(
     env_bearer_token: str | None,
 ):
     llm = BaseAWSLLM()
-    optional_params = {"aws_region_name": "us-east-1"}
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_profile_name": "litellm-profile-that-does-not-exist",
+    }
 
-    with (
-        patch(
-            "litellm.llms.bedrock.base_aws_llm.get_secret_str",
-            return_value=env_bearer_token,
-        ),
-        patch.object(
-            llm,
-            "get_credentials",
-            side_effect=AssertionError("bearer-token requests must not resolve AWS credentials"),
-        ) as get_credentials,
+    with patch(
+        "litellm.llms.bedrock.base_aws_llm.get_secret_str",
+        return_value=env_bearer_token,
     ):
         credential_info = llm._get_boto_credentials_from_optional_params(
             optional_params,
@@ -762,28 +758,30 @@ def test_bearer_token_skips_boto_credential_resolution(
             supports_bearer_token=True,
         )
 
-    get_credentials.assert_not_called()
     assert credential_info.credentials is None
     assert credential_info.aws_region_name == "us-east-1"
 
 
 def test_shared_boto_helper_requires_credentials_by_default():
     llm = BaseAWSLLM()
-    credentials = Credentials("test_key", "test_secret", "test_token")
 
-    with (
-        patch(
-            "litellm.llms.bedrock.base_aws_llm.get_secret_str",
-            return_value="environment-bearer-token",
-        ),
-        patch.object(llm, "get_credentials", return_value=credentials) as get_credentials,
+    with patch(
+        "litellm.llms.bedrock.base_aws_llm.get_secret_str",
+        return_value="environment-bearer-token",
     ):
         credential_info = llm._get_boto_credentials_from_optional_params(
-            {"aws_region_name": "us-east-1"},
+            {
+                "aws_region_name": "us-east-1",
+                "aws_access_key_id": "test_key",
+                "aws_secret_access_key": "test_secret",
+                "aws_session_token": "test_token",
+            },
         )
 
-    get_credentials.assert_called_once()
-    assert credential_info.credentials is credentials
+    assert credential_info.credentials is not None
+    assert credential_info.credentials.access_key == "test_key"
+    assert credential_info.credentials.secret_key == "test_secret"
+    assert credential_info.credentials.token == "test_token"
 
 
 def test_get_request_headers_with_env_var_bearer_token():

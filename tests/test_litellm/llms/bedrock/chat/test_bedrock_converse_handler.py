@@ -138,14 +138,16 @@ def test_the_core_receives_the_credentials_this_handler_already_resolved():
 def test_bearer_token_skips_aws_credential_resolution():
     seen = _inject()
 
-    with patch.object(
-        BedrockConverseLLM,
-        "get_credentials",
-        side_effect=AssertionError("bearer-token requests must not resolve AWS credentials"),
-    ) as get_credentials:
-        response = BedrockConverseLLM().completion(**_completion_kwargs(api_key="bedrock-bearer-token"))
+    response = BedrockConverseLLM().completion(
+        **_completion_kwargs(
+            api_key="bedrock-bearer-token",
+            optional_params={
+                "maxTokens": 16,
+                "aws_profile_name": "litellm-profile-that-does-not-exist",
+            },
+        )
+    )
 
-    get_credentials.assert_not_called()
     assert response.choices[0].message.content == "hello from rust"
     params = seen["call"][0]["optional_params"]
     assert params["aws_region_name"] == "us-east-1"

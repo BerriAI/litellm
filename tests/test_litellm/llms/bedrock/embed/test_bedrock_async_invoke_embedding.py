@@ -1,5 +1,5 @@
 import json
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -238,6 +238,34 @@ class TestBedrockAsyncInvokeEmbedding:
 
             assert status_response["status"] == "InProgress"
             assert "invocationArn" in status_response
+
+    @pytest.mark.asyncio
+    async def test_async_invoke_status_uses_sigv4_when_bearer_token_is_configured(
+        self, monkeypatch
+    ):
+        from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
+        response = Mock(status_code=200)
+        response.json.return_value = async_invoke_status_response
+        client = Mock()
+        client.get = AsyncMock(return_value=response)
+
+        with patch(
+            "litellm.llms.bedrock.embed.embedding.get_async_httpx_client",
+            return_value=client,
+        ):
+            status_response = await BedrockEmbedding()._get_async_invoke_status(
+                invocation_arn="arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456",
+                aws_region_name="us-east-1",
+                aws_access_key_id="test-access-key",
+                aws_secret_access_key="test-secret-key",
+                aws_session_token="test-session-token",
+            )
+
+        request_headers = client.get.await_args.kwargs["headers"]
+        assert request_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert status_response == async_invoke_status_response
 
     def test_async_invoke_error_handling_missing_output_s3_uri(self):
         """Test error handling when output_s3_uri is missing for async invoke."""

@@ -65,6 +65,7 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
             "client": client,
             "aws_region_name": "us-east-1",
             "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "aws_profile_name": "litellm-profile-that-does-not-exist",
             "api_key": test_api_key,
         }
 

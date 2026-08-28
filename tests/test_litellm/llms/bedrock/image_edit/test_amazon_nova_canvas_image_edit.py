@@ -3,6 +3,7 @@
 import base64
 import io
 from typing import cast
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -70,6 +71,24 @@ def test_get_config_class_stability_unchanged():
         "stability.stable-image-inpaint-v1:0",
     )
     assert cls is BedrockStabilityImageEditConfig
+
+
+def test_prepare_request_bearer_token_skips_aws_credentials():
+    prepared_request = BedrockImageEdit()._prepare_request(
+        model="amazon.nova-canvas-v1:0",
+        image=[io.BytesIO(b"image")],
+        prompt="replace the background",
+        optional_params={
+            "aws_profile_name": "litellm-profile-that-does-not-exist",
+            "aws_region_name": "us-east-1",
+        },
+        api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+        extra_headers=None,
+        logging_obj=Mock(),
+        api_key="bedrock-bearer-token",
+    )
+
+    assert prepared_request.prepped.headers["Authorization"] == "Bearer bedrock-bearer-token"
 
 
 def test_provider_config_router_returns_nova_for_canvas():

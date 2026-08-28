@@ -373,22 +373,25 @@ class BedrockConverseLLM(BaseAWSLLM):
         # before transforming so whichever path runs emits pre_call once, and
         # hand down the credentials, region and endpoint this handler already
         # resolved so both paths sign as the same principal.
+        credential_params: Final = (
+            ()
+            if credentials is None
+            else (
+                ("aws_access_key_id", credentials.access_key),
+                ("aws_secret_access_key", credentials.secret_key),
+                ("aws_session_token", credentials.token),
+            )
+        )
         rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
             **optional_params,
-            "aws_region_name": aws_region_name,
-            **(
-                {  # mutable-ok: merged into its mutable parent above
-                    key: value
-                    for key, value in (
-                        ("aws_access_key_id", credentials.access_key),
-                        ("aws_secret_access_key", credentials.secret_key),
-                        ("aws_session_token", credentials.token),
-                    )
-                    if value is not None
-                }
-                if credentials is not None
-                else {}
-            ),
+            **{  # mutable-ok: merged into its mutable parent above
+                key: value
+                for key, value in (
+                    *credential_params,
+                    ("aws_region_name", aws_region_name),
+                )
+                if value is not None
+            },
         }
         serves_via_rust: Final = rust_chat_completions_accepts(
             model=model,
