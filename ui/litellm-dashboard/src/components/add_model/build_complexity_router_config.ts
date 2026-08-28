@@ -103,6 +103,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
+  classificationPrompt: string | undefined;
   heuristicFirstMaxTier: string | undefined;
   sessionAffinity: boolean;
   deploymentAffinity: boolean;
@@ -154,6 +155,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  classification_prompt?: string;
   heuristic_first_max_tier?: string;
   session_affinity: boolean;
   deployment_affinity: boolean;
@@ -269,6 +271,7 @@ export const customTierWireFields = (
   customTierSet: CustomTierSet,
   classifierLlmConfig: ClassifierLLMConfig | undefined,
   planModeMinTierId: string | undefined,
+  classificationPrompt: string | undefined,
 ): Partial<ComplexityRouterConfigPayload> => {
   const rows = customTierSet.tiers;
   const fallback = tierRowById(rows, customTierSet.fallback_tier_id);
@@ -280,11 +283,12 @@ export const customTierWireFields = (
     classifier_type: "llm",
     // Rebuilt from the two fields an edited tier set allows. The backend rejects system_prompt and
     // classification_rubric beside tier_definitions, and both live inside this object rather than at
-    // the top level the omit list covers.
+    // the top level the omit list covers. The opening instructions ride classification_prompt below.
     ...(classifierLlmConfig && {
       classifier_llm_config: { model: classifierLlmConfig.model, timeout_ms: classifierLlmConfig.timeout_ms },
     }),
     session_affinity: false,
+    ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
     ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
   };
 };
@@ -383,6 +387,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextBudgetChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
+  classificationPrompt,
   heuristicFirstMaxTier,
   sessionAffinity,
   deploymentAffinity,
@@ -466,6 +471,6 @@ export const buildComplexityRouterConfig = ({
   ) as ComplexityRouterConfigPayload;
   return {
     ...kept,
-    ...customTierWireFields(customTierSet, classifierLlmConfig, planModeMinTier),
+    ...customTierWireFields(customTierSet, classifierLlmConfig, planModeMinTier, classificationPrompt),
   };
 };

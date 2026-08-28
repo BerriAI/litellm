@@ -10,7 +10,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
-import { Restricted, RestrictedSection, restrictedBy } from "./TierRestrictions";
+import CustomTierPromptEditor from "./CustomTierPromptEditor";
+import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
@@ -245,6 +246,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({ ...value, heuristic_first_max_tier: tier });
   };
 
+  const handleClassificationPromptChange = (classificationPrompt: string | undefined) => {
+    onChange({ ...value, classification_prompt: classificationPrompt });
+  };
+
   const handleClassifierModelChange = (model: string) => {
     onChange({
       ...value,
@@ -421,7 +426,14 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           </div>
           <div>
             <strong className="block mb-1 font-semibold">Classifier Prompt</strong>
-            <Restricted by={restrictedBy(value, "classifierPrompt")}>
+            {value.custom_tier_set ? (
+              <CustomTierPromptEditor
+                classificationPrompt={value.classification_prompt}
+                onChange={handleClassificationPromptChange}
+                tierRows={value.custom_tier_set.tiers}
+                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
+              />
+            ) : (
               <ClassifierPromptEditor
                 systemPrompt={value.classifier_llm_config?.system_prompt}
                 onChange={handleClassifierSystemPromptChange}
@@ -429,7 +441,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                 tierLabels={value.tier_labels}
                 classificationRubric={classificationRubric}
               />
-            </Restricted>
+            )}
           </div>
           <RestrictedSection heading="If the classifier fails" by={restrictedBy(value, "classifierFallback")}>
             <RadioGroup
