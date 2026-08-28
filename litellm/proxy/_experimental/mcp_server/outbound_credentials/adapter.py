@@ -20,6 +20,7 @@ from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    DEFAULT_CREDENTIAL_HEADER,
     ApiKeyConfig,
     AuthorizationCodeConfig,
     ClientAuth,
@@ -43,6 +44,15 @@ if TYPE_CHECKING:
 
 _TOKEN_EXCHANGE_SUBJECT_TOKEN_DEFAULT: Final = "urn:ietf:params:oauth:token-type:access_token"
 _ID_JAG_SUBJECT_TOKEN_DEFAULT: Final = "urn:ietf:params:oauth:token-type:id_token"
+
+
+def token_header(server: MCPServer) -> str:
+    """The upstream header this server's resolved credential occupies.
+
+    One owner for every arm, so no spec builder spells the default itself and a server can never
+    hand two arms different answers.
+    """
+    return server.upstream_token_header or DEFAULT_CREDENTIAL_HEADER
 
 
 def to_subject(user_api_key_auth: UserAPIKeyAuth | None, subject_token: str | None) -> Subject:
@@ -122,7 +132,7 @@ def _oauth2_spec(server: MCPServer, resource: str) -> ServerSpec | None:
         return ServerSpec(
             server_id=server.server_id,
             resource=resource,
-            config=AuthorizationCodeConfig(),
+            config=AuthorizationCodeConfig(header_name=token_header(server)),
         )
     return None
 
@@ -140,6 +150,7 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
         server_id=server.server_id,
         resource=resource,
         config=ClientCredentialsConfig(
+            header_name=token_header(server),
             client_id=server.client_id,
             client_secret=SecretStr(server.client_secret) if server.client_secret else None,
             token_url=server.effective_token_url,
@@ -173,6 +184,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
         server_id=server.server_id,
         resource=resource,
         config=TokenExchangeConfig(
+            header_name=token_header(server),
             profile=profile,
             subject_token_type=server.subject_token_type or DEFAULT_SUBJECT_TOKEN_TYPE,
             token_exchange_endpoint=endpoint,
@@ -206,7 +218,7 @@ def _shared_key_spec(
         server_id=server.server_id,
         resource=resource,
         config=ApiKeyConfig(
-            header_name=header_name,
+            header_name=server.upstream_token_header or header_name,
             value_prefix=value_prefix,
             key_source=SharedKey(value=SecretStr(value)),
         ),
@@ -231,6 +243,7 @@ def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
         server_id=server.server_id,
         resource=resource,
         config=IdJagConfig(
+            header_name=token_header(server),
             org_token_endpoint=org_token_endpoint,
             resource_token_endpoint=resource_token_endpoint,
             client_id=client_id,

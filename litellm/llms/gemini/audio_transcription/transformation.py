@@ -4,6 +4,7 @@ from typing import Final
 
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import (
     normalize_transcription_language_to_bcp47,
     process_audio_file,
@@ -47,6 +48,10 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self, model: str
     ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: BaseAudioTranscriptionConfig signature
         return ["language", "response_format", "timestamp_granularities"]  # mutable-ok: base contract returns a list
+
+    @property
+    def supports_subtitle_synthesis(self) -> bool:
+        return True
 
     def map_openai_params(
         self,
@@ -215,16 +220,17 @@ def _language_config(language: object) -> GeminiTranscriptionConfig:
     return language_config
 
 
-def _timestamp_config(timestamp_granularities: object) -> GeminiTranscriptionConfig:
-    if isinstance(timestamp_granularities, list) and "word" in timestamp_granularities:
-        return _WORD_TIMESTAMP_CONFIG
-    return _EMPTY_TRANSCRIPTION_CONFIG
+def _timestamp_config(timestamp_granularities: object, response_format: object) -> GeminiTranscriptionConfig:
+    wants_word_timestamps: Final = (
+        isinstance(timestamp_granularities, list) and "word" in timestamp_granularities
+    ) or (isinstance(response_format, str) and response_format in SUBTITLE_RESPONSE_FORMATS)
+    return _WORD_TIMESTAMP_CONFIG if wants_word_timestamps else _EMPTY_TRANSCRIPTION_CONFIG
 
 
 def _build_transcription_config(optional_params: Mapping[str, object]) -> GeminiTranscriptionConfig:
     transcription_config: Final[GeminiTranscriptionConfig] = {
         **_language_config(optional_params.get("language")),
-        **_timestamp_config(optional_params.get("timestamp_granularities")),
+        **_timestamp_config(optional_params.get("timestamp_granularities"), optional_params.get("response_format")),
     }
     return transcription_config
 
