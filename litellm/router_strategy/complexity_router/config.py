@@ -1246,6 +1246,28 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_tier_param_placement(self) -> "ComplexityRouterConfig":
+        """Reject a router setting written into a tier entry's request params.
+
+        A tier entry's ``litellm_params`` are request params for that deployment: the
+        pre-routing hook spreads them onto the outbound call, so a config key placed
+        there configures nothing and reaches the provider as an unknown body field.
+        """
+        misplaced: Final = tuple(
+            f"{tier}.{key}"
+            for tier, entries in self.tier_model_configs.items()
+            for entry in entries
+            for key in sorted(frozenset(entry.litellm_params) & COMPLEXITY_ROUTER_CONFIG_KEYS)
+        )
+        if misplaced:
+            raise ValueError(
+                "tier entries carry complexity_router_config settings in their litellm_params, where the "
+                "router never reads them and the outbound request forwards them to the provider as unknown "
+                f"body fields: {', '.join(misplaced)}. Set these on complexity_router_config itself"
+            )
+        return self
+
     def tier_label(self, tier: ComplexityTier) -> str:
         """Operator-facing display name for a tier, falling back to its canonical name."""
         return self.tier_labels.get(tier, "").strip() or tier.value
@@ -1262,6 +1284,15 @@ class ComplexityRouterConfig(BaseModel):
             (tier for tier, tier_label in labeled if tier_label.casefold() == folded),
             next((tier for tier in TIER_SEVERITY_ORDER if tier.value.casefold() == folded), None),
         )
+
+
+COMPLEXITY_ROUTER_CONFIG_KEYS: Final[frozenset[str]] = frozenset(ComplexityRouterConfig.model_fields)
+"""Every setting name this config owns, derived from the model so a field added later is covered.
+
+These names are disjoint from the OpenAI request params, from ``all_litellm_params``, and from the
+``LiteLLM_Params`` fields, so one of them appearing where a request param belongs is always a
+misplaced setting rather than a parameter the caller meant to send.
+"""
 
 
 # Combined default config

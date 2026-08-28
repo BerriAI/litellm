@@ -8690,6 +8690,38 @@ def test_tier_model_params_reject_malformed_entries(tiers):
         ComplexityRouterConfig(tiers=tiers)
 
 
+@pytest.mark.parametrize(
+    "misplaced",
+    [
+        {"tier_boundaries": {"simple_medium": 0.1}},
+        {"token_thresholds": {"medium": 100}},
+        {"classifier_type": "llm"},
+    ],
+)
+def test_tier_model_params_reject_router_settings(misplaced):
+    """A tier entry's litellm_params are request params for that deployment: the pre-routing hook
+    spreads them onto the outbound call, so a router setting placed there configures nothing and
+    reaches the provider as an unknown body field, failing every call through that tier."""
+    with pytest.raises(ValidationError, match="complexity_router_config settings"):
+        ComplexityRouterConfig(tiers={"REASONING": [{"model_name": "opus", "litellm_params": misplaced}]})
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"reasoning_effort": "xhigh"},
+        {"thinking": {"type": "enabled"}},
+        {"max_tokens": 512, "temperature": 0.2},
+    ],
+)
+def test_tier_model_params_still_accept_real_request_params(params):
+    """The negative class for the gate above: per-tier request-param overrides are a shipped
+    feature, so the check must reject only names the config itself owns."""
+    config = ComplexityRouterConfig(tiers={"REASONING": [{"model_name": "opus", "litellm_params": params}]})
+
+    assert config.tier_model_configs["REASONING"][0].litellm_params == params
+
+
 def test_tier_model_params_reject_duplicate_models():
     with pytest.raises(ValidationError, match="duplicate model_name"):
         ComplexityRouterConfig(
