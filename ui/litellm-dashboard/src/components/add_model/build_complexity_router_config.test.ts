@@ -855,7 +855,6 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       heuristicFirstMaxTier: "SIMPLE",
       customTechnicalKeywords: ["kubernetes"],
     };
-    // The control arm must be a router that actually emits the key, or the assertion is vacuous.
     const emittingType = key === "heuristic_first_max_tier" ? "heuristic_first" : "llm";
     expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: emittingType })).toHaveProperty(key);
     expect(build(loaded)).not.toHaveProperty(key);
