@@ -111,7 +111,7 @@
     "limit": 19829
   },
   "reportUnknownVariableType": {
-    "limit": 30344
+    "limit": 30348
   },
   "reportUnnecessaryCast": {
     "limit": 117
