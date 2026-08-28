@@ -2619,3 +2619,174 @@ class TestNativeWebSocketUrlConstruction:
         mock_config.get_websocket_url.assert_called_once()
         _, call_kwargs = mock_config.get_websocket_url.call_args
         assert call_kwargs["litellm_params"]["api_version"] == "2025-04-01-preview"
+
+
+class TestResponsesWebSocketUsageLogging:
+    def _build_logging_obj(self):
+        import time
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LitellmLogging,
+        )
+
+        logging_obj = LitellmLogging(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Reply with one word: ok"}],
+            stream=False,
+            call_type="_aresponses_websocket",
+            start_time=time.time(),
+            litellm_call_id="test-call-id",
+            function_id="fn",
+        )
+        logging_obj.update_environment_variables(
+            model="gpt-4o",
+            optional_params={},
+            litellm_params={"metadata": {}},
+            custom_llm_provider="openai",
+        )
+        return logging_obj
+
+    @pytest.mark.asyncio
+    async def test_websocket_completed_event_usage_is_logged(self):
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions
+
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        class FakeBackendWS:
+            def __init__(self, events):
+                self._events = list(events)
+
+            async def recv(self, decode=False):
+                if self._events:
+                    return self._events.pop(0)
+                raise websockets.exceptions.ConnectionClosed(None, None)
+
+        completed_event = json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_abc",
+                    "object": "response",
+                    "created_at": 1234567890,
+                    "model": "gpt-4o",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "ok"}],
+                        }
+                    ],
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 50,
+                        "total_tokens": 150,
+                        "input_tokens_details": {
+                            "cached_tokens": 80,
+                            "text_tokens": 20,
+                        },
+                        "output_tokens_details": {
+                            "reasoning_tokens": 10,
+                        },
+                    },
+                },
+            }
+        )
+
+        client_ws = MagicMock()
+        client_ws.send_text = AsyncMock()
+        logging_obj = self._build_logging_obj()
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=client_ws,
+            backend_ws=FakeBackendWS([completed_event]),
+            logging_obj=logging_obj,
+        )
+
+        await handler.backend_to_client()
+
+        assert any(event.get("type") == "response.completed" for event in handler.messages)
+
+        logging_obj._success_handler_helper_fn(
+            result=handler.messages,
+            cache_hit=False,
+            standard_logging_object=None,
+        )
+
+        slo = logging_obj.model_call_details["standard_logging_object"]
+        assert slo["prompt_tokens"] == 100
+        assert slo["completion_tokens"] == 50
+        assert slo["total_tokens"] == 150
+        assert slo["response_cost"] > 0
+        usage_obj = slo["metadata"]["usage_object"]
+        assert usage_obj["prompt_tokens_details"]["cached_tokens"] == 80
+        assert usage_obj["completion_tokens_details"]["reasoning_tokens"] == 10
+
+    def test_build_response_from_websocket_events_combines_usage_with_details(self):
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        events = [
+            {"type": "response.created", "response": {"id": "r1"}},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "r1",
+                    "created_at": 1,
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 50,
+                        "total_tokens": 150,
+                        "input_tokens_details": {
+                            "cached_tokens": 80,
+                            "text_tokens": 20,
+                        },
+                        "output_tokens_details": {
+                            "reasoning_tokens": 10,
+                        },
+                    },
+                },
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "r2",
+                    "created_at": 2,
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 40,
+                        "output_tokens": 10,
+                        "total_tokens": 50,
+                        "input_tokens_details": {
+                            "cached_tokens": 20,
+                        },
+                        "output_tokens_details": {
+                            "reasoning_tokens": 5,
+                        },
+                    },
+                },
+            },
+        ]
+
+        response = ResponseAPILoggingUtils.build_response_from_websocket_events(events=events)
+
+        assert response is not None
+        assert response.id == "r2"
+        assert response.usage.input_tokens == 140
+        assert response.usage.output_tokens == 60
+        assert response.usage.total_tokens == 200
+        assert response.usage.input_tokens_details.cached_tokens == 100
+        assert response.usage.input_tokens_details.text_tokens == 20
+        assert response.usage.output_tokens_details.reasoning_tokens == 15
+
+    def test_build_response_from_websocket_events_without_completed_returns_none(self):
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        events = [
+            {"type": "response.created", "response": {"id": "r1"}},
+            {"type": "response.output_text.delta", "delta": "hi"},
+        ]
+
+        assert ResponseAPILoggingUtils.build_response_from_websocket_events(events=events) is None

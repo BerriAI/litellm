@@ -3,7 +3,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final, Optional, Union, cast, get_type_hints, overload
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
 
 import litellm
@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
+    InputTokensDetails,
     OutputTokensDetails,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -1169,3 +1170,71 @@ class ResponseAPILoggingUtils:
             setattr(chat_usage, "cost", response_api_usage.cost)
 
         return chat_usage
+
+    @staticmethod
+    def build_response_from_websocket_events(
+        events: Iterable[Any],
+    ) -> ResponsesAPIResponse | None:
+        """
+        Build a single ResponsesAPIResponse from the events collected on a
+        Responses API WebSocket connection so token usage (including details
+        like cached and reasoning tokens) and cost are logged the same way as
+        the HTTP /v1/responses path.
+        """
+        terminal_responses = tuple(
+            event["response"]
+            for event in events
+            if isinstance(event, dict)
+            and event.get("type") in ("response.completed", "response.incomplete")
+            and isinstance(event.get("response"), dict)
+        )
+        if not terminal_responses:
+            return None
+
+        usage_objects: Final[list[Usage]] = [
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(r["usage"])
+            for r in terminal_responses
+            if isinstance(r.get("usage"), (dict, ResponseAPIUsage))
+        ]
+
+        combined_usage: ResponseAPIUsage | None = None
+        if usage_objects:
+            from litellm.cost_calculator import BaseTokenUsageProcessor
+
+            combined: Final = BaseTokenUsageProcessor.combine_usage_objects(usage_objects)
+            input_tokens_details: InputTokensDetails | None = None
+            if combined.prompt_tokens_details:
+                input_tokens_details = InputTokensDetails(
+                    cached_tokens=combined.prompt_tokens_details.cached_tokens or 0,
+                    audio_tokens=combined.prompt_tokens_details.audio_tokens,
+                    text_tokens=combined.prompt_tokens_details.text_tokens,
+                )
+            output_tokens_details: OutputTokensDetails | None = None
+            if combined.completion_tokens_details:
+                output_tokens_details = OutputTokensDetails(
+                    reasoning_tokens=combined.completion_tokens_details.reasoning_tokens,
+                    audio_tokens=combined.completion_tokens_details.audio_tokens,
+                    text_tokens=combined.completion_tokens_details.text_tokens,
+                )
+            combined_usage = ResponseAPIUsage(
+                input_tokens=combined.prompt_tokens,
+                output_tokens=combined.completion_tokens,
+                total_tokens=combined.total_tokens,
+                input_tokens_details=input_tokens_details,
+                output_tokens_details=output_tokens_details,
+            )
+
+        response_dict = {
+            "id": "",
+            "created_at": 0,
+            "output": [],
+            **terminal_responses[-1],
+        }
+        if combined_usage is not None:
+            response_dict["usage"] = combined_usage
+
+        try:
+            return ResponsesAPIResponse(**response_dict)
+        except ValidationError as e:
+            verbose_logger.debug("could not build ResponsesAPIResponse from websocket events: %s", e)
+            return None
