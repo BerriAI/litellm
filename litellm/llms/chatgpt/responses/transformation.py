@@ -43,6 +43,15 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+CODEX_RESPONSES_LITE_HEADER: Final = "x-openai-internal-codex-responses-lite"
+_FALSY_HEADER_VALUES: Final = frozenset({"", "0", "false", "no"})
+
+
+def is_codex_responses_lite_request(headers: Mapping[str, object] | None) -> bool:
+    return any(
+        key.lower() == CODEX_RESPONSES_LITE_HEADER and str(value).strip().lower() not in _FALSY_HEADER_VALUES
+        for key, value in (headers or {}).items()
+    )
 
 
 def _system_item_as_developer(item: ResponseInputItemParam) -> ResponseInputItemParam:
@@ -140,6 +149,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "include",
             "tools",
             "tool_choice",
+            "parallel_tool_calls",
             "reasoning",
             "previous_response_id",
             "truncation",
@@ -151,7 +161,16 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
         if service_tier is not None:
             filtered["service_tier"] = service_tier
-        return filtered
+        if not is_codex_responses_lite_request(headers):
+            return filtered
+        # The Codex backend 400s a Responses-Lite request unless parallel_tool_calls is false and
+        # reasoning.context is "all_turns", and Codex 0.144.x can omit the reasoning object entirely.
+        reasoning: Final = filtered.get("reasoning")
+        return {
+            **filtered,
+            "parallel_tool_calls": False,
+            "reasoning": {**(reasoning if isinstance(reasoning, dict) else {}), "context": "all_turns"},
+        }
 
     def transform_response_api_response(
         self,
