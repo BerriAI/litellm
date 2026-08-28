@@ -34,8 +34,7 @@ def _assert_datadog_logger_active(proxy: ProxyClient) -> None:
         f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
     )
     assert DD_LOGGER_NAME in result.body, (
-        f"the proxy must report the {DD_LOGGER_NAME} callback active "
-        f"(callbacks + DD_* env); got: {result.body[:400]}"
+        f"the proxy must report the {DD_LOGGER_NAME} callback active (callbacks + DD_* env); got: {result.body[:400]}"
     )
 
 
@@ -49,16 +48,6 @@ def _seed_completion(proxy: ProxyClient, *, key: str, marker: str) -> None:
 
 
 class TestDatadogMcpRoundTrip:
-    @pytest.mark.skip(
-        reason=(
-            "LIT-5052: this test sends a `telemetry` argument that Datadog's "
-            "search_datadog_logs tool now rejects, so every tool call fails validation with "
-            "'unexpected additional properties [\"telemetry\"]' before the round-trip "
-            "assertion is reached. `telemetry` was never a documented Datadog parameter; the "
-            "test relied on the server ignoring unknown properties. Unskip once the argument "
-            "is dropped."
-        )
-    )
     @pytest.mark.covers("mcp.list_tools.api_key.succeeds", "mcp.call_tool.api_key.succeeds")
     def test_search_logs_finds_seeded_completion(
         self,
@@ -88,24 +77,22 @@ class TestDatadogMcpRoundTrip:
             "within the poll deadline; MCP search would have nothing to find"
         )
 
-        tool_name = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
+        tool = client.await_tool_entry(key, server_id, SEARCH_LOGS_TOOL)
+        arguments = {
+            "query": marker,
+            "from": DD_SEARCH_FROM,
+            "to": "now",
+            "max_tokens": 5000,
+        }
+        tool.assert_arguments_are_documented(arguments)
         call = client.await_call_tool(
             key,
             server_id=server_id,
-            name=tool_name,
-            arguments={
-                "query": marker,
-                "from": DD_SEARCH_FROM,
-                "to": "now",
-                "max_tokens": 5000,
-                "telemetry": {
-                    "intent": "e2e assert seeded litellm completion log is searchable via MCP"
-                },
-            },
+            name=tool.name,
+            arguments=arguments,
         )
         assert call.is_error is not True, f"search_datadog_logs errored: {call}"
         body = call.all_text
         assert marker in body, (
-            f"search_datadog_logs response must include the seeded marker {marker!r}; "
-            f"got: {body[:800]!r}"
+            f"search_datadog_logs response must include the seeded marker {marker!r}; got: {body[:800]!r}"
         )
