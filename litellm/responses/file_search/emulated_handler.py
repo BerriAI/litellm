@@ -15,7 +15,9 @@ import json
 import time
 import uuid
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast  # noqa: TID251  # see kwargs-ok / cast-ok markers
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
@@ -29,6 +31,12 @@ if TYPE_CHECKING:
 ToolParam: TypeAlias = object
 
 FILE_SEARCH_FUNCTION_NAME: Final = "litellm_file_search"
+
+
+class FileSearchToolCallArgs(TypedDict):
+    queries: ReadOnly[NotRequired[object]]
+    query: ReadOnly[NotRequired[object]]
+    vector_store_id: ReadOnly[NotRequired[object]]
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +183,18 @@ async def _run_vector_searches(
 # ---------------------------------------------------------------------------
 
 
-def _get_field(result: object, key: str, default: object = None) -> Any:
+def _get_field(result: object, key: str, default: object = None) -> object:
     """Read a field from either a dict/TypedDict or an attribute-based object."""
     if isinstance(result, dict):
         return result.get(key, default)
     return getattr(result, key, default)
+
+
+def _joined_content_text(result: object) -> str:
+    """Concatenate the text of every content chunk on a search result."""
+    content_items: Final = cast(Iterable[object], _get_field(result, "content") or [])  # cast-ok: iterated as today
+    text_chunks: Final = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
+    return " ".join(t for t in text_chunks if t)
 
 
 def _format_search_results_as_tool_output(
@@ -194,9 +209,7 @@ def _format_search_results_as_tool_output(
         score = _get_field(result, "score")
         file_id = _get_field(result, "file_id")
         filename = _get_field(result, "filename")
-        content_items = _get_field(result, "content") or []
-        text_chunks = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
-        text = " ".join(t for t in text_chunks if t)
+        text = _joined_content_text(result)
 
         header = f"[Result {i}"
         if filename:
@@ -226,9 +239,7 @@ def _build_search_results_for_include(
     formatted: Final[list[dict[str, object]]] = []
     for result in results:
         file_id = _get_field(result, "file_id") or ""
-        content_items = _get_field(result, "content") or []
-        text_chunks = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
-        text = " ".join(t for t in text_chunks if t)
+        text = _joined_content_text(result)
         formatted.append(
             {
                 "file_id": file_id,
@@ -353,14 +364,14 @@ def _synthesize_responses_api_response(
         created_at=getattr(original_response, "created_at", int(time.time())),
         status="completed",
         model=getattr(original_response, "model", ""),
-        output=cast(list[ResponseOutputItem | dict[str, Any]], synthesized_output),
+        output=cast(list[ResponseOutputItem | dict[str, object]], synthesized_output),  # cast-ok: list is invariant
         usage=getattr(original_response, "usage", None),
         error=None,
     )
     if hasattr(original_response, "_hidden_params"):
         hidden: Final = dict(getattr(original_response, "_hidden_params") or {})
         if first_response is not None and hasattr(first_response, "_hidden_params"):
-            first_hidden: Final = getattr(first_response, "_hidden_params") or {}
+            first_hidden: Final[object] = getattr(first_response, "_hidden_params") or {}
             first_cost: Final = (
                 first_hidden.get("response_cost")
                 if isinstance(first_hidden, dict)
@@ -385,9 +396,10 @@ async def _call_aresponses(input, model, tools, **kwargs):  # pragma: no cover â
 
 
 def _prepare_emulated_file_search_call(
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
 ) -> tuple[bool, dict[str, object]]:
-    include_items: Final[list[str]] = list(kwargs.get("include") or [])
+    raw_include: Final = kwargs.get("include") or []
+    include_items: Final[list[object]] = list(cast(Iterable[object], raw_include))  # cast-ok: iterated as today
     include_search_results: Final = "file_search_call.results" in include_items
 
     original_stream: Final = kwargs.get("stream")
@@ -413,16 +425,16 @@ def _extract_tool_call_fields(tool_call: object, fallback_call_id: str) -> tuple
     return call_id, raw_args
 
 
-def _resolve_queries_from_args(args: dict[str, Any], input: object) -> list[str]:
+def _resolve_queries_from_args(args: FileSearchToolCallArgs, input: object) -> list[str]:
     """Pull the queries list out of parsed tool-call arguments, with backward-compat fallbacks."""
     queries_from_call: Final = args.get("queries")
     if not queries_from_call:
         # Fallback: check for single "query" field (backward compat)
         single_query: Final = args.get("query")
-        return [single_query] if single_query else [str(input)]
+        return [cast(str, single_query)] if single_query else [str(input)]  # cast-ok: model-supplied, as today
     if not isinstance(queries_from_call, list):
         return [str(queries_from_call)]
-    return queries_from_call
+    return cast(list[str], queries_from_call)  # cast-ok: model-supplied elements, forwarded unchecked as today
 
 
 async def _execute_file_search_tool_calls(
@@ -440,14 +452,14 @@ async def _execute_file_search_tool_calls(
         call_id, raw_args = _extract_tool_call_fields(tool_call, fallback_call_id=file_search_call_id)
 
         try:
-            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            args: FileSearchToolCallArgs = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
         except json.JSONDecodeError:
             args = {}
 
         queries_from_call = _resolve_queries_from_args(args, input)
 
         vs_id_arg = args.get("vector_store_id")
-        vs_ids_for_call = [vs_id_arg] if vs_id_arg else all_vs_ids
+        vs_ids_for_call = [cast(str, vs_id_arg)] if vs_id_arg else all_vs_ids  # cast-ok: model-supplied, as today
 
         queries, results = await _run_vector_searches(
             queries=queries_from_call,
@@ -481,7 +493,7 @@ def _build_follow_up_input(
     original_input_items: Final[list[object]] = (
         list(input) if isinstance(input, (list, tuple)) else [{"role": "user", "content": str(input)}]
     )
-    first_response_output_items: Final[list[Any]] = []
+    first_response_output_items: Final[list[object]] = []
     for _item in first_response.output:
         if isinstance(_item, dict):
             first_response_output_items.append(_item)
@@ -498,7 +510,7 @@ async def aresponses_with_emulated_file_search(
     model: str,
     tools: Iterable[ToolParam] | None = None,
     # Pass-through params â€” forwarded as-is to the underlying aresponses call
-    **kwargs: Any,
+    **kwargs: Any,  # kwargs-ok: `object` would surface the caller's partially-unknown dict at its call site
 ) -> ResponsesAPIResponse:
     """
     Emulated file_search for providers that don't support it natively.
@@ -507,7 +519,7 @@ async def aresponses_with_emulated_file_search(
     runs vector search, and synthesizes an OpenAI-format response.
     """
     # Determine whether caller wants search_results populated in the output.
-    _include_search_results, kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
+    _include_search_results, call_kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
 
     # 1. Replace file_search tools with function tool
     transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
@@ -524,7 +536,7 @@ async def aresponses_with_emulated_file_search(
                 input=input,
                 model=model,
                 tools=transformed_tools or None,
-                **kwargs,
+                **call_kwargs,
             ),
         )
     finally:
@@ -588,7 +600,7 @@ async def aresponses_with_emulated_file_search(
                 input=follow_up_input,
                 model=model,
                 tools=None,  # no tools needed for the answer step
-                **kwargs,
+                **call_kwargs,
             ),
         )
     finally:

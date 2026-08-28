@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 
-import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
+import { formatGuardrailMode, getGuardrailLogoAndName } from "./guardrail_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 
 const CONFIG_DELETE_HINT = "Config guardrails are defined in the config file and cannot be deleted from the dashboard.";
@@ -117,9 +117,14 @@ export const getGuardrailTableColumns = ({
     header: "Mode",
     size: 130,
     enableSorting: false,
-    cell: ({ row }) => (
-      <span className="font-mono text-xs text-muted-foreground">{row.original.litellm_params.mode}</span>
-    ),
+    cell: ({ row }) => {
+      const mode = formatGuardrailMode(row.original.litellm_params.mode);
+      return (
+        <span className="font-mono text-xs text-muted-foreground" title={mode || undefined}>
+          {mode || "-"}
+        </span>
+      );
+    },
   },
   {
     id: "default_on",

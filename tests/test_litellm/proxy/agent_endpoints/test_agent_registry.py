@@ -428,3 +428,60 @@ async def test_migrate_legacy_grant_ids_no_ops_without_config_agents():
 
     assert await registry.migrate_legacy_grant_ids(table=table) == GrantMigrationResult(rewritten=0, missed=0)
     table.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_agent_in_db_raises_when_row_deleted_mid_update():
+    """Prisma's update returns None when the row vanished between read and write. Without a
+    guard the code dereferences None and reports an opaque AttributeError instead of the id."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.update = AsyncMock(return_value=None)
+
+    with pytest.raises(Exception, match="Error updating agent in DB") as exc_info:
+        await registry.update_agent_in_db(
+            agent_id="agent-123",
+            agent={
+                "agent_name": "Updated Agent",
+                "agent_card_params": _sample_agent_card_params(),
+                "litellm_params": {},
+            },
+            prisma_client=mock_prisma,
+            updated_by="test-user",
+        )
+
+    assert str(exc_info.value) == "Error updating agent in DB: Agent not found, passed agent_id=agent-123"
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_raises_when_row_deleted_mid_update():
+    """Same race on PATCH: the existing row is read, then deleted before the update lands."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={"agent_id": "agent-123", "agent_name": "Old Agent", "object_permission_id": None}
+    )
+    mock_prisma.db.litellm_agentstable.update = AsyncMock(return_value=None)
+
+    with pytest.raises(Exception, match="Error patching agent in DB") as exc_info:
+        await registry.patch_agent_in_db(
+            agent_id="agent-123",
+            agent={"agent_name": "Patched Agent"},
+            prisma_client=mock_prisma,
+            updated_by="test-user",
+        )
+
+    assert str(exc_info.value) == "Error patching agent in DB: Agent not found, passed agent_id=agent-123"
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_from_db_raises_when_row_already_gone():
+    """Prisma's delete returns None for a missing row, which dict() cannot consume."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.delete = AsyncMock(return_value=None)
+
+    with pytest.raises(Exception, match="Error deleting agent from DB") as exc_info:
+        await registry.delete_agent_from_db(agent_id="agent-123", prisma_client=mock_prisma)
+
+    assert str(exc_info.value) == "Error deleting agent from DB: Agent not found, passed agent_id=agent-123"

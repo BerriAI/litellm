@@ -9,7 +9,7 @@ import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/s
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
