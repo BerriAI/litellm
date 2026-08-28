@@ -1899,12 +1899,17 @@ def ocr_cost(
         return cost_per_credit * credits, 0.0
 
     ocr_cost_per_page: float | None = None
+    annotation_cost_per_page: float | None = None
     if model_info is not None:
         ocr_cost_per_page = model_info.get("ocr_cost_per_page")
+        annotation_cost_per_page = model_info.get("annotation_cost_per_page")
 
-    pages_processed: Final = response.usage_info.pages_processed
-    if pages_processed is None:
-        if cost_per_credit is not None or ocr_cost_per_page is None:
+    raw_pages_processed: Final = response.usage_info.pages_processed
+    pages_processed_annotation: Final = getattr(response.usage_info, "pages_processed_annotation", None) or 0
+    if raw_pages_processed is None:
+        if pages_processed_annotation > 0 and (annotation_cost_per_page is not None or ocr_cost_per_page is not None):
+            pages_processed = 0
+        elif cost_per_credit is not None or ocr_cost_per_page is None:
             # Surface missing usage data instead of silently under-reporting
             # cost. The previous behavior raised ValueError; we now return 0.0
             # for credit-priced or unpriced models, so log a warning to keep
@@ -1917,7 +1922,10 @@ def ocr_cost(
                 credits,
             )
             return 0.0, 0.0
-        raise ValueError("OCR response pages_processed is None")
+        else:
+            raise ValueError("OCR response pages_processed is None")
+    else:
+        pages_processed = raw_pages_processed
 
     if ocr_cost_per_page is None:
         # No per-page pricing configured. Either the model is on credit-based
@@ -1935,7 +1943,11 @@ def ocr_cost(
         )
         return 0.0, 0.0
 
-    total_ocr_processing_cost: Final[float] = ocr_cost_per_page * pages_processed
+    total_ocr_processing_cost: float = ocr_cost_per_page * pages_processed
+    if pages_processed_annotation > 0:
+        annotation_rate = annotation_cost_per_page if annotation_cost_per_page is not None else ocr_cost_per_page
+        total_ocr_processing_cost += annotation_rate * pages_processed_annotation
+
     return total_ocr_processing_cost, 0.0
 
 
