@@ -1176,9 +1176,7 @@ class ResponseAPILoggingUtils:
         terminal_responses: Sequence[Mapping[str, object]],
     ) -> ResponseAPIUsage | None:
         raw_usages: Final = tuple(
-            r["usage"]
-            for r in terminal_responses
-            if isinstance(r.get("usage"), (dict, ResponseAPIUsage))
+            r["usage"] for r in terminal_responses if isinstance(r.get("usage"), (dict, ResponseAPIUsage))
         )
         if not raw_usages:
             return None
