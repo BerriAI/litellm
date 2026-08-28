@@ -27,6 +27,7 @@ from litellm.types.utils import (
 )
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    CostCalculatorUtils,
     PromptTokensDetailsResult,
     TokenTypeCostBreakdown,
     _calculate_input_cost,
@@ -3872,3 +3873,76 @@ def test_generic_cost_per_token_grok_46_long_context(_local_model_cost_map):
     )
     assert prompt_cost == pytest.approx(200_000 * 4e-06 + 50_000 * 1e-06)
     assert completion_cost == pytest.approx(1_000 * 1.2e-05)
+
+
+@pytest.mark.parametrize(
+    ("response_quality", "requested_quality", "expected_cost"),
+    [
+        (None, "low", 0.04),
+        (None, None, 0.06),
+        ("high", "low", 0.08),
+    ],
+)
+def test_route_image_generation_cost_falls_back_to_requested_quality(
+    monkeypatch, response_quality, requested_quality, expected_cost
+):
+    def tier(cost):
+        return {"litellm_provider": "xai", "mode": "image_generation", "input_cost_per_image": cost}
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "xai/grok-imagine-image-2.0": tier(0.06),
+            "low/1024-x-1024/grok-imagine-image-2.0": tier(0.04),
+            "high/1024-x-1024/grok-imagine-image-2.0": tier(0.08),
+        },
+    )
+    response = ImageResponse(data=[ImageObject(url="https://example.com/image.png")], quality=response_quality)
+    optional_params = {} if requested_quality is None else {"quality": requested_quality}
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="xai/grok-imagine-image-2.0",
+        completion_response=response,
+        custom_llm_provider="xai",
+        optional_params=optional_params,
+        call_type="image_generation",
+    )
+
+    assert cost == expected_cost
+
+
+@pytest.mark.parametrize(
+    ("requested_size", "expected_cost"),
+    [
+        ("1536x1024", 0.05),
+        ("1536-x-1024", 0.05),
+        ("auto", 0.04),
+        (None, 0.04),
+    ],
+)
+def test_route_image_generation_cost_falls_back_to_requested_size(monkeypatch, requested_size, expected_cost):
+    def tier(cost):
+        return {"litellm_provider": "xai", "mode": "image_generation", "input_cost_per_image": cost}
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "xai/grok-imagine-image-2.0": tier(0.06),
+            "low/1024-x-1024/grok-imagine-image-2.0": tier(0.04),
+            "low/1536-x-1024/grok-imagine-image-2.0": tier(0.05),
+        },
+    )
+    response = ImageResponse(data=[ImageObject(url="https://example.com/image.png")])
+    optional_params = {"quality": "low", **({} if requested_size is None else {"size": requested_size})}
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="xai/grok-imagine-image-2.0",
+        completion_response=response,
+        custom_llm_provider="xai",
+        optional_params=optional_params,
+        call_type="image_generation",
+    )
+
+    assert cost == expected_cost
