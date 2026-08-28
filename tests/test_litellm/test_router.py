@@ -11299,6 +11299,15 @@ class TestTierParamsTheTargetAccepts:
 
         assert accepted == {"allowed_openai_params": ["seed"]}
 
+    def test_declared_param_allowlist_ignores_malformed_declarations(self):
+        """A str is iterable, so without the type guard a YAML scalar mistake like
+        allowed_openai_params: reasoning_effort would allowlist single characters."""
+        assert litellm.Router._declared_param_allowlist({"allowed_openai_params": ["reasoning_effort", 3]}) == frozenset(
+            {"reasoning_effort"}
+        )
+        assert litellm.Router._declared_param_allowlist({"allowed_openai_params": "reasoning_effort"}) == frozenset()
+        assert litellm.Router._declared_param_allowlist({}) == frozenset()
+
     def test_deployment_accepts_param_honors_deployment_allowlist(self):
         deployment = {
             "model_name": "x",
