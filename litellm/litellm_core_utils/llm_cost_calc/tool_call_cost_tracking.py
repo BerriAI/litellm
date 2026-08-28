@@ -63,12 +63,12 @@ class StandardBuiltInToolCostTracking:
         - Code Interpreter (Azure)
         """
         standard_built_in_tools_params = standard_built_in_tools_params or {}
+        total_cost = 0.0
 
-        # Handle web search
         if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=response_object, usage=usage
         ):
-            return StandardBuiltInToolCostTracking._handle_web_search_cost(
+            total_cost += StandardBuiltInToolCostTracking._handle_web_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
@@ -76,20 +76,20 @@ class StandardBuiltInToolCostTracking:
                 response_object=response_object,
             )
 
-        # Handle file search
         if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response_object=response_object):
-            return StandardBuiltInToolCostTracking._handle_file_search_cost(
+            total_cost += StandardBuiltInToolCostTracking._handle_file_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 standard_built_in_tools_params=standard_built_in_tools_params,
             )
 
-        # Handle Azure assistant features
-        return StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+        total_cost += StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
             model=model,
             custom_llm_provider=custom_llm_provider,
             standard_built_in_tools_params=standard_built_in_tools_params,
         )
+
+        return total_cost
 
     @staticmethod
     def _handle_web_search_cost(

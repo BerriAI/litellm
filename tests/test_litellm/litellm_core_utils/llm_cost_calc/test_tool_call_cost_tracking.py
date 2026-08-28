@@ -806,6 +806,56 @@ def test_response_includes_output_type_reads_dict_output_items():
     )
 
 
+def test_get_cost_for_built_in_tools_sums_web_search_and_file_search(local_model_cost_map):
+    """
+    Regression: get_cost_for_built_in_tools used sequential `if ... return` checks, so a
+    single response using both web search and file search (a normal multi-tool Responses API
+    turn) only billed the web search cost and silently dropped the file search cost. The two
+    costs must be summed instead of the first match winning.
+    """
+    from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import Usage
+
+    model = "gpt-4o-search-preview"
+    web_search_options = WebSearchOptions(search_context_size="medium")
+    per_call_web_search_cost = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    standard_built_in_tools_params = StandardBuiltInToolsParams(
+        web_search_options=web_search_options,
+        file_search=FileSearchTool(type="file_search"),
+    )
+
+    response = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1754900000,
+            "model": model,
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {"type": "web_search_call", "id": "ws_1", "status": "completed"},
+                {"type": "file_search_call", "id": "fs_1", "status": "completed"},
+            ],
+        }
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+
+    expected_cost = per_call_web_search_cost + OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
+    assert cost == pytest.approx(expected_cost), (
+        f"web search (${per_call_web_search_cost}) and file search (${OPENAI_FILE_SEARCH_COST_PER_1K_CALLS}) "
+        f"must both be billed, got ${cost}"
+    )
+
+
 def test_web_search_gate_reads_server_side_tool_usage_details_without_citations():
     """
     Regression: xAI chat responses bridged from the Responses API only carry
