@@ -12213,6 +12213,22 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "cerebras/gemma-4-31b": {
+        "input_cost_per_token": 9.9e-07,
+        "litellm_provider": "cerebras",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 40960,
+        "max_tokens": 40960,
+        "mode": "chat",
+        "output_cost_per_token": 1.49e-06,
+        "source": "https://api.cerebras.ai/public/v1/models/gemma-4-31b",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "cerebras/qwen-3-32b": {
         "input_cost_per_token": 4e-07,
         "litellm_provider": "cerebras",
@@ -12241,6 +12257,7 @@
         "supports_tool_choice": true
     },
     "cerebras/zai-glm-4.7": {
+        "deprecation_date": "2026-08-17",
         "input_cost_per_token": 2.25e-06,
         "litellm_provider": "cerebras",
         "max_input_tokens": 128000,
