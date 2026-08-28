@@ -5352,12 +5352,6 @@ async def reset_key_spend_fn(
                 detail={"error": "Failed to update key spend"},
             )
 
-        await _delete_cache_key_object(
-            hashed_token=hashed_api_key,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
         # Reset the lifetime spend counter to the new value (not 0.0, so partial
         # resets are reflected correctly), and force-expire any of the key's own
         # budget_limits windows, so get_current_spend() returns the correct
@@ -5369,6 +5363,17 @@ async def reset_key_spend_fn(
             prisma_client=prisma_client,
             hashed_api_key=hashed_api_key,
             budget_limits=_key_in_db.budget_limits,
+        )
+
+        # Evicting the cached key object LAST (after every DB write above has
+        # committed) matters: a request landing between an earlier eviction and
+        # a later write would re-fetch and re-cache the pre-write row, pinning
+        # that pod to the stale budget_limits/spend for the rest of its own
+        # cache TTL even though the DB is already correct.
+        await _delete_cache_key_object(
+            hashed_token=hashed_api_key,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
         max_budget: Final = updated_key.max_budget
