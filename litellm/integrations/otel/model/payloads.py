@@ -100,8 +100,7 @@ class LLMUsage:
 
     @classmethod
     def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> LLMUsage:
-        # Cache token counts live on the raw provider usage object (kept under
-        # metadata), not on the top-level payload token fields.
+        # Cache token counts only exist on the raw provider usage object under metadata
         metadata: Final = cast(Mapping[str, object], payload.get("metadata") or {})
         usage_object: Final = cast(Mapping[str, object], metadata.get("usage_object") or {})
         return cls(
