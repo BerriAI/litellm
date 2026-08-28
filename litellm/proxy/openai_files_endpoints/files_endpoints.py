@@ -8,7 +8,7 @@
 import asyncio
 import traceback
 from collections.abc import Mapping
-from typing import Any, BinaryIO, Final, cast, get_args
+from typing import Any, BinaryIO, Final, TypedDict, cast, get_args
 
 import httpx
 from fastapi import (
@@ -23,6 +23,7 @@ from fastapi import (
     status,
 )
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import CreateFileRequest, get_secret_str
@@ -82,6 +83,13 @@ from litellm.types.llms.openai import (
 router: Final = APIRouter()
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
+
+
+class UploadedFileInfo(TypedDict):
+    filename: ReadOnly[str | None]
+    content_type: ReadOnly[str | None]
+    size: ReadOnly[int | None]
+
 
 files_config = None
 
@@ -526,17 +534,21 @@ async def create_file(
             proxy_config=proxy_config,
         )
 
-        hook_data: Final[dict] = {
-            **data,
-            "purpose": purpose,
-            "file": {"filename": file.filename, "content_type": file.content_type, "size": file.size},
+        uploaded_file_info: Final[UploadedFileInfo] = {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size": file.size,
         }
-        hooked_data: Final[dict] = await proxy_logging_obj.pre_call_hook(
+        data["purpose"] = purpose
+        data["file"] = uploaded_file_info
+        hooked_data: Final = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
-            data=hook_data,
+            data=data,
             call_type="acreate_file",
         )
-        data = {k: v for k, v in hooked_data.items() if k not in ("purpose", "file")}
+        data = hooked_data if hooked_data is not None else data
+        data.pop("purpose", None)
+        data.pop("file", None)
 
         # /v1/files stores its proxy metadata under litellm_metadata, not metadata
         request_metadata: Final = data.get("metadata") or data.get("litellm_metadata") or EMPTY_MAPPING
