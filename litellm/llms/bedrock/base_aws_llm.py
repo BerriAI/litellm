@@ -1439,10 +1439,15 @@ class BaseAWSLLM:
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
         )
 
+    def _get_bedrock_bearer_token(self, api_key: str | None) -> str | None:
+        if api_key is not None:
+            return api_key
+        return get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+
     @tracer.wrap()
     def get_request_headers(
         self,
-        credentials: Credentials,
+        credentials: Credentials | None,
         aws_region_name: str,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -1451,12 +1456,9 @@ class BaseAWSLLM:
         api_key: str | None = None,
         supports_bearer_token: bool = True,
     ) -> AWSPreparedRequest:
-        if not supports_bearer_token:
-            aws_bearer_token: str | None = None
-        elif api_key is not None:
-            aws_bearer_token = api_key
-        else:
-            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+        aws_bearer_token: Final = (
+            self._get_bedrock_bearer_token(api_key) if supports_bearer_token else None
+        )
 
         if aws_bearer_token:
             try:
@@ -1471,6 +1473,8 @@ class BaseAWSLLM:
                 from botocore.awsrequest import AWSRequest
             except ImportError:
                 raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+            if credentials is None:
+                raise ValueError("AWS credentials are required when Bedrock bearer token authentication is not configured.")
 
             # Filter headers for AWS signature calculation
             # AWS SigV4 only includes specific headers in signature calculation

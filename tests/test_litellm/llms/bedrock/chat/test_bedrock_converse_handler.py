@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-
 from botocore.credentials import Credentials
+
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import chat_completions as bridge
@@ -133,6 +133,17 @@ def test_the_core_receives_the_credentials_this_handler_already_resolved():
     assert params["aws_secret_access_key"] == "resolved-secret"
     assert params["aws_session_token"] == "resolved-token"
     assert params["aws_region_name"] == "us-east-1"
+
+
+def test_bearer_token_auth_does_not_resolve_aws_credentials():
+    seen = _inject()
+    with patch.object(BedrockConverseLLM, "get_credentials") as get_credentials:
+        BedrockConverseLLM().completion(**_completion_kwargs(api_key="bedrock-bearer-token"))
+
+    get_credentials.assert_not_called()
+    params = seen["call"][0]["optional_params"]
+    assert "aws_access_key_id" not in params
+    assert "aws_secret_access_key" not in params
 
 
 def test_the_core_receives_the_converse_url_this_handler_already_built():

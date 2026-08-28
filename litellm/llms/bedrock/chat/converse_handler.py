@@ -331,17 +331,22 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
+        aws_bearer_token: Final = self._get_bedrock_bearer_token(api_key)
+        credentials: Final[Credentials | None] = (
+            None
+            if aws_bearer_token
+            else self.get_credentials(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_region_name=aws_region_name,
+                aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
+                aws_role_name=aws_role_name,
+                aws_web_identity_token=aws_web_identity_token,
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_external_id=aws_external_id,
+            )
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -369,14 +374,21 @@ class BedrockConverseLLM(BaseAWSLLM):
         # before transforming so whichever path runs emits pre_call once, and
         # hand down the credentials, region and endpoint this handler already
         # resolved so both paths sign as the same principal.
+        credential_params: Final = (
+            ()
+            if credentials is None
+            else (
+                ("aws_access_key_id", credentials.access_key),
+                ("aws_secret_access_key", credentials.secret_key),
+                ("aws_session_token", credentials.token),
+            )
+        )
         rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
             **optional_params,
             **{  # mutable-ok: merged into its mutable parent above
                 key: value
                 for key, value in (
-                    ("aws_access_key_id", credentials.access_key),
-                    ("aws_secret_access_key", credentials.secret_key),
-                    ("aws_session_token", credentials.token),
+                    *credential_params,
                     ("aws_region_name", aws_region_name),
                 )
                 if value is not None
