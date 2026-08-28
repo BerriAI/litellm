@@ -159,7 +159,7 @@ async def test_multiple_includes():
 
 
 @pytest.mark.asyncio
-async def test_config_file_success_callback_registers_custom_logger_instance():
+async def test_config_file_success_callback_registers_custom_logger_instance(monkeypatch):
     """Config-file success_callback must register a custom-logger instance, not just the
     string.
 
@@ -176,8 +176,8 @@ async def test_config_file_success_callback_registers_custom_logger_instance():
         LangfusePromptManagement,
     )
 
-    litellm.success_callback = []
-    litellm._async_success_callback = []
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
 
     config_content = {"litellm_settings": {"success_callback": ["langfuse"]}}
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as temp_file:
@@ -197,8 +197,6 @@ async def test_config_file_success_callback_registers_custom_logger_instance():
         )
         assert num_langfuse_instances == 1
     finally:
-        litellm.success_callback = []
-        litellm._async_success_callback = []
         os.unlink(temp_file_path)
 
 
