@@ -17,16 +17,15 @@ from litellm.proxy.management_endpoints.management_v1.budgets import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import (
     MANAGEMENT_V1_PREFIX,
-    PROBLEM_TYPE_BASE,
     ManagementProblem,
     problem_response,
+    validation_problem,
 )
 from litellm.proxy.management_endpoints.management_v1.list_framework import (
     Compare,
     ScopeWhere,
     build_query_plan,
 )
-from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 app = FastAPI()
 
@@ -38,14 +37,8 @@ async def management_problem_exception_handler(request: Request, exc: Management
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    return problem_response(
-        ProblemDetail(
-            type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
-            title="Invalid query parameter",
-            status=400,
-            detail="The request query parameters are invalid.",
-        )
-    )
+    """The same translation `proxy_server` installs, rather than a local approximation of it."""
+    return problem_response(validation_problem(exc.errors()))
 
 
 app.include_router(router)

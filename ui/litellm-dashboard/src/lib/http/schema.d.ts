@@ -8057,6 +8057,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/keys/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Key
+         * @description Partially update a key, using RFC 7396 JSON Merge Patch semantics.
+         *
+         *     `key_id` is taken from the path; a `key_id` in the body is accepted only when it matches.
+         *     Omitting a field preserves it, `null` clears it, and any other value overwrites it. `metadata`
+         *     merges rather than replacing: an omitted entry is preserved, `entry: null` deletes it, and a
+         *     nested object recurses. Arrays replace wholesale, which RFC 7396 is explicit about. An unknown
+         *     field is a 422 rather than a silent no-op.
+         *
+         *     Answers with the full key under `data`, the same representation every other keys operation
+         *     serves. The key's plaintext secret is never in that representation.
+         *
+         *     ```
+         *     curl --location --request PATCH 'http://0.0.0.0:4000/management/v1/keys/<key_id>'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *         "metadata": {"cost_center": "1234", "deprecated_entry": null}
+         *     }'
+         *     ```
+         */
+        patch: operations["patch_key_management_v1_keys__key_id__patch"];
+        trace?: never;
+    };
     "/management/v1/spend_logs/end_users": {
         parameters: {
             query?: never;
@@ -27164,6 +27199,10 @@ export interface components {
             /** Is Accepted */
             is_accepted: boolean;
         };
+        /** ItemResponse[KeyResource] */
+        ItemResponse_KeyResource_: {
+            data: components["schemas"]["KeyResource"];
+        };
         /** JWTKeyMappingResponse */
         JWTKeyMappingResponse: {
             /**
@@ -27191,6 +27230,7 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -27240,12 +27280,305 @@ export interface components {
             metadata?: components["schemas"]["KeyMetadata"];
             metrics: components["schemas"]["SpendMetrics"];
         };
+        /**
+         * KeyPatchRequest
+         * @description Body of `PATCH /management/v1/keys/{key_id}`.
+         *
+         *     Unknown fields are rejected rather than ignored: on a merge patch the set of fields present
+         *     *is* the request, so a misspelled field has to fail loudly instead of silently no-op'ing.
+         */
+        KeyPatchRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
+            /** Agent Id */
+            agent_id?: string | null;
+            /**
+             * Aliases
+             * @default {}
+             */
+            aliases: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: unknown[] | null;
+            /** Allowed Passthrough Routes */
+            allowed_passthrough_routes?: unknown[] | null;
+            /**
+             * Allowed Routes
+             * @default []
+             */
+            allowed_routes: unknown[] | null;
+            /** Allowed Vector Store Indexes */
+            allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
+            /** Auto Rotate */
+            auto_rotate?: boolean | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /**
+             * Config
+             * @default {}
+             */
+            config: {
+                [key: string]: unknown;
+            } | null;
+            /** Default Estimated Output Tokens */
+            default_estimated_output_tokens?: number | null;
+            /** Default Estimated Output Tokens Per Model */
+            default_estimated_output_tokens_per_model?: {
+                [key: string]: number;
+            } | null;
+            /** Disable Global Guardrails */
+            disable_global_guardrails?: boolean | null;
+            /** Duration */
+            duration?: string | null;
+            /** Enable Prompt Caching */
+            enable_prompt_caching?: boolean | null;
+            /** Enforced Params */
+            enforced_params?: string[] | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Key */
+            key?: string | null;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
+            models: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /**
+             * Permissions
+             * @default {}
+             */
+            permissions: {
+                [key: string]: unknown;
+            } | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Rotation Interval */
+            rotation_interval?: string | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Rpm Limit Type */
+            rpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+            /** Spend */
+            spend?: number | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Tags */
+            tags?: string[] | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
+            /** Throttle On Budget Exceeded */
+            throttle_on_budget_exceeded?: boolean | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** Tpm Limit Type */
+            tpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+            /** User Id */
+            user_id?: string | null;
+        };
         /** KeyRequest */
         KeyRequest: {
             /** Key Aliases */
             key_aliases?: string[] | null;
             /** Keys */
             keys?: string[] | null;
+        };
+        /**
+         * KeyResource
+         * @description A key as every `/management/v1/keys` operation returns it.
+         *
+         *     One representation, shared by list, read, create and update, so a form seeded from any of them
+         *     holds exactly the fields the server stores. A per-operation projection is what lets a form
+         *     compute its dirty-field delta against a value the server never sent.
+         *
+         *     The plaintext secret is structurally absent rather than filtered: it is not a declared field and
+         *     extras are ignored, so it cannot appear here however the row was assembled. `key_id` is the
+         *     hashed token, which is what identifies a key everywhere else, and `key_name` is the masked
+         *     display form safe to show in a UI.
+         */
+        KeyResource: {
+            /**
+             * Access Group Ids
+             * @default []
+             */
+            access_group_ids: string[];
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Aliases */
+            aliases?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: string[];
+            /**
+             * Allowed Routes
+             * @default []
+             */
+            allowed_routes: string[];
+            /** Auto Rotate */
+            auto_rotate?: boolean | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Expires */
+            expires?: string | null;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Key Id */
+            key_id: string;
+            /** Key Name */
+            key_name?: string | null;
+            /** Key Rotation At */
+            key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
+            /** Last Active */
+            last_active?: string | null;
+            /** Last Rotation At */
+            last_rotation_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Model Spend */
+            model_spend?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Models
+             * @default []
+             */
+            models: string[];
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /** Permissions */
+            permissions?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Policies
+             * @default []
+             */
+            policies: string[];
+            /** Project Id */
+            project_id?: string | null;
+            /** Rotation Count */
+            rotation_count?: number | null;
+            /** Rotation Interval */
+            rotation_interval?: string | null;
+            /** Router Settings */
+            router_settings?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Team Id */
+            team_id?: string | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * KeyUpdateFields
@@ -48524,6 +48857,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListResponse_BudgetListItem_"];
+                };
+            };
+        };
+    };
+    patch_key_management_v1_keys__key_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemResponse_KeyResource_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
