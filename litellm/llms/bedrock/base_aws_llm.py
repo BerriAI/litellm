@@ -1427,7 +1427,7 @@ class BaseAWSLLM:
     @tracer.wrap()
     def get_request_headers(
         self,
-        credentials: Credentials,
+        credentials: Credentials | None,
         aws_region_name: str,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -1451,6 +1451,14 @@ class BaseAWSLLM:
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
             request = AWSRequest(method="POST", url=endpoint_url, data=data, headers=headers)
         else:
+            if credentials is None:
+                raise AwsAuthError(
+                    status_code=401,
+                    message=(
+                        "No bearer token and no resolved AWS credentials: cannot sign the "
+                        "Bedrock request."
+                    ),
+                )
             try:
                 from botocore.auth import SigV4Auth
                 from botocore.awsrequest import AWSRequest
