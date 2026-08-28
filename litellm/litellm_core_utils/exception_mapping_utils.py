@@ -62,10 +62,27 @@ class ExceptionCheckers:
         if re.search(r"rate[\s_\-]*limit", _error_str_lower):
             return True
 
-        #######################################
-        # Mistral API returns this error string
-        #########################################
-        if "service tier capacity exceeded" in _error_str_lower:
+        # Common provider rate-limit and quota exhaustion phrases across Gemini, Bedrock, Mistral, Azure, and Anthropic
+        rate_limit_patterns: Final = (
+            "service tier capacity exceeded",
+            "too many requests",
+            "quota exceeded",
+            "quota_exceeded",
+            "insufficient_quota",
+            "exceeded your current quota",
+            "resource_exhausted",
+            "resource has been exhausted",
+            "request_rate_too_large",
+            "provisioned throughput exceeded",
+            "capacity temporarily exceeded",
+            "concurrency limit reached",
+            "concurrent requests limit exceeded",
+            "requests per minute exceeded",
+            "tokens per minute exceeded",
+            "requests per day exceeded",
+            "tokens per day exceeded",
+        )
+        if any(pattern in _error_str_lower for pattern in rate_limit_patterns):
             return True
 
         return False
