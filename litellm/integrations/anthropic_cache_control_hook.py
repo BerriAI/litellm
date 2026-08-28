@@ -123,11 +123,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
+        tools: list[dict] | None = None,
     ) -> tuple[str, list[AllMessageValues], dict]:
         """
         Apply cache control directives based on specified injection points.
