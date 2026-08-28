@@ -835,22 +835,18 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
                     self._reasoning_item_id = self._cached_reasoning_item_id
                     self._sequence_number += 1
+                    # summary must be a non-empty list of summary_text parts:
+                    # strict consumers require a sequence, and null / missing
+                    # / empty lists (omitted by pydantic serialization) cause
+                    # the whole added frame to be rejected.
                     _reasoning_added = OutputItemAddedEvent(
                         type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                         output_index=0,
                         item=BaseLiteLLMOpenAIResponseObject(
-                            **{
-                                "id": self._cached_reasoning_item_id,
-                                "type": "reasoning",
-                                "status": "in_progress",
-                                # summary must be a non-empty list of
-                                # summary_text parts: strict consumers
-                                # require a sequence, and null / missing /
-                                # empty lists (omitted by pydantic
-                                # serialization) cause the whole added frame
-                                # to be rejected.
-                                "summary": [{"type": "summary_text", "text": ""}],
-                            }
+                            id=self._cached_reasoning_item_id,
+                            type="reasoning",
+                            status="in_progress",
+                            summary=[{"type": "summary_text", "text": ""}],
                         ),
                     )
                     _reasoning_added.__dict__["sequence_number"] = self._sequence_number
@@ -913,13 +909,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                         output_index=0,
                         item=BaseLiteLLMOpenAIResponseObject(
-                            **{
-                                "id": self._cached_item_id,
-                                "type": "message",
-                                "role": "assistant",
-                                "status": "in_progress",
-                                "content": [],
-                            }
+                            id=self._cached_item_id,
+                            type="message",
+                            role="assistant",
+                            status="in_progress",
+                            content=[],
                         ),
                     )
                     _msg_added.__dict__["sequence_number"] = self._sequence_number
