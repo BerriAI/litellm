@@ -147,7 +147,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
 
-        embeddings: list[list[float]] = []
+        embeddings: list[list[float]] = []  # mutable-ok: used to accumulate embeddings in batches
 
         for i in range(0, len(docs), EMBEDDING_BATCH_SIZE):
             batch = docs[i : i + EMBEDDING_BATCH_SIZE]
