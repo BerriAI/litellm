@@ -210,7 +210,7 @@ def _problem_from_http_exception(exc: HTTPException) -> ManagementProblem:
 
 @router.patch(
     "/users/{user_id}",
-    tags=("Internal User management",),
+    tags=("Internal User management",),  # pyright: ignore[reportArgumentType]  # annotated list, takes a sequence
     dependencies=(Depends(user_api_key_auth),),
     response_model=ItemResponse[UserItem],
     responses=problem_responses(403, 404, 422, 500, 503),
