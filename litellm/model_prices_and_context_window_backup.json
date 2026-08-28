@@ -51102,6 +51102,26 @@
         "supports_reasoning": true,
         "supports_vision": false
     },
+    "tencent/minimax-m3": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_cache_hit": 6e-08,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://www.tencentcloud.com/products/tokenhub",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
     "cognition/swe-1.6": {
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 2.5e-06,
