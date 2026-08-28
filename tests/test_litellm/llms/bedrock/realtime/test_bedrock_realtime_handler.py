@@ -368,9 +368,7 @@ class TestBedrockRealtimeSessionLifecycle:
             [json.dumps({"type": "session.update", "session": {"instructions": "hi", "modalities": ["text"]}})]
         )
 
-        await handler._forward_client_to_bedrock(
-            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging()
-        )
+        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging())
 
         acked = [json.loads(message) for message in client_ws.sent_to_client]
         updated = [event for event in acked if event["type"] == "session.updated"]
@@ -382,9 +380,7 @@ class TestBedrockRealtimeSessionLifecycle:
         handler = BedrockRealtime()
         config = BedrockRealtimeConfig()
         stream = FakeBedrockStream()
-        client_ws = DisconnectingClientWS(
-            [json.dumps({"type": "session.update", "session": {"instructions": "hi"}})]
-        )
+        client_ws = DisconnectingClientWS([json.dumps({"type": "session.update", "session": {"instructions": "hi"}})])
 
         await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
 
