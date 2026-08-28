@@ -85,6 +85,18 @@ class TestResolveSupportedReasoningEfforts:
         )
         assert resolved == ("none", "minimal", "low", "medium", "high")
 
+    def test_per_level_flag_without_supports_reasoning_treats_as_implicit_true(self):
+        # A model with only a per-level flag (e.g. supports_minimal_reasoning_effort) but no
+        # explicit supports_reasoning should be treated as reasoning-capable, since the per-level
+        # flag is evidence of reasoning support.
+        resolved = resolve_supported_reasoning_efforts(
+            {
+                "supports_minimal_reasoning_effort": True,
+            },
+            deployment_is_mapped=True,
+        )
+        assert resolved == ("none", "minimal", "low", "medium", "high")
+
 
 class TestBareModelNameFallback:
     def test_a_prefixed_entry_inherits_the_flags_of_its_unprefixed_twin(self):

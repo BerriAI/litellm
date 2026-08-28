@@ -148,16 +148,23 @@ def resolve_supported_reasoning_efforts(
     unset flag as () would let one custom deployment empty every level its mapped siblings agree
     on. deployment_is_mapped is that provenance, and an operator who wants either answer for an
     off-map deployment gets it by setting supports_reasoning explicitly.
+
+    If no explicit supports_reasoning flag is set but at least one per-level flag (e.g.
+    supports_minimal_reasoning_effort) is present, treat supports_reasoning as implicitly True,
+    since the per-level flags are evidence the model supports reasoning.
     """
     supports_reasoning: Final = model_info.get("supports_reasoning")
+    flags: Final = _declared_effort_flags(model_info)
+    has_per_level_flag: Final = any(value is not None for value in flags.values())
+
     if supports_reasoning is not True:
-        return () if supports_reasoning is False or deployment_is_mapped else None
+        if not has_per_level_flag:
+            return () if supports_reasoning is False or deployment_is_mapped else None
 
     declared: Final = declared_reasoning_efforts(model_info)
     if declared is not None:
         return declared
 
-    flags: Final = _declared_effort_flags(model_info)
     if all(value is None for value in flags.values()):
         return None
 
