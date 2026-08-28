@@ -2002,6 +2002,7 @@ interface UiSpendLogsParams {
   user_id?: string;
   end_user?: string;
   status_filter?: string;
+  cache_hit_filter?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
   /** Filter by model ID (litellm model deployment id) */
@@ -2013,6 +2014,7 @@ interface UiSpendLogsParams {
   sort_order?: "asc" | "desc";
   min_spend?: number;
   max_spend?: number;
+  exclude_internal_health_checks?: boolean;
 }
 
 interface UiSpendLogsCallOptions {
@@ -2047,6 +2049,8 @@ export const uiSpendLogsCall = async ({
       if (value == null) continue;
       if (key === "min_spend" || key === "max_spend") {
         queryParams.append(key, value.toString());
+      } else if (typeof value === "boolean") {
+        if (value) queryParams.append(key, "true");
       } else if (typeof value === "string" && value !== "") {
         queryParams.append(key, String(value));
       }
@@ -8068,5 +8072,26 @@ export const deleteMemory = async (accessToken: string, key: string): Promise<vo
   if (!response.ok) {
     const errorData = await response.text();
     throw new Error(errorData);
+  }
+};
+
+export interface ComplexityRouterConfigValidation {
+  valid: boolean;
+  error?: string | null;
+}
+
+export const validateAutoRouterConfig = async (
+  accessToken: string,
+  complexityRouterConfig: Record<string, unknown>,
+  teamId?: string,
+): Promise<ComplexityRouterConfigValidation> => {
+  try {
+    return await apiClient.post<ComplexityRouterConfigValidation>("/auto_router/validate_complexity_router_config", {
+      accessToken,
+      body: { complexity_router_config: complexityRouterConfig, ...(teamId && { team_id: teamId }) },
+    });
+  } catch (error) {
+    console.warn("Could not dry-run the complexity router config; the save will be validated server side", error);
+    return { valid: true };
   }
 };

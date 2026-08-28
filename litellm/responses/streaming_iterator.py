@@ -49,6 +49,21 @@ if TYPE_CHECKING:
         ResponsesClientWebSocket,
     )
 
+    class _StreamCachingHandler(Protocol):
+        """The ``_llm_caching_handler`` attached to a logging object, as this module uses it."""
+
+        original_function: Callable[..., object]
+
+        def _should_store_result_in_cache(
+            self, original_function: Callable[..., object], kwargs: Mapping[str, object]
+        ) -> bool: ...
+
+    class PiiUnmaskingGuardrailCallback(PresidioGuardrailCallback, Protocol):
+        """Guardrail callback that can also reverse its own masking, selected by
+        ``llm_http_handler`` on exactly this attribute."""
+
+        def _unmask_pii_text(self, text: str, pii_tokens: Mapping[str, str]) -> str: ...
+
 
 class ProjectQuotaCallback(Protocol):
     async def enforce_project_io_token_quota_for_frame(
@@ -81,6 +96,11 @@ def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verif
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
     """Parse a JSON payload that the caller consumes as an object."""
+    return json.loads(payload)
+
+
+def _load_json_value(payload: str | bytes) -> object:
+    """Parse a JSON payload whose top-level shape the caller narrows itself."""
     return json.loads(payload)
 
 
@@ -243,10 +263,10 @@ class BaseResponsesAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk: Final = json.loads(chunk)
+            parsed_chunk: Final = _load_json_value(chunk)
 
             # Format as ResponsesAPIStreamingResponse
-            if isinstance(parsed_chunk, dict):
+            if _is_json_object(parsed_chunk):
                 if self.responses_api_provider_config is None:
                     raise ValueError("responses_api_provider_config is required to process live streaming chunks")
                 openai_responses_api_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
@@ -529,7 +549,7 @@ class BaseResponsesAPIStreamingIterator:
         if response_obj is None:
             return
 
-        caching_handler: Final = getattr(self.logging_obj, "_llm_caching_handler", None)
+        caching_handler: Final[_StreamCachingHandler | None] = getattr(self.logging_obj, "_llm_caching_handler", None)
         if caching_handler is None:
             return
 
@@ -547,19 +567,22 @@ class BaseResponsesAPIStreamingIterator:
         if preset_cache_key is not None:
             request_kwargs["cache_key"] = preset_cache_key
 
-        if not caching_handler._should_store_result_in_cache(
+        if not caching_handler._should_store_result_in_cache(  # pyright: ignore[reportPrivateUsage]  # no public API
             original_function=caching_handler.original_function,
             kwargs=request_kwargs,
         ):
             return
 
-        if litellm.cache is None:
+        cache: Final = litellm.cache
+        if cache is None:
             return
 
         cached_response: Final = response_obj.model_dump_json()
         if is_async:
-            cache_write_task: Final = asyncio.create_task(
-                litellm.cache.async_add_cache(
+            from litellm.caching.caching_handler import create_cache_write_task
+
+            cache_write_task: Final = create_cache_write_task(
+                lambda: cache.async_add_cache(
                     cached_response,
                     dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
                     **request_kwargs,
@@ -572,7 +595,7 @@ class BaseResponsesAPIStreamingIterator:
                 )
             )
         else:
-            litellm.cache.add_cache(
+            cache.add_cache(
                 cached_response,
                 dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
                 **request_kwargs,
@@ -1401,7 +1424,7 @@ async def _enforce_frame_project_quota(
     if not quota_callbacks:
         return
     try:
-        msg_obj = json.loads(raw_message)
+        msg_obj: Final = _load_json_value(raw_message)
     except (json.JSONDecodeError, TypeError):
         return
     if not _is_json_object(msg_obj) or msg_obj.get("type") != "response.create":
@@ -1451,7 +1474,7 @@ class ResponsesWebSocketStreaming:
         user_api_key_dict: UserAPIKeyAuth | None = None,
         request_data: dict[str, object] | None = None,
         first_message: str | None = None,
-        guardrail_callbacks: list[Any] | None = None,
+        guardrail_callbacks: list[PiiUnmaskingGuardrailCallback] | None = None,
         output_guardrail_callbacks: list[PresidioGuardrailCallback] | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         authorized_model: str | None = None,
@@ -1464,7 +1487,7 @@ class ResponsesWebSocketStreaming:
         self.messages: list[dict[str, object]] = []
         self.input_messages: list[dict[str, object]] = []
         self.first_message = first_message
-        self.guardrail_callbacks: list[Any] = guardrail_callbacks or []
+        self.guardrail_callbacks: list[PiiUnmaskingGuardrailCallback] = guardrail_callbacks or []
         self.output_guardrail_callbacks: list[PresidioGuardrailCallback] = output_guardrail_callbacks or []
         self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
         # Model name authorized at connection time; enforced on every
@@ -1780,7 +1803,9 @@ class ResponsesWebSocketStreaming:
                         continue
                     text = content_block.get("text")
                     if isinstance(text, str):
-                        unmasked = cb._unmask_pii_text(text, pii_tokens)
+                        unmasked = cb._unmask_pii_text(  # pyright: ignore[reportPrivateUsage]  # no public unmasker
+                            text, pii_tokens
+                        )
                         if unmasked != text:
                             content_block["text"] = unmasked
                             modified = True
@@ -1789,7 +1814,9 @@ class ResponsesWebSocketStreaming:
         if event_type in self._DELTA_EVENT_TYPES:
             delta: Final = evt_obj.get("delta")
             if isinstance(delta, str):
-                unmasked = cb._unmask_pii_text(delta, pii_tokens)
+                unmasked = cb._unmask_pii_text(  # pyright: ignore[reportPrivateUsage]  # no public unmasker
+                    delta, pii_tokens
+                )
                 if unmasked != delta:
                     evt_obj["delta"] = unmasked
                     return json.dumps(evt_obj)

@@ -2,6 +2,7 @@
 Unit tests for auto router management endpoints
 """
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -22,10 +23,21 @@ from litellm.proxy.management_endpoints.auto_router_endpoints import (
 from litellm.router import Router
 from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.types.management_endpoints.auto_router_endpoints import (
+    AutoRouterBenchmarksResponse,
     AutoRouterRoutingTestRequest,
 )
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
+
+
+def _deployment(model_name: str, model: str, *, db_model: bool) -> dict[str, object]:
+    """One entry as `Router.model_list` holds it, for either origin."""
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": model},
+        "model_info": {"id": f"{model_name}-{int(db_model)}", "db_model": db_model},
+    }
+
 
 TIERS = {
     "SIMPLE": ["cheap-model"],
@@ -35,32 +47,85 @@ TIERS = {
 }
 
 
+ROUTER_MODEL_LIST = [
+    {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"}}
+    for name in ("cheap-model", "mid-model", "strong-model", "reasoning-model")
+]
+
+
 def _router() -> Router:
-    return Router(
-        model_list=[
-            {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"}}
-            for name in ("cheap-model", "mid-model", "strong-model", "reasoning-model")
-        ]
-    )
+    return Router(model_list=ROUTER_MODEL_LIST)
 
 
-def _request(prompt: str, **config_overrides: object) -> AutoRouterRoutingTestRequest:
+class RecordingRouter(Router):
+    """A real router that records the classifier calls the endpoint makes instead of sending them.
+
+    Injected at the same `proxy_server.llm_router` boundary the endpoint reads, so model resolution
+    and the key's model-access checks still run against a genuine Router.
+    """
+
+    def __init__(self, classified_tier: str) -> None:
+        super().__init__(model_list=ROUTER_MODEL_LIST)
+        self.classified_tier = classified_tier
+        self.recorded_calls: list[dict] = []
+
+    async def acompletion(self, model, messages, stream=False, **kwargs):
+        self.recorded_calls.append({"model": model, "messages": messages, **kwargs})
+        return ModelResponse(
+            choices=[Choices(message=Message(content=f'{{"tier": "{self.classified_tier}"}}'))],
+            model=model,
+        )
+
+
+def _request_from(body: Mapping[str, object], **config_overrides: object) -> AutoRouterRoutingTestRequest:
     return AutoRouterRoutingTestRequest.model_validate(
         {
-            "prompt": prompt,
+            **body,
             "complexity_router_config": {"tiers": TIERS, "classifier_type": "heuristic", **config_overrides},
         }
     )
 
 
-async def _route(prompt: str, monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
+def _request(prompt: str, **config_overrides: object) -> AutoRouterRoutingTestRequest:
+    return _request_from({"prompt": prompt}, **config_overrides)
+
+
+async def _route_body(body: Mapping[str, object], monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
     import litellm.proxy.proxy_server as proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
     return await preview_auto_router_routing(
-        data=_request(prompt, **config_overrides),
+        data=_request_from(body, **config_overrides),
         user_api_key_dict=ADMIN,
     )
+
+
+async def _route(prompt: str, monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
+    return await _route_body({"prompt": prompt}, monkeypatch, **config_overrides)
+
+
+AGENTIC_MESSAGES = [
+    {"role": "system", "content": "You are a database migration assistant for a payments ledger"},
+    {"role": "user", "content": "duplicate ledger postings since the celery upgrade, same event_id twice"},
+    {"role": "assistant", "content": "The idempotency index is not unique, so two workers both insert"},
+    {"role": "user", "content": "ok do it"},
+]
+
+PLAN_MODE_TOOLS = [{"type": "function", "function": {"name": "exit_plan_mode", "description": "Leave plan mode"}}]
+
+
+async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pytest.MonkeyPatch) -> str:
+    """The variable half of the classifier call this body produces."""
+    from litellm.proxy import proxy_server
+
+    router = RecordingRouter("SIMPLE")
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    await preview_auto_router_routing(
+        data=_request_from(body, classifier_type="llm", classifier_llm_config={"model": "classifier-model"}),
+        user_api_key_dict=ADMIN,
+    )
+    return router.recorded_calls[0]["messages"][1]["content"]
 
 
 @pytest.mark.asyncio
@@ -146,6 +211,123 @@ async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pyt
     assert len(calls) == 1
     assert calls[0]["metadata"]["user_api_key"] == ADMIN.api_key
     assert calls[0]["metadata"]["user_api_key_user_id"] == ADMIN.user_id
+
+
+@pytest.mark.asyncio
+async def test_a_full_turn_is_classified_on_its_system_prompt_and_prior_turns(monkeypatch: pytest.MonkeyPatch):
+    """A dry run over `messages` must produce the classifier call the serving path produces.
+
+    The `prompt` shorthand for the same final ask is the negative class: it carries neither the
+    caller's system prompt nor the conversation it continues, which is why a real agentic turn
+    reduced to its last sentence classifies as trivial.
+    """
+    full_turn = await _classifier_user_payload({"messages": AGENTIC_MESSAGES}, monkeypatch)
+    last_sentence_only = await _classifier_user_payload({"prompt": "ok do it"}, monkeypatch)
+
+    assert "You are a database migration assistant for a payments ledger" in full_turn
+    assert "duplicate ledger postings since the celery upgrade" in full_turn
+    assert full_turn.endswith("Classify this message:\nok do it")
+
+    assert "database migration assistant" not in last_sentence_only
+    assert "duplicate ledger postings" not in last_sentence_only
+    assert last_sentence_only.endswith("Classify this message:\nok do it")
+
+
+@pytest.mark.asyncio
+async def test_a_top_level_system_prompt_is_not_classified_as_the_ask(monkeypatch: pytest.MonkeyPatch):
+    """An Anthropic body carries `system` beside its messages, and the serving path leaves it
+    there: it reaches the raw-body scan, never the ask the classifier is asked to rate."""
+    payload = await _classifier_user_payload(
+        {"messages": [{"role": "user", "content": "ok do it"}], "system": "You migrate payment ledgers"},
+        monkeypatch,
+    )
+
+    assert payload.endswith("Classify this message:\nok do it")
+    assert "You migrate payment ledgers" not in payload
+
+
+@pytest.mark.parametrize(
+    "body, expected_model",
+    [
+        pytest.param({"prompt": "what is 2+2", "tools": PLAN_MODE_TOOLS}, "strong-model", id="tools-carry-it"),
+        pytest.param(
+            {"prompt": "what is 2+2", "system": 'You are currently running in "Plan" mode.'},
+            "strong-model",
+            id="system-carries-it",
+        ),
+        pytest.param({"prompt": "what is 2+2"}, "cheap-model", id="neither-carries-it"),
+        pytest.param(
+            {"prompt": "what is 2+2", "tools": [{"type": "function", "function": {"name": "Bash"}}]},
+            "cheap-model",
+            id="unrelated-tool",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_the_plan_mode_floor_sees_the_tools_and_system_the_request_carries(
+    monkeypatch: pytest.MonkeyPatch, body: dict, expected_model: str
+):
+    response = await _route_body(body, monkeypatch, plan_mode_min_tier="COMPLEX")
+
+    assert response.routed_model == expected_model
+
+
+def test_the_wire_body_hands_out_the_same_messages_the_hook_classifies():
+    """The routing hook reads messages twice, as its own argument and through the raw-body scan.
+    One value, so the two can never disagree."""
+    request = _request_from({"messages": AGENTIC_MESSAGES})
+
+    assert request.wire_body()["messages"] is request.messages
+
+
+def test_a_prompt_is_carried_as_one_user_turn():
+    assert _request_from({"prompt": "what is 2+2"}).messages == [{"role": "user", "content": "what is 2+2"}]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param({"content": "hi"}, id="no-role"),
+        pytest.param({"role": 123, "content": "hi"}, id="role-not-a-string"),
+        pytest.param({"role": "   ", "content": "hi"}, id="blank-role"),
+        pytest.param({"role": "user", "content": {"weird": 1}}, id="content-neither-text-nor-blocks"),
+    ],
+)
+def test_a_message_no_surface_would_accept_is_rejected(message: dict):
+    """The serving path 400s on each of these, so a routed tier here would be a promise it breaks."""
+    with pytest.raises(ValidationError):
+        _request_from({"messages": [message]})
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param({"role": "user", "content": "ok do it"}, id="text-content"),
+        pytest.param({"role": "user", "content": [{"type": "text", "text": "ok"}]}, id="block-content"),
+        pytest.param(
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function"}]},
+            id="null-content-with-tool-calls",
+        ),
+        pytest.param({"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}, id="unknown-key"),
+    ],
+)
+def test_a_message_a_serving_surface_accepts_is_kept(message: dict):
+    """The serving path returns 200 for each of these, and none of their keys are translated."""
+    assert _request_from({"messages": [message]}).messages == [message]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({}, id="neither"),
+        pytest.param({"prompt": "hi", "messages": [{"role": "user", "content": "hi"}]}, id="both"),
+        pytest.param({"prompt": "   "}, id="blank-prompt"),
+        pytest.param({"messages": []}, id="empty-messages"),
+    ],
+)
+def test_a_request_must_carry_exactly_one_usable_conversation(body: dict):
+    with pytest.raises(ValidationError):
+        _request_from(body)
 
 
 @pytest.mark.parametrize(
@@ -294,6 +476,34 @@ def test_classifier_plugin_is_not_settable_over_http():
 
 class TestAutoRouterBenchmarks:
     from litellm.proxy.management_endpoints.auto_router_endpoints import _SessionAggRow
+
+    @pytest.fixture(autouse=True)
+    def _pin_the_router_global(self, monkeypatch: pytest.MonkeyPatch):
+        """Every test here reads proxy_server.llm_router, so no test may inherit a sibling's."""
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    @staticmethod
+    async def _benchmarks(
+        monkeypatch: pytest.MonkeyPatch,
+        rows: Sequence[Mapping[str, object]],
+        model_list: Sequence[object],
+    ) -> AutoRouterBenchmarksResponse:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        class _DB:
+            async def query_raw(self, sql: str, *params: object):
+                return rows
+
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        monkeypatch.setattr(proxy_server, "llm_router", type("R", (), {"model_list": model_list})())
+        return await get_auto_router_benchmarks(
+            user_api_key_dict=ADMIN,
+            start_date="2026-07-01",
+            end_date="2026-08-01",
+        )
 
     ROW = _SessionAggRow(
         router_name="live-auto",
@@ -471,6 +681,113 @@ class TestAutoRouterBenchmarks:
         )
         assert response.groups[0].tier_turns == expected
 
+    @pytest.mark.asyncio
+    async def test_the_picker_lists_configured_routers_before_they_have_traffic(self, monkeypatch: pytest.MonkeyPatch):
+        """A router must be selectable the moment it exists, from either origin.
+
+        `live-auto` is the only router the rollup knows about, so before this it was the only
+        thing the dropdown could offer. Both a config.yaml router and a DB-created one now
+        arrive zeroed, and neither moves the totals or duplicates the router that has traffic.
+        """
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[self.ROW.model_dump()],
+            model_list=[
+                _deployment("live-auto", "auto_router/complexity_router", db_model=False),
+                _deployment("idle-from-config", "auto_router/complexity_router", db_model=False),
+                _deployment("idle-from-db", "auto_router/complexity_router", db_model=True),
+            ],
+        )
+
+        by_name = {group.router_name: group for group in response.groups}
+        assert sorted(by_name) == ["idle-from-config", "idle-from-db", "live-auto"]
+        assert len(response.groups) == 3
+        assert response.routers_in_scope == 3
+        assert by_name["live-auto"].spend == 10.0
+        assert response.totals.spend == 10.0
+        assert response.totals.sessions == 4
+        for name in ("idle-from-config", "idle-from-db"):
+            idle = by_name[name]
+            assert idle.router_type == "complexity"
+            assert (idle.sessions, idle.turns, idle.spend, idle.saved_spend, idle.baseline_spend) == (
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+            )
+            assert (idle.saved_pct, idle.saved_per_session, idle.avg_turns_per_session) == (0.0, 0.0, 0.0)
+            assert (idle.cache.hit_rate_pct, idle.cache.coverage_pct) == (0.0, 0.0)
+            assert idle.cache.same_model.turns == idle.cache.return_to_tier.hits == 0
+            assert idle.tier_turns == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model, listed_as",
+        [
+            ("auto_router/complexity_router", "complexity"),
+            ("auto_router/adaptive_router", "adaptive"),
+            ("auto_router/quality_router", "quality"),
+            ("auto_router/my-semantic-router", None),
+            ("openai/gpt-5", None),
+        ],
+    )
+    async def test_only_kinds_whose_routing_the_rollup_records_are_listed(
+        self, model: str, listed_as: str | None, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A semantic auto-router records no routing decision, so it can never own a session
+        row; listing it would show $0 forever even while it serves traffic."""
+        response = await self._benchmarks(
+            monkeypatch, rows=[], model_list=[_deployment("candidate", model, db_model=True)]
+        )
+
+        assert [group.router_type for group in response.groups] == ([listed_as] if listed_as else [])
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_deployment_is_skipped_rather_than_failing_the_dashboard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[self.ROW.model_dump()],
+            model_list=[
+                "not-a-mapping",
+                {},
+                {"model_name": "no-params"},
+                {"model_name": "", "litellm_params": {"model": "auto_router/complexity_router"}},
+                {"model_name": 7, "litellm_params": {"model": "auto_router/complexity_router"}},
+                {"model_name": "no-model", "litellm_params": {}},
+                {"model_name": "unreadable-model", "litellm_params": {"model": None}},
+            ],
+        )
+
+        assert [group.router_name for group in response.groups] == ["live-auto"]
+
+    @pytest.mark.asyncio
+    async def test_two_deployments_of_one_router_are_listed_once(self, monkeypatch: pytest.MonkeyPatch):
+        """Tagged variants share a model_name, and the picker selects by name and type."""
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[],
+            model_list=[
+                _deployment("tagged", "auto_router/complexity_router", db_model=True),
+                _deployment("tagged", "auto_router/complexity_router", db_model=True),
+            ],
+        )
+
+        assert [group.router_name for group in response.groups] == ["tagged"]
+
+    def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
+        """The one reason semantic is excluded, pinned against both declarations: a kind the
+        rollup can record must be listable, and a kind it cannot must not be."""
+        from typing import get_args, get_type_hints
+
+        from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
+        from litellm.types.utils import StandardLoggingRoutingDecision
+
+        recorded = set(get_args(get_type_hints(StandardLoggingRoutingDecision)["router_type"]))
+        assert set(get_args(StrategyRouterKind)) - {"semantic"} == recorded
+
 
 # ---------------------------------------------------------------------------
 # Shadow eval endpoints
@@ -492,15 +809,66 @@ VIEWER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, api_ke
 NON_ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="user")
 
 
-def _shadow_router() -> MagicMock:
-    router = MagicMock()
-    router.auto_routers = {}
-    router.complexity_routers = {"my-router": [MagicMock()]}
-    router.adaptive_routers = {}
-    router.quality_routers = {}
-    router.model_group_alias = {}
-    router.get_model_list = MagicMock(return_value=None)
-    return router
+def _complexity_router_deployment(
+    model_name: str, tiers: dict[str, str], default: str, classifier: str = "cheap"
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_default_model": default,
+            "complexity_router_config": {
+                "tiers": tiers,
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": classifier},
+                "session_affinity": False,
+            },
+        },
+    }
+
+
+def _shadow_router() -> Router:
+    """A real Router, so the endpoint's model checks run against real resolution.
+
+    `sonnet-router` exists to keep the judge-vs-candidate cases honest: its tiers are
+    deployments named nothing like the shipped default judge, yet one of them serves
+    `anthropic/claude-sonnet-5`, so only a check that resolves names finds the collision.
+    `my-router` deliberately serves none of it, since the default judge has to stay valid
+    for every other test in this file.
+    """
+    return Router(
+        model_list=[
+            {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"}},
+            {"model_name": "mid", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}},
+            {"model_name": "pricey", "litellm_params": {"model": "openai/o3", "api_key": "fake"}},
+            {"model_name": "prefixed-tier", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}},
+            {"model_name": "bare-tier", "litellm_params": {"model": "gpt-4o", "api_key": "fake"}},
+            {"model_name": "house-sonnet", "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"}},
+            {
+                "model_name": "model_name_team-a_x",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"},
+                "model_info": {"team_id": "team-a", "team_public_model_name": "house-judge"},
+            },
+            {
+                "model_name": "model_name_team-b_y",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"},
+                "model_info": {"team_id": "team-b", "team_public_model_name": "b-tier"},
+            },
+            _complexity_router_deployment(
+                "my-router", {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "pricey"}, "mid"
+            ),
+            _complexity_router_deployment(
+                "sonnet-router", {"SIMPLE": "cheap", "MEDIUM": "house-sonnet"}, "cheap"
+            ),
+            _complexity_router_deployment(
+                "classifier-router", {"SIMPLE": "cheap"}, "cheap", classifier="pricey"
+            ),
+            _complexity_router_deployment("b-team-router", {"SIMPLE": "cheap", "MEDIUM": "b-tier"}, "cheap"),
+            _complexity_router_deployment("prefixed-router", {"SIMPLE": "prefixed-tier"}, "prefixed-tier"),
+            _complexity_router_deployment("bare-router", {"SIMPLE": "bare-tier"}, "bare-tier"),
+        ],
+        model_group_alias={"judge-alias": "pricey"},
+    )
 
 
 def _leg_record(**overrides: object) -> MagicMock:
@@ -530,22 +898,37 @@ def _leg_record(**overrides: object) -> MagicMock:
 
 
 def _key_record(
-    token: str = "key-hash", key_alias: str | None = "prod-alpha", key_name: str | None = "sk-...lpha"
+    token: str = "key-hash",
+    key_alias: str | None = "prod-alpha",
+    key_name: str | None = "sk-...lpha",
+    team_id: str | None = None,
 ) -> MagicMock:
-    record = MagicMock(spec=["token", "key_alias", "key_name"])
+    record = MagicMock(spec=["token", "key_alias", "key_name", "team_id"])
     record.token = token
     record.key_alias = key_alias
     record.key_name = key_name
+    record.team_id = team_id
     return record
 
 
-def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-hash", "key-hash-2")) -> MagicMock:
+def _shadow_prisma(
+    legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-hash", "key-hash-2"), key_teams=None
+) -> MagicMock:
     """The job-table fake honours the filters it is handed, so a read that forgets
     stopped_at sees rows the partial index would have released, one that forgets
     direction sees the opposite-direction legs a key may hold at the same time, and a
     group read that matched on a leg id would come back empty."""
     prisma = MagicMock()
-    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[_key_record(token) for token in known_keys])
+    teams: Final = key_teams or {}
+
+    async def find_tokens(*, where):
+        """Honours the token filter, like the job-table fake below: the endpoint derives the
+        job's teams from these rows, so a fake returning keys the request never named would
+        validate against a team no leg of the job runs under."""
+        requested = where["token"]["in"]
+        return [_key_record(t, team_id=teams.get(t)) for t in known_keys if t in requested]
+
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(side_effect=find_tokens)
 
     async def execute_raw(sql: str, *params: object):
         if "SET stopped_by" in sql:
@@ -705,6 +1088,11 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
         (ADMIN, {"direction": "reverse", "baseline_model": "my-router"}, (), 400),
         (ADMIN, {"direction": "reverse", "baseline_model": "not/a real model!"}, (), 400),
         (ADMIN, {"direction": "reverse", "baseline_model": "openai/gpt-4o", "router_name": "not-a-router"}, (), 400),
+        (ADMIN, {"judge_model": "pricey"}, (), 400),
+        (ADMIN, {"judge_model": "mid"}, (), 400),
+        (ADMIN, {"judge_model": "judge-alias"}, (), 400),
+        (ADMIN, {"router_name": "sonnet-router"}, (), 400),
+        (ADMIN, {"direction": "reverse", "baseline_model": "house-sonnet"}, (), 400),
     ],
     ids=[
         "non-admin",
@@ -717,6 +1105,11 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
         "router-as-baseline",
         "unresolvable-baseline",
         "reverse-still-needs-an-auto-router",
+        "judge-is-a-tier-model",
+        "judge-is-the-routers-default-model",
+        "judge-alias-resolves-to-a-tier-model",
+        "default-judge-is-what-a-tier-deployment-serves",
+        "judge-is-what-the-reverse-baseline-serves",
     ],
 )
 async def test_start_shadow_eval_rejections(
@@ -732,6 +1125,68 @@ async def test_start_shadow_eval_rejections(
         await start_shadow_eval(_start_request(**request_overrides), caller)
     assert exc.value.status_code == expected_status
     prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_overrides",
+    [
+        {"judge_model": "house-sonnet"},
+        {"judge_model": "anthropic/claude-opus-4-5"},
+        {"router_name": "sonnet-router", "judge_model": "pricey"},
+        {"router_name": "classifier-router", "judge_model": "pricey"},
+        {"direction": "reverse", "baseline_model": "house-sonnet", "judge_model": "openai/gpt-4.1"},
+    ],
+    ids=[
+        "judge-serves-a-model-no-tier-serves",
+        "judge-is-an-unconfigured-public-name",
+        "judge-is-a-tier-of-a-DIFFERENT-router",
+        "judge-is-only-the-routers-classifier",
+        "reverse-judge-differs-from-both-arms",
+    ],
+)
+async def test_start_shadow_eval_accepts_a_judge_that_serves_neither_arm(
+    monkeypatch: pytest.MonkeyPatch, request_overrides: dict[str, object]
+) -> None:
+    """The negative class of the judge-as-candidate gate.
+
+    Without these, a gate that refused every judge would pass the rejection table above
+    while making the endpoint useless.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    response = await start_shadow_eval(_start_request(**request_overrides), ADMIN)
+
+    assert response.job_id
+    prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_names_the_colliding_arm_by_the_deployment_the_admin_configured(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The gate compares what would ANSWER each name, not the names themselves.
+
+    `anthropic/claude-sonnet-5` shares no substring with the deployment `house-sonnet` that
+    serves it, so a spelling comparison accepts this job and the run's whole budget buys a
+    result that has to be discarded. The detail has to name the deployment, since that is
+    the thing the admin can go and change.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma())
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(router_name="sonnet-router"), ADMIN)
+
+    assert exc.value.status_code == 400
+    assert "house-sonnet" in str(exc.value.detail)
+    assert "anthropic/claude-sonnet-5" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -1488,3 +1943,136 @@ async def test_two_racing_stops_produce_exactly_one_winner(monkeypatch: pytest.M
         await stop_shadow_eval_job("job-1", ADMIN)
     assert exc.value.status_code == 400
     assert "already stopped" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_finds_a_collision_only_the_keys_team_can_see(monkeypatch: pytest.MonkeyPatch):
+    """The shadow and judge calls carry the shadowed key's team, so the router selects
+    deployments with it and an unscoped check answers for a caller that does not exist.
+
+    `house-judge` is team-a's public name for a deployment serving anthropic/claude-sonnet-5,
+    which is also what the router's MEDIUM tier `house-sonnet` serves. Resolved without the
+    team it matches no deployment at all, so the judge reads as the literal string, nothing
+    collides, and the job runs a week producing win rates its own judge authored.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(key_teams={"key-hash": "team-a"})
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(router_name="sonnet-router", judge_model="house-judge"), ADMIN)
+
+    assert exc.value.status_code == 400
+    assert "house-sonnet" in str(exc.value.detail)
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_refuses_when_only_one_of_several_teams_collides(monkeypatch: pytest.MonkeyPatch):
+    """Every key's verdicts land in the same win rates, so one team's biased judge is enough
+    to spoil the job. team-b cannot reach `house-judge` at all; team-a can, and collides."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(key_teams={"key-hash": "team-b", "key-hash-2": "team-a"})
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(
+            _start_request(
+                api_key_ids=("key-hash", "key-hash-2"), router_name="sonnet-router", judge_model="house-judge"
+            ),
+            ADMIN,
+        )
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_sees_a_collision_hidden_behind_the_second_teams_tier(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The arm side is team-scoped too, and the same job is valid or not depending on which
+    keys it samples for.
+
+    `b-team-router`'s MEDIUM tier is team-b's own deployment, serving the model the judge
+    `house-sonnet` also serves. A team-a key can never be routed to it, so that job is fine;
+    add a team-b key and the judge starts grading its own answers. The pair is one test
+    because either half alone would pass against a check that ignored teams in the direction
+    it does not exercise.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(key_teams={"key-hash": "team-a"}))
+    accepted = await start_shadow_eval(
+        _start_request(router_name="b-team-router", judge_model="house-sonnet"), ADMIN
+    )
+    assert accepted.job_id
+
+    monkeypatch.setattr(
+        proxy_server, "prisma_client", _shadow_prisma(key_teams={"key-hash": "team-a", "key-hash-2": "team-b"})
+    )
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(
+            _start_request(
+                api_key_ids=("key-hash", "key-hash-2"), router_name="b-team-router", judge_model="house-sonnet"
+            ),
+            ADMIN,
+        )
+
+    assert exc.value.status_code == 400
+    assert "b-tier" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_matches_a_bare_public_judge_name_to_a_prefixed_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`gpt-4o` and a tier deployment serving `openai/gpt-4o` are one model.
+
+    The judge is not configured on the proxy, so it is served by the SDK under the name
+    litellm resolves it to; the tier is served by its deployment under the name the admin
+    configured. Comparing those two spellings finds nothing, and the job runs a week with
+    the judge grading its own answers, which is the whole defect this endpoint guards.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(router_name="prefixed-router", judge_model="gpt-4o"), ADMIN)
+
+    assert exc.value.status_code == 400
+    assert "prefixed-tier" in str(exc.value.detail)
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_matches_a_prefixed_judge_name_to_a_bare_tier_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mirror of the case above, and the reason BOTH sides are normalised.
+
+    An admin may configure a deployment as plain `gpt-4o` and litellm infers the provider.
+    Normalising only the judge would leave that tier spelled differently from the judge that
+    is the same model, so the collision would be missed for exactly the configs that spell
+    the two ends differently, which is every config this guard exists for.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(router_name="bare-router", judge_model="openai/gpt-4o"), ADMIN)
+
+    assert exc.value.status_code == 400
+    assert "bare-tier" in str(exc.value.detail)
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { Button } from "@/components/ui/button";
