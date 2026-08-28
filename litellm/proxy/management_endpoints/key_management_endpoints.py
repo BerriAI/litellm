@@ -86,6 +86,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     validate_budget_duration,
     validate_finite_spend,
 )
+from litellm.proxy.management_endpoints.credential_migration import ReencryptMode
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
@@ -4568,17 +4569,24 @@ async def migrate_encryption_endpoint(
         False,
         description="If true, scan and report without writing any changes.",
     ),
+    mode: ReencryptMode = "algorithm",
 ):
     """
-    Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+    Re-encrypt all at-rest credentials, either into the AES-256-GCM (``v2:gcm:``)
+    format (``mode=algorithm``, the default) or under the active salt key
+    (``mode=salt-key``).
 
-    Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
-    Idempotent and resumable — re-running skips already-migrated values. Pass
-    ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+    Admin only. ``mode=algorithm`` requires
+    ``general_settings.encryption_algorithm: aes-256-gcm``; ``mode=salt-key``
+    requires the retired key(s) in ``LITELLM_SALT_KEY_PREVIOUS`` and the new one
+    in ``LITELLM_SALT_KEY``. Idempotent and resumable, so re-running skips values
+    that are already current. Pass ``dry_run=true`` for a non-mutating scan
+    (equivalent to ``--check``).
     """
     from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.management_endpoints.credential_migration import (
         migrate_encryption,
+        policy_for_mode,
     )
     from litellm.proxy.proxy_server import prisma_client
 
@@ -4589,12 +4597,17 @@ async def migrate_encryption_endpoint(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    report: Final = await migrate_encryption(
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        dry_run=dry_run,
-    )
-    return {"status": "success", "dry_run": dry_run, "report": report.as_dict()}
+    try:
+        report: Final = await migrate_encryption(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            dry_run=dry_run,
+            policy=policy_for_mode(mode),
+        )
+    except RuntimeError as e:
+        # Unmet precondition (AES gate off, or no retired salt key configured).
+        raise HTTPException(status_code=400, detail={"error": str(e)}) from e
+    return {"status": "success", "dry_run": dry_run, "mode": mode, "report": report.as_dict()}
 
 
 @router.get(
@@ -4604,15 +4617,22 @@ async def migrate_encryption_endpoint(
 )
 async def check_encryption_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    mode: ReencryptMode = "algorithm",
 ):
     """
-    Read-only residual scan for compliance attestation. Reports how many at-rest
-    values are still in the legacy format. ``residual_legacy == 0`` attests no
-    legacy ciphertext remains. Admin only; performs no writes.
+    Read-only residual scan for compliance attestation. Admin only; performs no
+    writes. With ``mode=algorithm`` it reports how many at-rest values are still
+    in the legacy format; with ``mode=salt-key`` it reports how many still
+    decrypt only under a retired salt key. ``residual_legacy == 0`` with an empty
+    ``unreadable_locations`` is the attestation for the selected mode, and for
+    ``salt-key`` it means ``LITELLM_SALT_KEY_PREVIOUS`` can be dropped. A store
+    the scan could not read is named in ``unreadable_locations``, because zero
+    counts from a store nobody could open mean unknown rather than clean.
     """
     from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.management_endpoints.credential_migration import (
         check_encryption,
+        policy_for_mode,
     )
     from litellm.proxy.proxy_server import prisma_client
 
@@ -4623,8 +4643,8 @@ async def check_encryption_endpoint(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    report: Final = await check_encryption(prisma_client=prisma_client)
-    return {"status": "success", "report": report.as_dict()}
+    report: Final = await check_encryption(prisma_client=prisma_client, policy=policy_for_mode(mode))
+    return {"status": "success", "mode": mode, "report": report.as_dict()}
 
 
 async def get_new_token(data: RegenerateKeyRequest | None) -> str:

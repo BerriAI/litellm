@@ -1,5 +1,6 @@
 import base64
 import os
+from dataclasses import dataclass
 from typing import Final, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -19,6 +20,12 @@ _ENCRYPTION_ALGORITHM_SETTING: Final = "encryption_algorithm"
 _ALGO_AES_GCM: Final = "aes-256-gcm"
 _ALGO_XSALSA20: Final = "xsalsa20-poly1305"
 
+# Comma-separated retired salt keys, accepted on read only. New writes always use
+# the active LITELLM_SALT_KEY, so setting this makes a salt-key rotation
+# zero-downtime: values encrypted under a retired key stay readable until the
+# rotation walkers have re-encrypted them under the active key.
+_PREVIOUS_SALT_KEYS_ENV: Final = "LITELLM_SALT_KEY_PREVIOUS"
+
 
 def _get_salt_key():
     from litellm.proxy.proxy_server import master_key
@@ -29,6 +36,19 @@ def _get_salt_key():
         salt_key = master_key
 
     return salt_key
+
+
+def get_previous_salt_keys() -> tuple[str, ...]:
+    """Retired salt keys from ``LITELLM_SALT_KEY_PREVIOUS``, in configured order."""
+    raw: Final = os.getenv(_PREVIOUS_SALT_KEYS_ENV) or ""
+    return tuple(dict.fromkeys(k.strip() for k in raw.split(",") if k.strip()))
+
+
+def get_decryption_keys() -> tuple[str, ...]:
+    """Keys tried on read: the active salt key first, then any retired ones."""
+    primary: Final = _get_salt_key()
+    previous: Final = tuple(k for k in get_previous_salt_keys() if k != primary)
+    return (() if primary is None else (primary,)) + previous
 
 
 def _get_encryption_algorithm() -> str:
@@ -79,6 +99,11 @@ def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
     return _V2_GCM_PREFIX + base64.urlsafe_b64encode(nonce + blob).decode("utf-8")
 
 
+def _encrypt_xsalsa20(value: str, signing_key: str) -> str:
+    """Encrypt under the legacy XSalsa20-Poly1305 (nacl) format, url-safe base64."""
+    return base64.urlsafe_b64encode(encrypt_value(value=value, signing_key=signing_key)).decode("utf-8")
+
+
 def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Decrypt a versioned ``v2:gcm:`` string produced by :func:`_encrypt_aes_gcm`."""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -91,6 +116,66 @@ def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     return AESGCM(_derive_key(signing_key)).decrypt(nonce, blob, None).decode("utf-8")
 
 
+@dataclass(frozen=True, slots=True)
+class _DecryptAttempt:
+    plaintext: str | None
+    error: BaseException | None
+
+
+def _decrypt_with_key(value: str, signing_key: str) -> str:
+    """Decrypt one stored value under ``signing_key``, detecting its format.
+
+    Versioned AES-256-GCM values are detected before any base64 decode: the
+    prefix is the algorithm tag the legacy nacl format never carried. Legacy
+    values are url-safe base64 (new) or standard base64 (old).
+    """
+    if value.startswith(_V2_GCM_PREFIX):
+        return _decrypt_aes_gcm(value=value, signing_key=signing_key)
+
+    try:
+        decoded_b64: Final = base64.urlsafe_b64decode(value)
+    except (ValueError, TypeError):
+        return decrypt_value(value=base64.b64decode(value), signing_key=signing_key)
+    return decrypt_value(value=decoded_b64, signing_key=signing_key)
+
+
+def _attempt_decrypt(value: str, signing_key: str) -> _DecryptAttempt:
+    try:
+        return _DecryptAttempt(plaintext=_decrypt_with_key(value=value, signing_key=signing_key), error=None)
+    except Exception as e:  # noqa: BLE001  # a wrong key fails differently per algorithm (nacl CryptoError, InvalidTag, decode errors)
+        return _DecryptAttempt(plaintext=None, error=e)
+
+
+def try_decrypt_with_key(value: str, signing_key: str) -> str | None:
+    """``_decrypt_with_key`` as a value: ``None`` when the key does not fit."""
+    return _attempt_decrypt(value=value, signing_key=signing_key).plaintext
+
+
+def _decrypt_with_any_key(value: str) -> _DecryptAttempt:
+    """Decrypt under the first salt key that fits (active, then retired)."""
+    attempts: Final = tuple(_attempt_decrypt(value=value, signing_key=k) for k in get_decryption_keys())
+    fallback: Final = (
+        attempts[-1] if attempts else _DecryptAttempt(plaintext=None, error=ValueError("No salt key is set"))
+    )
+    return next((a for a in attempts if a.plaintext is not None), fallback)
+
+
+def encrypt_value_in_format_of(value: str, reference_ciphertext: str) -> str:
+    """Encrypt ``value`` under the active salt key in ``reference_ciphertext``'s format.
+
+    The algorithm and the salt key are independent axes: a key-only rotation must
+    leave each value's algorithm alone. Rewriting through ``encrypt_value_helper``
+    would instead apply the configured *write* algorithm, silently downgrading an
+    AES-256-GCM value to the legacy format whenever that setting is the default.
+    """
+    signing_key: Final = _get_salt_key()
+    if signing_key is None:
+        raise RuntimeError("Cannot re-encrypt: neither LITELLM_SALT_KEY nor a master key is configured.")
+    if reference_ciphertext.startswith(_V2_GCM_PREFIX):
+        return _encrypt_aes_gcm(value=value, signing_key=signing_key)
+    return _encrypt_xsalsa20(value=value, signing_key=signing_key)
+
+
 def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
     signing_key: Final = new_encryption_key or _get_salt_key()
 
@@ -101,11 +186,7 @@ def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
                 # is returned directly with no extra base64 wrapper.
                 return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
 
-            encrypted_value = encrypt_value(value=value, signing_key=signing_key)
-            # Use urlsafe_b64encode for URL-safe base64 encoding (replaces + with - and / with _)
-            encrypted_value = base64.urlsafe_b64encode(encrypted_value).decode("utf-8")
-
-            return encrypted_value
+            return _encrypt_xsalsa20(value=value, signing_key=signing_key)
 
         verbose_proxy_logger.debug(
             "Invalid value type passed to encrypt_value: %s for Value: %s\n Value must be a string", type(value), value
@@ -122,25 +203,15 @@ def decrypt_value_helper(
     exception_type: Literal["debug", "error"] = "error",
     return_original_value: bool = False,
 ):
-    signing_key: Final = _get_salt_key()
-
     try:
         if isinstance(value, str):
-            # Versioned AES-256-GCM values are detected before any base64 decode.
-            # The prefix is the algorithm tag the legacy nacl format never carried.
-            if value.startswith(_V2_GCM_PREFIX):
-                return _decrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
-
-            # Try URL-safe base64 decoding first (new format)
-            # Fall back to standard base64 decoding for backwards compatibility (old format)
-            try:
-                decoded_b64 = base64.urlsafe_b64decode(value)
-            except Exception:
-                # If URL-safe decoding fails, try standard base64 decoding for backwards compatibility
-                decoded_b64 = base64.b64decode(value)
-
-            value = decrypt_value(value=decoded_b64, signing_key=signing_key)
-            return value
+            # Read under the active salt key, then any retired keys listed in
+            # LITELLM_SALT_KEY_PREVIOUS, so a salt-key rotation stays readable
+            # while the re-encryption walkers catch up.
+            attempt: Final = _decrypt_with_any_key(value)
+            if attempt.plaintext is not None:
+                return attempt.plaintext
+            raise attempt.error or ValueError("Unable to decrypt value")
 
         # if it's not str - do not decrypt it, return the value
         return value

@@ -663,7 +663,7 @@ def encrypt_callback_vars(metadata: Any) -> Any:
     Idempotent: a value that already decrypts cleanly is left unchanged so
     round-trips through edit forms don't double-encrypt.
     """
-    return _transform_callback_vars(metadata, _encrypt_if_plaintext)
+    return transform_callback_vars(metadata, _encrypt_if_plaintext)
 
 
 def decrypt_callback_vars(metadata: Any) -> Any:
@@ -671,10 +671,10 @@ def decrypt_callback_vars(metadata: Any) -> Any:
 
     Legacy plaintext rows pass through unchanged (decrypt failure → original).
     """
-    return _transform_callback_vars(metadata, _decrypt_or_passthrough)
+    return transform_callback_vars(metadata, _decrypt_or_passthrough)
 
 
-def _transform_callback_vars(metadata: Any, transform: Callable[[str, Any], Any]) -> Any:
+def transform_callback_vars(metadata: Any, transform: Callable[[str, Any], Any]) -> Any:
     if not isinstance(metadata, dict):
         return metadata
     out: Final = copy.deepcopy(metadata)
