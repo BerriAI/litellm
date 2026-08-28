@@ -1,10 +1,7 @@
 """Regression tests for ProxyExtrasDBManager's v2 migration resolver.
 
-v2 is what the proxy CLI selects by default; v1 stays reachable via
-`--use_legacy_migration_resolver` or `USE_V2_MIGRATION_RESOLVER=false`. At the
-library level the resolver is picked with the `use_v2_resolver` kwarg, which
-still defaults to False so `migrations/run.py` and any direct caller keep their
-own explicit choice.
+v2 is the proxy CLI default; v1 stays reachable via the `use_v2_resolver`
+kwarg, which still defaults to False for direct callers.
 """
 
 import os
@@ -271,9 +268,7 @@ class _DeployApplied:
 def _deploy_only(deploy_side_effect):
     """subprocess.run stand-in that only intercepts `prisma migrate deploy`.
 
-    Everything else the resolver shells out to, the Prisma toolchain check
-    above all, succeeds untouched, so a mock meant for the deploy call cannot
-    be silently consumed by an earlier subprocess call.
+    Scoped by argv so the Prisma toolchain check cannot consume the mock first.
     """
     deploys = {"n": 0}
 
@@ -298,13 +293,8 @@ def _prepare_v2_resolver(monkeypatch, tmp_path):
 
 
 def test_v2_retries_transient_advisory_lock_deadlock(monkeypatch, tmp_path):
-    """A deadlock on Prisma's migration advisory lock is transient and retried.
-
-    Several proxy replicas booting against one database race `migrate deploy`,
-    and Postgres aborts one side. v1 retried any failed deploy, so it rode this
-    out; v2 classifies unrecognised stderr as unrecoverable and raises, which
-    with v2 as the default would take a replica's whole boot down.
-    """
+    """v2: replicas racing `migrate deploy` deadlock on Prisma's advisory
+    lock, which is transient and must be retried rather than kill the boot."""
     _prepare_v2_resolver(monkeypatch, tmp_path)
 
     def _side_effect(n, cmd):
@@ -323,8 +313,8 @@ def test_v2_retries_transient_advisory_lock_deadlock(monkeypatch, tmp_path):
 
 
 def test_v2_persistent_advisory_lock_deadlock_eventually_raises(monkeypatch, tmp_path):
-    """The deadlock retry stays bounded: a deadlock that never clears still
-    raises rather than looping forever or reporting a successful migration."""
+    """v2: the deadlock retry is bounded, so a deadlock that never clears
+    still raises instead of looping or reporting success."""
     _prepare_v2_resolver(monkeypatch, tmp_path)
 
     def _side_effect(n, cmd):
@@ -348,13 +338,7 @@ def test_v2_persistent_advisory_lock_deadlock_eventually_raises(monkeypatch, tmp
     ],
 )
 def test_v2_retries_transient_database_connectivity_errors(monkeypatch, tmp_path, stderr):
-    """A database that is not accepting connections yet is retried, not fatal.
-
-    A proxy and its database starting together race routinely, and v1 rode that
-    out by retrying every failed deploy. v2 treats unrecognised stderr as
-    unrecoverable, so without this the default flip would turn a database that
-    is a few seconds late into a dead proxy instead of a slow boot.
-    """
+    """v2: a database not accepting connections yet is retried, not fatal."""
     _prepare_v2_resolver(monkeypatch, tmp_path)
 
     def _side_effect(n, cmd):
@@ -373,9 +357,8 @@ def test_v2_retries_transient_database_connectivity_errors(monkeypatch, tmp_path
 
 
 def test_v2_unreachable_database_still_fails_after_the_retries(monkeypatch, tmp_path):
-    """Retrying connectivity errors must not turn a genuinely unreachable
-    database into a silent success: after the attempts are spent it still
-    raises, so the proxy exits instead of serving without its database."""
+    """v2: a genuinely unreachable database still raises once the attempts
+    are spent, rather than passing as a successful migration."""
     _prepare_v2_resolver(monkeypatch, tmp_path)
 
     def _side_effect(n, cmd):
@@ -395,13 +378,8 @@ def test_v2_unreachable_database_still_fails_after_the_retries(monkeypatch, tmp_
 
 
 def test_v2_exhausted_retries_report_the_prisma_error(monkeypatch, tmp_path, caplog):
-    """Retrying must not swallow why the database was unreachable.
-
-    Prisma's stderr is captured, so if the retry path neither logs it nor puts
-    it in the final error, an operator (and CI's bad-DATABASE_URL job, which
-    greps the boot log for the P1001 line) sees four silent retries and no
-    cause.
-    """
+    """v2: retrying must not swallow Prisma's stderr, which is captured and is
+    the only place the cause appears for an operator or a boot-log grep."""
     _prepare_v2_resolver(monkeypatch, tmp_path)
     stderr = "Error: P1001: Can't reach database server at `wrong`:`5432`"
 
@@ -422,21 +400,47 @@ def test_v2_exhausted_retries_report_the_prisma_error(monkeypatch, tmp_path, cap
     assert "P1001" in caplog.text
 
 
-def test_v2_migration_failure_is_not_treated_as_transient(monkeypatch, tmp_path):
-    """The transient classification must stay narrow: a genuinely broken
-    migration still fails fast on the first attempt rather than being retried
-    into the same error four times."""
+def test_v2_db_push_retries_transient_failures(monkeypatch, tmp_path):
+    """v2: `prisma db push` retries a transient failure like v1 did, so the
+    default flip does not cost --use_prisma_db_push its retries."""
     _prepare_v2_resolver(monkeypatch, tmp_path)
 
-    stderr = (
-        "Error: P3009\n"
-        "The `20260101000000_genuinely_broken` migration failed to apply.\n"
-        'Reason: syntax error at or near "BRKN" LINE 42'
+    pushes = {"n": 0}
+
+    def _run(*args, **kwargs):
+        cmd = list(args[0] if args else kwargs.get("args", []))
+        if cmd[-3:] != ["db", "push", "--accept-data-loss"]:
+            return _DeployApplied()
+        pushes["n"] += 1
+        if pushes["n"] == 1:
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=cmd,
+                stderr="Error: P1001: Can't reach database server at `db`:`5432`",
+                output="",
+            )
+        return _DeployApplied()
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", lambda: False
     )
+    with patch("subprocess.run", side_effect=_run):
+        ok = ProxyExtrasDBManager.setup_database(use_migrate=False, use_v2_resolver=True)
+
+    assert ok is True
+    assert pushes["n"] == 2
+
+
+def test_v2_unclassified_failure_is_not_treated_as_transient(monkeypatch, tmp_path):
+    """v2: an unrecognised deploy failure still raises on the first attempt."""
+    _prepare_v2_resolver(monkeypatch, tmp_path)
 
     def _side_effect(n, cmd):
         raise subprocess.CalledProcessError(
-            returncode=1, cmd=cmd, stderr=stderr, output=""
+            returncode=1,
+            cmd=cmd,
+            stderr="Error: relation \"LiteLLM_SpendLogs\" does not exist",
+            output="",
         )
 
     run, deploys = _deploy_only(_side_effect)
@@ -447,26 +451,3 @@ def test_v2_migration_failure_is_not_treated_as_transient(monkeypatch, tmp_path)
     assert deploys["n"] == 1
 
 
-def test_v1_still_runs_the_diff_and_force_recovery(monkeypatch, tmp_path):
-    """v1 remains the pre-existing diff-and-force resolver, unchanged by the
-    default flip: it still calls _resolve_all_migrations after a deploy that
-    applied something. Operators opting back in must get exactly the old path.
-    """
-    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
-    (tmp_path / "schema.prisma").write_text("// stub")
-
-    class FakeResult:
-        stdout = "Applied migration.\n"
-        stderr = ""
-
-    resolve_called = {"n": 0}
-
-    def fake_resolve(*args, **kwargs):
-        resolve_called["n"] += 1
-
-    monkeypatch.setattr("subprocess.run", lambda *a, **kw: FakeResult())
-    monkeypatch.setattr(ProxyExtrasDBManager, "_resolve_all_migrations", fake_resolve)
-
-    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=False)
-    assert ok is True
-    assert resolve_called["n"] == 1

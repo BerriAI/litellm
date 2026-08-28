@@ -51,33 +51,15 @@ _SPEND_LOGS_PK_CLAUSE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MIGRATE_DEPLOY_ATTEMPTS: Final = 4
+_PRISMA_ATTEMPTS: Final = 4
 
-_TRANSIENT_DEPLOY_FAILURES: Final = MappingProxyType(
+_TRANSIENT_PRISMA_FAILURES: Final = MappingProxyType(
     {
         "deadlock detected": "a deadlock on the migration advisory lock (a concurrent migrate deploy)",
         "P1001": "an unreachable database server",
         "P1002": "a database server that timed out",
     }
 )
-
-
-def _transient_deploy_failure(stderr: str) -> str | None:
-    """Describe why a failed `prisma migrate deploy` is worth retrying, or None.
-
-    These are environment failures, not migration failures: the database is not
-    up yet, or another instance holds the migration lock. v1 retried every
-    failed deploy and absorbed them; failing fast on them instead would turn a
-    database that is ten seconds late into a dead proxy.
-    """
-    return next(
-        (
-            reason
-            for marker, reason in _TRANSIENT_DEPLOY_FAILURES.items()
-            if marker in stderr
-        ),
-        None,
-    )
 
 
 PARTITIONED_SPEND_LOGS_PUSH_ERROR = (
@@ -302,6 +284,23 @@ class ProxyExtrasDBManager:
             check=True,
             capture_output=True,
             env=prisma_env,
+        )
+
+    @staticmethod
+    def _transient_prisma_failure(stderr: str) -> str | None:
+        """Why a failed prisma command is worth retrying, or None.
+
+        v1 retried every failure, so it absorbed a database that was not up yet
+        or another instance holding the migration lock. v2 fails fast, which is
+        right for a broken migration and wrong for these.
+        """
+        return next(
+            (
+                reason
+                for marker, reason in _TRANSIENT_PRISMA_FAILURES.items()
+                if marker in stderr
+            ),
+            None,
         )
 
     @staticmethod
@@ -699,20 +698,43 @@ class ProxyExtrasDBManager:
             original_dir = os.getcwd()
             os.chdir(migrations_dir)
             try:
-                subprocess.run(
-                    [_get_prisma_command(), "db", "push", "--accept-data-loss"],
-                    timeout=prisma_command_timeout(),
-                    check=True,
-                    env=_get_prisma_env(),
+                for attempt in range(_PRISMA_ATTEMPTS):
+                    try:
+                        subprocess.run(
+                            [_get_prisma_command(), "db", "push", "--accept-data-loss"],
+                            timeout=prisma_command_timeout(),
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            env=_get_prisma_env(),
+                        )
+                        return True
+                    except (
+                        subprocess.CalledProcessError,
+                        subprocess.TimeoutExpired,
+                    ) as e:
+                        stderr = e.stderr or ""
+                        transient = ProxyExtrasDBManager._transient_prisma_failure(
+                            stderr
+                        )
+                        # Re-raise as RuntimeError so proxy_cli.py's
+                        # `except RuntimeError` catches it and exits cleanly.
+                        if transient is None or attempt == _PRISMA_ATTEMPTS - 1:
+                            raise RuntimeError(
+                                f"prisma db push failed.\n\nDetail: {e}"
+                                f"\n\nPrisma error:\n{stderr}"
+                            ) from e
+                        logger.info(
+                            "prisma db push attempt %s failed on %s, retrying. "
+                            "Prisma error:\n%s",
+                            attempt + 1,
+                            transient,
+                            stderr,
+                        )
+                        time.sleep(random.randrange(5, 15))
+                raise RuntimeError(
+                    f"prisma db push failed after {_PRISMA_ATTEMPTS} attempts."
                 )
-                return True
-            except (
-                subprocess.CalledProcessError,
-                subprocess.TimeoutExpired,
-            ) as e:
-                # Re-raise as RuntimeError so proxy_cli.py's
-                # `except RuntimeError` catches it and exits cleanly.
-                raise RuntimeError(f"prisma db push failed.\n\nDetail: {e}") from e
             finally:
                 os.chdir(original_dir)
 
@@ -722,7 +744,7 @@ class ProxyExtrasDBManager:
         original_dir = os.getcwd()
         os.chdir(migrations_dir)
         try:
-            for attempt in range(_MIGRATE_DEPLOY_ATTEMPTS):
+            for attempt in range(_PRISMA_ATTEMPTS):
                 try:
                     result = subprocess.run(
                         [_get_prisma_command(), "migrate", "deploy"],
@@ -837,17 +859,17 @@ class ProxyExtrasDBManager:
                             f"Manual intervention required.\n\nPrisma error:\n{stderr}"
                         ) from e
 
-                    transient = _transient_deploy_failure(stderr)
+                    transient = ProxyExtrasDBManager._transient_prisma_failure(stderr)
                     if transient is None:
                         raise RuntimeError(
                             "Database migration failed and cannot be auto-recovered. "
                             f"Manual intervention required.\n\nPrisma error:\n{stderr}"
                         ) from e
 
-                    if attempt == _MIGRATE_DEPLOY_ATTEMPTS - 1:
+                    if attempt == _PRISMA_ATTEMPTS - 1:
                         raise RuntimeError(
                             f"Database migration failed after "
-                            f"{_MIGRATE_DEPLOY_ATTEMPTS} attempts on {transient}. "
+                            f"{_PRISMA_ATTEMPTS} attempts on {transient}. "
                             "Check database connectivity and load."
                             f"\n\nPrisma error:\n{stderr}"
                         ) from e
@@ -863,7 +885,7 @@ class ProxyExtrasDBManager:
                     continue
 
             raise RuntimeError(
-                f"Database migration failed after {_MIGRATE_DEPLOY_ATTEMPTS} "
+                f"Database migration failed after {_PRISMA_ATTEMPTS} "
                 "attempts (retry loop exhausted by timeouts or repeated "
                 "idempotent-recovery continues). Check database connectivity, "
                 "load, and _prisma_migrations ledger state."

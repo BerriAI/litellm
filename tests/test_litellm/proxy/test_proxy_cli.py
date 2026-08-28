@@ -2008,15 +2008,9 @@ class TestRunServerDbSetup:
         env_value,
         expected_v2,
     ):
-        """The proxy defaults to the v2 resolver, and v1 stays reachable.
-
-        Both opt-out routes matter: --use_legacy_migration_resolver for a CLI
-        boot, and USE_V2_MIGRATION_RESOLVER=false for containerised deploys,
-        where litellm/proxy/prisma_migration.py calls run_server with a fixed
-        argv and an env var is the only way in. The deprecated
-        --use_v2_migration_resolver must still parse so existing commands do
-        not die on an unknown option, and an explicit flag still beats the env.
-        """
+        """The proxy defaults to v2, and both v1 opt-out routes work: the
+        flag for a CLI boot, USE_V2_MIGRATION_RESOLVER=false for deploys that
+        cannot pass one. An explicit flag beats the env var."""
         from litellm.proxy.proxy_cli import run_server
 
         mock_subprocess_run.return_value = MagicMock(returncode=0)
