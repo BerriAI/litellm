@@ -74,8 +74,6 @@ Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages
 
 When working on a PR, keep the PR description in sync with new commits being made
 
-Whenever a review round, bot or human, finds a real bug that survived multiple prior rounds of automated review or your own testing, or you learn a non-obvious codebase fact or process gap that would have changed your approach had you known it upfront, capture it immediately in `litellm/learnings.md` without waiting to be asked. If the finding is specific to a skill's own process rather than the codebase itself, also add it to that skill's own `learnings.md` (e.g. `.claude/skills/implement-litellm-plan/learnings.md`, `.claude/skills/review-loop/learnings.md`). Before appending, skim the file for an existing entry covering the same root cause and extend or correct that one instead of adding a near-duplicate. Write the entry as soon as you understand the root cause, not just at the end of the session, and be direct about what was missed rather than softening it
-
 All GitHub comments must be human-readable and 15-25 words max
 
 Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer dependency-injecting things into classes. That way, at unit test time, you can pass a mocked dependency in
