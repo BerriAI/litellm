@@ -6,7 +6,6 @@ import pytest
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
 
-
 @pytest.mark.asyncio
 async def test_async_realtime_uses_max_size_parameter():
     """
@@ -15,7 +14,6 @@ async def test_async_realtime_uses_max_size_parameter():
 
     This verifies the fix for: https://github.com/BerriAI/litellm/issues/15747
     """
-    from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
     from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
 
     handler = AzureOpenAIRealtime()
@@ -432,7 +430,6 @@ async def test_realtime_protocol_env_var_fallback():
     Test that LITELLM_AZURE_REALTIME_PROTOCOL env var is used as fallback.
     Fixes #22127: no way to set realtime_protocol from config.
     """
-    from litellm.realtime_api.main import _arealtime
     from litellm.types.router import GenericLiteLLMParams
 
     with patch.dict(os.environ, {"LITELLM_AZURE_REALTIME_PROTOCOL": "v1"}):
@@ -739,6 +736,216 @@ async def test_realtime_health_check_uses_bearer_token_when_no_api_key(monkeypat
         is True
     )
     assert connect_calls[0]["additional_headers"] == {"Authorization": "Bearer my-entra-token"}
+
+
+def _mint_handler(value="ephemeral-xyz", side_effect=None):
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    response = MagicMock()
+    response.json.return_value = {"client_secret": {"value": value}}
+    handler = MagicMock(spec=BaseLLMHTTPHandler)
+    handler.async_realtime_transcription_session_handler = AsyncMock(
+        return_value=response, side_effect=side_effect
+    )
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_transcription_intent_mints_ephemeral_key():
+    """
+    Azure rejects a standing api-key on the realtime transcription socket
+    ("This operation requires ephemeral authentication"). The handler must first
+    POST /openai/realtime/transcription_sessions with the standing credential and
+    open the socket with the returned client_secret instead.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/38635
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime, AzureRealtimeHTTPConfig
+
+    handler = AzureOpenAIRealtime()
+    http_handler = _mint_handler("ephemeral-xyz")
+
+    mock_backend_ws = AsyncMock()
+    with (
+        patch(
+            "websockets.connect",
+            return_value=_DummyAsyncContextManager(mock_backend_ws),
+        ) as mock_ws_connect,
+        patch(  # test-quality-ok: the streaming loop is covered elsewhere, only the handshake auth is under test
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
+    ):
+        mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
+
+        await handler.async_realtime(
+            model="gpt-live-transcribe",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key="static-key",
+            api_version="2025-04-01-preview",
+            realtime_protocol="GA",
+            query_params={"intent": "transcription"},
+            http_handler=http_handler,
+        )
+
+    http_handler.async_realtime_transcription_session_handler.assert_awaited_once()
+    mint_kwargs = http_handler.async_realtime_transcription_session_handler.call_args.kwargs
+    assert mint_kwargs["api_base"] == "https://my-endpoint.openai.azure.com"
+    assert mint_kwargs["api_key"] == "static-key"
+    assert mint_kwargs["api_version"] == "2025-04-01-preview"
+    assert mint_kwargs["request_data"] == {"input_audio_transcription": {"model": "gpt-live-transcribe"}}
+    assert isinstance(mint_kwargs["provider_config"], AzureRealtimeHTTPConfig)
+    assert mint_kwargs["extra_headers"] is None
+
+    assert mock_ws_connect.call_args.kwargs["additional_headers"] == {"api-key": "ephemeral-xyz"}
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_transcription_intent_mints_with_entra_token():
+    """An Entra ID-only deployment mints the session with a bearer token."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    http_handler = _mint_handler("ephemeral-abc")
+
+    with (
+        patch(
+            "websockets.connect",
+            return_value=_DummyAsyncContextManager(AsyncMock()),
+        ) as mock_ws_connect,
+        patch(  # test-quality-ok: only the handshake auth is under test here
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
+    ):
+        mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
+
+        await handler.async_realtime(
+            model="gpt-live-transcribe",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key=None,
+            api_version="2025-04-01-preview",
+            azure_ad_token="my-entra-token",
+            realtime_protocol="GA",
+            query_params={"intent": "transcription"},
+            http_handler=http_handler,
+        )
+
+    mint_kwargs = http_handler.async_realtime_transcription_session_handler.call_args.kwargs
+    assert mint_kwargs["api_key"] == ""
+    assert mint_kwargs["extra_headers"] == {"Authorization": "Bearer my-entra-token"}
+    assert mock_ws_connect.call_args.kwargs["additional_headers"] == {"api-key": "ephemeral-abc"}
+
+
+@pytest.mark.asyncio
+async def test_non_transcription_realtime_keeps_static_key():  # test-quality-ok: injected minter raises if called
+    """
+    A normal realtime session opens the backend socket with the static api-key,
+    unchanged. A minting http_handler that raises would surface if it were called.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    http_handler = _mint_handler(side_effect=AssertionError("must not mint for a non-transcription session"))
+
+    with (
+        patch(
+            "websockets.connect",
+            return_value=_DummyAsyncContextManager(AsyncMock()),
+        ) as mock_ws_connect,
+        patch(  # test-quality-ok: only the handshake auth is under test here
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
+    ):
+        mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
+
+        await handler.async_realtime(
+            model="gpt-4o-realtime-preview",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key="static-key",
+            api_version="2025-04-01-preview",
+            realtime_protocol="GA",
+            query_params={"model": "gpt-4o-realtime-preview"},
+            http_handler=http_handler,
+        )
+
+    assert mock_ws_connect.call_args.kwargs["additional_headers"] == {"api-key": "static-key"}
+    assert mock_realtime_streaming.call_args.kwargs["force_transcription_model"] is None
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_transcription_mint_failure_closes_client_socket():
+    """
+    A failed ephemeral mint must close the client socket with a readable reason
+    instead of letting the raw upstream 401 bubble through the socket.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    http_handler = _mint_handler(side_effect=Exception("401 Unauthorized"))
+
+    client_ws = AsyncMock()
+    with patch("websockets.connect") as mock_ws_connect:
+        await handler.async_realtime(
+            model="gpt-live-transcribe",
+            websocket=client_ws,
+            logging_obj=MagicMock(),
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key="static-key",
+            api_version="2025-04-01-preview",
+            realtime_protocol="GA",
+            query_params={"intent": "transcription"},
+            http_handler=http_handler,
+        )
+
+    mock_ws_connect.assert_not_called()
+    client_ws.close.assert_awaited_once()
+    close_kwargs = client_ws.close.call_args.kwargs
+    assert close_kwargs["code"] == 1008
+    assert "transcription session" in close_kwargs["reason"]
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_transcription_missing_credentials_closes_client_socket():
+    """No api_key and no Entra token means there is nothing to exchange for a session."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    client_ws = AsyncMock()
+    with patch("websockets.connect") as mock_ws_connect:
+        await handler.async_realtime(
+            model="gpt-live-transcribe",
+            websocket=client_ws,
+            logging_obj=MagicMock(),
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key=None,
+            api_version="2025-04-01-preview",
+            realtime_protocol="GA",
+            query_params={"intent": "transcription"},
+        )
+
+    mock_ws_connect.assert_not_called()
+    client_ws.close.assert_awaited_once()
+    close_kwargs = client_ws.close.call_args.kwargs
+    assert close_kwargs["code"] == 1008
+    assert "Missing Azure credentials" in close_kwargs["reason"]
+
+
+def test_azure_gpt_live_transcribe_is_registered(local_model_cost_map):
+    """
+    `azure/gpt-live-transcribe` must be in the model registry so routing infers the
+    transcription mode and cost tracking has an entry to key on.
+    """
+    import litellm
+
+    info = litellm.get_model_info(model="gpt-live-transcribe", custom_llm_provider="azure")
+    assert info["litellm_provider"] == "azure"
+    assert info["mode"] == "audio_transcription"
+    assert "/v1/realtime/transcription_sessions" in (info.get("supported_endpoints") or [])
 
 
 @pytest.mark.asyncio
