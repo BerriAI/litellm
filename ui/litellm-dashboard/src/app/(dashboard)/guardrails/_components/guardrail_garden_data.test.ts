@@ -27,6 +27,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   deepkeep: "deepkeep.svg",
   repelloai: "repelloai.png",
   straiker: "straiker.svg",
+  wingback: "wingback.png",
 };
 
 describe("guardrail_garden_data logos", () => {

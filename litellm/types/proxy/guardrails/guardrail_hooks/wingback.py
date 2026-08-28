@@ -40,9 +40,7 @@ class WingbackGuardrailConfigModel(GuardrailConfigModel):
     )
     fail_on_error: bool | None = Field(
         default=True,
-        description=(
-            "If False, allow requests when the guardrail returns an error other than an explicit block."
-        ),
+        description=("If False, allow requests when the guardrail returns an error other than an explicit block."),
     )
 
     @staticmethod

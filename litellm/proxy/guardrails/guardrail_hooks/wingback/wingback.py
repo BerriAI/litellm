@@ -34,11 +34,7 @@ class WingbackGuardrail(GenericGuardrailAPI):
         wingback_app_id: str | None = None,
         **kwargs,
     ):
-        resolved_api_base: Final = (
-            api_base
-            or os.environ.get("WINGBACK_API_BASE")
-            or DEFAULT_WINGBACK_API_BASE
-        )
+        resolved_api_base: Final = api_base or os.environ.get("WINGBACK_API_BASE") or DEFAULT_WINGBACK_API_BASE
         resolved_api_key: Final = api_key or os.environ.get("WINGBACK_INTEGRATION_API_KEY")
 
         existing_params = kwargs.pop("additional_provider_specific_params", None) or {}
