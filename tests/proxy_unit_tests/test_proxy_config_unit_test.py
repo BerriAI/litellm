@@ -220,6 +220,53 @@ async def test_config_file_success_callback_registers_custom_logger_instance(mon
         os.unlink(temp_file_path)
 
 
+@pytest.mark.asyncio
+async def test_config_file_callback_falls_back_to_string_when_init_fails(monkeypatch):
+    """When the custom-logger class cannot be initialized, config-file callbacks
+    must fall back to string registration so standard-route logging still works."""
+    import tempfile
+
+    import yaml
+
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+        lambda callback, internal_usage_cache=None, llm_router=None: None,
+    )
+
+    config_content = {
+        "litellm_settings": {
+            "success_callback": ["langfuse"],
+            "failure_callback": ["langfuse"],
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=None,
+            config_file_path=temp_file_path,
+        )
+
+        # init failed -> fall back to the string path, standard route keeps logging
+        assert "langfuse" in litellm.success_callback
+        assert "langfuse" in litellm.failure_callback
+        assert not any(isinstance(callback, LangfusePromptManagement) for callback in litellm._async_success_callback)
+        assert not any(isinstance(callback, LangfusePromptManagement) for callback in litellm._async_failure_callback)
+    finally:
+        os.unlink(temp_file_path)
+
+
 def test_add_callbacks_from_db_config():
     """Test that callbacks are added correctly and duplicates are prevented"""
     # Setup
