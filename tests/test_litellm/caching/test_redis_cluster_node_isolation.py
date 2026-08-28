@@ -28,6 +28,14 @@ if TYPE_CHECKING:
     from redis.asyncio.cluster import RedisCluster as _AsyncRedisClusterType
 
 
+class _NodeClassWithPerConnectionRecovery:
+    def update_active_connections_for_reconnect(self) -> None: ...
+
+
+class _NodeClassWithoutPerConnectionRecovery:
+    pass
+
+
 class _FakeClusterNode:
     def __init__(self, name: str, raises: Exception | None = None, response: object = None) -> None:
         self.name = name
@@ -47,7 +55,9 @@ class _FakeNodesManager:
 
 
 def _build_cluster_instance() -> "_AsyncRedisClusterType":
-    cluster_cls = get_litellm_async_redis_cluster_class()
+    cluster_cls = get_litellm_async_redis_cluster_class(
+        cluster_node_class=_NodeClassWithoutPerConnectionRecovery
+    )
     instance = cluster_cls.__new__(cluster_cls)
     instance.RedisClusterRequestTTL = 1
     instance.reinitialize_counter = 0
@@ -56,6 +66,33 @@ def _build_cluster_instance() -> "_AsyncRedisClusterType":
     instance.load_balancing_strategy = None
     instance.aclose = AsyncMock()
     return instance
+
+
+def test_per_connection_recovery_redis_py_gets_the_unmodified_upstream_class() -> None:
+    """Regression (redis-py 8.x): when upstream ClusterNode already recovers a node-level
+    connection error per-connection, the factory must NOT install the copied override,
+    whose node.disconnect() also kills connections other coroutines are mid-operation on."""
+    from redis.asyncio.cluster import RedisCluster
+
+    cluster_cls = get_litellm_async_redis_cluster_class(
+        cluster_node_class=_NodeClassWithPerConnectionRecovery
+    )
+
+    assert cluster_cls is RedisCluster
+
+
+def test_pre_recovery_redis_py_still_gets_the_node_isolation_override() -> None:
+    """Old redis-py (5.x) responds to a node-level error with a full-cluster aclose(),
+    so those versions must keep litellm's per-node isolation override."""
+    from redis.asyncio.cluster import RedisCluster
+
+    cluster_cls = get_litellm_async_redis_cluster_class(
+        cluster_node_class=_NodeClassWithoutPerConnectionRecovery
+    )
+
+    assert cluster_cls is not RedisCluster
+    assert issubclass(cluster_cls, RedisCluster)
+    assert "_execute_command" in cluster_cls.__dict__
 
 
 @pytest.mark.asyncio

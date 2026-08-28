@@ -1128,7 +1128,11 @@ export interface paths {
          */
         get: operations["get_auto_router_classifier_default_prompt_auto_router_classifier_default_prompt_get"];
         put?: never;
-        post?: never;
+        /**
+         * Preview Auto Router Classifier Prompt
+         * @description Get the system prompt an auto-router's LLM classifier sends for an edited tier set
+         */
+        post: operations["preview_auto_router_classifier_prompt_auto_router_classifier_default_prompt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12061,6 +12065,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/v1/model_hub": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Model Hub List
+         * @description The public model groups this proxy publishes, paged, sortable, searchable and
+         *     filterable, for the public Model Hub page. No authentication.
+         *
+         *     A rejected request answers with the parameters, sort fields and filter operators
+         *     it would have accepted, so the accepted set stays discoverable from the endpoint
+         *     itself rather than from a copy of the spec kept here.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff         'http://0.0.0.0:4000/public/v1/model_hub?sort=-input_cost_per_token&filter[mode][in]=chat&page_size=25'
+         *     ```
+         */
+        get: operations["public_model_hub_list_public_v1_model_hub_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/queue/chat/completions": {
         parameters: {
             query?: never;
@@ -16585,6 +16619,10 @@ export interface paths {
          *     Pass `?health_check=true` to filter out agents whose URL is unreachable:
          *     ```
          *     curl -X GET "http://localhost:4000/v1/agents?health_check=true"       -H "Content-Type: application/json"       -H "Authorization: Bearer your-key"     ```
+         *
+         *     Pass `?query=<task>` to get the best matching agents ranked by semantic similarity:
+         *     ```
+         *     curl -X GET "http://localhost:4000/v1/agents?query=translate+a+PDF+document&top_k=5"       -H "Content-Type: application/json"       -H "Authorization: Bearer your-key"     ```
          *
          *     Returns: List[AgentResponse]
          */
@@ -22498,6 +22536,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Search Score */
+            search_score?: number | null;
             /** Session Rpm Limit */
             session_rpm_limit?: number | null;
             /** Session Tpm Limit */
@@ -22858,6 +22898,22 @@ export interface components {
         AutoRouterClassifierDefaultPromptResponse: {
             /** System Prompt */
             system_prompt: string;
+        };
+        /**
+         * AutoRouterClassifierPromptPreviewRequest
+         * @description A POST rather than query params: classification_prompt is the operator's own text, which must
+         *     not reach access logs through a URL.
+         */
+        AutoRouterClassifierPromptPreviewRequest: {
+            /** Classification Prompt */
+            classification_prompt?: string | null;
+            /**
+             * Context Window Size
+             * @default 3
+             */
+            context_window_size: number;
+            /** Tier Definitions */
+            tier_definitions: components["schemas"]["TierDefinition"][];
         };
         /**
          * AutoRouterRoutingTestRequest
@@ -25819,6 +25875,11 @@ export interface components {
              */
             total_flat_cost: number;
             /**
+             * Total Gateway Injected Caching Savings Spend
+             * @default 0
+             */
+            total_gateway_injected_caching_savings_spend: number;
+            /**
              * Total Pages
              * @default 1
              */
@@ -27449,6 +27510,13 @@ export interface components {
         ListResponse_BudgetListItem_: {
             /** Data */
             data: components["schemas"]["BudgetListItem"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
+        /** ListResponse[ModelGroupInfoProxy] */
+        ListResponse_ModelGroupInfoProxy_: {
+            /** Data */
+            data: components["schemas"]["ModelGroupInfoProxy"][];
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
@@ -33848,6 +33916,11 @@ export interface components {
              */
             heuristic_first_max_tier?: string | null;
             /**
+             * Housekeeping Patterns
+             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
+             */
+            housekeeping_patterns?: string[] | null;
+            /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
              */
@@ -33894,6 +33967,12 @@ export interface components {
              * @default false
              */
             return_raw_model_name: boolean;
+            /**
+             * Route Housekeeping To Cheapest Tier
+             * @description Route a coding agent's own housekeeping calls to the cheapest configured tier without classifying them. A client names the conversation by quoting the whole session and asking for a title, so the ask reads as the session's engineering work and lands on the most expensive tier, which is the reverse of what the call is worth. Detection is a literal match against client-owned sentinels on the newest ask only, so it cannot fire on an earlier turn, and it never lowers what anyone else asked for: a keyword_tier_rule or a session pin still decides instead, and an escalation keyword or the plan-mode floor still raises the tier from here. Only the classifier is displaced, and its call is skipped, so a matched request costs nothing to route. Set false to classify these calls like any other.
+             * @default true
+             */
+            route_housekeeping_to_cheapest_tier: boolean;
             /**
              * Semantic Keyword Matching
              * @description Match keyword_tier_rules by embedding similarity instead of literal text
@@ -34916,6 +34995,11 @@ export interface components {
              */
             flat_cost: number;
             /**
+             * Gateway Injected Caching Savings Spend
+             * @default 0
+             */
+            gateway_injected_caching_savings_spend: number;
+            /**
              * Prompt Caching Savings Spend
              * @default 0
              */
@@ -34950,7 +35034,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -39862,6 +39946,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_auto_router_classifier_prompt_auto_router_classifier_default_prompt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRouterClassifierPromptPreviewRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -53352,6 +53469,26 @@ export interface operations {
             };
         };
     };
+    public_model_hub_list_public_v1_model_hub_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_ModelGroupInfoProxy_"];
+                };
+            };
+        };
+    };
     async_queue_request_queue_chat_completions_post: {
         parameters: {
             query?: {
@@ -58582,6 +58719,10 @@ export interface operations {
             query?: {
                 /** @description When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out. */
                 health_check?: boolean;
+                /** @description Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model. */
+                query?: string | null;
+                /** @description With query: the maximum number of ranked agents to return. */
+                top_k?: number;
             };
             header?: never;
             path?: never;

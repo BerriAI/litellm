@@ -235,3 +235,73 @@ def test_sync_transport_error_before_completed_event_raises():
     with pytest.raises(httpx.ReadError):
         for _ in iterator:
             pass
+
+
+def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypatch):
+    """
+    Regression test for LIT-6184 on the /v1/responses streaming surface: the
+    completed-stream cache write was dispatched as a bare fire-and-forget task,
+    so asyncio.run cancelled it at loop close before the write landed. The
+    write must survive loop shutdown just like the chat-completions one.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    import litellm
+    from litellm.types.utils import CallTypes
+
+    writes = []
+
+    class _SlowWriteCache:
+        async def async_add_cache(self, result, dynamic_cache_object=None, **kwargs):
+            await asyncio.sleep(0.2)
+            writes.append(result)
+
+        def add_cache(self, *args, **kwargs):
+            raise AssertionError("sync write must not run on the async path")
+
+    caching_handler = SimpleNamespace(
+        request_kwargs={
+            "model": "test-model",
+            "input": "hello",
+            "stream": True,
+            "caching": True,
+            "metadata": None,
+            "custom_llm_provider": "openai",
+        },
+        preset_cache_key="responses-stream-cache-key",
+        original_function=litellm.aresponses,
+        dual_cache=None,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
+    )
+    logging_obj = SimpleNamespace(
+        model_call_details={"litellm_params": {}},
+        _llm_caching_handler=caching_handler,
+    )
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=Mock(spec=BaseResponsesAPIConfig),
+        logging_obj=logging_obj,
+        request_data=caching_handler.request_kwargs,
+        call_type=CallTypes.aresponses.value,
+    )
+    iterator.completed_response = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_lit6184",
+            created_at=int(datetime.now().timestamp()),
+            status="completed",
+            model="test-model",
+            object="response",
+            output=[],
+        ),
+    )
+    monkeypatch.setattr(litellm, "cache", _SlowWriteCache())
+
+    async def _short_lived_script():
+        iterator._persist_completed_response_to_cache(is_async=True)
+
+    asyncio.run(_short_lived_script())
+
+    assert len(writes) == 1

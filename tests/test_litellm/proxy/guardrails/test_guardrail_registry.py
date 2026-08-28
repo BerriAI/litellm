@@ -1,8 +1,11 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
     get_guardrail_initializer_from_hooks,
+    GuardrailRegistry,
     InMemoryGuardrailHandler,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmParams
@@ -120,9 +123,7 @@ def test_explicit_config_guardrail_id_wins_over_derived_id():
     registry_module = _register_noop_initializer("explicit_id_test")
     try:
         result = InMemoryGuardrailHandler().initialize_guardrail(
-            guardrail=_config_guardrail(
-                "tooling", "explicit_id_test", guardrail_id="my-explicit-id"
-            )
+            guardrail=_config_guardrail("tooling", "explicit_id_test", guardrail_id="my-explicit-id")
         )
 
         assert result["guardrail_id"] == "my-explicit-id"
@@ -138,20 +139,12 @@ def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
     registry_module = _register_noop_initializer("dup_name_test")
     try:
         handler = InMemoryGuardrailHandler()
-        first = handler.initialize_guardrail(
-            guardrail=_config_guardrail("dup", "dup_name_test")
-        )
-        second = handler.initialize_guardrail(
-            guardrail=_config_guardrail("dup", "dup_name_test")
-        )
+        first = handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
+        second = handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
 
         rebooted_handler = InMemoryGuardrailHandler()
-        rebooted_first = rebooted_handler.initialize_guardrail(
-            guardrail=_config_guardrail("dup", "dup_name_test")
-        )
-        rebooted_second = rebooted_handler.initialize_guardrail(
-            guardrail=_config_guardrail("dup", "dup_name_test")
-        )
+        rebooted_first = rebooted_handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
+        rebooted_second = rebooted_handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
 
         assert first["guardrail_id"] != second["guardrail_id"]
         assert first["guardrail_id"] == rebooted_first["guardrail_id"]
@@ -657,3 +650,66 @@ class TestScanOnlyToolResultsInitRefusal:
                     "scan_only_tool_results": True,
                 },
             )
+
+
+@pytest.mark.asyncio
+async def test_update_guardrail_in_db_raises_when_row_missing():
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.update = AsyncMock(return_value=None)
+
+    with pytest.raises(
+        Exception,
+        match=r"^Error updating guardrail in DB: Guardrail not found, passed guardrail_id=missing-guardrail$",
+    ):
+        await GuardrailRegistry().update_guardrail_in_db(
+            guardrail_id="missing-guardrail",
+            guardrail=Guardrail(
+                guardrail_name="missing-guardrail",
+                litellm_params=LitellmParams(guardrail="bedrock", mode="pre_call"),
+            ),
+            prisma_client=prisma_client,
+        )
+
+
+def test_reinitialize_guardrail_restores_previous_on_failure():
+    """A reinitialization whose new params make the guardrail constructor raise must
+    restore the previous instance instead of leaving the guardrail silently removed:
+    an enforcing guardrail must never fail open because an update was bad."""
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        if litellm_params.api_key == "boom":
+            raise ValueError("invalid updated params")
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    registry_module.guardrail_initializer_registry["restore_test"] = _initializer
+    try:
+        handler = InMemoryGuardrailHandler()
+        created = handler.initialize_guardrail(
+            guardrail={
+                "guardrail_name": "restore-me",
+                "litellm_params": {"guardrail": "restore_test", "mode": "pre_call", "api_key": "ok"},
+            },
+        )
+        guardrail_id = created["guardrail_id"]
+        original_instance = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+
+        with pytest.raises(ValueError, match="invalid updated params"):
+            handler.reinitialize_guardrail(
+                guardrail={
+                    "guardrail_id": guardrail_id,
+                    "guardrail_name": "restore-me",
+                    "litellm_params": {"guardrail": "restore_test", "mode": "pre_call", "api_key": "boom"},
+                },
+            )
+
+        assert guardrail_id in handler.IN_MEMORY_GUARDRAILS
+        restored = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+        assert restored is not None and restored is not original_instance
+        assert restored.guardrail_name == "restore-me"
+    finally:
+        registry_module.guardrail_initializer_registry.pop("restore_test", None)

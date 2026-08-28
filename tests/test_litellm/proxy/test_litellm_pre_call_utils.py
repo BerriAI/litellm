@@ -235,6 +235,40 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_key_otel_service_name_outranks_team_metadata_merge():
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"otel_service_name": "key-svc"},
+        team_metadata={"otel_service_name": "team-svc", "other_setting": "team-val"},
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    auth_metadata = updated_data["metadata"]["user_api_key_auth_metadata"]
+    assert auth_metadata["otel_service_name"] == "key-svc"
+    assert auth_metadata["other_setting"] == "team-val"
+
+
+@pytest.mark.asyncio
 async def test_stamped_auth_object_reflects_header_derived_identity():
     """
     Regression (LIT-5487): the stamped object is a copy taken partway through request setup,
@@ -920,6 +954,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_policies": ["spoofed-policy"],
         "policy_sources": {"spoofed-policy": "request"},
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
+        "litellm_gateway_injected_cache": "forged-deployment-id",
         "_session_deployment_affinity_ttl": 999999,
         "internal_call_origin": "autorouter_classifier",
         "_guardrail_pipelines": [{"name": "spoofed"}],
@@ -934,6 +969,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "disable_global_guardrails": True,
         "enable_prompt_caching": True,
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
+        "litellm_gateway_injected_cache": "forged-deployment-id",
         "metadata": copy.deepcopy(malicious_metadata),
         "litellm_metadata": copy.deepcopy(malicious_metadata),
     }
@@ -952,6 +988,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "disable_global_guardrails" not in updated
     assert "enable_prompt_caching" not in updated
     assert "routing_decision" not in updated
+    assert "litellm_gateway_injected_cache" not in updated
 
     stripped_keys = {
         "disable_global_guardrails",
@@ -966,6 +1003,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_policies",
         "policy_sources",
         "routing_decision",
+        "litellm_gateway_injected_cache",
         "_session_deployment_affinity_ttl",
         "internal_call_origin",
         "_guardrail_pipelines",
@@ -7329,3 +7367,92 @@ def test_vertex_sends_exactly_one_authorization_header():
     vertex_request_headers.update(forwarded)
 
     assert _authorization_values(vertex_request_headers) == [GOOGLE_ACCESS_TOKEN]
+@pytest.mark.asyncio
+async def test_newrelic_team_callback_vars_reach_trusted_field():
+    """A key with a newrelic team callback stamps its vars into the proxy-owned
+    trusted field, and a caller-supplied newrelic_api_key in the body is
+    stripped rather than merged."""
+    key_with_newrelic_callback = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "newrelic",
+                    "callback_type": "success",
+                    "callback_vars": {"newrelic_api_key": "team-nr-key", "newrelic_region": "eu"},
+                }
+            ]
+        },
+    )
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "newrelic_api_key": "attacker-key",
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key_with_newrelic_callback,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {
+        "newrelic_api_key": "team-nr-key",
+        "newrelic_region": "eu",
+    }
+    assert updated["success_callback"] == ["newrelic"]
+
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+
+    params = initialize_standard_callback_dynamic_params(updated)
+    assert params.get("newrelic_api_key") == "team-nr-key"
+    assert params.get("newrelic_region") == "eu"
+
+    from litellm.integrations.otel.presets import dynamic_otlp_endpoint, dynamic_otlp_headers
+
+    assert dynamic_otlp_headers("newrelic", params) == {"api-key": "team-nr-key"}
+    assert dynamic_otlp_endpoint("newrelic", params) == "https://otlp.eu01.nr-data.net"
+
+    from litellm.utils import get_non_default_completion_params
+
+    forwarded = get_non_default_completion_params(updated)
+    assert not any(param.startswith("newrelic_") for param in forwarded)
+    assert TRUSTED_CALLBACK_VARS_FIELD not in forwarded
+
+
+def test_newrelic_vars_scoped_to_newrelic_callback_entry():
+    """New Relic routing reads these vars from the trusted overlay with no
+    callback-name check, so a team that puts newrelic_* under a different
+    callback's vars must not have them enter the shared bag (and so never
+    exports to New Relic). Vars under a real newrelic entry are kept."""
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+
+    smuggled = convert_key_logging_metadata_to_callback(
+        AddTeamCallback(
+            callback_name="langfuse",
+            callback_type="success",
+            callback_vars={
+                "langfuse_public_key": "pk",
+                "newrelic_api_key": "SMUGGLED",
+                "newrelic_region": "eu",
+            },
+        ),
+        None,
+    )
+    assert smuggled.callback_vars == {"langfuse_public_key": "pk"}
+
+    legit = convert_key_logging_metadata_to_callback(
+        AddTeamCallback(
+            callback_name="newrelic",
+            callback_type="success",
+            callback_vars={"newrelic_api_key": "REAL", "newrelic_region": "us"},
+        ),
+        None,
+    )
+    assert legit.callback_vars == {"newrelic_api_key": "REAL", "newrelic_region": "us"}
