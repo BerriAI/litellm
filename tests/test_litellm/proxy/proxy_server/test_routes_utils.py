@@ -229,3 +229,33 @@ def test_token_counter_fallback_counts_tools_system_and_anthropic_blocks(client,
         tools=tools,
     )
     assert full > bare
+
+
+def test_token_counter_fallback_prompt_with_tools_does_not_500(client, auth_as, monkeypatch):
+    """
+    Regression: a raw-text ``prompt`` request that also carries ``tools`` (no ``messages``) must
+    still count. ``litellm.token_counter`` rejects tools on the text path, so the fallback route
+    only attaches tools when it is counting messages; otherwise this 500'd instead of returning
+    the plain text count.
+    """
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
+    prompt = "count the tokens in this sentence please"
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Look up the current weather for a city",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+            },
+        }
+    ]
+
+    with auth_as():
+        response = client.post(
+            "/utils/token_counter", json={"model": "claude-fable-5", "prompt": prompt, "tools": tools}
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total_tokens"] == litellm.token_counter(model="claude-fable-5", text=prompt)

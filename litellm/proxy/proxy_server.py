@@ -12244,7 +12244,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
     )
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
-        list[ChatCompletionToolParam] | None, tools
+        list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
     total_tokens: Final = await asyncify(litellm.token_counter)(
         model=model_to_use,
