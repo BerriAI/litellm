@@ -5122,7 +5122,14 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             if callback in litellm._known_custom_logger_compatible_callbacks:
-                                _add_custom_logger_callback_to_specific_event(callback, "success")
+                                # drop the string first: _add_custom_logger_callback_to_specific_event
+                                # skips registration (and the string removal inside it) when an
+                                # instance already exists from an earlier registration
+                                if callback in litellm.success_callback:
+                                    litellm.success_callback.remove(callback)
+                                _add_custom_logger_callback_to_specific_event(  # pyright: ignore[reportPrivateUsage]  # mirrors the DB-config registration path
+                                    callback, "success"
+                                )
                             else:
                                 litellm.logging_callback_manager.add_litellm_success_callback(callback)
                             if "prometheus" in callback:
@@ -5152,7 +5159,11 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             if callback in litellm._known_custom_logger_compatible_callbacks:
-                                _add_custom_logger_callback_to_specific_event(callback, "failure")
+                                if callback in litellm.failure_callback:
+                                    litellm.failure_callback.remove(callback)
+                                _add_custom_logger_callback_to_specific_event(  # pyright: ignore[reportPrivateUsage]  # mirrors the DB-config registration path
+                                    callback, "failure"
+                                )
                             else:
                                 litellm.logging_callback_manager.add_litellm_failure_callback(callback)
                     print(  # noqa: T201
