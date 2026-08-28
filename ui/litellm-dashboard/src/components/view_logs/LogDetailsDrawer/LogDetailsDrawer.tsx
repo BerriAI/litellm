@@ -49,7 +49,7 @@ interface TraceEventRowProps {
   onClick: () => void;
 }
 
-const TRACE_EVENT_ICON_CLASS = "text-slate-500 shrink-0";
+const TRACE_EVENT_ICON_CLASS = "text-muted-foreground shrink-0";
 
 function TraceEventIcon({ callType, isAutoRouted }: { callType: string; isAutoRouted: boolean }) {
   if (MCP_CALL_TYPES.includes(callType)) return <Wrench size={12} className={TRACE_EVENT_ICON_CLASS} />;
@@ -70,19 +70,17 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   return (
     <button
       type="button"
-      className={`w-full text-left pl-8 pr-2 py-1 transition-colors ${
-        isSelected ? "bg-blue-50" : "hover:bg-slate-100"
-      }`}
+      className={`w-full text-left pl-8 pr-2 py-1 transition-colors ${isSelected ? "bg-info/10" : "hover:bg-accent"}`}
       onClick={onClick}
     >
       <div className="flex items-center gap-1">
         <TraceEventIcon callType={row.call_type} isAutoRouted={isAutoRouted} />
-        <span className="text-xs font-medium text-slate-900 truncate">
+        <span className="text-xs font-medium text-foreground truncate">
           {getEventDisplayName(row.call_type, row.model)}
         </span>
         <ClassifyTag origin={row.metadata?.internal_call_origin} className="ml-auto" />
       </div>
-      <div className="text-[10px] text-slate-500 mt-0 flex items-center gap-1.5 font-mono">
+      <div className="text-[10px] text-muted-foreground mt-0 flex items-center gap-1.5 font-mono">
         <span>{durationValue}s</span>
         {row.spend ? (
           <>
@@ -280,6 +278,7 @@ export function LogDetailsDrawer({
   ).length;
   const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
+  const cacheHitCount = sessionLogs.filter((row) => String(row.cache_hit ?? "").toLowerCase() === "true").length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
@@ -319,7 +318,7 @@ export function LogDetailsDrawer({
               variant="ghost"
               size="icon-sm"
               onClick={() => setIsSidebarCollapsed(true)}
-              className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
+              className="absolute top-2 left-2 z-raised bg-card! border! border-border! rounded-md!"
               aria-label="Collapse trace sidebar"
             >
               <ChevronLeft className="size-4" />
@@ -329,26 +328,26 @@ export function LogDetailsDrawer({
               variant="ghost"
               size="icon-sm"
               onClick={() => setIsSidebarCollapsed(false)}
-              className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
+              className="absolute top-2 left-2 z-raised bg-card! border! border-border! rounded-md!"
               aria-label="Expand trace sidebar"
             >
               <ChevronRight className="size-4" />
             </Button>
           )}
           {!isSidebarCollapsed && (
-            <div className="border-r border-slate-200 bg-slate-50 flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
-              <div className="pl-12 pr-3 py-2 border-b border-slate-200 bg-white">
+            <div className="border-r border-border bg-muted flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
+              <div className="pl-12 pr-3 py-2 border-b border-border bg-card">
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                       {isSessionMode ? "Session" : "Trace"}
                     </div>
-                    <div className="font-mono text-[12px] text-slate-900 leading-tight flex items-center gap-1">
+                    <div className="font-mono text-[12px] text-foreground leading-tight flex items-center gap-1">
                       <span className="truncate">{leftPanelDisplayId}</span>
                       <button
                         type="button"
                         onClick={handleCopyLeftPanelId}
-                        className="text-slate-400 hover:text-slate-600"
+                        className="text-muted-foreground hover:text-foreground"
                         aria-label="Copy trace id"
                       >
                         {copiedLeftPanelId ? <Check className="size-3" /> : <Copy className="size-3" />}
@@ -356,7 +355,7 @@ export function LogDetailsDrawer({
                     </div>
                   </div>
                 </div>
-                <div className="mt-1 text-[11px] text-slate-500 font-mono">
+                <div className="mt-1 text-[11px] text-muted-foreground font-mono">
                   {logsForList.length} req
                   {[
                     isSessionMode
@@ -389,8 +388,13 @@ export function LogDetailsDrawer({
                     </>
                   )}
                 </div>
+                {isSessionMode && (
+                  <div className="text-[11px] text-muted-foreground font-mono whitespace-nowrap">
+                    {cacheHitCount}/{logsForList.length} cached
+                  </div>
+                )}
                 {isSessionMode && sessionTruncated && (
-                  <div className="mt-1 text-[11px] text-amber-600 font-mono">
+                  <div className="mt-1 text-[11px] text-warning font-mono">
                     Showing most recent {logsForList.length} of {sessionTotalCount}
                   </div>
                 )}
@@ -422,13 +426,13 @@ export function LogDetailsDrawer({
                   <div className="py-1">
                     {/* Child events — vertical tree line with horizontal connectors */}
                     <div className="relative pl-2">
-                      <div className="absolute left-4 top-1 bottom-1 border-l border-slate-300" />
+                      <div className="absolute left-4 top-1 bottom-1 border-l border-border" />
                       {logsForList.map((row, idx) => {
                         const isLast = idx === logsForList.length - 1;
                         return (
                           <div key={row.request_id} className="relative">
-                            <div className="absolute left-4 top-3 w-3 border-t border-slate-300" />
-                            {isLast && <div className="absolute left-4 top-3 bottom-0 w-px bg-slate-50" />}
+                            <div className="absolute left-4 top-3 w-3 border-t border-border" />
+                            {isLast && <div className="absolute left-4 top-3 bottom-0 w-px bg-muted" />}
                             <TraceEventRow
                               row={row}
                               isSelected={row.request_id === currentLog.request_id}

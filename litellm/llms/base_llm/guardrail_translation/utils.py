@@ -158,6 +158,22 @@ def openai_messages_without_tool(
     return tuple(m for m in messages if _message_role(m) != "tool")
 
 
+def filter_messages_by_skip_flags(
+    guardrail_to_apply: object, messages: Sequence[AllMessageValues]
+) -> tuple[tuple[AllMessageValues, ...], bool]:
+    system_filtered = (
+        openai_messages_without_system(messages)
+        if effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        else tuple(messages)
+    )
+    fully_filtered = (
+        openai_messages_without_tool(system_filtered)
+        if effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        else system_filtered
+    )
+    return fully_filtered, len(fully_filtered) != len(messages)
+
+
 def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -> bool:
     return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
 
@@ -209,9 +225,20 @@ def openai_tool_name(tool: object) -> str | None:
     return flat_name if isinstance(flat_name, str) else None
 
 
+def anthropic_tool_names(tool: object) -> tuple[str, ...]:
+    """Every name a /v1/messages tool dict can act under: the flat Anthropic ``name`` plus
+    ``function.name`` for OpenAI-format tools the bridge forwards verbatim. Allowlist checks
+    must see both, or a decoy flat name could smuggle a disallowed ``function.name`` through."""
+    if not isinstance(tool, dict):
+        return ()
+    function: Final = tool.get("function") if tool.get("type") == "function" else None
+    function_name: Final = function.get("name") if isinstance(function, dict) else None
+    return tuple(name for name in (tool.get("name"), function_name) if isinstance(name, str) and name)
+
+
 def anthropic_tool_name(tool: object) -> str | None:
-    name: Final = tool.get("name") if isinstance(tool, dict) else None
-    return name if isinstance(name, str) else None
+    names: Final = anthropic_tool_names(tool)
+    return names[0] if names else None
 
 
 def merge_returned_tools_into_request_tools(

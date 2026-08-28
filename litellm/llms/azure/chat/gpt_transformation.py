@@ -4,6 +4,7 @@ from httpx._models import Headers, Response
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_tool_reference_parts_from_tool_messages,
     hoist_images_from_tool_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -112,6 +113,16 @@ class AzureOpenAIConfig(BaseConfig):
             "store",
         ]
 
+    @classmethod
+    def requires_max_completion_tokens(cls, model: str) -> bool:
+        """Whether Azure rejects the legacy ``max_tokens`` key for this deployment.
+
+        Deliberately wider than ``AzureOpenAIGPT5Config.is_model_gpt_5_model``: the whole gpt-5
+        name family needs the rename, including the ``gpt-5-chat*`` models that are excluded from
+        the reasoning path by https://github.com/BerriAI/litellm/issues/13781.
+        """
+        return "gpt-5" in model or "gpt5_series" in model
+
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
         Determines if the model supports response_format.
@@ -160,6 +171,7 @@ class AzureOpenAIConfig(BaseConfig):
         api_version: str = "",
     ) -> dict:
         supported_openai_params: Final = self.get_supported_openai_params(model)
+        renames_max_tokens: Final = self.requires_max_completion_tokens(model)
         api_version_times: Final = api_version.split("-")
 
         if len(api_version_times) >= 3:
@@ -172,7 +184,9 @@ class AzureOpenAIConfig(BaseConfig):
             api_version_day = None
 
         for param, value in non_default_params.items():
-            if param == "tool_choice":
+            if param == "max_tokens" and renames_max_tokens:
+                optional_params.setdefault("max_completion_tokens", value)
+            elif param == "tool_choice":
                 """
                 This parameter requires API version 2023-12-01-preview or later
 
@@ -239,7 +253,8 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(messages))
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
         return {
             "model": model,
             "messages": azure_messages,

@@ -6,6 +6,18 @@ This Terraform provider allows you to manage LiteLLM resources through Infrastru
 
 This directory (`terraform/provider/` in [BerriAI/litellm](https://github.com/BerriAI/litellm)) is the source of truth for the provider. [BerriAI/terraform-provider-litellm](https://github.com/BerriAI/terraform-provider-litellm) is a thin release mirror that the public Terraform Registry ingests from; do not open PRs there. Changes land here, where CI builds the provider, runs its tests, and statically audits every endpoint the provider calls against the proxy's generated OpenAPI schema (`tools/endpointaudit/`), so the provider cannot drift from the LiteLLM API silently. Releases are published by mirroring this directory into the split repo and tagging it, which triggers the goreleaser workflow there (see `RELEASING.md`)
 
+## Versioning
+
+The provider version **is the LiteLLM version**. Every LiteLLM release (dev, rc and stable) publishes the provider at the same version as the proxy, built from the same commit, so `1.99.0` of the provider is the one that shipped with `1.99.0` of the proxy and was audited against that proxy's API. Pin the provider to the line your proxy runs:
+
+```hcl
+version = "~> 1.99.0"
+```
+
+Pre-release versions (`1.99.0-rc.1`, `1.99.0-dev.1`) are published too; Terraform only selects one when it is pinned exactly.
+
+Versions `0.1.0` through `0.4.0` predate this scheme and sit on their own line. They stay in the registry, but **a `~> 0.4` constraint will never pick up another release**: re-pin to the LiteLLM version to keep receiving updates.
+
 ## Features
 
 - Manage LiteLLM model configurations
@@ -32,7 +44,7 @@ terraform {
   required_providers {
     litellm = {
       source  = "BerriAI/litellm"
-      version = "~> 0.1.1" #HERE UPDATE VERSION ACCORDINGLY
+      version = "~> 1.99.0" # the LiteLLM version your proxy runs
     }
   }
 }
@@ -219,6 +231,6 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 - Always use environment variables or secure secret management solutions to handle sensitive information like API keys and AWS credentials.
 - Refer to the comprehensive documentation in the `docs/` directory for detailed usage examples and configuration options.
-- Make sure to keep your provider version updated for the latest features and bug fixes.
+- Keep the provider version in step with the LiteLLM version your proxy runs; see [Versioning](#versioning).
 - The provider now supports AWS cross-account access with `aws_session_name` and `aws_role_name` parameters in the model resource.
 - All example configurations have been consolidated into the documentation for better organization and maintenance.

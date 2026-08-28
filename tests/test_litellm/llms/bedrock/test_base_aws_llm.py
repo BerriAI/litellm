@@ -1,15 +1,11 @@
 import json
 import os
-import sys
 import threading
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 from datetime import datetime, timedelta, timezone
@@ -1944,7 +1940,7 @@ def test_role_assumption_access_denied_raises_when_different_role():
         with patch.object(
             base_aws_llm, "_is_already_running_as_role", return_value=False
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='An error occurred \\(AccessDenied\\) when calling the') as exc_info:
                 base_aws_llm._auth_with_aws_role(
                     aws_access_key_id=None,
                     aws_secret_access_key=None,
@@ -1969,7 +1965,7 @@ def test_role_assumption_non_access_denied_error_propagated():
     )
 
     with patch("boto3.client", return_value=mock_sts_client):
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='An error occurred \\(MalformedPolicyDocument\\) when calling') as exc_info:
             base_aws_llm._auth_with_aws_role(
                 aws_access_key_id=None,
                 aws_secret_access_key=None,

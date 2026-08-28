@@ -222,6 +222,21 @@ class SpendLogCleanup:
         remaining_ms: Final = int((deadline - time.monotonic()) * 1000)
         return max(1, min(int(self.batch_timeout_seconds * 1000), remaining_ms))
 
+    @staticmethod
+    def _group_deadline(overall_deadline: float, groups_remaining: int) -> float:
+        """
+        Give each pending cleanup group an equal share of the time left.
+
+        A single group keeps the whole run budget, while a persistent backlog
+        on an earlier group cannot starve a later group.
+        """
+        if groups_remaining == 1:
+            return overall_deadline
+        current_time: Final = time.monotonic()
+        if current_time >= overall_deadline:
+            return overall_deadline
+        return current_time + (overall_deadline - current_time) / groups_remaining
+
     def _remaining_timeout_ms(self, deadline: float) -> RemainingTimeoutMs:
         """
         The per-statement bound for work this job delegates, as a callable.
@@ -477,6 +492,18 @@ class SpendLogCleanup:
             deadline=deadline,
         )
 
+    async def _delete_old_health_check_rows(
+        self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_HealthCheckTable",
+            key_columns=("health_check_id",),
+            time_column="checked_at",
+            deadline=deadline,
+        )
+
     async def _clean_spend_log_tables(
         self, prisma_client: PrismaClient, deadline: float
     ) -> tuple[TableCleanupResult, ...]:
@@ -526,6 +553,19 @@ class SpendLogCleanup:
         verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_result.rows_deleted)
         return (sessions_result,)
 
+    async def _clean_health_checks(
+        self, prisma_client: PrismaClient, retention_seconds: int, deadline: float
+    ) -> tuple[TableCleanupResult, ...]:
+        health_check_cutoff: Final = datetime.now(timezone.utc) - timedelta(seconds=float(retention_seconds))
+        health_checks_result: Final = await self._delete_old_health_check_rows(
+            prisma_client, health_check_cutoff, deadline
+        )
+        verbose_proxy_logger.info(
+            "Deleted %s expired health-check rows",
+            health_checks_result.rows_deleted,
+        )
+        return (health_checks_result,)
+
     @staticmethod
     def _run_outcome(results: tuple[TableCleanupResult, ...]) -> RunOutcome:
         """
@@ -558,7 +598,12 @@ class SpendLogCleanup:
             autorouter_retention_seconds: Final = self._retention_seconds_for(
                 "maximum_autorouter_session_retention_period"
             )
-            if not delete_spend_logs and autorouter_retention_seconds is None:
+            health_check_retention_seconds: Final = self._retention_seconds_for("maximum_health_check_retention_period")
+            if (
+                not delete_spend_logs
+                and autorouter_retention_seconds is None
+                and health_check_retention_seconds is None
+            ):
                 SpendLogCleanupMetrics.record_run("skipped_disabled")
                 return
 
@@ -585,19 +630,45 @@ class SpendLogCleanup:
                     return
 
             deadline: Final = time.monotonic() + self.run_budget_seconds
+            configured_group_count: Final = (
+                int(delete_spend_logs and self.retention_seconds is not None)
+                + int(autorouter_retention_seconds is not None)
+                + int(health_check_retention_seconds is not None)
+            )
 
             spend_log_results: Final = (
-                await self._clean_spend_log_tables(prisma_client, deadline)
+                await self._clean_spend_log_tables(
+                    prisma_client,
+                    self._group_deadline(deadline, configured_group_count),
+                )
                 if delete_spend_logs and self.retention_seconds is not None
                 else ()
             )
+            remaining_groups_after_spend_logs: Final = int(autorouter_retention_seconds is not None) + int(
+                health_check_retention_seconds is not None
+            )
             session_results: Final = (
-                await self._clean_session_rollup(prisma_client, autorouter_retention_seconds, deadline)
+                await self._clean_session_rollup(
+                    prisma_client,
+                    autorouter_retention_seconds,
+                    self._group_deadline(deadline, remaining_groups_after_spend_logs),
+                )
                 if autorouter_retention_seconds is not None
                 else ()
             )
+            health_check_results: Final = (
+                await self._clean_health_checks(
+                    prisma_client,
+                    health_check_retention_seconds,
+                    deadline,
+                )
+                if health_check_retention_seconds is not None
+                else ()
+            )
 
-            SpendLogCleanupMetrics.record_run(self._run_outcome(spend_log_results + session_results))
+            SpendLogCleanupMetrics.record_run(
+                self._run_outcome(spend_log_results + session_results + health_check_results)
+            )
 
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB

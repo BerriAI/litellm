@@ -18,7 +18,7 @@ import asyncio
 import datetime
 import inspect
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
 from pydantic import BaseModel
@@ -27,6 +27,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
+from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
@@ -106,7 +107,7 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
-def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, Any]) -> bool:
+def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, object]) -> bool:
     """
     When stream=True, do not run success callbacks at cache-hit time.
 
@@ -119,11 +120,44 @@ def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, Any]) -> bo
     return kwargs.get("stream", False) is True
 
 
+def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
+    """Dump prompt token details to an opaque field mapping, tolerating non-pydantic stand-ins."""
+    return details.model_dump(exclude_none=True) if hasattr(details, "model_dump") else {}
+
+
+_PENDING_CACHE_WRITES: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs to pending write tasks
+
+
+async def _complete_cache_write_despite_cancellation(write_factory: Callable[[], Awaitable[None]]) -> None:
+    try:
+        await write_factory()
+    except asyncio.CancelledError:
+        try:
+            await asyncio.wait_for(write_factory(), timeout=CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS)
+        except Exception as flush_error:  # noqa: BLE001  # shutdown flush failures are logged, never raised
+            verbose_logger.warning(
+                "LiteLLM Cache: pending cache write failed during event loop shutdown: %s", flush_error
+            )
+        raise
+
+
+def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "asyncio.Task[None]":
+    task: Final = asyncio.create_task(_complete_cache_write_despite_cancellation(write_factory))
+    _PENDING_CACHE_WRITES.add(task)
+    task.add_done_callback(_PENDING_CACHE_WRITES.discard)
+    return task
+
+
+def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
+    """Read the caller-supplied ``cache_key`` off the request kwargs."""
+    return request_kwargs.get("cache_key", None)
+
+
 class LLMCachingHandler:
     def __init__(
         self,
         original_function: Callable,
-        request_kwargs: dict[str, Any],
+        request_kwargs: dict[str, object],
         start_time: datetime.datetime,
     ):
         from litellm.caching import DualCache, RedisCache
@@ -150,7 +184,7 @@ class LLMCachingHandler:
         start_time: datetime.datetime,
         call_type: str,
         kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse | None:
         """
         Internal method to get from the cache.
@@ -289,7 +323,7 @@ class LLMCachingHandler:
         start_time: datetime.datetime,
         call_type: str,
         kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse:
         cached_result: Any | None = None
 
@@ -366,7 +400,7 @@ class LLMCachingHandler:
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
 
-    def handle_kwargs_input_list_or_str(self, kwargs: dict[str, Any]) -> list[str]:
+    def handle_kwargs_input_list_or_str(self, kwargs: dict[str, object]) -> list[str]:
         """
         Handles the input of kwargs['input'] being a list or a string
         """
@@ -548,8 +582,8 @@ class LLMCachingHandler:
         if details2 is None:
             return details1
 
-        dict1: Final = details1.model_dump(exclude_none=True) if hasattr(details1, "model_dump") else {}
-        dict2: Final = details2.model_dump(exclude_none=True) if hasattr(details2, "model_dump") else {}
+        dict1: Final = _prompt_tokens_details_as_mapping(details1)
+        dict2: Final = _prompt_tokens_details_as_mapping(details2)
 
         merged: Final[dict] = {}
         for key in set(dict1.keys()) | set(dict2.keys()):
@@ -671,7 +705,9 @@ class LLMCachingHandler:
             cache_hit=cache_hit,
         )
 
-    async def _retrieve_from_cache(self, call_type: str, kwargs: dict[str, Any], args: tuple[Any, ...]) -> Any | None:
+    async def _retrieve_from_cache(
+        self, call_type: str, kwargs: dict[str, object], args: tuple[object, ...]
+    ) -> Any | None:
         """
         Internal method to
         - get cache key
@@ -727,7 +763,8 @@ class LLMCachingHandler:
                     cached_result = None
         else:
             request_kwargs: Final = new_kwargs.copy()
-            request_cache_key: Final = request_kwargs.pop("cache_key", None)
+            request_cache_key: Final = _request_cache_key(request_kwargs)
+            request_kwargs.pop("cache_key", None)
             if litellm.cache._supports_async() is True:
                 ## check if dual cache is supported ##
                 self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
@@ -749,10 +786,10 @@ class LLMCachingHandler:
         self,
         cached_result: Any,
         call_type: str,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        args: tuple[Any, ...],
+        args: tuple[object, ...],
         custom_llm_provider: str | None = None,
     ) -> (
         ModelResponse
@@ -948,7 +985,7 @@ class LLMCachingHandler:
         result: Any,
         original_function: Callable,
         kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        args: tuple[object, ...] | None = None,
     ):
         """
         Internal method to check the type of the result & cache used and adds the result to the cache accordingly
@@ -970,6 +1007,7 @@ class LLMCachingHandler:
 
         if litellm.cache is None:
             return
+        cache: Final = litellm.cache
 
         new_kwargs: Final = kwargs.copy()
         new_kwargs.update(
@@ -991,30 +1029,30 @@ class LLMCachingHandler:
             ):
                 if (
                     isinstance(result, EmbeddingResponse)
-                    and litellm.cache is not None
-                    and not isinstance(litellm.cache.cache, S3Cache)  # s3 doesn't support bulk writing. Exclude.
+                    and not isinstance(cache.cache, S3Cache)  # s3 doesn't support bulk writing. Exclude.
                 ):
-                    asyncio.create_task(
-                        litellm.cache.async_add_cache_pipeline(
+                    create_cache_write_task(
+                        lambda: cache.async_add_cache_pipeline(
                             result, dynamic_cache_object=self.dual_cache, **new_kwargs
                         )
                     )
                 else:
-                    asyncio.create_task(
-                        litellm.cache.async_add_cache(
-                            result.model_dump_json(),
+                    result_json: Final = result.model_dump_json()
+                    create_cache_write_task(
+                        lambda: cache.async_add_cache(
+                            result_json,
                             dynamic_cache_object=self.dual_cache,
                             **new_kwargs,
                         )
                     )
             else:
-                asyncio.create_task(litellm.cache.async_add_cache(result, **new_kwargs))
+                create_cache_write_task(lambda: cache.async_add_cache(result, **new_kwargs))
 
     def sync_set_cache(
         self,
         result: Any,
-        kwargs: dict[str, Any],
-        args: tuple[Any, ...] | None = None,
+        kwargs: dict[str, object],
+        args: tuple[object, ...] | None = None,
     ):
         """
         Sync internal method to add the result to the cache
@@ -1204,8 +1242,8 @@ class LLMCachingHandler:
 
 def convert_args_to_kwargs(
     original_function: Callable,
-    args: tuple[Any, ...] | None = None,
-) -> dict[str, Any]:
+    args: tuple[object, ...] | None = None,
+) -> dict[str, object]:
     # Get the signature of the original function
     signature: Final = inspect.signature(original_function)
 

@@ -3,19 +3,26 @@ import { describe, expect, it, vi } from "vitest";
 
 import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import EditAutoRouterModal from "./edit_auto_router_modal";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
-const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall } = vi.hoisted(() => ({
-  modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
-  modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
-  getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
-}));
+const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall, validateAutoRouterConfig } =
+  vi.hoisted(() => ({
+    validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+    modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
+    modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+    getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+  }));
 
 vi.mock("../networking", () => ({
   modelPatchUpdateCall,
   modelAvailableCall,
   getAutoRouterClassifierDefaultPromptCall,
+  validateAutoRouterConfig,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "sk-test" }) }));
@@ -92,6 +99,23 @@ describe("EditAutoRouterModal keyword matching", () => {
     expect(config.match_threshold).toBe(0.72);
   });
 
+  // Same gate as the create form: the dry-run's verdict has to stop the PATCH, or an operator sees
+  // a raw 400 instead of the inline message the dry-run was added to give them.
+  it("does not PATCH when the backend's dry-run rejects the config", async () => {
+    const user = userEvent.setup();
+    validateAutoRouterConfig.mockResolvedValueOnce({
+      valid: false,
+      error: "tier_labels cannot be combined with tier_definitions",
+    });
+
+    renderModal();
+    await screen.findByText(/Escalation Keywords/i);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalled());
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
+
   // The create form blocks this; the edit modal renders the same controls, so it must block it
   // too. The backend raises on semantic_keyword_matching without an embedding model or keyword
   // rules, so skipping the guard turns a friendly inline message into a raw 400.
@@ -122,7 +146,7 @@ describe("EditAutoRouterModal keyword matching", () => {
     await screen.findByText(/Escalation Keywords/i);
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    await waitFor(() => expect(NotificationsManager.fromBackend).toHaveBeenCalled());
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalled());
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
 
@@ -193,8 +217,9 @@ describe("EditAutoRouterModal keyword matching", () => {
 
     await user.type(
       within(screen.getByText("Keywords 2").closest("div") as HTMLElement).getByRole("combobox"),
-      "chargeback{enter}",
+      "chargeback",
     );
+    await user.click(await screen.findByText('Create "chargeback"'));
 
     expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled();
     expect(screen.queryByText("At least one keyword is required")).not.toBeInTheDocument();
@@ -240,7 +265,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     await user.click(await screen.findByText("Advanced: Classification Method"));
     await screen.findByText("Context Window Size");
     expect(screen.getByDisplayValue("5")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("300")).toBeInTheDocument();
+    expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -263,7 +288,6 @@ describe("EditAutoRouterModal classifier context window", () => {
 
     expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
     expect(baseElement.querySelectorAll('[data-slot="dialog-content"]')).toHaveLength(2);
-    expect(baseElement.querySelector(".ant-modal")).toBeNull();
   });
 
   it("persists an edited classifier context window size", async () => {
@@ -514,7 +538,7 @@ describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
 
     await user.click(await screen.findByText("Advanced: Classification Method"));
     expect(await screen.findByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toHaveAttribute("checked");
+    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -546,5 +570,323 @@ describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().classifier_llm_config).not.toHaveProperty("system_prompt");
+  });
+});
+
+describe("EditAutoRouterModal default model", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const savedDefaultModel = () => {
+    const [, payload] = modelPatchUpdateCall.mock.calls.at(-1) ?? [];
+    return payload?.litellm_params?.complexity_router_default_model;
+  };
+
+  const renderWithStoredPin = (default_model?: string) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_CONFIG, ...(default_model && { default_model }) },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // No config blob marker — only litellm_params.complexity_router_default_model, as an untouched
+  // router looked before this PR's marker existed, or one an external API call wrote directly to.
+  const renderWithLitellmParamsDefaultOnly = (complexityRouterDefaultModel: string) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: STORED_CONFIG,
+            complexity_router_default_model: complexityRouterDefaultModel,
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  it("preserves a stored pin through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredPin("out-of-band-default");
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedDefaultModel()).toBe("out-of-band-default");
+    expect(savedConfig()).toMatchObject({ default_model: "out-of-band-default" });
+  });
+
+  it("shows a stored pin as the selection, so the saved value is not a hidden one", async () => {
+    renderWithStoredPin("out-of-band-default");
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(select).toHaveValue("out-of-band-default");
+  });
+
+  // The pin is recorded in the config rather than inferred by comparing the stored default to a
+  // re-derivation, so pinning the model the tiers already imply still reads back as a pin.
+  it("keeps a pin that matches what the tiers derive", async () => {
+    const user = userEvent.setup();
+    renderWithStoredPin(STORED_CONFIG.tiers.MEDIUM[0]);
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(select).toHaveValue(STORED_CONFIG.tiers.MEDIUM[0]);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ default_model: STORED_CONFIG.tiers.MEDIUM[0] });
+  });
+
+  // Greptile P1 on #36615: with no config blob marker, a litellm_params default that merely
+  // matches what the tiers derive is indistinguishable from the pre-PR auto-derive-and-write
+  // behavior (main always wrote a tier-derived value there on every save). Treating it as a pin
+  // would freeze every pre-existing router's default away from its tiers, so it stays unpinned.
+  it("treats a litellm_params default matching tier-derivation as unpinned, not a frozen-in pin", async () => {
+    const user = userEvent.setup();
+    renderWithLitellmParamsDefaultOnly(STORED_CONFIG.tiers.MEDIUM[0]);
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(select).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("default_model");
+    expect(savedDefaultModel()).toBe(STORED_CONFIG.tiers.MEDIUM[0]);
+  });
+
+  // Greptile P1 on #36615: a litellm_params default that diverges from tier-derivation could only
+  // have gotten there via an explicit override — set by the API directly, since this UI's own
+  // save path keeps it in sync with tiers whenever there's no pin. That divergence must survive
+  // the next save instead of being silently recomputed away.
+  it("treats a diverging litellm_params default as an external pin and preserves it", async () => {
+    const user = userEvent.setup();
+    renderWithLitellmParamsDefaultOnly("claude-sonnet-4");
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(select).toHaveValue("claude-sonnet-4");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ default_model: "claude-sonnet-4" });
+    expect(savedDefaultModel()).toBe("claude-sonnet-4");
+  });
+
+  // The config blob marker is this UI's own authoritative record of intent (see
+  // hydratePinnedDefaultModel), so it wins even over a litellm_params value that disagrees —
+  // e.g. a stale value from before the operator most recently changed the pin.
+  it("prefers the config blob marker over a diverging litellm_params value", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_CONFIG, default_model: "blob-pin" },
+            complexity_router_default_model: "stale-litellm-params-value",
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(select).toHaveValue("blob-pin");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ default_model: "blob-pin" });
+  });
+
+  // This modal only requires one non-empty tier, so a COMPLEX-only router is reachable here even
+  // though the backend raises on it. The block keeps that failure at save time instead of init.
+  it("blocks a save when neither the tiers nor a pin give the backend a default", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: {
+              ...STORED_CONFIG,
+              tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: ["complex-model"], REASONING: [] },
+            },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(expect.stringContaining("Simple or Medium tier")));
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("leaves a router with no stored pin tracking its tiers", async () => {
+    const user = userEvent.setup();
+    renderWithStoredPin();
+
+    const select = await screen.findByRole("combobox", { name: "Default model" });
+    expect(select).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedDefaultModel()).toBe(STORED_CONFIG.tiers.MEDIUM[0]);
+    expect(savedConfig()).not.toHaveProperty("default_model");
+  });
+});
+
+describe("EditAutoRouterModal plan-mode minimum tier", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const renderWithStoredTier = (plan_mode_min_tier?: string) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_CONFIG, ...(plan_mode_min_tier && { plan_mode_min_tier }) },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  const openPlanModePanel = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByText("Advanced: Plan-Mode Override"));
+  };
+
+  it("shows a stored tier as an enabled override, so the saved value is not a hidden one", async () => {
+    const user = userEvent.setup();
+    renderWithStoredTier("MEDIUM");
+    await openPlanModePanel(user);
+    expect(await screen.findByRole("switch", { name: "Route plan-mode requests to a minimum tier" })).toBeChecked();
+  });
+
+  it("preserves a stored tier through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredTier("MEDIUM");
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ plan_mode_min_tier: "MEDIUM" });
+  });
+
+  it("turning the override off removes the stored tier from the saved config", async () => {
+    const user = userEvent.setup();
+    renderWithStoredTier("MEDIUM");
+    await openPlanModePanel(user);
+    await user.click(await screen.findByRole("switch", { name: "Route plan-mode requests to a minimum tier" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("plan_mode_min_tier");
+  });
+});
+
+describe("EditAutoRouterModal with a stored custom tier set", () => {
+  const CUSTOM_STORED = {
+    tiers: { CASUAL: ["gpt-4o-mini"], SECURITY_REVIEW: ["gpt-4o-mini"] },
+    tier_definitions: [
+      { name: "CASUAL", description: "small talk" },
+      { name: "SECURITY_REVIEW", description: "audits and vulnerability review" },
+    ],
+    fallback_tier: "CASUAL",
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    plan_mode_min_tier: "SECURITY_REVIEW",
+    classification_prompt: "operator written preamble",
+    tier_model_configs: {
+      SECURITY_REVIEW: [{ model_name: "gpt-4o-mini", litellm_params: { reasoning_effort: "high" } }],
+    },
+  };
+
+  const renderCustomModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: CUSTOM_STORED },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  it("shows the stored tier names rather than the built-in four", async () => {
+    renderCustomModal();
+    expect(await screen.findByText("SECURITY_REVIEW Tier")).toBeInTheDocument();
+    expect(screen.queryByText("Simple Tier")).not.toBeInTheDocument();
+  });
+
+  it("saves an untouched custom-tier router back byte-identically, tier set and floor included", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await screen.findByText("SECURITY_REVIEW Tier");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+
+    const config = savedConfig();
+    expect(config.tier_definitions).toEqual(CUSTOM_STORED.tier_definitions);
+    expect(config.tiers).toEqual(CUSTOM_STORED.tiers);
+    expect(config.fallback_tier).toBe("CASUAL");
+    expect(config.plan_mode_min_tier).toBe("SECURITY_REVIEW");
+    expect(config.classification_prompt).toBe("operator written preamble");
+    expect(config.classifier_type).toBe("llm");
+  });
+
+  it("keeps the stored per-model reasoning effort, which hydrates by tier name and saves by row id", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await screen.findByText("SECURITY_REVIEW Tier");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+
+    expect(savedConfig().tier_model_configs).toEqual(CUSTOM_STORED.tier_model_configs);
   });
 });

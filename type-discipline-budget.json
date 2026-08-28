@@ -1,9 +1,9 @@
 {
   "LIT001": {
-    "limit": 22938
+    "limit": 22727
   },
   "LIT002": {
-    "limit": 26901
+    "limit": 26873
   },
   "LIT003": {
     "limit": 269
@@ -15,24 +15,24 @@
     "limit": 0
   },
   "LIT006": {
-    "limit": 1072
+    "limit": 1065
   },
   "LIT007": {
     "limit": 0
   },
   "LIT008": {
-    "limit": 950
+    "limit": 948
   },
   "LIT009": {
     "limit": 0
   },
   "LIT010": {
-    "limit": 16715
+    "limit": 16616
   },
   "LIT011": {
-    "limit": 5593
+    "limit": 5583
   },
   "LIT012": {
-    "limit": 4519
+    "limit": 4509
   }
 }

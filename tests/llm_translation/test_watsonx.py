@@ -1,10 +1,5 @@
 import json
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm import completion, embedding
 from litellm.llms.custom_httpx.http_handler import HTTPHandler

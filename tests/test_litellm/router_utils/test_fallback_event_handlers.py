@@ -1,4 +1,5 @@
 import json
+from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -21,6 +22,8 @@ class StreamingWrapper:
 
 
 class FakeRouter:
+    fallback_access_check = None
+
     def log_retry(self, kwargs, e):
         return kwargs
 
@@ -29,6 +32,8 @@ class FakeRouter:
 
 
 class AlwaysFailRouter:
+    fallback_access_check = None
+
     def log_retry(self, kwargs, e):
         return kwargs
 
@@ -91,6 +96,8 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
 
 
 class RecordingRouter:
+    fallback_access_check = None
+
     def __init__(self):
         self.received_kwargs = None
 
@@ -150,6 +157,8 @@ async def test_run_async_fallback_skips_original_model_group():
 
 
 class AttemptRecordingRouter:
+    fallback_access_check = None
+
     def __init__(self):
         self.attempted_model_groups = []
         self.received_kwargs = None
@@ -164,6 +173,10 @@ class AttemptRecordingRouter:
 
 
 async def _acreate_batch(*args, **kwargs):
+    raise AssertionError("only used for its __name__")
+
+
+async def _acreate_file(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("only used for its __name__")
 
 
@@ -230,6 +243,46 @@ async def test_run_async_fallback_allows_same_model_group_retry_for_uploaded_fil
 
 
 @pytest.mark.asyncio
+async def test_run_async_fallback_keeps_file_creation_in_its_model_group():
+    """A file created for batches lands in the account of the deployment that stored it,
+    and its id is only usable against the model group the caller named. A cross-group
+    fallback silently stores the file with the wrong provider."""
+    router = AttemptRecordingRouter()
+
+    with pytest.raises(RuntimeError, match="azure connection error"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["openai-group"],
+            original_model_group="azure-group",
+            original_exception=RuntimeError("azure connection error"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="azure-group",
+            original_function=_acreate_file,
+        )
+
+    assert router.attempted_model_groups == []
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_allows_same_model_group_retry_for_file_creation():
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[{"model": "azure-group", "_target_order": 2}],
+        original_model_group="azure-group",
+        original_exception=RuntimeError("first deployment failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="azure-group",
+        original_function=_acreate_file,
+    )
+
+    assert router.attempted_model_groups == ["azure-group"]
+
+
+@pytest.mark.asyncio
 async def test_run_async_fallback_still_crosses_model_groups_without_an_uploaded_file():
     router = AttemptRecordingRouter()
 
@@ -263,7 +316,11 @@ async def test_run_async_fallback_handles_explicitly_none_metadata():
         metadata=None,
     )
 
-    assert router.received_kwargs["metadata"] == {"model_group": "azure-group"}
+    assert router.received_kwargs["metadata"] == {
+        "model_group": "azure-group",
+        "attempted_fallbacks": 1,
+        "original_model_group": "openai-group",
+    }
 
 
 @pytest.mark.asyncio
@@ -290,7 +347,84 @@ async def test_run_async_fallback_records_batch_model_group_outside_provider_met
     assert router.received_kwargs["litellm_metadata"]["model_group"] == "openai-group"
 
 
+class AccessCheckedRouter(AttemptRecordingRouter):
+    def __init__(self, allowed_models: frozenset[str]):
+        super().__init__()
+        self.allowed_models = allowed_models
+        self.access_checks = []
+
+    async def fallback_access_check(self, *, model, request_kwargs, llm_router):
+        self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], llm_router is self))
+        return model in self.allowed_models
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_skips_targets_the_access_check_rejects():
+    router = AccessCheckedRouter(allowed_models=frozenset({"allowed-model"}))
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[
+            {"model": "secret-model", "messages": [{"role": "user", "content": "hi"}]},
+            "allowed-model",
+        ],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("primary failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="primary-model",
+        metadata={"user_api_key": "hashed"},
+    )
+
+    assert router.attempted_model_groups == ["allowed-model"]
+    assert router.access_checks == [
+        ("secret-model", "hashed", True),
+        ("allowed-model", "hashed", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_raises_original_error_when_no_target_is_authorized():
+    router = AccessCheckedRouter(allowed_models=frozenset())
+
+    with pytest.raises(RuntimeError, match="primary failed"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["secret-model", "other-secret-model"],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("primary failed"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="primary-model",
+            metadata={"user_api_key": "hashed"},
+        )
+
+    assert router.attempted_model_groups == []
+    assert [model for model, _, _ in router.access_checks] == ["secret-model", "other-secret-model"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_does_not_consult_access_check_for_same_model_group_retries():
+    router = AccessCheckedRouter(allowed_models=frozenset())
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[{"model": "primary-model", "_target_order": 2}],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("first order level failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="primary-model",
+        metadata={"user_api_key": "hashed"},
+    )
+
+    assert router.attempted_model_groups == ["primary-model"]
+    assert router.access_checks == []
+
+
 class RecordingFailRouter:
+    fallback_access_check = None
+
     def __init__(self):
         self.attempted_models = []
 
@@ -725,6 +859,8 @@ class TestTriggerCooldownForFailedDeployment:
 
 class TestRunAsyncFallbackTriggersCooldown:
     class RouterWithLoggingKwarg:
+        fallback_access_check = None
+
         def __init__(self):
             self.cooldown_time = 60.0
 
@@ -798,3 +934,45 @@ class TestRunAsyncFallbackTriggersCooldown:
                 )
 
             mock_trigger.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_stamps_fallback_info_into_metadata():
+    """Spend logs are built from the request metadata of the nested call, so the
+    fallback signal has to be stamped there before recursing."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("original failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+    )
+
+    metadata = router.received_kwargs["metadata"]
+    assert metadata["attempted_fallbacks"] == 1
+    assert metadata["original_model_group"] == "primary-model"
+    assert metadata["model_group"] == "fallback-model"
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_preserves_original_model_group_on_nested_fallback():
+    """A second-level fallback receives the first fallback target as its
+    original_model_group argument, so the first-stamped value must survive the hop."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["second-fallback"],
+        original_model_group="first-fallback",
+        original_exception=RuntimeError("first fallback failed"),
+        max_fallbacks=3,
+        fallback_depth=1,
+        metadata={"attempted_fallbacks": 1, "original_model_group": "primary-model"},
+    )
+
+    metadata = router.received_kwargs["metadata"]
+    assert metadata["attempted_fallbacks"] == 2
+    assert metadata["original_model_group"] == "primary-model"
