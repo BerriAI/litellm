@@ -27,6 +27,10 @@ resource "litellm_team_member_add" "example" {
   }
 
   max_budget_in_team = 100.0
+  budget_duration    = "30d"
+  tpm_limit          = 100000
+  rpm_limit          = 100
+  allowed_models     = ["gpt-4"]
 }
 ```
 
@@ -152,6 +156,10 @@ resource "litellm_team_member_add" "budget_example" {
   * `user_email` - (Optional) The email of the user to add to the team.
   * `role` - (Required) The role of the user in the team. Must be one of: "admin" or "user".
 * `max_budget_in_team` - (Optional) The maximum budget allocated for the team members.
+* `budget_duration` - (Optional) Duration after which each member's budget resets, for example "1h", "24h", "7d", "30d". If not set, the budget never resets.
+* `tpm_limit` - (Optional) Tokens per minute limit applied to each team member. Sent via `/team/member_update` after members are added, since `/team/member_add` does not accept it.
+* `rpm_limit` - (Optional) Requests per minute limit applied to each team member. Sent via `/team/member_update` after members are added, since `/team/member_add` does not accept it.
+* `allowed_models` - (Optional) List of models each team member can access. If not set, members inherit the team's `default_team_member_models` or all team models.
 
 ## Import
 
