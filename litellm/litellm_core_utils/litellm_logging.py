@@ -5032,7 +5032,7 @@ class StandardLoggingPayloadSetup:
         return start_time_float, end_time_float, completion_start_time_float
 
     @staticmethod
-    def get_system_prompt_from_kwargs(kwargs: dict[str, Any] | None) -> str | list[Any] | None:  # noqa: LIT001  # caller kwargs contain mixed types; system can be str or content-block list
+    def get_system_prompt_from_kwargs(kwargs: dict | None) -> Any:
         """
         Extract the system prompt from kwargs, checking all known sources.
 
