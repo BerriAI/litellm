@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Any, Final, Literal, cast, overload
 
 import litellm
@@ -14,6 +14,15 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+
+def _reasoning_effort_string(value: object) -> str | None:
+    """The /v1/messages and /v1/responses bridges wrap the level as {"effort", "summary"} for
+    providers with a reasoning-summary surface. Moonshot's API takes only the bare string and 400s
+    on an object, so the level is unwrapped and the summary, which has no Moonshot equivalent, is
+    dropped."""
+    effort: Final = value.get("effort") if isinstance(value, Mapping) else value
+    return effort if isinstance(effort, str) else None
 
 
 class MoonshotChatConfig(OpenAIGPTConfig):
@@ -124,7 +133,12 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
-            elif param in supported_openai_params:
+            elif param not in supported_openai_params:
+                continue
+            elif param == "reasoning_effort":
+                if (effort := _reasoning_effort_string(value)) is not None:
+                    optional_params["reasoning_effort"] = effort
+            else:
                 optional_params[param] = value
 
         ##########################################

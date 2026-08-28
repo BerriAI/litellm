@@ -807,3 +807,24 @@ class TestMoonshotReasoningEffort:
                 reasoning_effort="high",
                 drop_params=False,
             )
+
+    def test_bridge_effort_dict_is_unwrapped_to_the_level_string(self):
+        optional_params = MoonshotChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "high", "summary": "detailed"}},
+            optional_params={},
+            model="kimi-k3",
+            drop_params=False,
+        )
+
+        assert optional_params["reasoning_effort"] == "high"
+
+    @pytest.mark.parametrize("value", [{"summary": "detailed"}, {"effort": 3}, 7])
+    def test_effort_without_a_level_string_is_omitted(self, value):
+        optional_params = MoonshotChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": value},
+            optional_params={},
+            model="kimi-k3",
+            drop_params=False,
+        )
+
+        assert "reasoning_effort" not in optional_params
