@@ -16,6 +16,7 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     fixed_length_identity,
     order_tags_for_identity_resolution,
     partition_key,
+    resolve_success_event_metadata_variable_name,
 )
 from litellm.types.router import TagRateLimitEntry, TagRateLimitScope
 
@@ -122,6 +123,43 @@ def test_extract_key_hash_ignores_a_forged_value_in_the_non_authoritative_field(
 def test_extract_key_hash_reads_metadata_when_it_is_the_authoritative_field():
     request_kwargs = {"metadata": {"user_api_key": "real-hash"}}
     assert extract_key_hash(request_kwargs, "metadata") == "real-hash"
+
+
+# ---------------------------------------------------------------------------
+# resolve_success_event_metadata_variable_name -- veria-ai finding surfaced on
+# PR #38347: a caller-supplied, non-empty litellm_metadata must not be
+# selected over the metadata the proxy actually wrote authenticated tags into
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_success_event_metadata_variable_name_ignores_caller_forged_non_empty_litellm_metadata():
+    """A caller-supplied litellm_metadata with unrelated content (no
+    user_api_key_auth marker) must not be picked over metadata, even though
+    it is a non-empty dict."""
+    litellm_params_for_metadata = {"litellm_metadata": {"marker": True}}
+    assert resolve_success_event_metadata_variable_name(litellm_params_for_metadata) == "metadata"
+
+
+def test_resolve_success_event_metadata_variable_name_selects_litellm_metadata_when_server_written():
+    """A genuinely server-populated litellm_metadata (LITELLM_METADATA_ROUTES)
+    always carries the user_api_key_auth marker stamped by
+    add_user_api_key_auth_to_request_metadata."""
+    litellm_params_for_metadata = {
+        "litellm_metadata": {"user_api_key_auth": object(), "tags": ["team_id:t1"]}
+    }
+    assert resolve_success_event_metadata_variable_name(litellm_params_for_metadata) == "litellm_metadata"
+
+
+def test_resolve_success_event_metadata_variable_name_defaults_to_metadata_when_litellm_metadata_absent():
+    assert resolve_success_event_metadata_variable_name({}) == "metadata"
+
+
+def test_resolve_success_event_metadata_variable_name_defaults_to_metadata_when_litellm_metadata_none():
+    assert resolve_success_event_metadata_variable_name({"litellm_metadata": None}) == "metadata"
+
+
+def test_resolve_success_event_metadata_variable_name_defaults_to_metadata_when_litellm_metadata_empty():
+    assert resolve_success_event_metadata_variable_name({"litellm_metadata": {}}) == "metadata"
 
 
 # ---------------------------------------------------------------------------
