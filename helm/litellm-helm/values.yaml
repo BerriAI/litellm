@@ -473,6 +473,11 @@ migrationJob:
 #
 # Setting LITELLM_LOG inside `envVars:` below also wins: the template skips
 # this injection entirely when envVars already defines LITELLM_LOG.
+#
+# At WARNING or above, uvicorn inherits this level too, which silences the
+# per-request access log line that liveness and readiness probes would
+# otherwise emit on every poll. At INFO or below uvicorn keeps its own
+# default, so access logs stay on.
 logLevel: INFO
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs

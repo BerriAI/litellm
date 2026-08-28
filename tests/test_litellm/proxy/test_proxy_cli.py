@@ -136,6 +136,44 @@ class TestProxyInitializationHelpers:
             )
             assert args["timeout_worker_healthcheck"] == 15
 
+    @pytest.mark.parametrize(
+        "litellm_log, expected_uvicorn_level",
+        [
+            ("WARNING", "warning"),
+            ("WARN", "warning"),
+            ("warning", "warning"),
+            ("ERROR", "error"),
+            ("CRITICAL", "critical"),
+            ("FATAL", "critical"),
+        ],
+    )
+    def test_uvicorn_log_level_follows_litellm_log_when_quieter_than_info(
+        self, litellm_log, expected_uvicorn_level
+    ):
+        with patch("litellm._logging.log_level", litellm_log):
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000
+            )
+        assert args["log_level"] == expected_uvicorn_level
+
+    @pytest.mark.parametrize("litellm_log", ["DEBUG", "INFO", "NOTSET", "nonsense"])
+    def test_uvicorn_log_level_is_left_alone_when_litellm_log_is_not_quieter(
+        self, litellm_log
+    ):
+        with patch("litellm._logging.log_level", litellm_log):
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000
+            )
+        assert "log_level" not in args
+
+    def test_explicit_log_config_wins_over_litellm_log(self):
+        with patch("litellm._logging.log_level", "WARNING"):
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000, "log_config.json"
+            )
+        assert args["log_config"] == "log_config.json"
+        assert "log_level" not in args
+
     def test_installed_uvicorn_supports_worker_flags(self):
         params = inspect.signature(uvicorn.Config.__init__).parameters
         assert "timeout_worker_healthcheck" in params

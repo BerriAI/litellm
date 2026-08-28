@@ -5,6 +5,7 @@ import os
 import sys
 from datetime import datetime
 from logging import Formatter
+from types import MappingProxyType
 from typing import Any, Final
 
 import litellm
@@ -620,6 +621,28 @@ def _get_uvicorn_json_log_config():
     }
 
     return log_config
+
+
+_UVICORN_LOG_LEVELS_QUIETER_THAN_INFO: Final = MappingProxyType(
+    {
+        "WARN": "warning",
+        "WARNING": "warning",
+        "ERROR": "error",
+        "FATAL": "critical",
+        "CRITICAL": "critical",
+    }
+)
+
+
+def get_uvicorn_log_level() -> str | None:
+    """Uvicorn's log level to inherit from LITELLM_LOG, or None to leave uvicorn's default alone.
+
+    Only levels quieter than INFO are inherited. uvicorn.access logs one line per request, so at
+    WARNING or above an operator asking for less noise also means the health probe access lines.
+    Levels at or below INFO are not propagated: LITELLM_LOG defaults to DEBUG, and mapping that
+    onto uvicorn would turn on asgi-internals logging nobody asked for.
+    """
+    return _UVICORN_LOG_LEVELS_QUIETER_THAN_INFO.get(log_level.upper())
 
 
 def _turn_on_json():
