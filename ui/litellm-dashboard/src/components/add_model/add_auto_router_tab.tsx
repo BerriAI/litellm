@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
-import { ChevronDown, ChevronRight, CircleHelp } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { z } from "zod/v4";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -14,6 +14,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import { modelAvailableCall, validateAutoRouterConfig } from "../networking";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
@@ -22,6 +23,7 @@ import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
+  effectiveClassifierType,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -33,17 +35,16 @@ import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
-  dryRunRejection,
   getKeywordTierRulesError,
   getClassifierModelError,
   getMissingTiersError,
   getPlanModeTierError,
   getSemanticConfigError,
   getTierLabelsError,
+  dryRunRejection,
 } from "./build_complexity_router_config";
-import { activeTierName, activeTierRows, resolveComplexityDefaultModel } from "./tier_rows";
-import { DEFAULT_TIER_LABELS } from "./complexity_router_tiers";
-import type { ComplexityTier } from "./KeywordTierRules";
+import { activeTierName, activeTierRows, getCustomTierRowsError, resolveComplexityDefaultModel } from "./tier_rows";
+import { tierRowLabel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
@@ -110,7 +111,7 @@ const presets = getAllPresets();
 const tierConfigSummary = (config: ComplexityRouterConfigValue): string => {
   const parts = activeTierRows(config)
     .filter((row) => row.models.length > 0)
-    .map((row) => `${DEFAULT_TIER_LABELS[row.id as ComplexityTier] ?? activeTierName(row)}: ${row.models.join(", ")}`);
+    .map((row) => `${tierRowLabel(row, config.tier_labels)}: ${row.models.join(", ")}`);
   return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
 };
 
@@ -124,8 +125,8 @@ export const getSubmitBlockedReason = (
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
   availability: ModelAvailability,
 ): string | null =>
+  (config.custom_tier_set ? getCustomTierRowsError(config.custom_tier_set) : getTierLabelsError(config.tier_labels)) ??
   getMissingTiersError(activeTierRows(config)) ??
-  getTierLabelsError(config.tier_labels) ??
   getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
   getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
   getClassifierModelError(config) ??
@@ -145,16 +146,6 @@ const EMPTY_FORM_VALUES: AddAutoRouterFormValues = {
   team_id: "",
   model_access_group: undefined,
 };
-
-const labelWithHint = (label: string, hint: string): React.ReactNode => (
-  <>
-    {label}
-    <Tooltip>
-      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
-      <TooltipContent>{hint}</TooltipContent>
-    </Tooltip>
-  </>
-);
 
 const teamScopePayload = (requiresTeamScope: boolean, teamId: string): { team_id?: string } =>
   requiresTeamScope ? { team_id: teamId } : {};
@@ -197,7 +188,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [editingTiers, setEditingTiers] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
   // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
@@ -297,6 +289,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   );
 
   const applyPrefill = (prefill: PresetPrefill) => {
+    setEditingTiers(false);
     setComplexityRouterConfig(prefill.complexityRouterConfig);
     setCustomTechnicalKeywords(prefill.customTechnicalKeywords);
     setKeywordTierRules(prefill.keywordTierRules);
@@ -327,8 +320,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const referencedModelsParams = {
-    tiers: complexityRouterConfig.tiers,
-    classifierType: complexityRouterConfig.classifier_type,
+    tiers: Object.fromEntries(activeTierRows(complexityRouterConfig).map((row) => [activeTierName(row), row.models])),
+    classifierType: effectiveClassifierType(complexityRouterConfig),
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     semanticMatchingEnabled,
     embeddingModel,
@@ -344,6 +337,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
+    customTierSet: complexityRouterConfig.custom_tier_set,
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
@@ -375,8 +369,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const submitRecommendedRouter = async (name: string) => {
-    const { tiers } = complexityRouterConfigParams;
-
     // The one answer the submit button reads, so a disabled button and a refused submit cannot
     // disagree about why. The handler needs it in its own right: the form fires this on Enter
     // regardless of the button's disabled state.
@@ -403,6 +395,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
+    // auto_router_default_model (-> litellm_params, read by the backend at init) and
+    // complexity_router_config.default_model (-> the pin marker read back on edit, see
+    // hydratePinnedDefaultModel in edit_auto_router_modal.tsx) must both come from the same
+    // `defaultModel`, or the two fields diverge and hydration's divergence check misfires.
     const complexityRouterConfigPayload = buildComplexityRouterConfig(complexityRouterConfigParams);
     const serverVerdict = await validateAutoRouterConfig(
       accessToken,
@@ -416,10 +412,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    // auto_router_default_model (-> litellm_params, read by the backend at init) and
-    // complexity_router_config.default_model (-> the pin marker read back on edit, see
-    // hydratePinnedDefaultModel in edit_auto_router_modal.tsx) must both come from the same
-    // `defaultModel`, or the two fields diverge and hydration's divergence check misfires.
     const submitValues: AddAutoRouterValues = {
       auto_router_name: name,
       ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
@@ -433,7 +425,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const handleAutoRouterSubmit = async () => {
-    if (isSubmitting) return;
     const name = form.getValues("auto_router_name");
     if (!name) {
       setShowValidationErrors(true);
@@ -579,6 +570,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 {detailsExpanded && (
                   <div className="px-4 pb-4">
                     <ComplexityRouterConfig
+                      editingTiers={editingTiers}
+                      onEditingTiersChange={setEditingTiers}
                       modelInfo={modelInfo}
                       value={complexityRouterConfig}
                       onChange={setComplexityRouterConfig}
@@ -642,7 +635,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       type="button"
                       variant="outline"
                       data-testid="auto-router-test-routing-btn"
-                      disabled={submitBlockedReason !== null}
+                      disabled={submitBlockedReason !== null || isSubmitting}
                       onClick={() => setIsRoutingTestVisible(true)}
                     >
                       Test Routing
@@ -666,7 +659,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                         void handleAutoRouterSubmit();
                       }}
                     >
-                      {isSubmitting && <UiLoadingSpinner className="size-4" />}
                       Add Auto Router
                     </Button>
                   </BlockedReasonTooltip>
