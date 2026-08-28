@@ -3,7 +3,7 @@ import json
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from types import MappingProxyType
@@ -224,7 +224,7 @@ class _BudgetCascade:
     endusers: tuple[_EndUserRow, ...] = ()
     counter_resets: tuple[tuple[str, float], ...] = ()
     cache_keys: tuple[str, ...] = ()
-    rollover_caps: Mapping[str, float] = MappingProxyType({})
+    rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
