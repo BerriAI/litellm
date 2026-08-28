@@ -8605,6 +8605,12 @@ def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional
         return _stream_builder_model_map_cost(response)
 
 
+def _joined_streamed_citations(streamed_citations: "tuple[object, ...]") -> "list[object]":
+    if all(isinstance(citation, list) for citation in streamed_citations):
+        return list(streamed_citations)  # mutable-ok: JSON list field
+    return [list(streamed_citations)]  # mutable-ok: JSON list field
+
+
 def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
     model_name: Final = getattr(response, "model", None)
     usage: Final = getattr(response, "usage", None)
@@ -8861,7 +8867,9 @@ def stream_chunk_builder(
                 fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
             )
             citation_fields: Final = (
-                {"citations": [list(streamed_citations)]} if streamed_citations else {}  # mutable-ok: JSON dict field
+                {"citations": _joined_streamed_citations(streamed_citations)}  # mutable-ok: JSON dict field
+                if streamed_citations
+                else {}  # mutable-ok: JSON dict field
             )
             combined_provider_fields: Final = {  # mutable-ok: Message.provider_specific_fields is a plain dict field
                 key: value
