@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
-import { modelAvailableCall } from "../networking";
+import { modelAvailableCall, validateAutoRouterConfig } from "../networking";
 import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
@@ -33,6 +33,7 @@ import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
+  dryRunRejection,
   getKeywordTierRulesError,
   getClassifierModelError,
   getMissingTiersError,
@@ -401,6 +402,19 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
+    const complexityRouterConfigPayload = buildComplexityRouterConfig(complexityRouterConfigParams);
+    const serverVerdict = await validateAutoRouterConfig(
+      accessToken,
+      complexityRouterConfigPayload as unknown as Record<string, unknown>,
+      requiresTeamScope ? form.getValues("team_id") : undefined,
+    );
+    const dryRunError = dryRunRejection(serverVerdict);
+    if (dryRunError) {
+      setShowValidationErrors(true);
+      toast.fromError(dryRunError);
+      return;
+    }
+
     // auto_router_default_model (-> litellm_params, read by the backend at init) and
     // complexity_router_config.default_model (-> the pin marker read back on edit, see
     // hydratePinnedDefaultModel in edit_auto_router_modal.tsx) must both come from the same
@@ -410,7 +424,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
       auto_router_default_model: defaultModel,
       model_type: "complexity_router",
-      complexity_router_config: buildComplexityRouterConfig(complexityRouterConfigParams),
+      complexity_router_config: complexityRouterConfigPayload,
       model_access_group: form.getValues("model_access_group"),
     };
 
