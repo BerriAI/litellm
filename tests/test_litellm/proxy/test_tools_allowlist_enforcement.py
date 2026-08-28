@@ -86,6 +86,31 @@ class TestExtractRequestToolNames:
             "get_current_weather",
         ]
 
+    def test_openai_responses_builtin_tools(self):
+        """Built-in server-side tools carry no name of their own, so they act under their
+        type; without that a restricted key could still reach the internet and bill for
+        web_search while its allowlist named nothing of the sort (VERIA finding on PR #37995)."""
+        data = {
+            "tools": [
+                {"type": "web_search"},
+                {"type": "code_interpreter", "container": {"type": "auto"}},
+                {"type": "function", "name": "get_current_weather"},
+                {"type": "mcp", "server_label": "dmcp", "server_url": "http://x"},
+            ]
+        }
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "web_search",
+            "code_interpreter",
+            "get_current_weather",
+            "dmcp",
+        ]
+
+    def test_openai_responses_unnamed_tool_yields_no_name(self):
+        """A function or custom tool missing its name must not fall back to the bare type:
+        that would let "function" satisfy an allowlist that never granted the real tool."""
+        data = {"tools": [{"type": "function"}, {"type": "custom", "name": ""}, {"type": "mcp"}, "junk"]}
+        assert extract_request_tool_names("/v1/responses", data) == []
+
     def test_anthropic_tools(self):
         data = {"tools": [{"name": "get_weather"}, {"name": "run_sql"}]}
         assert extract_request_tool_names("/v1/messages", data) == [
@@ -226,6 +251,34 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_disallowed_builtin_web_search_raises_on_responses_route(self):
+        token = _token(metadata={"allowed_tools": ["run_sql"]})
+        body = {"tools": [{"type": "web_search"}]}
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "web_search" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_allowlisted_builtin_web_search_passes_on_responses_route(self):
+        token = _token(metadata={"allowed_tools": ["web_search", "run_sql"]})
+        tools = [{"type": "web_search"}, {"type": "function", "name": "run_sql"}]
+        body = {"tools": tools}
+        assert extract_request_tool_names("/v1/responses", body) == ["web_search", "run_sql"]
+        await check_tools_allowlist(
+            request_body=body,
+            valid_token=token,
+            team_object=None,
+            route="/v1/responses",
+        )
+        assert body["tools"] == tools
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):

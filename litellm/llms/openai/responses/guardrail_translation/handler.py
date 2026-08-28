@@ -216,18 +216,25 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         return data
 
+    @staticmethod
+    def _request_tool_name(tool: object) -> str | None:
+        """The name a Responses request tool acts under: ``name`` for function and custom,
+        ``server_label`` for mcp, and the bare ``type`` for built-in server-side tools
+        (web_search, code_interpreter, ...) that carry no name of their own. Those bill and
+        reach the internet, so allowlist checks must see them under some name."""
+        if not isinstance(tool, dict):
+            return None
+        tool_type: Final = tool.get("type")
+        if tool_type in ("function", "custom"):
+            name: Final = tool.get("name")
+            return str(name) if name else None
+        if tool_type == "mcp":
+            server_label: Final = tool.get("server_label")
+            return str(server_label) if server_label else None
+        return str(tool_type) if tool_type else None
+
     def extract_request_tool_names(self, data: dict) -> list[str]:
-        """Extract tool names from Responses API request (tools[].name for function
-        and custom, tools[].server_label for mcp)."""
-        names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
-            if not isinstance(tool, dict):
-                continue
-            if tool.get("type") in ("function", "custom") and tool.get("name"):
-                names.append(str(tool["name"]))
-            elif tool.get("type") == "mcp" and tool.get("server_label"):
-                names.append(str(tool["server_label"]))
-        return names
+        return [name for tool in data.get("tools") or [] if (name := self._request_tool_name(tool)) is not None]
 
     def _extract_and_transform_tools(
         self,
