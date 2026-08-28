@@ -1875,3 +1875,54 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
         assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
             1 if expect_spend_log else 0
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+async def test_async_post_call_failure_hook_records_selected_deployment(metadata_key):
+    """A failed request must persist the deployment the Router picked. Routes such as
+    /v1/messages keep that state in ``litellm_metadata``, and ``api_base`` only ever
+    reaches the spend log through ``litellm_params``."""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    logger = _ProxyDBLogger()
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "trace-id"
+    mock_logging_obj.model_call_details = {
+        "litellm_params": {"api_base": "https://upstream-b.example.com"}
+    }
+
+    request_data = {
+        "model": "GLM-5",
+        "messages": [{"role": "user", "content": "Hello"}],
+        metadata_key: {
+            "model_group": "GLM-5",
+            "model_info": {"id": "deployment-b"},
+            "api_base": "https://upstream-b.example.com",
+            "deployment": "anthropic/glm-5",
+        },
+        "litellm_logging_obj": mock_logging_obj,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("upstream returned 400"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", user_id="test_user_id"),
+        )
+
+    call_kwargs = mock_update_database.call_args[1]["kwargs"]
+    payload = get_logging_payload(
+        kwargs=call_kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert payload["model_id"] == "deployment-b"
+    assert payload["model_group"] == "GLM-5"
+    assert payload["api_base"] == "https://upstream-b.example.com"
