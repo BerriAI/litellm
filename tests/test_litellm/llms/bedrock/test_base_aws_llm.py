@@ -741,6 +741,7 @@ def test_sign_request_with_api_key_bearer_token():
 def test_bearer_token_skips_boto_credential_resolution(
     api_key: str | None,
     env_bearer_token: str | None,
+    monkeypatch,
 ):
     llm = BaseAWSLLM()
     optional_params = {
@@ -748,35 +749,32 @@ def test_bearer_token_skips_boto_credential_resolution(
         "aws_profile_name": "litellm-profile-that-does-not-exist",
     }
 
-    with patch(
-        "litellm.llms.bedrock.base_aws_llm.get_secret_str",
-        return_value=env_bearer_token,
-    ):
-        credential_info = llm._get_boto_credentials_from_optional_params(
-            optional_params,
-            api_key=api_key,
-            supports_bearer_token=True,
-        )
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    if env_bearer_token is not None:
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", env_bearer_token)
+
+    credential_info = llm._get_boto_credentials_from_optional_params(
+        optional_params,
+        api_key=api_key,
+        supports_bearer_token=True,
+    )
 
     assert credential_info.credentials is None
     assert credential_info.aws_region_name == "us-east-1"
 
 
-def test_shared_boto_helper_requires_credentials_by_default():
+def test_shared_boto_helper_requires_credentials_by_default(monkeypatch):
     llm = BaseAWSLLM()
 
-    with patch(
-        "litellm.llms.bedrock.base_aws_llm.get_secret_str",
-        return_value="environment-bearer-token",
-    ):
-        credential_info = llm._get_boto_credentials_from_optional_params(
-            {
-                "aws_region_name": "us-east-1",
-                "aws_access_key_id": "test_key",
-                "aws_secret_access_key": "test_secret",
-                "aws_session_token": "test_token",
-            },
-        )
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "environment-bearer-token")
+    credential_info = llm._get_boto_credentials_from_optional_params(
+        {
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "test_key",
+            "aws_secret_access_key": "test_secret",
+            "aws_session_token": "test_token",
+        },
+    )
 
     assert credential_info.credentials is not None
     assert credential_info.credentials.access_key == "test_key"

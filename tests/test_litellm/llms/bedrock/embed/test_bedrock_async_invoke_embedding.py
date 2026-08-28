@@ -1,7 +1,9 @@
 import json
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -246,15 +248,17 @@ class TestBedrockAsyncInvokeEmbedding:
         from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
 
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
-        response = Mock(status_code=200)
-        response.json.return_value = async_invoke_status_response
-        client = Mock()
-        client.get = AsyncMock(return_value=response)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        status_url = (
+            "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke/"
+            "arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aasync-invoke%2Fabc123def456"
+        )
 
-        with patch(
-            "litellm.llms.bedrock.embed.embedding.get_async_httpx_client",
-            return_value=client,
-        ):
+        with respx.mock:
+            route = respx.get(status_url).mock(
+                return_value=httpx.Response(200, json=async_invoke_status_response)
+            )
             status_response = await BedrockEmbedding()._get_async_invoke_status(
                 invocation_arn="arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456",
                 aws_region_name="us-east-1",
@@ -263,7 +267,7 @@ class TestBedrockAsyncInvokeEmbedding:
                 aws_session_token="test-session-token",
             )
 
-        request_headers = client.get.await_args.kwargs["headers"]
+        request_headers = route.calls.last.request.headers
         assert request_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
         assert status_response == async_invoke_status_response
 
