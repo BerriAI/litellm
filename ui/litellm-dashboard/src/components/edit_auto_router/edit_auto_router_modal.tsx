@@ -247,6 +247,10 @@ export interface KeywordMatchingState {
   matchThreshold: number;
 }
 
+// A custom save drops the stored keys an edited tier set forbids.
+const customTierDroppedKeys = (value: ComplexityRouterConfigValue): readonly string[] =>
+  value.custom_tier_set ? CUSTOM_TIER_OMITTED_KEYS : [];
+
 export const buildUpdatedComplexityRouterConfig = (
   storedConfig: unknown,
   value: ComplexityRouterConfigValue,
@@ -258,8 +262,7 @@ export const buildUpdatedComplexityRouterConfig = (
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
   };
-  // A custom save drops the stored keys an edited tier set forbids.
-  const dropped: readonly string[] = value.custom_tier_set ? CUSTOM_TIER_OMITTED_KEYS : [];
+  const dropped = customTierDroppedKeys(value);
   const preservedConfig = Object.fromEntries(
     Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key) && !dropped.includes(key)),
   );

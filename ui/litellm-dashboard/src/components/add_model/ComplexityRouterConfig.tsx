@@ -164,6 +164,177 @@ const rowOrigin = (row: TierRow, editing: boolean): string => {
   return isBuiltInTierName(row.name) ? "built-in" : "custom";
 };
 
+const defaultModelPlaceholderFor = (derivedDefaultModel: string | undefined, isCustomSet: boolean): string => {
+  if (derivedDefaultModel) return `Derived from tiers: ${derivedDefaultModel}`;
+  return isCustomSet ? "Add a model to your fallback tier" : "Add a model to the Simple or Medium tier";
+};
+
+const builtInTierInfo = (rowId: string): { label: string; description: string; examples: string } | undefined => {
+  const builtIn = TIER_ORDER.find((tier) => tier === rowId);
+  return builtIn ? TIER_DESCRIPTIONS[builtIn] : undefined;
+};
+
+const TierConfigIntro: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => (
+  <>
+    <span className="block mb-6 text-muted-foreground">
+      {heuristicScoringRole(value) === "never"
+        ? "The complexity router classifies each request with your classifier model and routes it to that tier. Configure which model(s) handle each tier."
+        : "The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls, <1ms latency). Configure which model(s) handle each tier."}
+    </span>
+
+    <span className="block mb-4 text-xs text-muted-foreground">
+      {restrictedBy(value, "displayNames")?.reason ??
+        "Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn't change how requests are classified, and callers never see these names."}
+      {!value.custom_tier_set &&
+        usesLlmClassifier(value.classifier_type) &&
+        " Your classifier model reads these names, so clearer ones can sharpen its choices."}
+    </span>
+  </>
+);
+
+const TierSetToolbar: React.FC<{
+  editing: boolean;
+  isCustomSet: boolean;
+  rowCount: number;
+  rowsError: string | null;
+  onEditingChange: ((editing: boolean) => void) | undefined;
+  onAdd: () => void;
+  onRestore: () => void;
+}> = ({ editing, isCustomSet, rowCount, rowsError, onEditingChange, onAdd, onRestore }) => (
+  <>
+    <div className="mt-4 flex flex-wrap items-center gap-2">
+      {editing ? (
+        <>
+          <Button variant="outline" onClick={onAdd} disabled={rowCount >= MAX_TIER_COUNT}>
+            <Plus />
+            Add tier
+          </Button>
+          <SimpleTooltip content={rowsError || undefined}>
+            <Button variant="outline" disabled={Boolean(rowsError)} onClick={() => onEditingChange?.(false)}>
+              Done
+            </Button>
+          </SimpleTooltip>
+          {isCustomSet && (
+            <Button variant="outline" size="sm" onClick={onRestore}>
+              Restore defaults
+            </Button>
+          )}
+        </>
+      ) : (
+        onEditingChange && (
+          <Button variant="outline" onClick={() => onEditingChange(true)}>
+            Edit tiers
+          </Button>
+        )
+      )}
+    </div>
+    {editing && (
+      <span className="block mt-1 text-xs text-muted-foreground">
+        Add or remove tiers to define your own set. Every custom tier needs a definition the LLM classifier routes on,
+        and an edited set requires the LLM classification method
+      </span>
+    )}
+  </>
+);
+
+const FallbackTierField: React.FC<{
+  rows: readonly TierRow[];
+  fallbackTierId: string;
+  onValueChange: (rowId: string) => void;
+}> = ({ rows, fallbackTierId, onValueChange }) => (
+  <div className="mt-4">
+    <div className="flex items-center gap-2 mb-2">
+      <strong className="text-base font-semibold">Fallback Tier</strong>
+      <SimpleTooltip content="Where requests route when the LLM classifier errors, times out, or returns an unparseable reply. Required for an edited tier set: the heuristic scorer cannot produce your tiers.">
+        <Info className="size-4 text-muted-foreground" />
+      </SimpleTooltip>
+    </div>
+    <TierRowSelect
+      label="Fallback tier"
+      options={rows.filter((row) => activeTierName(row)).map((row) => ({ value: row.id, label: activeTierName(row) }))}
+      value={fallbackTierId || null}
+      onValueChange={onValueChange}
+      placeholder="Pick the tier classifier failures route to"
+    />
+  </div>
+);
+
+const TierRowHeader: React.FC<{
+  row: TierRow;
+  index: number;
+  rowCount: number;
+  label: string;
+  description: string | undefined;
+  editing: boolean;
+  isCustomSet: boolean;
+  onRemove: () => void;
+}> = ({ row, index, rowCount, label, description, editing, isCustomSet, onRemove }) => (
+  <div className="flex items-center gap-2 mb-2">
+    <strong className="text-base font-semibold">{label} Tier</strong>
+    <SimpleTooltip
+      content={
+        row.definition.trim() ||
+        description ||
+        "A tier you defined. The classifier routes requests matching its definition here."
+      }
+    >
+      <Info className="size-4 text-muted-foreground" />
+    </SimpleTooltip>
+    <span className="text-xs text-muted-foreground">
+      Tier {index + 1} of {rowCount} &middot; {rowOrigin(row, isCustomSet)}
+    </span>
+    {editing && (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="text-destructive hover:text-destructive/80"
+        aria-label={`Remove the ${activeTierName(row) || `tier ${index + 1}`} tier`}
+        disabled={rowCount <= MIN_TIER_COUNT}
+        onClick={onRemove}
+      >
+        <Trash2 />
+        Remove
+      </Button>
+    )}
+  </div>
+);
+
+const TierRowEditFields: React.FC<{
+  row: TierRow;
+  index: number;
+  definitionMissing: boolean;
+  onPatch: (patch: Partial<Omit<TierRow, "id">>) => void;
+}> = ({ row, index, definitionMissing, onPatch }) => (
+  <>
+    <Input
+      value={row.name}
+      onChange={(event) => onPatch({ name: event.target.value })}
+      placeholder="Tier name, e.g. SECURITY_REVIEW"
+      aria-label={`Name for tier ${index + 1}`}
+      maxLength={MAX_TIER_NAME_CHARS}
+      className="mb-2"
+    />
+    <Textarea
+      value={row.definition}
+      onChange={(event) => onPatch({ definition: event.target.value.replace(/[\r\n]+/g, " ") })}
+      placeholder={
+        isBuiltInTierName(row.name)
+          ? "Leave blank to keep the built-in definition"
+          : "What belongs in this tier, e.g. requests asking for a security audit"
+      }
+      aria-label={`Definition for tier ${index + 1}`}
+      maxLength={MAX_TIER_DEFINITION_CHARS}
+      rows={2}
+      className={definitionMissing ? "mb-2 border-destructive" : "mb-2"}
+    />
+    {definitionMissing && (
+      <span className="mb-2 block text-xs text-destructive">
+        A definition is required: it is the rubric the classifier routes on for this tier
+      </span>
+    )}
+  </>
+);
+
 const TierRowSelect: React.FC<{
   label: string;
   options: { value: string; label: string }[];
@@ -416,10 +587,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     label: tierRowLabel(row, value.tier_labels),
   }));
   const derivedDefaultModel = resolveComplexityDefaultModel(value);
-  const emptyTiersHint = customTierSet
-    ? "Add a model to your fallback tier"
-    : "Add a model to the Simple or Medium tier";
-  const defaultModelPlaceholder = derivedDefaultModel ? `Derived from tiers: ${derivedDefaultModel}` : emptyTiersHint;
+  const defaultModelPlaceholder = defaultModelPlaceholderFor(derivedDefaultModel, Boolean(customTierSet));
   const defaultModel = resolveComplexityDefaultModel(value, value.default_model);
 
   const dispatch = (action: TierSetAction) => {
@@ -480,97 +648,43 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         </SimpleTooltip>
       </div>
 
-      <span className="block mb-6 text-muted-foreground">
-        {heuristicScoringRole(value) === "never"
-          ? "The complexity router classifies each request with your classifier model and routes it to that tier. Configure which model(s) handle each tier."
-          : "The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls, <1ms latency). Configure which model(s) handle each tier."}
-      </span>
-
-      <span className="block mb-4 text-xs text-muted-foreground">
-        {restrictedBy(value, "displayNames")?.reason ??
-          "Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn't change how requests are classified, and callers never see these names."}
-        {!customTierSet &&
-          usesLlmClassifier(value.classifier_type) &&
-          " Your classifier model reads these names, so clearer ones can sharpen its choices."}
-      </span>
+      <TierConfigIntro value={value} />
 
       <Card>
         <CardContent>
           {tierRows.map((row, index) => {
-            const builtIn = TIER_ORDER.find((tier) => tier === row.id);
-            const tierInfo = builtIn ? TIER_DESCRIPTIONS[builtIn] : undefined;
+            const tierInfo = builtInTierInfo(row.id);
             const label = tierRowLabel(row, value.tier_labels);
             const tierMissing = showValidationErrors && row.models.length === 0;
-            const definitionMissing =
-              showValidationErrors && Boolean(customTierSet) && !row.definition.trim() && !isBuiltInTierName(row.name);
+            const needsDefinition = Boolean(customTierSet) && !row.definition.trim() && !isBuiltInTierName(row.name);
+            const definitionMissing = showValidationErrors && needsDefinition;
+            const showsDisplayName = !customTierSet && !editingTiers;
             return (
               <div key={row.id}>
                 {index > 0 && <Separator className="my-4" />}
                 <div className="mb-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <strong className="text-base font-semibold">{label} Tier</strong>
-                    <SimpleTooltip
-                      content={
-                        row.definition.trim() ||
-                        tierInfo?.description ||
-                        "A tier you defined. The classifier routes requests matching its definition here."
-                      }
-                    >
-                      <Info className="size-4 text-muted-foreground" />
-                    </SimpleTooltip>
-                    <span className="text-xs text-muted-foreground">
-                      Tier {index + 1} of {tierRows.length} &middot; {rowOrigin(row, Boolean(customTierSet))}
-                    </span>
-                    {editingTiers && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive hover:text-destructive/80"
-                        aria-label={`Remove the ${activeTierName(row) || `tier ${index + 1}`} tier`}
-                        disabled={tierRows.length <= MIN_TIER_COUNT}
-                        onClick={() => removeTierRow(row.id)}
-                      >
-                        <Trash2 />
-                        Remove
-                      </Button>
-                    )}
-                  </div>
+                  <TierRowHeader
+                    row={row}
+                    index={index}
+                    rowCount={tierRows.length}
+                    label={label}
+                    description={tierInfo?.description}
+                    editing={editingTiers}
+                    isCustomSet={Boolean(customTierSet)}
+                    onRemove={() => removeTierRow(row.id)}
+                  />
                   {tierInfo && !customTierSet && (
                     <span className="block mb-2 text-xs text-muted-foreground">Examples: {tierInfo.examples}</span>
                   )}
                   {editingTiers && (
-                    <>
-                      <Input
-                        value={row.name}
-                        onChange={(event) => updateTierRow(row.id, { name: event.target.value })}
-                        placeholder="Tier name, e.g. SECURITY_REVIEW"
-                        aria-label={`Name for tier ${index + 1}`}
-                        maxLength={MAX_TIER_NAME_CHARS}
-                        className="mb-2"
-                      />
-                      <Textarea
-                        value={row.definition}
-                        onChange={(event) =>
-                          updateTierRow(row.id, { definition: event.target.value.replace(/[\r\n]+/g, " ") })
-                        }
-                        placeholder={
-                          isBuiltInTierName(row.name)
-                            ? "Leave blank to keep the built-in definition"
-                            : "What belongs in this tier, e.g. requests asking for a security audit"
-                        }
-                        aria-label={`Definition for tier ${index + 1}`}
-                        maxLength={MAX_TIER_DEFINITION_CHARS}
-                        rows={2}
-                        className={definitionMissing ? "mb-2 border-destructive" : "mb-2"}
-                      />
-                      {definitionMissing && (
-                        <span className="mb-2 block text-xs text-destructive">
-                          A definition is required: it is the rubric the classifier routes on for this tier
-                        </span>
-                      )}
-                    </>
+                    <TierRowEditFields
+                      row={row}
+                      index={index}
+                      definitionMissing={definitionMissing}
+                      onPatch={(patch) => updateTierRow(row.id, patch)}
+                    />
                   )}
-                  {!customTierSet && !editingTiers && tierInfo && (
+                  {showsDisplayName && tierInfo && (
                     <InputGroup className="mb-2">
                       <InputGroupInput
                         value={value.tier_labels?.[row.id as keyof ComplexityTiers] ?? ""}
@@ -618,61 +732,22 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             );
           })}
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            {editingTiers ? (
-              <>
-                <Button variant="outline" onClick={addCustomTier} disabled={tierRows.length >= MAX_TIER_COUNT}>
-                  <Plus />
-                  Add tier
-                </Button>
-                <SimpleTooltip content={tierRowsError || undefined}>
-                  <Button
-                    variant="outline"
-                    disabled={Boolean(tierRowsError)}
-                    onClick={() => onEditingTiersChange?.(false)}
-                  >
-                    Done
-                  </Button>
-                </SimpleTooltip>
-                {customTierSet && (
-                  <Button variant="outline" size="sm" onClick={exitToBuiltInTiers}>
-                    Restore defaults
-                  </Button>
-                )}
-              </>
-            ) : (
-              onEditingTiersChange && (
-                <Button variant="outline" onClick={() => onEditingTiersChange(true)}>
-                  Edit tiers
-                </Button>
-              )
-            )}
-          </div>
-          {editingTiers && (
-            <span className="block mt-1 text-xs text-muted-foreground">
-              Add or remove tiers to define your own set. Every custom tier needs a definition the LLM classifier routes
-              on, and an edited set requires the LLM classification method
-            </span>
-          )}
+          <TierSetToolbar
+            editing={editingTiers}
+            isCustomSet={Boolean(customTierSet)}
+            rowCount={tierRows.length}
+            rowsError={tierRowsError}
+            onEditingChange={onEditingTiersChange}
+            onAdd={addCustomTier}
+            onRestore={exitToBuiltInTiers}
+          />
 
           {customTierSet && (
-            <div className="mt-4">
-              <div className="flex items-center gap-2 mb-2">
-                <strong className="text-base font-semibold">Fallback Tier</strong>
-                <SimpleTooltip content="Where requests route when the LLM classifier errors, times out, or returns an unparseable reply. Required for an edited tier set: the heuristic scorer cannot produce your tiers.">
-                  <Info className="size-4 text-muted-foreground" />
-                </SimpleTooltip>
-              </div>
-              <TierRowSelect
-                label="Fallback tier"
-                options={tierRows
-                  .filter((row) => activeTierName(row))
-                  .map((row) => ({ value: row.id, label: activeTierName(row) }))}
-                value={customTierSet.fallback_tier_id || null}
-                onValueChange={(fallbackTierId) => onChange(setFallbackTier(value, fallbackTierId))}
-                placeholder="Pick the tier classifier failures route to"
-              />
-            </div>
+            <FallbackTierField
+              rows={tierRows}
+              fallbackTierId={customTierSet.fallback_tier_id}
+              onValueChange={(fallbackTierId) => onChange(setFallbackTier(value, fallbackTierId))}
+            />
           )}
 
           <Separator className="my-4" />
