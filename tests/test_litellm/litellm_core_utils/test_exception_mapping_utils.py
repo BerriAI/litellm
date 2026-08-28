@@ -164,6 +164,23 @@ class TestExceptionCheckers:
             is True
         )
 
+    def test_rate_limit_provider_specific_phrases(self):
+        """Test that common vendor rate-limit and quota exhaustion phrases are properly recognized."""
+        vendor_phrases = [
+            "GeminiException - Resource has been exhausted (e.g. check quota)",
+            "VertexAIException - resource_exhausted: quota exceeded for default tier",
+            "OpenAIException - insufficient_quota: You exceeded your current quota",
+            "BedrockException - provisioned throughput exceeded for model",
+            "DatabricksException - request_rate_too_large",
+            "TogetherAIException - concurrency limit reached: max 20 concurrent requests",
+            "GroqException - tokens per minute exceeded (TPM limit)",
+            "AnthropicException - capacity temporarily exceeded",
+        ]
+        for phrase in vendor_phrases:
+            assert (
+                ExceptionCheckers.is_error_str_rate_limit(phrase, status_code=400) is True
+            ), f"Failed to recognize rate limit in phrase: {phrase}"
+
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
 
