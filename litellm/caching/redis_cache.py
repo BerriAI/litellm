@@ -246,7 +246,9 @@ async def _run_under_circuit_breaker(
     return result
 
 
-def _redis_circuit_breaker_guard(method):
+def _redis_circuit_breaker_guard(
+    method: Callable[..., Awaitable[_RedisCallResult]],
+) -> Callable[..., Awaitable[_RedisCallResult]]:
     """
     Decorator for RedisCache async methods.
     Checks the circuit breaker before each call; records success/failure after.
@@ -260,7 +262,7 @@ def _redis_circuit_breaker_guard(method):
     """
 
     @functools.wraps(method)
-    async def wrapper(self, *args, **kwargs):
+    async def wrapper(self: "RedisCache", *args: object, **kwargs: object) -> _RedisCallResult:
         return await _run_under_circuit_breaker(
             self._circuit_breaker, method.__name__, lambda: method(self, *args, **kwargs)
         )
