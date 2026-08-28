@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
 from litellm.litellm_core_utils.llm_judge import judge_target
@@ -678,6 +679,20 @@ def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) 
     )
 
 
+def _sdk_model_is_missing_anthropic_credentials(model: str) -> bool:
+    _, provider, _, _ = litellm.get_llm_provider(model=model)
+    if provider != "anthropic" or litellm.anthropic_key or litellm.api_key:
+        return False
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.secret_managers.main import secret_manager_would_be_consulted
+
+    if AnthropicModelInfo.get_api_key() or AnthropicModelInfo.get_auth_token():
+        return False
+    return not any(
+        secret_manager_would_be_consulted(secret_name) for secret_name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+    )
+
+
 def _validate_plain_model(
     llm_router: "Router | None", model: str, field_name: str, team_ids: Sequence[str | None]
 ) -> None:
@@ -694,14 +709,26 @@ def _validate_plain_model(
             status_code=400,
             detail=f"{field_name} '{model}' is an auto-router; it must be a plain model",
         )
-    unreachable: Final = tuple(team for team in team_ids if judge_target(llm_router, model, team).via == "nothing")
-    if not unreachable:
+    targets: Final = tuple((team, judge_target(llm_router, model, team)) for team in team_ids)
+    unreachable: Final = tuple(team for team, target in targets if target.via == "nothing")
+    if unreachable:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{field_name} '{model}' is neither a model configured on this proxy nor a "
+                "provider-qualified public model name (e.g. 'anthropic/claude-sonnet-5')" + _for_teams(unreachable)
+            ),
+        )
+    sdk_teams: Final = tuple(team for team, target in targets if target.via == "sdk")
+    if not sdk_teams:
+        return
+    if not _sdk_model_is_missing_anthropic_credentials(model):
         return
     raise HTTPException(
         status_code=400,
         detail=(
-            f"{field_name} '{model}' is neither a model configured on this proxy nor a "
-            "provider-qualified public model name (e.g. 'anthropic/claude-sonnet-5')" + _for_teams(unreachable)
+            f"{field_name} '{model}' uses the LiteLLM SDK but required credentials are not configured: "
+            "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN" + _for_teams(sdk_teams)
         ),
     )
 
