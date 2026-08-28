@@ -460,6 +460,92 @@ def test_v2_db_push_retries_are_bounded_and_report_the_prisma_error(
     assert "P1001" in str(exc.value)
 
 
+def _db_push_only(push_side_effect):
+    """subprocess.run stand-in that only intercepts `prisma db push`."""
+    pushes = {"n": 0}
+
+    def _run(*args, **kwargs):
+        cmd = list(args[0] if args else kwargs.get("args", []))
+        if cmd[-3:] != ["db", "push", "--accept-data-loss"]:
+            return _DeployApplied()
+        pushes["n"] += 1
+        return push_side_effect(pushes["n"], cmd)
+
+    return _run, pushes
+
+
+def _timed_out_for_real():
+    """Capture what subprocess.run really puts on a TimeoutExpired.
+
+    Under text=True it still leaves stderr as bytes, unlike CalledProcessError,
+    so hardcoding a str here would test a shape production never sees. Derived
+    at import, before any test patches subprocess.run.
+    """
+    try:
+        subprocess.run(
+            ["sh", "-c", "echo 'Error: P1001 unreachable' >&2; sleep 5"],
+            timeout=0.2,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.TimeoutExpired as e:
+        return e
+    raise AssertionError("the helper command was supposed to time out")
+
+
+_TIMEOUT_TEMPLATE = _timed_out_for_real()
+
+
+def _real_timeout_expired(cmd):
+    return subprocess.TimeoutExpired(
+        cmd=cmd,
+        timeout=_TIMEOUT_TEMPLATE.timeout,
+        output=_TIMEOUT_TEMPLATE.stdout,
+        stderr=_TIMEOUT_TEMPLATE.stderr,
+    )
+
+
+def test_v2_db_push_retries_a_timeout(monkeypatch, tmp_path):
+    """v2: a `prisma db push` that times out is retried, not turned into a
+    TypeError by classifying its bytes stderr as if it were text."""
+    _prepare_v2_resolver(monkeypatch, tmp_path)
+
+    def _side_effect(n, cmd):
+        if n == 1:
+            raise _real_timeout_expired(cmd)
+        return _DeployApplied()
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", lambda: False
+    )
+    run, pushes = _db_push_only(_side_effect)
+    with patch("subprocess.run", side_effect=run):
+        ok = ProxyExtrasDBManager.setup_database(use_migrate=False, use_v2_resolver=True)
+
+    assert ok is True
+    assert pushes["n"] == 2
+
+
+def test_v2_db_push_timeouts_are_bounded(monkeypatch, tmp_path):
+    """v2: a `prisma db push` that never stops timing out gives up as a
+    RuntimeError, which is the only exception proxy_cli.py exits cleanly on."""
+    _prepare_v2_resolver(monkeypatch, tmp_path)
+
+    def _side_effect(n, cmd):
+        raise _real_timeout_expired(cmd)
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", lambda: False
+    )
+    run, pushes = _db_push_only(_side_effect)
+    with patch("subprocess.run", side_effect=run):
+        with pytest.raises(RuntimeError, match=r"prisma db push failed after \d+"):
+            ProxyExtrasDBManager.setup_database(use_migrate=False, use_v2_resolver=True)
+
+    assert pushes["n"] == _PRISMA_ATTEMPTS
+
+
 def test_v2_unclassified_failure_is_not_treated_as_transient(monkeypatch, tmp_path):
     """v2: an unrecognised deploy failure still raises on the first attempt."""
     _prepare_v2_resolver(monkeypatch, tmp_path)
