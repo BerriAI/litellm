@@ -566,6 +566,7 @@ class LiteLLMRoutes(enum.Enum):
     model_info_routes = [
         "/model/info",
         "/v1/model/info",
+        "/model_group/info",
     ]
 
     llm_api_routes = (
