@@ -187,6 +187,15 @@ def test_bedrock_optional_params_embeddings():
     )
     assert len(optional_params) == 0
 
+def test_bedrock_cohere_english_optional_params_embeddings():
+    optional_params = get_optional_params_embeddings(
+        model="bedrock/cohere.embed-english-v3",
+        encoding_format="float",
+        custom_llm_provider="bedrock",
+    )
+
+    assert optional_params["embedding_types"] == "float"
+
 
 @pytest.mark.parametrize(
     "model",
