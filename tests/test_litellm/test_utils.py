@@ -1597,6 +1597,43 @@ def test_vertex_params_not_stripped_for_vertex_family(
         assert optional_params["vertex_location"] == "us-central1"
 
 
+
+
+
+class TestIsBase64Encoded:
+    def test_valid_base64_data_uri_returns_true(self):
+        # "aGVsbG8gd29ybGQ=" is the base64 encoding of "hello world"
+        assert (
+            litellm.utils.is_base64_encoded(
+                "data:text/plain;base64,aGVsbG8gd29ybGQ="
+            )
+            is True
+        )
+
+    def test_plain_string_without_data_prefix_returns_false(self):
+        # Guards against false positives on ordinary strings, e.g. "Dog"
+        assert litellm.utils.is_base64_encoded("Dog") is False
+
+    def test_empty_string_returns_false(self):
+        assert litellm.utils.is_base64_encoded("") is False
+
+    def test_data_prefix_without_comma_returns_false(self):
+        # No comma means the split(",")[1] access fails internally,
+        # which is caught by the except Exception clause
+        assert litellm.utils.is_base64_encoded("data:text/plain;base64") is False
+
+    def test_data_prefix_with_invalid_base64_content_returns_false(self):
+        # "!!!not-base64!!!" is not valid base64, decode should fail
+        assert (
+            litellm.utils.is_base64_encoded("data:text/plain;base64,!!!not-base64!!!")
+            is False
+        )
+
+    def test_data_prefix_with_empty_payload_returns_true(self):
+        # Empty string after the comma decodes to empty bytes, which
+        # trivially round-trips back to an empty string, so this is True
+        assert litellm.utils.is_base64_encoded("data:text/plain;base64,") is True
+
 from litellm.utils import supports_function_calling
 
 
@@ -3667,8 +3704,6 @@ class TestIsStreamingRequest:
             )
             is True
         )
-
-
 class TestCallbackAsyncSyncSeparation:
     """Test that LoggingCallbackManager auto-routes async callbacks to async lists."""
 
