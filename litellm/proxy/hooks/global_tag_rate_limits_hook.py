@@ -725,7 +725,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
 
         tags: Final = _order_tags_for_identity_resolution(
-            _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name),
+            _get_tags_from_request_kwargs(litellm_params_for_metadata, metadata_variable_name=metadata_variable_name),
             litellm_params_for_metadata,
             metadata_variable_name,
         )
