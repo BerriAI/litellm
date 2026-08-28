@@ -4069,6 +4069,62 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
     assert call_args[2] == [api_key]
 
 
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_session_cache_hit_count():
+    """
+    Each row of a session must carry session_cache_hit_count aggregated across
+    the whole session so the UI can show how many requests in the session were
+    served from the response cache.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-cache-hits"
+    api_key = "hashed-key-xyz"
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": api_key},
+        {"request_id": "req-2", "session_id": session_id, "call_type": "completion", "api_key": api_key},
+        {"request_id": "req-3", "session_id": None, "call_type": "completion", "api_key": api_key},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"session_id": session_id, "_count": {"session_id": 2}}]
+    )
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "session_total_spend": 0.05,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 2,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=3,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert rows[0]["session_cache_hit_count"] == 2
+    assert rows[1]["session_cache_hit_count"] == 2
+    assert "session_cache_hit_count" not in rows[2]
+
+    # The aggregate SQL must actually compute the cache-hit count.
+    _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
+    assert "session_cache_hit_count" in call_args[0]
+    assert "LOWER(cache_hit) = 'true'" in call_args[0]
+
+
 # ---------------------------------------------------------------------------
 # Tests for /spend/logs team-member permission
 # ---------------------------------------------------------------------------
