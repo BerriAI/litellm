@@ -1160,3 +1160,60 @@ def test_count_content_list_rejects_unknown_type():
     message = str(exc_info.value)
     assert "Invalid content item type: totally_unknown_block" in message
     assert "tool_reference" in message
+
+
+@pytest.mark.parametrize(
+    "content_block",
+    [
+        {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAA"}},
+        {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "mp3"}},
+        {
+            "type": "file",
+            "file": {
+                "file_data": "data:application/pdf;base64,AAAA",
+                "filename": "report.pdf",
+            },
+        },
+    ],
+    ids=["video_url", "input_audio", "file"],
+)
+def test_token_counter_with_non_text_modality_blocks(content_block: dict):
+    """
+    Regression test: video / audio / file content blocks must NOT raise.
+
+    Before the fix, token_counter raised e.g.
+    `Invalid content item type: video_url`. Two paths break as a result: on the
+    proxy this nulls response_cost and drops the SpendLogs row, and on the
+    ollama route the counter runs after generation, so an already-produced 200
+    response is turned into a 500.
+
+    Their payload is opaque here, so they contribute 0 tokens and the count
+    matches the same message without the block.
+    """
+    prompt = {"type": "text", "text": "Describe the attachment."}
+    messages = [{"role": "user", "content": [prompt, content_block]}]
+    text_only = [{"role": "user", "content": [prompt]}]
+
+    tokens = token_counter_new(model="gpt-4o", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    assert tokens == token_counter_new(model="gpt-4o", messages=text_only)
+
+
+def test_count_content_list_error_message_lists_modality_types():
+    """
+    The catch-all error must enumerate the handled block types so a future type
+    is not silently dropped, and the non-text modality types must appear there.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError, match="Invalid content item type: totally_unknown_block") as exc_info:
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "totally_unknown_block"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    message = str(exc_info.value)
+    for content_type in ("video_url", "input_audio", "file"):
+        assert content_type in message

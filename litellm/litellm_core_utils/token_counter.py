@@ -738,11 +738,19 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
+            elif c["type"] in ("video_url", "input_audio", "file"):
+                # Opaque payloads: a video or audio data URI, or an uploaded file
+                # reference. The provider decides their cost (frame sampling rate,
+                # audio chunking), so they contribute 0 rather than raise - on the
+                # ollama route the counter runs after generation, where raising
+                # discards a response the model already produced.
+                pass
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
+                    f"Expected str or dict with 'type' field (text, image_url, video_url, input_audio, "
+                    f"file, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:
