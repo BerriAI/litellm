@@ -49,7 +49,10 @@ async def test_event_loop_robustness() -> None:
 
 
 @pytest.mark.parametrize(("ssl_verify", "expected_ssl"), [(False, False), (None, True)])
-async def test_refused_connection_maps_to_httpx_connect_error(ssl_verify: bool | None, expected_ssl: bool) -> None:
+async def test_refused_connection_maps_to_httpx_connect_error(
+    ssl_verify: bool | None, expected_ssl: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     transport: Final = AsyncHTTPHandler._create_aiohttp_transport(ssl_verify=ssl_verify)
     port: Final = _closed_local_port()
     request: Final = httpx.Request("GET", f"https://127.0.0.1:{port}/")
