@@ -561,7 +561,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
   value,
   onChange,
-  editingTiers,
+  editingTiers = false,
   onEditingTiersChange,
   customTechnicalKeywords,
   onCustomTechnicalKeywordsChange,
