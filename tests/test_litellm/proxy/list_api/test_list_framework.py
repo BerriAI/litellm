@@ -7,13 +7,12 @@ from fastapi import Request
 from pydantic import BaseModel
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.management_endpoints.management_v1.common import (
-    MANAGEMENT_V1_PREFIX,
+from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
     build_page_links,
 )
-from litellm.proxy.management_endpoints.management_v1.list_framework import (
+from litellm.proxy.list_api.list_framework import (
     AnyOf,
     Compare,
     FilterSpec,
@@ -30,6 +29,7 @@ from litellm.proxy.management_endpoints.management_v1.list_framework import (
     order_by_sql,
     where_sql,
 )
+from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.types.proxy.management_endpoints.management_v1 import (
     PageLinks,
     PageMeta,
@@ -448,6 +448,29 @@ def test_one_bad_key_rejects_the_whole_multi_key_sort():
     """Dropping the unknown key and sorting by the rest would silently return a
     differently-ordered page than the one asked for."""
     assert _problem({"sort": "-created_at,api_key"}).type == f"{PROBLEM_TYPE_BASE}invalid-sort-field"
+
+
+def test_a_repeated_sort_field_is_rejected():
+    """An in-memory executor sorts once per key, so a repeat is unbounded work an
+    unauthenticated caller controls. Rejecting repeats caps it at len(sortable)."""
+    problem = _problem({"sort": "created_at,max_budget,created_at"})
+
+    assert problem.status == 400
+    assert problem.type == f"{PROBLEM_TYPE_BASE}duplicate-sort-field"
+    assert "created_at" in problem.detail
+    assert "max_budget" not in problem.detail
+
+
+def test_a_field_repeated_in_both_directions_is_still_a_repeat():
+    assert _problem({"sort": "created_at,-created_at"}).type == f"{PROBLEM_TYPE_BASE}duplicate-sort-field"
+
+
+def test_the_appended_tiebreaker_does_not_count_as_a_repeat():
+    """The tiebreaker is added after parsing, so sorting by it explicitly stays legal."""
+    assert _plan({"sort": "-budget_id"}).order == (
+        SortKey(field="budget_id", descending=True),
+        SortKey(field="budget_id", descending=False),
+    )
 
 
 def test_a_double_dash_prefix_is_not_a_descending_sort():
