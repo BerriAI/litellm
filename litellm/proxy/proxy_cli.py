@@ -1323,10 +1323,10 @@ def run_server(
                             use_v2_resolver=use_v2_migration_resolver,
                         )
                     except RuntimeError as e:
-                        # Raised on unrecoverable migration errors: the v2
-                        # resolver's non-idempotent failures and permission
-                        # issues, and any `prisma db push` against a
-                        # partitioned LiteLLM_SpendLogs.
+                        # Raised on unrecoverable migration errors: permission
+                        # failures from either resolver, the v2 resolver's
+                        # non-idempotent failures, and any `prisma db push`
+                        # against a partitioned LiteLLM_SpendLogs.
                         print(
                             f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {e}\033[0m",
                             file=sys.stderr,

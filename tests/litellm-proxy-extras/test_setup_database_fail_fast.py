@@ -219,7 +219,7 @@ def test_v2_resolve_specific_migration_failure_raises_runtime_error(
     )
     with patch("subprocess.run", side_effect=_fake_migrate_deploy_failure(1, stderr)):
         with pytest.raises(
-            RuntimeError, match="Failed to mark migration .* as applied"
+            RuntimeError, match=r"Failed to mark migration .* as applied"
         ):
             ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
 
