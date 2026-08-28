@@ -6273,6 +6273,9 @@ class TestPerRequestModelGroupAlias:
         async def passthrough(data, user_api_key_dict):
             return data
 
+        async def passthrough_data_only(data):
+            return data
+
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
         mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=reroute_once)
         monkeypatch.setattr(
@@ -6296,7 +6299,7 @@ class TestPerRequestModelGroupAlias:
         )
         monkeypatch.setattr(
             "litellm.proxy.agent_endpoints.a2a_routing.merge_a2a_agent_guardrails_before_hooks",
-            passthrough,
+            passthrough_data_only,
         )
 
         returned_data, _ = await processing_obj.common_processing_pre_call_logic(

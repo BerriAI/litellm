@@ -110,7 +110,7 @@ async def test_poll_for_completion_honors_request_timeout():
         "litellm.a2a_protocol.providers.pydantic_ai_agents.transformation.time.monotonic",
         side_effect=[100.0, 100.0, 100.02],
     ):
-        with pytest.raises(TimeoutError, match="0.01 seconds"):
+        with pytest.raises(TimeoutError, match=r"0\.01 seconds"):
             await PydanticAITransformation._poll_for_completion(
                 client=client,
                 endpoint="http://example.test",
