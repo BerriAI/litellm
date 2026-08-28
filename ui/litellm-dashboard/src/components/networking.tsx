@@ -8080,9 +8080,6 @@ export interface ComplexityRouterConfigValidation {
   error?: string | null;
 }
 
-// Dry-runs the same write gate /model/new and /model/update apply, so a save that would come back
-// as a raw 400 shows the backend's own message inline first. Transport failures fail open: the
-// write gate stays authoritative.
 export const validateAutoRouterConfig = async (
   accessToken: string,
   complexityRouterConfig: Record<string, unknown>,

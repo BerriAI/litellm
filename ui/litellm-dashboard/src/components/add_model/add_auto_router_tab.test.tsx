@@ -194,9 +194,6 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({ team_id: "team-1" });
   });
 
-  // The dry-run exists so a config the write gate would refuse shows the backend's own message
-  // inline instead of coming back as a raw 400. Nothing asserted that its verdict actually stops
-  // the submit, so the whole gate could be deleted with the suite still green.
   it("does not submit when the backend's dry-run rejects the config", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
@@ -223,6 +220,32 @@ describe("AddAutoRouterTab", () => {
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+  });
+
+  // A second submit while the dry-run round-trip is pending must not start another create: the
+  // button disables, and the handler itself refuses re-entry since a form submit (Enter) fires it
+  // regardless of the button's disabled state.
+  it("creates the router once when the form is submitted again mid dry-run", async () => {
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    let resolveVerdict: (verdict: { valid: boolean }) => void = () => {};
+    validateAutoRouterConfig.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveVerdict = resolve;
+        }),
+    );
+
+    const { container } = renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "double-submit-router" } });
+
+    fireEvent.submit(container.querySelector("form")!);
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled());
+    fireEvent.submit(container.querySelector("form")!);
+
+    resolveVerdict({ valid: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
+    expect(validateAutoRouterConfig).toHaveBeenCalledTimes(1);
+    expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1);
   });
 
   // LIT-5133: "Add keyword rule" seeds a row with no keywords, and the semantic toggle that used

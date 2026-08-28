@@ -101,8 +101,6 @@ describe("EditAutoRouterModal keyword matching", () => {
     expect(config.match_threshold).toBe(0.72);
   });
 
-  // Same gate as the create form: the dry-run's verdict has to stop the PATCH, or an operator sees
-  // a raw 400 instead of the inline message the dry-run was added to give them.
   it("does not PATCH when the backend's dry-run rejects the config", async () => {
     const user = userEvent.setup();
     validateAutoRouterConfig.mockResolvedValueOnce({

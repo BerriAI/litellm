@@ -197,6 +197,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
   // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
@@ -428,10 +429,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       model_access_group: form.getValues("model_access_group"),
     };
 
-    handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
+    await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
   };
 
   const handleAutoRouterSubmit = async () => {
+    if (isSubmitting) return;
     const name = form.getValues("auto_router_name");
     if (!name) {
       setShowValidationErrors(true);
@@ -440,7 +442,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    await submitRecommendedRouter(name);
+    setIsSubmitting(true);
+    try {
+      await submitRecommendedRouter(name);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleTestConnection = () => {
@@ -654,11 +661,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   <BlockedReasonTooltip reason={submitBlockedReason}>
                     <Button
                       type="button"
-                      disabled={submitBlockedReason !== null}
+                      disabled={submitBlockedReason !== null || isSubmitting}
                       onClick={() => {
                         void handleAutoRouterSubmit();
                       }}
                     >
+                      {isSubmitting && <UiLoadingSpinner className="size-4" />}
                       Add Auto Router
                     </Button>
                   </BlockedReasonTooltip>

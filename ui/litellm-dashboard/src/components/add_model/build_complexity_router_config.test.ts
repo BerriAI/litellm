@@ -763,8 +763,6 @@ describe("heuristic_first", () => {
 
 describe("dryRunRejection", () => {
   it("blocks the save on a rejection whose message is missing, which the write would return as a raw 400", () => {
-    // The verdict's two fields arrive independently, so a rejection carrying no message must still
-    // stop the save rather than fall through to the write endpoint.
     expect(dryRunRejection({ valid: false })).toBe("The proxy rejected this auto-router configuration");
     expect(dryRunRejection({ valid: false, error: null })).toBe("The proxy rejected this auto-router configuration");
     expect(dryRunRejection({ valid: false, error: "   " })).toBe("The proxy rejected this auto-router configuration");
