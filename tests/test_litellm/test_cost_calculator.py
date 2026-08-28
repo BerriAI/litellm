@@ -4095,10 +4095,7 @@ def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_ma
         ],
         model="us-east-1/anthropic.claude-v2:1",
     )
-    response._hidden_params = {
-        "provider_response_model": "anthropic.claude-v2:1",
-        "region_name": "us-east-1",
-    }
+    response._hidden_params = {"region_name": "us-east-1"}
 
     selected = _select_model_name_for_cost_calc(
         model=None,
@@ -4107,6 +4104,53 @@ def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_ma
     )
 
     assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
+def _bedrock_response_with_private_model(model: str, region_name: str) -> litellm.ModelResponse:
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model=model,
+    )
+    response._hidden_params = {"provider_response_model": model, "region_name": region_name}
+    return response
+
+
+def test_select_model_name_applies_region_to_private_provider_response_model(_local_model_cost_map):
+    """A Bedrock stream carries its requested model as the private provider model and must keep the
+    request's region in the cost key, exactly as the same request does without streaming."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=_bedrock_response_with_private_model("anthropic.claude-v2:1", "us-east-1"),
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
+def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
+    """An explicit base_model keeps pricing on that model's own key even when the request carries a
+    region with different regional rates, so the private provider model never widens region pricing."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    selected = _select_model_name_for_cost_calc(
+        model="my-bedrock-deployment",
+        completion_response=_bedrock_response_with_private_model("moonshotai.kimi-k2.5", "ap-northeast-1"),
+        base_model="moonshotai.kimi-k2.5",
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/moonshotai.kimi-k2.5"
 
 
 def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
