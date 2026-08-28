@@ -1105,3 +1105,63 @@ async def test_empty_first_thinking_chunk_then_real_text_still_opens_one_block(i
     assert _signature_deltas(events) == ["sig123"]
     assert _text_deltas(events) == ["Hello"]
     _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_early_signature_on_blank_thinking_chunk_is_carried_to_the_opened_block(is_async: bool):
+    """Pins that the blank-chunk skip does not lose an early signature: the
+    classifier captures the skipped chunk's signature into the pending block
+    start body, so when real thinking text follows, the opened block still
+    carries it. Guards the LIT-6357 blank-skip against regressing signature
+    replay."""
+    chunks = [
+        _thinking_chunk("", signature="sig_early"),
+        _thinking_chunk("Let me think"),
+        _make_chunk(Delta(content="Hello")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    starts = _thinking_block_starts(events)
+    assert len(starts) == 1
+    assert starts[0].get("signature") == "sig_early"
+    assert _thinking_deltas(events) == ["Let me think"]
+    assert _text_deltas(events) == ["Hello"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_early_signature_discarded_when_first_block_is_not_thinking(is_async: bool):
+    """An early signature from a skipped blank thinking chunk must not leak
+    into a text or tool_use first block, and must not resurrect an empty
+    thinking block on its own (an empty-but-signed block is exactly what
+    Anthropic rejects)."""
+    chunks = [
+        _thinking_chunk("", signature="sig_early"),
+        _make_chunk(Delta(content="Hello")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    assert _thinking_block_starts(events) == []
+    text_starts = [
+        e["content_block"]
+        for e in events
+        if e.get("type") == "content_block_start" and e["content_block"].get("type") == "text"
+    ]
+    assert len(text_starts) == 1
+    assert "signature" not in text_starts[0]
+    assert _text_deltas(events) == ["Hello"]
+    _assert_deltas_match_their_block_type(events)
