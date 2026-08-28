@@ -2652,6 +2652,23 @@ class ProxyBaseLLMRequestProcessing:
             stream_completed = True
             yield serialize_error(proxy_exception)
         finally:
+            # Release the max_parallel_requests slot inline on stream
+            # completion, rather than deferring to the logging worker.
+            # ``async_log_success_event`` (the deferred path) is enqueued to
+            # ``GLOBAL_LOGGING_WORKER`` and runs later — so until it drains,
+            # the Redis ZSET lease count (``ZCARD``) overcounts active
+            # streaming requests. Releasing here (mirroring the disconnect
+            # release in the except block above) closes that gap. The
+            # ``is_centralized_redis_cache_incremented`` guard makes this
+            # idempotent against the later deferred release.
+            #
+            # Only release on natural completion — the disconnect and error
+            # branches above already own their own release.
+            if stream_completed and not client_disconnected:
+                proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                )
             await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
                 request=request,
                 request_data=request_data,

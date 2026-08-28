@@ -3777,8 +3777,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
         Post-call hook to update rate limit headers in the response.
+
+        Also releases the max_parallel_requests slot **inline** (on the proxy
+        hook loop, not deferred through the logging worker) for successful
+        non-streaming requests. Without this, the only release path for
+        non-streaming success is ``async_log_success_event``, which is enqueued
+        to ``GLOBAL_LOGGING_WORKER`` and therefore deferred — causing the Redis
+        ZSET lease count (``ZCARD``) to overcount active requests by the depth
+        of the logging-worker backlog until it drains.
+
+        The ``is_centralized_redis_cache_incremented`` guard in
+        ``_release_max_parallel_requests_after_increment`` (and its clearing on
+        successful release) makes this safe to run here even though the
+        deferred ``async_log_success_event`` will also attempt a release: the
+        first release clears the flag, so the second is a no-op.
         """
         try:
+            # Inline release — runs before the deferred logging worker would.
+            # Idempotent: the guard at line 3345 bails if already released.
+            await self._release_max_parallel_requests_after_increment(
+                request_data=data,
+                user_api_key_dict=user_api_key_dict,
+            )
+
             from pydantic import BaseModel
 
             litellm_proxy_rate_limit_response = cast(
