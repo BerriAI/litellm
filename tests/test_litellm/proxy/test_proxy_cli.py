@@ -1787,7 +1787,7 @@ class TestRunServerDbSetup:
             # use_prisma_db_push should be False (default), so use_migrate should be True
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
             mock_setup_database.assert_called_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
             # Reset mocks
@@ -1802,7 +1802,7 @@ class TestRunServerDbSetup:
                 standalone_mode=False,
             )
             mock_setup_database.assert_called_with(
-                use_migrate=False, use_v2_resolver=False
+                use_migrate=False, use_v2_resolver=True
             )
 
     @patch("subprocess.run")
@@ -1869,7 +1869,7 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
     @patch("subprocess.run")
@@ -1979,6 +1979,83 @@ class TestRunServerDbSetup:
 
         mock_setup_database.assert_called_once_with(
             use_migrate=True, use_v2_resolver=True
+        )
+
+    @pytest.mark.parametrize(
+        "argv, env_value, expected_v2",
+        [
+            ([], None, True),
+            (["--use_v2_migration_resolver"], None, True),
+            (["--use_legacy_migration_resolver"], None, False),
+            ([], "false", False),
+            ([], "true", True),
+            (["--use_v2_migration_resolver"], "false", True),
+        ],
+    )
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_migration_resolver_default_and_opt_out(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+        argv,
+        env_value,
+        expected_v2,
+    ):
+        """The proxy defaults to the v2 resolver, and v1 stays reachable.
+
+        Both opt-out routes matter: --use_legacy_migration_resolver for a CLI
+        boot, and USE_V2_MIGRATION_RESOLVER=false for containerised deploys,
+        where litellm/proxy/prisma_migration.py calls run_server with a fixed
+        argv and an env var is the only way in. The deprecated
+        --use_v2_migration_resolver must still parse so existing commands do
+        not die on an unknown option, and an explicit flag still beats the env.
+        """
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.return_value = True
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in ("DATABASE_URL", "DIRECT_URL", "USE_V2_MIGRATION_RESOLVER")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        if env_value is not None:
+            clean_env["USE_V2_MIGRATION_RESOLVER"] = env_value
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+        ):
+            run_server.main(
+                ["--local", "--skip_server_startup", *argv], standalone_mode=False
+            )
+
+        mock_setup_database.assert_called_once_with(
+            use_migrate=True, use_v2_resolver=expected_v2
         )
 
 

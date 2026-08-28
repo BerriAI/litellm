@@ -1,14 +1,25 @@
-"""Regression tests for ProxyExtrasDBManager v2 migration resolver.
+"""Regression tests for ProxyExtrasDBManager's v2 migration resolver.
 
-The v2 resolver is opt-in via `--use_v2_migration_resolver` / the
-`use_v2_resolver=True` kwarg. These tests exercise the v2 path; the v1
-(default) behavior is unchanged from pre-fix.
+v2 is what the proxy CLI selects by default; v1 stays reachable via
+`--use_legacy_migration_resolver` or `USE_V2_MIGRATION_RESOLVER=false`. At the
+library level the resolver is picked with the `use_v2_resolver` kwarg, which
+still defaults to False so `migrations/run.py` and any direct caller keep their
+own explicit choice.
 """
 
+import os
 import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
+
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../litellm-proxy-extras")
+    ),
+)
 
 from litellm_proxy_extras.utils import (
     ProxyExtrasDBManager,
@@ -240,3 +251,222 @@ def test_v2_does_not_call_resolve_all_migrations(monkeypatch, tmp_path):
     ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
     assert ok is True
     assert resolve_called["n"] == 0, "v2 must not invoke the diff-and-force recovery"
+
+
+_DEADLOCK_STDERR = (
+    "Error: ERROR: deadlock detected\n"
+    "DETAIL: Process 277 waits for ExclusiveLock on advisory lock "
+    "[17556,0,72707369,1]; blocked by process 278.\n"
+    "Process 278 waits for ShareLock on virtual transaction 3/1041; "
+    "blocked by process 277."
+)
+
+
+class _DeployApplied:
+    stdout = "All migrations have been successfully applied."
+    stderr = ""
+    returncode = 0
+
+
+def _deploy_only(deploy_side_effect):
+    """subprocess.run stand-in that only intercepts `prisma migrate deploy`.
+
+    Everything else the resolver shells out to, the Prisma toolchain check
+    above all, succeeds untouched, so a mock meant for the deploy call cannot
+    be silently consumed by an earlier subprocess call.
+    """
+    deploys = {"n": 0}
+
+    def _run(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        if list(cmd)[-2:] == ["migrate", "deploy"]:
+            deploys["n"] += 1
+            return deploy_side_effect(deploys["n"], cmd)
+        return _DeployApplied()
+
+    return _run, deploys
+
+
+def _prepare_v2_resolver(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+
+
+def test_v2_retries_transient_advisory_lock_deadlock(monkeypatch, tmp_path):
+    """A deadlock on Prisma's migration advisory lock is transient and retried.
+
+    Several proxy replicas booting against one database race `migrate deploy`,
+    and Postgres aborts one side. v1 retried any failed deploy, so it rode this
+    out; v2 classifies unrecognised stderr as unrecoverable and raises, which
+    with v2 as the default would take a replica's whole boot down.
+    """
+    _prepare_v2_resolver(monkeypatch, tmp_path)
+
+    def _side_effect(n, cmd):
+        if n == 1:
+            raise subprocess.CalledProcessError(
+                returncode=1, cmd=cmd, stderr=_DEADLOCK_STDERR, output=""
+            )
+        return _DeployApplied()
+
+    run, deploys = _deploy_only(_side_effect)
+    with patch("subprocess.run", side_effect=run):
+        ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    assert ok is True
+    assert deploys["n"] == 2, "the deadlocked deploy must be retried, not raised"
+
+
+def test_v2_persistent_advisory_lock_deadlock_eventually_raises(monkeypatch, tmp_path):
+    """The deadlock retry stays bounded: a deadlock that never clears still
+    raises rather than looping forever or reporting a successful migration."""
+    _prepare_v2_resolver(monkeypatch, tmp_path)
+
+    def _side_effect(n, cmd):
+        raise subprocess.CalledProcessError(
+            returncode=1, cmd=cmd, stderr=_DEADLOCK_STDERR, output=""
+        )
+
+    run, deploys = _deploy_only(_side_effect)
+    with patch("subprocess.run", side_effect=run):
+        with pytest.raises(RuntimeError, match="after 4 attempts"):
+            ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    assert deploys["n"] == 4
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Error: P1001: Can't reach database server at `db`:`5432`",
+        "Error: P1002: The database server was reached but timed out.",
+    ],
+)
+def test_v2_retries_transient_database_connectivity_errors(monkeypatch, tmp_path, stderr):
+    """A database that is not accepting connections yet is retried, not fatal.
+
+    A proxy and its database starting together race routinely, and v1 rode that
+    out by retrying every failed deploy. v2 treats unrecognised stderr as
+    unrecoverable, so without this the default flip would turn a database that
+    is a few seconds late into a dead proxy instead of a slow boot.
+    """
+    _prepare_v2_resolver(monkeypatch, tmp_path)
+
+    def _side_effect(n, cmd):
+        if n == 1:
+            raise subprocess.CalledProcessError(
+                returncode=1, cmd=cmd, stderr=stderr, output=""
+            )
+        return _DeployApplied()
+
+    run, deploys = _deploy_only(_side_effect)
+    with patch("subprocess.run", side_effect=run):
+        ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    assert ok is True
+    assert deploys["n"] == 2, "an unreachable database must be retried, not raised"
+
+
+def test_v2_unreachable_database_still_fails_after_the_retries(monkeypatch, tmp_path):
+    """Retrying connectivity errors must not turn a genuinely unreachable
+    database into a silent success: after the attempts are spent it still
+    raises, so the proxy exits instead of serving without its database."""
+    _prepare_v2_resolver(monkeypatch, tmp_path)
+
+    def _side_effect(n, cmd):
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=cmd,
+            stderr="Error: P1001: Can't reach database server at `db`:`5432`",
+            output="",
+        )
+
+    run, deploys = _deploy_only(_side_effect)
+    with patch("subprocess.run", side_effect=run):
+        with pytest.raises(RuntimeError, match="after 4 attempts"):
+            ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    assert deploys["n"] == 4
+
+
+def test_v2_exhausted_retries_report_the_prisma_error(monkeypatch, tmp_path, caplog):
+    """Retrying must not swallow why the database was unreachable.
+
+    Prisma's stderr is captured, so if the retry path neither logs it nor puts
+    it in the final error, an operator (and CI's bad-DATABASE_URL job, which
+    greps the boot log for the P1001 line) sees four silent retries and no
+    cause.
+    """
+    _prepare_v2_resolver(monkeypatch, tmp_path)
+    stderr = "Error: P1001: Can't reach database server at `wrong`:`5432`"
+
+    def _side_effect(n, cmd):
+        raise subprocess.CalledProcessError(
+            returncode=1, cmd=cmd, stderr=stderr, output=""
+        )
+
+    run, _ = _deploy_only(_side_effect)
+    with caplog.at_level("INFO", logger="litellm_proxy_extras"):
+        with patch("subprocess.run", side_effect=run):
+            with pytest.raises(RuntimeError) as exc_info:
+                ProxyExtrasDBManager.setup_database(
+                    use_migrate=True, use_v2_resolver=True
+                )
+
+    assert "P1001" in str(exc_info.value)
+    assert "P1001" in caplog.text
+
+
+def test_v2_migration_failure_is_not_treated_as_transient(monkeypatch, tmp_path):
+    """The transient classification must stay narrow: a genuinely broken
+    migration still fails fast on the first attempt rather than being retried
+    into the same error four times."""
+    _prepare_v2_resolver(monkeypatch, tmp_path)
+
+    stderr = (
+        "Error: P3009\n"
+        "The `20260101000000_genuinely_broken` migration failed to apply.\n"
+        'Reason: syntax error at or near "BRKN" LINE 42'
+    )
+
+    def _side_effect(n, cmd):
+        raise subprocess.CalledProcessError(
+            returncode=1, cmd=cmd, stderr=stderr, output=""
+        )
+
+    run, deploys = _deploy_only(_side_effect)
+    with patch("subprocess.run", side_effect=run):
+        with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
+            ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    assert deploys["n"] == 1
+
+
+def test_v1_still_runs_the_diff_and_force_recovery(monkeypatch, tmp_path):
+    """v1 remains the pre-existing diff-and-force resolver, unchanged by the
+    default flip: it still calls _resolve_all_migrations after a deploy that
+    applied something. Operators opting back in must get exactly the old path.
+    """
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+
+    class FakeResult:
+        stdout = "Applied migration.\n"
+        stderr = ""
+
+    resolve_called = {"n": 0}
+
+    def fake_resolve(*args, **kwargs):
+        resolve_called["n"] += 1
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: FakeResult())
+    monkeypatch.setattr(ProxyExtrasDBManager, "_resolve_all_migrations", fake_resolve)
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=False)
+    assert ok is True
+    assert resolve_called["n"] == 1
