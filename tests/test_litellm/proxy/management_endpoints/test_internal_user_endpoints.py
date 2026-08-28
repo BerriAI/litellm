@@ -2670,6 +2670,41 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker, user_rows):
 
 
 @pytest.mark.asyncio
+async def test_user_info_v2_returns_rate_limits(mocker, user_rows):
+    """
+    The Admin UI seeds its edit form from this response, so a limit missing here reads
+    to the operator as "not set" and a save silently wipes it.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    user_rows(
+        **{
+            "limited-user": {
+                "user_id": "limited-user",
+                "tpm_limit": 12000,
+                "rpm_limit": 60,
+                "max_parallel_requests": 3,
+                "teams": [],
+            }
+        }
+    )
+
+    response = await user_info_v2(
+        request=mocker.MagicMock(spec=Request),
+        user_id="limited-user",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response.tpm_limit == 12000
+    assert response.rpm_limit == 60
+    assert response.max_parallel_requests == 3
+
+
+@pytest.mark.asyncio
 async def test_user_info_v2_redacts_scim_enterprise_metadata(mocker):
     """
     SCIM enterprise attributes are persisted in metadata for reporting, but
@@ -3012,6 +3047,9 @@ async def test_user_info_v2_response_shape(mocker):
         "models",
         "budget_duration",
         "budget_reset_at",
+        "tpm_limit",
+        "rpm_limit",
+        "max_parallel_requests",
         "metadata",
         "created_at",
         "updated_at",

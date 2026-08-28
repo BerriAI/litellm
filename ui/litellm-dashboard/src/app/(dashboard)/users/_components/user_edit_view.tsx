@@ -52,6 +52,8 @@ const userEditShape = {
   user_role: z.string().nullish(),
   models: z.array(z.string()),
   budget_duration: z.string().nullish(),
+  tpm_limit: z.union([z.string(), z.number()]).nullish(),
+  rpm_limit: z.union([z.string(), z.number()]).nullish(),
   metadata: z.string().nullish(),
   mcp_servers_and_groups: MCP_SELECTION_SHAPE.optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
@@ -92,7 +94,14 @@ const toFormValues = (
   const maxBudget = userData.user_info?.max_budget;
   const isUnlimited = maxBudget === null || maxBudget === undefined;
   return {
-    ...(isBulkEdit ? {} : { user_id: userData.user_id, user_email: userData.user_info?.user_email }),
+    ...(isBulkEdit
+      ? {}
+      : {
+          user_id: userData.user_id,
+          user_email: userData.user_info?.user_email,
+          tpm_limit: userData.user_info?.tpm_limit ?? "",
+          rpm_limit: userData.user_info?.rpm_limit ?? "",
+        }),
     user_alias: userData.user_info?.user_alias,
     user_role: userData.user_info?.user_role,
     models: userData.user_info?.models || [],
@@ -292,6 +301,58 @@ export function UserEditView({
           <FormField control={form.control} name="budget_duration" label="Reset Budget">
             {({ id, value, onChange }) => <BudgetDurationDropdown id={id} value={value} onChange={onChange} />}
           </FormField>
+
+          {/* Bulk edit posts a fixed field list to /user/bulk_update, which does not carry
+              either limit, so the controls would look like they saved and do nothing. */}
+          {!isBulkEdit && (
+            <>
+              <FormField
+                control={form.control}
+                name="tpm_limit"
+                label={labelWithHint(
+                  "TPM Limit",
+                  "Tokens per minute this user may spend across every key they hold. Leave blank for no limit.",
+                )}
+              >
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={value ?? ""}
+                    onChange={(event) => onChange(event.target.value)}
+                    onWheel={(event) => event.currentTarget.blur()}
+                    placeholder="Unlimited"
+                  />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="rpm_limit"
+                label={labelWithHint(
+                  "RPM Limit",
+                  "Requests per minute this user may make across every key they hold. Leave blank for no limit.",
+                )}
+              >
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={value ?? ""}
+                    onChange={(event) => onChange(event.target.value)}
+                    onWheel={(event) => event.currentTarget.blur()}
+                    placeholder="Unlimited"
+                  />
+                )}
+              </FormField>
+            </>
+          )}
 
           {/* Bulk edit forwards a fixed field list and has no single stored budget to
               diff against, so the editor would silently discard whatever was typed. */}

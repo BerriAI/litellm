@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import UserInfoView from "./user_info_view";
@@ -9,7 +9,7 @@ const mockTeamMemberDeleteCall = vi.fn();
 const mockTeamListCall = vi.fn();
 const mockUserGetInfoV2 = vi.fn();
 const mockTeamInfoCall = vi.fn();
-const mockUserUpdateUserCall = vi.fn();
+const mockUserPatchCall = vi.fn();
 const mockFetchMCPServers = vi.fn();
 const mockListMCPTools = vi.fn();
 
@@ -54,7 +54,7 @@ vi.mock("@/components/networking", () => {
     serverRootPath: "/",
     userGetInfoV2: (...args: any[]) => mockUserGetInfoV2(...args),
     userDeleteCall: vi.fn(),
-    userUpdateUserCall: (...args: unknown[]) => mockUserUpdateUserCall(...args),
+    userPatchCall: (...args: unknown[]) => mockUserPatchCall(...args),
     modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
     invitationCreateCall: vi.fn(),
     teamInfoCall: (...args: any[]) => mockTeamInfoCall(...args),
@@ -105,7 +105,7 @@ describe("UserInfoView", () => {
     ]);
     mockTeamMemberAddCall.mockResolvedValue({});
     mockTeamMemberDeleteCall.mockResolvedValue({});
-    mockUserUpdateUserCall.mockResolvedValue({});
+    mockUserPatchCall.mockResolvedValue(MOCK_USER_DATA);
     mockFetchMCPServers.mockResolvedValue([MCP_SERVER]);
     mockListMCPTools.mockResolvedValue({ tools: [{ name: "list_issues", description: "List issues" }] });
   });
@@ -293,6 +293,110 @@ describe("UserInfoView", () => {
     expect(screen.getByText("list_issues")).toBeVisible();
   });
 
+  describe("rate limits", () => {
+    it("should show both limits on the details panel", async () => {
+      mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, tpm_limit: 12000, rpm_limit: 60 });
+      render(<UserInfoView {...defaultProps} initialTab={1} />);
+
+      expect(await screen.findByText("12,000")).toBeInTheDocument();
+      expect(screen.getByText("60")).toBeInTheDocument();
+    });
+
+    it("should read a user with no limits as unlimited rather than blank", async () => {
+      render(<UserInfoView {...defaultProps} initialTab={1} />);
+
+      await screen.findByText("TPM Limit");
+      expect(screen.getAllByText("Unlimited")).toHaveLength(2);
+    });
+
+    it("should seed the edit form from the stored limits", async () => {
+      const user = userEvent.setup();
+      mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, tpm_limit: 12000, rpm_limit: 60 });
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} />);
+
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(12000);
+      expect(screen.getByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(60);
+    });
+  });
+
+  // /user/update drops nulls, so an emptied control used to save as a silent no-op. The whole
+  // point of moving to PATCH /management/v1/users is that a cleared field reaches the proxy.
+  describe("clearing a setting", () => {
+    const saveWith = async (
+      edit: (user: ReturnType<typeof userEvent.setup>) => Promise<void>,
+      stored: Record<string, unknown> = {},
+    ) => {
+      const user = userEvent.setup();
+      mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, ...stored });
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+      await screen.findByText("Save Changes");
+      await edit(user);
+      await user.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(mockUserPatchCall).toHaveBeenCalledTimes(1);
+      });
+      return mockUserPatchCall.mock.calls[0][2];
+    };
+
+    it("should send null for an emptied TPM limit", async () => {
+      const patch = await saveWith(
+        async () => {
+          fireEvent.change(screen.getByRole("spinbutton", { name: /tpm limit/i }), { target: { value: "" } });
+        },
+        { tpm_limit: 12000, rpm_limit: 60 },
+      );
+
+      expect(patch.tpm_limit).toBeNull();
+      expect(patch.rpm_limit).toBe(60);
+    });
+
+    it("should send null for a budget switched to unlimited", async () => {
+      const patch = await saveWith(async (user) => {
+        await user.click(screen.getByRole("checkbox", { name: "Unlimited Budget" }));
+      });
+
+      expect(patch.max_budget).toBeNull();
+    });
+
+    it("should send null for a budget reset window set back to n/a", async () => {
+      const patch = await saveWith(async (user) => {
+        await user.click(screen.getByRole("combobox", { name: /reset budget/i }));
+        await user.click(await screen.findByRole("option", { name: "n/a" }));
+      });
+
+      expect(patch.budget_duration).toBeNull();
+    });
+
+    it("should keep the form-only keys the endpoint would reject out of the body", async () => {
+      const patch = await saveWith(async () => {});
+
+      expect(patch).not.toHaveProperty("user_id");
+      expect(patch).not.toHaveProperty("mcp_servers_and_groups");
+      expect(patch).not.toHaveProperty("mcp_tool_permissions");
+    });
+
+    it("should re-seed the view from the row the proxy wrote, not the values typed", async () => {
+      const user = userEvent.setup();
+      mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, tpm_limit: 12000 });
+      mockUserPatchCall.mockResolvedValue({ ...MOCK_USER_DATA, tpm_limit: null });
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+      await screen.findByText("Save Changes");
+      fireEvent.change(screen.getByRole("spinbutton", { name: /tpm limit/i }), { target: { value: "" } });
+      await user.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(mockUserPatchCall).toHaveBeenCalledTimes(1);
+      });
+      expect(await screen.findByText("TPM Limit")).toBeInTheDocument();
+      expect(screen.queryByText("12,000")).not.toBeInTheDocument();
+    });
+  });
+
   describe("MCP permissions", () => {
     it("should render the user's MCP entitlements in read mode", async () => {
       const user = userEvent.setup();
@@ -319,13 +423,13 @@ describe("UserInfoView", () => {
       await user.click(saveButton);
 
       await waitFor(() => {
-        expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(1);
+        expect(mockUserPatchCall).toHaveBeenCalledTimes(1);
       });
 
-      const [token, payload, roleArg] = mockUserUpdateUserCall.mock.calls[0];
+      const [token, userId, payload] = mockUserPatchCall.mock.calls[0];
       expect(token).toBe("test-token");
-      expect(roleArg).toBeNull();
-      expect(payload.user_id).toBe("user-123");
+      expect(userId).toBe("user-123");
+      expect(payload).not.toHaveProperty("user_id");
       const expectedObjectPermission = {
         mcp_servers: ["srv-1"],
         mcp_access_groups: ["dev-group"],
@@ -354,10 +458,10 @@ describe("UserInfoView", () => {
       await user.click(screen.getByText("Save Changes"));
 
       await waitFor(() => {
-        expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(1);
+        expect(mockUserPatchCall).toHaveBeenCalledTimes(1);
       });
 
-      const [, payload] = mockUserUpdateUserCall.mock.calls[0];
+      const [, , payload] = mockUserPatchCall.mock.calls[0];
       expect(payload.object_permission.mcp_tool_permissions).toEqual({ "srv-1": [] });
     });
 
@@ -377,10 +481,10 @@ describe("UserInfoView", () => {
       await user.click(saveButton);
 
       await waitFor(() => {
-        expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(1);
+        expect(mockUserPatchCall).toHaveBeenCalledTimes(1);
       });
 
-      const [, payload] = mockUserUpdateUserCall.mock.calls[0];
+      const [, , payload] = mockUserPatchCall.mock.calls[0];
       expect(payload.object_permission.mcp_tool_permissions).toEqual({
         "srv-1": ["list_issues"],
         "srv-via-group": ["read_only"],
@@ -395,10 +499,10 @@ describe("UserInfoView", () => {
       await user.click(saveButton);
 
       await waitFor(() => {
-        expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(1);
+        expect(mockUserPatchCall).toHaveBeenCalledTimes(1);
       });
 
-      const [, payload] = mockUserUpdateUserCall.mock.calls[0];
+      const [, , payload] = mockUserPatchCall.mock.calls[0];
       expect(payload).not.toHaveProperty("object_permission");
       expect(screen.queryByText("MCP Servers / Access Groups")).not.toBeInTheDocument();
     });
