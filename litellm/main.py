@@ -4016,14 +4016,16 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
         )
         # Extract credentials for legacy boto3 client and pass thru to httpx
         aws_bedrock_client: Final = optional_params.pop("aws_bedrock_client")
-        creds: Final = aws_bedrock_client._get_credentials().get_frozen_credentials()
+        creds_obj = aws_bedrock_client._get_credentials()
+        creds = creds_obj.get_frozen_credentials() if creds_obj is not None else None
 
-        if creds.access_key:
-            optional_params["aws_access_key_id"] = creds.access_key
-        if creds.secret_key:
-            optional_params["aws_secret_access_key"] = creds.secret_key
-        if creds.token:
-            optional_params["aws_session_token"] = creds.token
+        if creds is not None:
+            if creds.access_key:
+                optional_params["aws_access_key_id"] = creds.access_key
+            if creds.secret_key:
+                optional_params["aws_secret_access_key"] = creds.secret_key
+            if creds.token:
+                optional_params["aws_session_token"] = creds.token
         if "aws_region_name" not in optional_params or optional_params["aws_region_name"] is None:
             optional_params["aws_region_name"] = aws_bedrock_client.meta.region_name
 
