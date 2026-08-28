@@ -5123,7 +5123,7 @@ class ProxyConfig:
                         else:
                             self._add_callback_from_db_to_in_memory_litellm_callbacks(
                                 callback=callback,
-                                event_types=["success"],
+                                event_types=["success"],  # mutable-ok: mirrors the DB-config call site
                                 existing_callbacks=litellm.success_callback,
                             )
                             if "prometheus" in callback:
@@ -5154,7 +5154,7 @@ class ProxyConfig:
                         else:
                             self._add_callback_from_db_to_in_memory_litellm_callbacks(
                                 callback=callback,
-                                event_types=["failure"],
+                                event_types=["failure"],  # mutable-ok: mirrors the DB-config call site
                                 existing_callbacks=litellm.failure_callback,
                             )
                     print(  # noqa: T201
