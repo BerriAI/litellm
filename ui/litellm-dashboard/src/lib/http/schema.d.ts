@@ -37708,6 +37708,8 @@ export interface components {
             created_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -37728,6 +37730,8 @@ export interface components {
              */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
             /**
              * Spend
              * @default 0
@@ -37740,6 +37744,60 @@ export interface components {
              * @default []
              */
             teams: string[];
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
+            /** User Role */
+            user_role?: string | null;
+        };
+        /**
+         * UserItem
+         * @description One internal user as the control plane returns it, read back off the row the write produced.
+         *
+         *     Re-reading rather than echoing the request is the point of the endpoint: a caller can tell a
+         *     clear that landed from one that was dropped by looking at the response.
+         */
+        UserItem: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Models */
+            models?: string[];
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Teams */
+            teams?: string[];
+            /** Tpm Limit */
+            tpm_limit?: number | null;
             /** Updated At */
             updated_at?: string | null;
             /** User Alias */

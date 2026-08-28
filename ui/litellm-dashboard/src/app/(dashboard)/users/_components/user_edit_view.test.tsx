@@ -246,6 +246,88 @@ describe("UserEditView", () => {
     });
   });
 
+  describe("rate limits", () => {
+    const seededWithLimits = (limits: { tpm_limit?: number | null; rpm_limit?: number | null }) => ({
+      ...MOCK_USER_DATA,
+      user_info: { ...MOCK_USER_DATA.user_info, ...limits },
+    });
+
+    it("should seed both limits from the loaded user", async () => {
+      renderWithProviders(
+        <UserEditView {...defaultProps} userData={seededWithLimits({ tpm_limit: 5000, rpm_limit: 60 })} />,
+      );
+
+      expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(5000);
+      expect(screen.getByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(60);
+    });
+
+    it("should leave both blank when the user has no limits", async () => {
+      renderWithProviders(<UserEditView {...defaultProps} userData={seededWithLimits({})} />);
+
+      expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(null);
+      expect(screen.getByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(null);
+    });
+
+    it("should submit an emptied limit as an empty string so the caller can clear it", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(
+        <UserEditView
+          {...defaultProps}
+          onSubmit={onSubmit}
+          userData={seededWithLimits({ tpm_limit: 5000, rpm_limit: 60 })}
+        />,
+      );
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), { target: { value: "" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({ tpm_limit: "", rpm_limit: 60 });
+    });
+
+    // The proxy types both limits as ints, so a fractional or negative entry comes back as a 422
+    // the operator can only read in the network tab. These constraints stop the submit instead.
+    it("should not offer either limit in bulk edit, where the value would be discarded", async () => {
+      renderWithProviders(<UserEditView {...defaultProps} isBulkEdit />);
+
+      await screen.findByRole("button", { name: /save changes/i });
+      expect(screen.queryByRole("spinbutton", { name: /tpm limit/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("spinbutton", { name: /rpm limit/i })).not.toBeInTheDocument();
+    });
+
+    it("should keep both limits constrained to whole, non-negative numbers", async () => {
+      renderWithProviders(<UserEditView {...defaultProps} />);
+
+      for (const name of [/tpm limit/i, /rpm limit/i]) {
+        const input = await screen.findByRole("spinbutton", { name });
+        expect(input).toHaveAttribute("step", "1");
+        expect(input).toHaveAttribute("min", "0");
+      }
+    });
+
+    it("should not submit a fractional limit", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), { target: { value: "1.5" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("should not submit a negative limit", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /rpm limit/i }), { target: { value: "-1" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+  });
+
   it("should display metadata textarea with formatted JSON", async () => {
     renderWithProviders(<UserEditView {...defaultProps} />);
 
@@ -461,7 +543,7 @@ describe("UserEditView", () => {
       return onSubmit.mock.calls[0][0];
     };
 
-    it("should send exactly the ten keys an admin edit produces, with seeded types preserved", async () => {
+    it("should send exactly the twelve keys an admin edit produces, with seeded types preserved", async () => {
       const payload = await submittedPayload();
 
       expect(Object.keys(payload).sort()).toEqual([
@@ -471,6 +553,8 @@ describe("UserEditView", () => {
         "mcp_tool_permissions",
         "metadata",
         "models",
+        "rpm_limit",
+        "tpm_limit",
         "user_alias",
         "user_email",
         "user_id",
@@ -484,6 +568,8 @@ describe("UserEditView", () => {
         models: ["gpt-4", "gpt-3.5-turbo"],
         max_budget: 100.5,
         budget_duration: "30d",
+        tpm_limit: "",
+        rpm_limit: "",
         metadata: { key1: "value1", key2: "value2" },
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
@@ -512,6 +598,8 @@ describe("UserEditView", () => {
         "max_budget",
         "metadata",
         "models",
+        "rpm_limit",
+        "tpm_limit",
         "user_alias",
         "user_email",
         "user_id",

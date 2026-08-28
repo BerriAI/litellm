@@ -8,7 +8,7 @@ const mockTeamMemberDeleteCall = vi.fn();
 const mockTeamListCall = vi.fn();
 const mockUserGetInfoV2 = vi.fn();
 const mockTeamInfoCall = vi.fn();
-const mockUserUpdateUserCall = vi.fn();
+const mockUserPatchCall = vi.fn();
 const mockFetchMCPServers = vi.fn();
 const mockListMCPTools = vi.fn();
 
@@ -52,7 +52,7 @@ vi.mock("@/components/networking", () => {
     serverRootPath: "/",
     userGetInfoV2: (...args: unknown[]) => mockUserGetInfoV2(...args),
     userDeleteCall: vi.fn(),
-    userUpdateUserCall: (...args: unknown[]) => mockUserUpdateUserCall(...args),
+    userPatchCall: (...args: unknown[]) => mockUserPatchCall(...args),
     modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
     invitationCreateCall: vi.fn(),
     teamInfoCall: (...args: unknown[]) => mockTeamInfoCall(...args),
@@ -144,7 +144,11 @@ describe("UserInfoView add-to-team form", () => {
         ...MOCK_USER_DATA,
         model_max_budget: { "gpt-4": { budget_limit: 5, time_period: "30d" } },
       });
-      mockUserUpdateUserCall.mockResolvedValue({});
+      // The endpoint answers with the row it just wrote, which is what the view re-seeds from.
+      mockUserPatchCall.mockImplementation(async (_token: string, _userId: string, patch: object) => ({
+        ...MOCK_USER_DATA,
+        ...patch,
+      }));
     });
 
     it("shows the saved cap, not the pre-save one, when the form is reopened", async () => {
@@ -155,9 +159,9 @@ describe("UserInfoView add-to-team form", () => {
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
-        expect(mockUserUpdateUserCall).toHaveBeenCalled();
+        expect(mockUserPatchCall).toHaveBeenCalled();
       });
-      expect(mockUserUpdateUserCall.mock.calls[0][1].model_max_budget).toEqual({
+      expect(mockUserPatchCall.mock.calls[0][2].model_max_budget).toEqual({
         "gpt-4": { budget_limit: 42, time_period: "30d" },
       });
 

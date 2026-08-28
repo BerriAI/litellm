@@ -7,7 +7,7 @@ import {
   userGetInfoV2,
   UserInfoV2Response,
   userDeleteCall,
-  userUpdateUserCall,
+  userPatchCall,
   modelAvailableCall,
   invitationCreateCall,
   getProxyBaseUrl,
@@ -32,6 +32,7 @@ import { rolesWithWriteAccess } from "@/utils/roles";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
+import { toUserPatch } from "../userPatchPayload";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { ArrowLeft, CheckIcon, CopyIcon, Plus, RefreshCw, Trash2 } from "lucide-react";
@@ -314,28 +315,17 @@ export default function UserInfoView({
       if (!accessToken || !userData) return;
 
       const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers, allMcpToolsets);
-      const userFields = Object.fromEntries(
-        Object.entries(formValues).filter(
-          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions",
-        ),
-      );
+      const updated = await userPatchCall(accessToken, userData.user_id, {
+        ...toUserPatch(formValues),
+        ...(mcpEntitlement ? { object_permission: mcpEntitlement } : {}),
+      });
 
-      await userUpdateUserCall(
-        accessToken,
-        mcpEntitlement ? { ...userFields, object_permission: mcpEntitlement } : userFields,
-        null,
-      );
-
-      // Update local state with new values
+      // The response is the row as it now stands, so a field the operator cleared reads back
+      // as cleared instead of keeping the value the form was seeded with. Entitlements live in
+      // their own table and are not part of that row, so they still merge from the request.
       setUserData({
         ...userData,
-        user_email: formValues.user_email ?? userData.user_email,
-        user_alias: formValues.user_alias ?? userData.user_alias,
-        models: formValues.models ?? userData.models,
-        max_budget: formValues.max_budget ?? userData.max_budget,
-        budget_duration: formValues.budget_duration ?? userData.budget_duration,
-        metadata: formValues.metadata ?? userData.metadata,
-        model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
+        ...updated,
         object_permission: mcpEntitlement
           ? { ...userData.object_permission, ...mcpEntitlement }
           : userData.object_permission,
@@ -393,6 +383,8 @@ export default function UserInfoView({
       models: userData.models,
       max_budget: userData.max_budget,
       budget_duration: userData.budget_duration,
+      tpm_limit: userData.tpm_limit,
+      rpm_limit: userData.rpm_limit,
       metadata: userData.metadata,
       // Without these the per-model budget editor mounts empty and a save
       // replaces the user's existing budgets with whatever was typed.
@@ -661,6 +653,24 @@ export default function UserInfoView({
                 <div>
                   <p className="font-medium">Budget Reset</p>
                   <p>{getBudgetDurationLabel(userData.budget_duration ?? null)}</p>
+                </div>
+
+                <div>
+                  <p className="font-medium">TPM Limit</p>
+                  <p>
+                    {userData.tpm_limit !== null && userData.tpm_limit !== undefined
+                      ? formatNumberWithCommas(userData.tpm_limit)
+                      : "Unlimited"}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="font-medium">RPM Limit</p>
+                  <p>
+                    {userData.rpm_limit !== null && userData.rpm_limit !== undefined
+                      ? formatNumberWithCommas(userData.rpm_limit)
+                      : "Unlimited"}
+                  </p>
                 </div>
 
                 <div>

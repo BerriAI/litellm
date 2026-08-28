@@ -99,6 +99,7 @@ import {
   unwrapProxyErrorMessage,
 } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import type { components } from "@/lib/http/schema";
 import {
   registerAuthHeaderNameGetter,
   registerAuthTokenGetter,
@@ -1061,6 +1062,9 @@ export interface UserInfoV2Response {
   models: string[];
   budget_duration: string | null;
   budget_reset_at: string | null;
+  tpm_limit: number | null;
+  rpm_limit: number | null;
+  max_parallel_requests: number | null;
   metadata: Record<string, any> | null;
   created_at: string | null;
   updated_at: string | null;
@@ -1070,6 +1074,31 @@ export interface UserInfoV2Response {
   model_max_budget?: ModelMaxBudget | null;
   model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
 }
+
+/**
+ * Body of PATCH /management/v1/users/{user_id}: an omitted key is left alone, an explicit null
+ * clears the setting. Unknown keys come back as a 422, so this is taken from the generated spec
+ * rather than hand-written, which is what keeps a renamed field from turning into a silent no-op.
+ */
+export type UserPatchRequest = components["schemas"]["UserPatchRequest"];
+
+/** The user row as the patch wrote it. Narrower than UserInfoV2Response: no keys, teams or usage. */
+export type UserPatchResponse = components["schemas"]["UserItem"];
+
+/**
+ * Partially update one internal user. Unlike userUpdateUserCall, a null here actually clears.
+ */
+export const userPatchCall = async (
+  accessToken: string,
+  userId: string,
+  patch: UserPatchRequest,
+): Promise<UserPatchResponse> => {
+  const data = (await apiClient.patch(`/management/v1/users/${encodeURIComponent(userId)}`, {
+    accessToken,
+    body: patch,
+  })) as { data: UserPatchResponse };
+  return data.data;
+};
 
 /**
  * Lightweight user info fetch from /v2/user/info.
