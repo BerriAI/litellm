@@ -433,17 +433,7 @@ def _anthropic_stream_raised_error_status(error: Exception) -> int | None:
 def _anthropic_stream_fallback_error_for_raised(
     error: Exception, model: str, has_generated_content: bool
 ) -> "MidStreamFallbackError | None":
-    """
-    A provider iterator that fails mid-stream by raising (Bedrock surfaces
-    its event-stream exception frames as a BedrockError, a transport drop
-    raises httpx's error) never produces the Anthropic SSE `event: error`
-    frame the wrapper detects, so the raise is converted into the same
-    MidStreamFallbackError a detected error event gets, under the same gate:
-    only before real content reached the caller and only for a retriable
-    status (429, 5xx, or none at all for a transport failure), mirroring
-    CustomStreamWrapper._handle_stream_fallback_error on /chat/completions.
-    None means the exception propagates to the caller unchanged.
-    """
+    """Same gate as a detected SSE error event; None means the raise propagates unchanged."""
     from litellm.exceptions import MidStreamFallbackError
 
     if has_generated_content:
@@ -5101,7 +5091,7 @@ class Router:
                     yield chunk
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
-            except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate, like CustomStreamWrapper
+            except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
                 async for item in self._aanthropic_messages_recover_stream_error(
                     stream_error,
                     has_generated_content,
@@ -5130,17 +5120,7 @@ class Router:
         initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
         wrapper: "FallbackAwareAnthropicMessagesStream",
     ) -> AsyncGenerator[bytes, None]:
-        """
-        Decides what a source-iterator failure in
-        Router._aanthropic_messages_streaming_iterator turns into: a fallback
-        attempt, or the error reaching the caller. A MidStreamFallbackError
-        (completion-bridge path, or the wrapper's own SSE error-event
-        detection) is declined per _anthropic_stream_should_decline_fallback
-        with the held-back lifecycle frames flushed first; any other raise is
-        converted per _anthropic_stream_fallback_error_for_raised and, when
-        not convertible, propagates untouched so the caller still gets a
-        clean error response.
-        """
+        """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
         from litellm.exceptions import MidStreamFallbackError
 
         if isinstance(stream_error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
