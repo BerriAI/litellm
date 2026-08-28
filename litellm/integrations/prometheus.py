@@ -4264,7 +4264,7 @@ def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(
-    standard_logging_payload: dict | None,
+    standard_logging_payload: Mapping[str, object] | None,
 ) -> dict[str, object]:
     """
     Combine the metadata sources that can supply custom Prometheus labels.
@@ -4274,19 +4274,19 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
     via custom_prometheus_metadata_labels configuration.
     """
     return _get_combined_custom_metadata_from_standard_logging_metadata(
-        standard_logging_payload.get("metadata") if isinstance(standard_logging_payload, dict) else None
+        standard_logging_payload.get("metadata") if isinstance(standard_logging_payload, Mapping) else None
     )
 
 
 def _get_combined_custom_metadata_from_standard_logging_metadata(
-    standard_logging_metadata: dict | None,
+    standard_logging_metadata: Mapping[str, object] | None,
 ) -> dict[str, object]:
     """
     Same combination, for emitters holding the standard logging metadata itself
     rather than a whole payload: the fallback emitters and the proxy failure hook
     build it with StandardLoggingPayloadSetup.get_standard_logging_metadata.
     """
-    if not isinstance(standard_logging_metadata, dict):
+    if not isinstance(standard_logging_metadata, Mapping):
         return {}
 
     requester_metadata: Final = standard_logging_metadata.get("requester_metadata")
