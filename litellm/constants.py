@@ -629,6 +629,15 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "amazon_nova",
 ]
 
+# Resolving these providers runs an OAuth device flow (their provider info IS the login), so any
+# metadata or capability lookup against them can block for minutes waiting on a human.
+PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
+    {
+        "github_copilot",
+        "chatgpt",
+    }
+)
+
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
     "azure",
