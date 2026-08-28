@@ -3113,6 +3113,24 @@ def test_stream_chunk_builder_unknown_model_leaves_response_cost_unset():
     assert response.choices[0].message.content == "Hello world."
 
 
+def test_stream_chunk_builder_prices_proxy_alias_via_model_map():
+    chunks: Final = [
+        _stream_builder_text_chunk("claude-opus-5", "Hello "),
+        _stream_builder_text_chunk("claude-opus-5", "world.", finish_reason="stop"),
+    ]
+    for chunk in chunks:
+        chunk._hidden_params = {"custom_llm_provider": "openai"}
+
+    response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert response._hidden_params["custom_llm_provider"] == "openai"
+    prompt_cost, completion_cost = litellm.cost_per_token(model="claude-opus-5", usage_object=response.usage)
+    expected_cost: Final = prompt_cost + completion_cost
+    assert expected_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
 def _stream_builder_logging_obj() -> LiteLLMLogging:
     logging_obj: Final = LiteLLMLogging(
         model="gpt-4o",
