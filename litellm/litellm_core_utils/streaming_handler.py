@@ -2369,6 +2369,7 @@ class CustomStreamWrapper:
             partial_response: Final = litellm.stream_chunk_builder(
                 chunks=self.chunks,
                 messages=self.messages if isinstance(self.messages, list) else None,
+                logging_obj=self.logging_obj,
             )
             if partial_response is None:
                 return

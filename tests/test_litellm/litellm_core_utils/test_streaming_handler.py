@@ -3469,6 +3469,21 @@ def test_record_partial_usage_for_failure_backfills_missing_cache_fields():
     assert stashed.prompt_tokens_details.cached_tokens == 0
 
 
+def test_record_partial_usage_for_failure_prices_corrected_model_not_chunk_model():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="claude-opus-5",
+        usage=Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45),
+        model="gpt-4o-mini",
+        custom_llm_provider="openai",
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    rates = litellm.model_cost["gpt-4o-mini"]
+    expected = 40 * rates["input_cost_per_token"] + 5 * rates["output_cost_per_token"]
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected)
+
+
 def test_record_partial_usage_for_failure_carries_up_openai_style_cached_tokens():
     recovered = Usage(
         prompt_tokens=1000,
