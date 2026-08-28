@@ -10947,3 +10947,38 @@ async def test_router_without_fallback_access_check_attempts_every_config_fallba
     response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert response.choices[0].message.content == "served by secret-fallback"
+
+
+def _resolution_router() -> Router:
+    return Router(
+        model_list=[
+            {"model_name": "pinned", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+            {"model_name": "pooled", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}},
+            {"model_name": "pooled", "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-test"}},
+            {"model_name": "bedrock/*", "litellm_params": {"model": "bedrock/*", "api_key": "sk-test"}},
+        ],
+        model_group_alias={"nickname": "pinned"},
+    )
+
+
+@pytest.mark.parametrize(
+    "model_name,expected",
+    [
+        ("pinned", ("openai/gpt-4o",)),
+        ("nickname", ("openai/gpt-4o",)),
+        ("pooled", ("openai/gpt-4o-mini", "anthropic/claude-haiku-4-5")),
+        ("bedrock/anthropic.claude-3-5-sonnet", ("bedrock/anthropic.claude-3-5-sonnet",)),
+        ("never-configured", ()),
+    ],
+    ids=["exact-name", "model-group-alias", "every-member-of-a-pool", "wildcard-expands", "resolves-to-nothing"],
+)
+def test_resolved_litellm_models_answers_through_every_channel_a_request_uses(
+    model_name: str, expected: tuple[str, ...]
+) -> None:
+    """A caller comparing two names by what serves them needs each channel the request path
+    composes, since the deployment name an admin picked carries no information on its own.
+
+    `resolves-to-nothing` is the contract that keeps the fallback out of here: an empty
+    result is not "the call fails", so what to do about it stays each caller's policy.
+    """
+    assert set(_resolution_router().resolved_litellm_models(model_name)) == set(expected)

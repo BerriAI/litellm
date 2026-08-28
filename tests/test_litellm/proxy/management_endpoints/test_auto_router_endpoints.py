@@ -809,15 +809,66 @@ VIEWER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, api_ke
 NON_ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="user")
 
 
-def _shadow_router() -> MagicMock:
-    router = MagicMock()
-    router.auto_routers = {}
-    router.complexity_routers = {"my-router": [MagicMock()]}
-    router.adaptive_routers = {}
-    router.quality_routers = {}
-    router.model_group_alias = {}
-    router.get_model_list = MagicMock(return_value=None)
-    return router
+def _complexity_router_deployment(
+    model_name: str, tiers: dict[str, str], default: str, classifier: str = "cheap"
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_default_model": default,
+            "complexity_router_config": {
+                "tiers": tiers,
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": classifier},
+                "session_affinity": False,
+            },
+        },
+    }
+
+
+def _shadow_router() -> Router:
+    """A real Router, so the endpoint's model checks run against real resolution.
+
+    `sonnet-router` exists to keep the judge-vs-candidate cases honest: its tiers are
+    deployments named nothing like the shipped default judge, yet one of them serves
+    `anthropic/claude-sonnet-5`, so only a check that resolves names finds the collision.
+    `my-router` deliberately serves none of it, since the default judge has to stay valid
+    for every other test in this file.
+    """
+    return Router(
+        model_list=[
+            {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"}},
+            {"model_name": "mid", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}},
+            {"model_name": "pricey", "litellm_params": {"model": "openai/o3", "api_key": "fake"}},
+            {"model_name": "prefixed-tier", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}},
+            {"model_name": "bare-tier", "litellm_params": {"model": "gpt-4o", "api_key": "fake"}},
+            {"model_name": "house-sonnet", "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"}},
+            {
+                "model_name": "model_name_team-a_x",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"},
+                "model_info": {"team_id": "team-a", "team_public_model_name": "house-judge"},
+            },
+            {
+                "model_name": "model_name_team-b_y",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"},
+                "model_info": {"team_id": "team-b", "team_public_model_name": "b-tier"},
+            },
+            _complexity_router_deployment(
+                "my-router", {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "pricey"}, "mid"
+            ),
+            _complexity_router_deployment(
+                "sonnet-router", {"SIMPLE": "cheap", "MEDIUM": "house-sonnet"}, "cheap"
+            ),
+            _complexity_router_deployment(
+                "classifier-router", {"SIMPLE": "cheap"}, "cheap", classifier="pricey"
+            ),
+            _complexity_router_deployment("b-team-router", {"SIMPLE": "cheap", "MEDIUM": "b-tier"}, "cheap"),
+            _complexity_router_deployment("prefixed-router", {"SIMPLE": "prefixed-tier"}, "prefixed-tier"),
+            _complexity_router_deployment("bare-router", {"SIMPLE": "bare-tier"}, "bare-tier"),
+        ],
+        model_group_alias={"judge-alias": "pricey"},
+    )
 
 
 def _leg_record(**overrides: object) -> MagicMock:
@@ -847,22 +898,37 @@ def _leg_record(**overrides: object) -> MagicMock:
 
 
 def _key_record(
-    token: str = "key-hash", key_alias: str | None = "prod-alpha", key_name: str | None = "sk-...lpha"
+    token: str = "key-hash",
+    key_alias: str | None = "prod-alpha",
+    key_name: str | None = "sk-...lpha",
+    team_id: str | None = None,
 ) -> MagicMock:
-    record = MagicMock(spec=["token", "key_alias", "key_name"])
+    record = MagicMock(spec=["token", "key_alias", "key_name", "team_id"])
     record.token = token
     record.key_alias = key_alias
     record.key_name = key_name
+    record.team_id = team_id
     return record
 
 
-def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-hash", "key-hash-2")) -> MagicMock:
+def _shadow_prisma(
+    legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-hash", "key-hash-2"), key_teams=None
+) -> MagicMock:
     """The job-table fake honours the filters it is handed, so a read that forgets
     stopped_at sees rows the partial index would have released, one that forgets
     direction sees the opposite-direction legs a key may hold at the same time, and a
     group read that matched on a leg id would come back empty."""
     prisma = MagicMock()
-    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[_key_record(token) for token in known_keys])
+    teams: Final = key_teams or {}
+
+    async def find_tokens(*, where):
+        """Honours the token filter, like the job-table fake below: the endpoint derives the
+        job's teams from these rows, so a fake returning keys the request never named would
+        validate against a team no leg of the job runs under."""
+        requested = where["token"]["in"]
+        return [_key_record(t, team_id=teams.get(t)) for t in known_keys if t in requested]
+
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(side_effect=find_tokens)
 
     async def execute_raw(sql: str, *params: object):
         if "SET stopped_by" in sql:
@@ -1022,6 +1088,11 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
         (ADMIN, {"direction": "reverse", "baseline_model": "my-router"}, (), 400),
         (ADMIN, {"direction": "reverse", "baseline_model": "not/a real model!"}, (), 400),
         (ADMIN, {"direction": "reverse", "baseline_model": "openai/gpt-4o", "router_name": "not-a-router"}, (), 400),
+        (ADMIN, {"judge_model": "pricey"}, (), 400),
+        (ADMIN, {"judge_model": "mid"}, (), 400),
+        (ADMIN, {"judge_model": "judge-alias"}, (), 400),
+        (ADMIN, {"router_name": "sonnet-router"}, (), 400),
+        (ADMIN, {"direction": "reverse", "baseline_model": "house-sonnet"}, (), 400),
     ],
     ids=[
         "non-admin",
@@ -1034,6 +1105,11 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
         "router-as-baseline",
         "unresolvable-baseline",
         "reverse-still-needs-an-auto-router",
+        "judge-is-a-tier-model",
+        "judge-is-the-routers-default-model",
+        "judge-alias-resolves-to-a-tier-model",
+        "default-judge-is-what-a-tier-deployment-serves",
+        "judge-is-what-the-reverse-baseline-serves",
     ],
 )
 async def test_start_shadow_eval_rejections(
@@ -1049,6 +1125,68 @@ async def test_start_shadow_eval_rejections(
         await start_shadow_eval(_start_request(**request_overrides), caller)
     assert exc.value.status_code == expected_status
     prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_overrides",
+    [
+        {"judge_model": "house-sonnet"},
+        {"judge_model": "anthropic/claude-opus-4-5"},
+        {"router_name": "sonnet-router", "judge_model": "pricey"},
+        {"router_name": "classifier-router", "judge_model": "pricey"},
+        {"direction": "reverse", "baseline_model": "house-sonnet", "judge_model": "openai/gpt-4.1"},
+    ],
+    ids=[
+        "judge-serves-a-model-no-tier-serves",
+        "judge-is-an-unconfigured-public-name",
+        "judge-is-a-tier-of-a-DIFFERENT-router",
+        "judge-is-only-the-routers-classifier",
+        "reverse-judge-differs-from-both-arms",
+    ],
+)
+async def test_start_shadow_eval_accepts_a_judge_that_serves_neither_arm(
+    monkeypatch: pytest.MonkeyPatch, request_overrides: dict[str, object]
+) -> None:
+    """The negative class of the judge-as-candidate gate.
+
+    Without these, a gate that refused every judge would pass the rejection table above
+    while making the endpoint useless.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    response = await start_shadow_eval(_start_request(**request_overrides), ADMIN)
+
+    assert response.job_id
+    prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_names_the_colliding_arm_by_the_deployment_the_admin_configured(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The gate compares what would ANSWER each name, not the names themselves.
+
+    `anthropic/claude-sonnet-5` shares no substring with the deployment `house-sonnet` that
+    serves it, so a spelling comparison accepts this job and the run's whole budget buys a
+    result that has to be discarded. The detail has to name the deployment, since that is
+    the thing the admin can go and change.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma())
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(router_name="sonnet-router"), ADMIN)
+
+    assert exc.value.status_code == 400
+    assert "house-sonnet" in str(exc.value.detail)
+    assert "anthropic/claude-sonnet-5" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -1805,3 +1943,136 @@ async def test_two_racing_stops_produce_exactly_one_winner(monkeypatch: pytest.M
         await stop_shadow_eval_job("job-1", ADMIN)
     assert exc.value.status_code == 400
     assert "already stopped" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_finds_a_collision_only_the_keys_team_can_see(monkeypatch: pytest.MonkeyPatch):
+    """The shadow and judge calls carry the shadowed key's team, so the router selects
+    deployments with it and an unscoped check answers for a caller that does not exist.
+
+    `house-judge` is team-a's public name for a deployment serving anthropic/claude-sonnet-5,
+    which is also what the router's MEDIUM tier `house-sonnet` serves. Resolved without the
+    team it matches no deployment at all, so the judge reads as the literal string, nothing
+    collides, and the job runs a week producing win rates its own judge authored.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(key_teams={"key-hash": "team-a"})
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(router_name="sonnet-router", judge_model="house-judge"), ADMIN)
+
+    assert exc.value.status_code == 400
+    assert "house-sonnet" in str(exc.value.detail)
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_refuses_when_only_one_of_several_teams_collides(monkeypatch: pytest.MonkeyPatch):
+    """Every key's verdicts land in the same win rates, so one team's biased judge is enough
+    to spoil the job. team-b cannot reach `house-judge` at all; team-a can, and collides."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(key_teams={"key-hash": "team-b", "key-hash-2": "team-a"})
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(
+            _start_request(
+                api_key_ids=("key-hash", "key-hash-2"), router_name="sonnet-router", judge_model="house-judge"
+            ),
+            ADMIN,
+        )
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_sees_a_collision_hidden_behind_the_second_teams_tier(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The arm side is team-scoped too, and the same job is valid or not depending on which
+    keys it samples for.
+
+    `b-team-router`'s MEDIUM tier is team-b's own deployment, serving the model the judge
+    `house-sonnet` also serves. A team-a key can never be routed to it, so that job is fine;
+    add a team-b key and the judge starts grading its own answers. The pair is one test
+    because either half alone would pass against a check that ignored teams in the direction
+    it does not exercise.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(key_teams={"key-hash": "team-a"}))
+    accepted = await start_shadow_eval(
+        _start_request(router_name="b-team-router", judge_model="house-sonnet"), ADMIN
+    )
+    assert accepted.job_id
+
+    monkeypatch.setattr(
+        proxy_server, "prisma_client", _shadow_prisma(key_teams={"key-hash": "team-a", "key-hash-2": "team-b"})
+    )
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(
+            _start_request(
+                api_key_ids=("key-hash", "key-hash-2"), router_name="b-team-router", judge_model="house-sonnet"
+            ),
+            ADMIN,
+        )
+
+    assert exc.value.status_code == 400
+    assert "b-tier" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_matches_a_bare_public_judge_name_to_a_prefixed_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`gpt-4o` and a tier deployment serving `openai/gpt-4o` are one model.
+
+    The judge is not configured on the proxy, so it is served by the SDK under the name
+    litellm resolves it to; the tier is served by its deployment under the name the admin
+    configured. Comparing those two spellings finds nothing, and the job runs a week with
+    the judge grading its own answers, which is the whole defect this endpoint guards.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(router_name="prefixed-router", judge_model="gpt-4o"), ADMIN)
+
+    assert exc.value.status_code == 400
+    assert "prefixed-tier" in str(exc.value.detail)
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_matches_a_prefixed_judge_name_to_a_bare_tier_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mirror of the case above, and the reason BOTH sides are normalised.
+
+    An admin may configure a deployment as plain `gpt-4o` and litellm infers the provider.
+    Normalising only the judge would leave that tier spelled differently from the judge that
+    is the same model, so the collision would be missed for exactly the configs that spell
+    the two ends differently, which is every config this guard exists for.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(router_name="bare-router", judge_model="openai/gpt-4o"), ADMIN)
+
+    assert exc.value.status_code == 400
+    assert "bare-tier" in str(exc.value.detail)
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()

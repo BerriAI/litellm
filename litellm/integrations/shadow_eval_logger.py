@@ -452,6 +452,14 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     return False
 
 
+def _forwarded_team_id(metadata: Mapping[str, object]) -> str | None:
+    """The shadowed key's team, the identity the judge call already carries in its metadata
+    and the router already selects deployments with. Read here too so the arm choice, which
+    happens before the router sees the call, is made under the same team."""
+    team_id: Final = metadata.get("user_api_key_team_id")
+    return team_id if isinstance(team_id, str) and team_id else None
+
+
 def _routing_decision(metadata: Mapping[str, object]) -> Mapping[str, object]:
     """The routing decision a pre-routing strategy wrote to a call's metadata, empty when
     a plain model served it. Read off the sampled request for the control arm, and off the
@@ -915,6 +923,7 @@ class ShadowEvalLogger(CustomLogger):
                 self._router_provider(),
                 judge_model,
                 judge_messages,  # pyright: ignore[reportArgumentType]  # plain SDK message dicts
+                team_id=_forwarded_team_id(parent_metadata),
                 temperature=0,
                 max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
                 response_format=PAIRWISE_JUDGE_RESPONSE_FORMAT,
