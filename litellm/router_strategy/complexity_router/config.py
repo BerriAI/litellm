@@ -321,6 +321,18 @@ PLAN_MODE_TAIL_SENTINELS: Final[tuple[str, ...]] = (
     "Plan mode still active",
 )
 PLAN_MODE_SYSTEM_SENTINELS: Final[tuple[str, ...]] = ('You are currently running in "Plan" mode.',)
+
+# Taken verbatim from classifier payloads captured on a live gateway, 789 calls over one day: the
+# first appears on 17 of them and the second on 2. A coding agent names the conversation by quoting
+# the session and asking for a title, so the ask carries the session's engineering vocabulary while
+# the task is the cheapest one the client performs. Only wording observed on the wire belongs here,
+# never a paraphrase: a sentinel that matches nothing costs a substring scan per request and reads
+# as coverage the router does not have. These are client-owned strings that drift with client
+# releases, so operators extend coverage via housekeeping_patterns rather than editing these.
+HOUSEKEEPING_ASK_SENTINELS: Final[tuple[str, ...]] = (
+    "Write the title in the predominant language of the session",
+    "You are coming up with a succinct title for a coding session",
+)
 PLAN_MODE_TOOL_NAME: Final[str] = "exit_plan_mode"
 
 
@@ -770,6 +782,29 @@ class ComplexityRouterConfig(BaseModel):
             "wording the built-ins don't cover, or after a client release changes its strings."
         ),
     )
+    route_housekeeping_to_cheapest_tier: bool = Field(
+        default=True,
+        description=(
+            "Route a coding agent's own housekeeping calls to the cheapest configured tier "
+            "without classifying them. A client names the conversation by quoting the whole "
+            "session and asking for a title, so the ask reads as the session's engineering work "
+            "and lands on the most expensive tier, which is the reverse of what the call is "
+            "worth. Detection is a literal match against client-owned sentinels on the newest "
+            "ask only, so it cannot fire on an earlier turn, and it never lowers what anyone "
+            "else asked for: a keyword_tier_rule or a session pin still decides instead, and an "
+            "escalation keyword or the plan-mode floor still raises the tier from here. Only the "
+            "classifier is displaced, and its call is skipped, so a matched request costs "
+            "nothing to route. Set false to classify these calls like any other."
+        ),
+    )
+    housekeeping_patterns: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Additional case-sensitive literal sentinels that mark a request as client "
+            "housekeeping, on top of the built-in conversation-title ones. For clients whose "
+            "wording the built-ins don't cover, or after a client release changes its strings."
+        ),
+    )
 
     # Semantic (embedding) matching for keyword_tier_rules instead of literal text matching
     semantic_keyword_matching: bool = Field(
@@ -935,6 +970,15 @@ class ComplexityRouterConfig(BaseModel):
         """Blank patterns are dropped rather than kept: an empty string substring-matches every
         request, which would silently floor all traffic (same failure mode keyword_tier_rules
         rejects)."""
+        if value is None:
+            return None
+        return tuple(stripped for pattern in value if (stripped := pattern.strip()))
+
+    @field_validator("housekeeping_patterns")
+    @classmethod
+    def _normalize_housekeeping_patterns(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Blank patterns are dropped: an empty string substring-matches every request, which would
+        silently route all traffic to the cheapest tier."""
         if value is None:
             return None
         return tuple(stripped for pattern in value if (stripped := pattern.strip()))
@@ -1246,6 +1290,28 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_tier_param_placement(self) -> "ComplexityRouterConfig":
+        """Reject a router setting written into a tier entry's request params.
+
+        A tier entry's ``litellm_params`` are request params for that deployment: the
+        pre-routing hook spreads them onto the outbound call, so a config key placed
+        there configures nothing and reaches the provider as an unknown body field.
+        """
+        misplaced: Final = tuple(
+            f"{tier}.{key}"
+            for tier, entries in self.tier_model_configs.items()
+            for entry in entries
+            for key in sorted(frozenset(entry.litellm_params) & COMPLEXITY_ROUTER_CONFIG_KEYS)
+        )
+        if misplaced:
+            raise ValueError(
+                "tier entries carry complexity_router_config settings in their litellm_params, where the "
+                "router never reads them and the outbound request forwards them to the provider as unknown "
+                f"body fields: {', '.join(misplaced)}. Set these on complexity_router_config itself"
+            )
+        return self
+
     def tier_label(self, tier: ComplexityTier) -> str:
         """Operator-facing display name for a tier, falling back to its canonical name."""
         return self.tier_labels.get(tier, "").strip() or tier.value
@@ -1262,6 +1328,15 @@ class ComplexityRouterConfig(BaseModel):
             (tier for tier, tier_label in labeled if tier_label.casefold() == folded),
             next((tier for tier in TIER_SEVERITY_ORDER if tier.value.casefold() == folded), None),
         )
+
+
+COMPLEXITY_ROUTER_CONFIG_KEYS: Final[frozenset[str]] = frozenset(ComplexityRouterConfig.model_fields)
+"""Every setting name this config owns, derived from the model so a field added later is covered.
+
+These names are disjoint from the OpenAI request params, from ``all_litellm_params``, and from the
+``LiteLLM_Params`` fields, so one of them appearing where a request param belongs is always a
+misplaced setting rather than a parameter the caller meant to send.
+"""
 
 
 # Combined default config

@@ -15,6 +15,7 @@ COST_MAP_ADAPTER: Final = TypeAdapter(CostMap)
 SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/moonshotai/Kimi-K3",
     "together_ai/zai-org/GLM-5.2",
+    "together_ai/zai-org/GLM-5.3-Flash",
     "together_ai/deepseek-ai/DeepSeek-V4-Pro-0813",
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731",
     "together_ai/MiniMaxAI/MiniMax-M3",
@@ -110,6 +111,22 @@ def test_together_glm_52_pricing(cost_map: CostMap):
     assert info["supports_reasoning"] is True
 
 
+def test_together_glm_53_flash_pricing_and_capabilities(cost_map: CostMap):
+    info = cost_map["together_ai/zai-org/GLM-5.3-Flash"]
+    assert info["input_cost_per_token"] == 1.5e-07
+    assert info["output_cost_per_token"] == 5e-07
+    assert info["cache_read_input_token_cost"] == 3e-08
+    assert info["max_input_tokens"] == 1048575
+    assert info["max_output_tokens"] == 1048575
+    assert info["supports_function_calling"] is True
+    assert info["supports_parallel_function_calling"] is True
+    assert info["supports_prompt_caching"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_response_schema"] is True
+    assert info["supports_vision"] is True
+    assert info["supports_reasoning"] is True
+
+
 def test_together_multilingual_e5_embedding_entry(cost_map: CostMap):
     info = cost_map["together_ai/intfloat/multilingual-e5-large-instruct"]
     assert info["mode"] == "embedding"
@@ -159,3 +176,51 @@ def test_together_backup_cost_map_in_sync(cost_map: CostMap):
     together_main = {k: v for k, v in cost_map.items() if k.startswith("together_ai/")}
     together_backup = {k: v for k, v in backup.items() if k.startswith("together_ai/")}
     assert together_backup == together_main
+
+
+CACHED_INPUT_MODELS: Final = (
+    "together_ai/moonshotai/Kimi-K3",
+    "together_ai/zai-org/GLM-5.2",
+    "together_ai/meta-models/Muse-Glimmer-30B",
+    "together_ai/Qwen/Qwen3.8-2.4T-A95B",
+    "together_ai/deepseek-ai/DeepSeek-V4-Pro-0813",
+    "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731",
+    "together_ai/thinkingmachines/Inkling",
+    "together_ai/MiniMaxAI/MiniMax-M3",
+    "together_ai/thinkingmachines/Inkling-Small",
+    "together_ai/moonshotai/Kimi-K2.7-Code",
+    "together_ai/deepseek-ai/DeepSeek-V4-Pro",
+    "together_ai/nvidia/nemotron-3-ultra-550b-a55b",
+    "together_ai/Qwen/Qwen3.7-Max",
+)
+
+
+@pytest.mark.parametrize("model", CACHED_INPUT_MODELS)
+def test_together_cached_input_model_carries_cache_read_pricing(cost_map: CostMap, model: str):
+    info = cost_map.get(model)
+    assert info is not None, f"{model} missing from model_prices_and_context_window.json"
+    assert info.get("supports_prompt_caching") is True
+    cache_read = info.get("cache_read_input_token_cost")
+    assert isinstance(cache_read, float)
+    assert 0 < cache_read < info["input_cost_per_token"]
+    assert "cache_creation_input_token_cost" not in info
+
+
+def test_together_prompt_caching_flag_implies_cache_read_rate(cost_map: CostMap):
+    for model, info in cost_map.items():
+        if model.startswith("together_ai/") and info.get("supports_prompt_caching"):
+            assert "cache_read_input_token_cost" in info, f"{model} flags caching without a cache read rate"
+
+
+def test_together_deepseek_v4_flash_cache_read_rate(cost_map: CostMap):
+    info = cost_map["together_ai/deepseek-ai/DeepSeek-V4-Flash-0731"]
+    assert info["input_cost_per_token"] == 1.4e-07
+    assert info["cache_read_input_token_cost"] == 3e-08
+    assert info["output_cost_per_token"] == 2.8e-07
+
+
+def test_together_qwen_37_max_repriced_to_current_together_rate(cost_map: CostMap):
+    info = cost_map["together_ai/Qwen/Qwen3.7-Max"]
+    assert info["input_cost_per_token"] == 2.5e-06
+    assert info["output_cost_per_token"] == 7.5e-06
+    assert info["cache_read_input_token_cost"] == 5e-07

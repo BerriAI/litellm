@@ -196,6 +196,7 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    FallbackAccessCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
@@ -420,6 +421,36 @@ def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error
     return has_generated_content or not error.is_pre_first_chunk
 
 
+def _anthropic_stream_raised_error_status(error: Exception) -> int | None:
+    raw_status: Final = getattr(error, "status_code", None)
+    if isinstance(raw_status, int):
+        return raw_status
+    if isinstance(raw_status, str) and raw_status.isdigit():
+        return int(raw_status)
+    response_status: Final = getattr(getattr(error, "response", None), "status_code", None)
+    return response_status if isinstance(response_status, int) else None
+
+
+def _anthropic_stream_fallback_error_for_raised(
+    error: Exception, model: str, has_generated_content: bool
+) -> "MidStreamFallbackError | None":
+    """Same gate as a detected SSE error event; None means the raise propagates unchanged."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    if has_generated_content:
+        return None
+    status_code: Final = _anthropic_stream_raised_error_status(error)
+    if status_code is not None and not _is_retriable_anthropic_status(status_code):
+        return None
+    return MidStreamFallbackError(
+        message=str(error),
+        model=model,
+        llm_provider="anthropic",
+        original_exception=error,
+        is_pre_first_chunk=True,
+    )
+
+
 def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
     """
     Whether `chunk` should make Router._aanthropic_messages_streaming_iterator
@@ -604,6 +635,7 @@ class Router:
         health_check_ignore_transient_errors: bool = False,
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
+        fallback_access_check: FallbackAccessCheck | None = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -640,6 +672,7 @@ class Router:
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+            fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -679,6 +712,7 @@ class Router:
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
+        self.fallback_access_check: Final = fallback_access_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
@@ -3964,6 +3998,7 @@ class Router:
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
+            request_kwargs=kwargs,
         )
 
         # Filter out prompt management specific parameters from data before merging
@@ -5061,14 +5096,15 @@ class Router:
                     yield chunk
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
-            except MidStreamFallbackError as e:
-                if _anthropic_stream_should_decline_fallback(has_generated_content, e):
-                    for buffered_chunk in buffered_lifecycle_chunks:
-                        yield buffered_chunk
-                    if e.original_exception is not None:
-                        raise e.original_exception from e
-                    raise
-                async for item in self._aanthropic_messages_fallback_attempt(e, initial_kwargs, wrapper):
+            except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
+                async for item in self._aanthropic_messages_recover_stream_error(
+                    stream_error,
+                    has_generated_content,
+                    buffered_lifecycle_chunks,
+                    model,
+                    initial_kwargs,
+                    wrapper,
+                ):
                     yield item
             finally:
                 with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
@@ -5079,6 +5115,36 @@ class Router:
         # being defined textually after the function that captures it.
         wrapper: Final = FallbackAwareAnthropicMessagesStream(stream_with_fallbacks(), source_iterator)
         return wrapper
+
+    async def _aanthropic_messages_recover_stream_error(
+        self,
+        stream_error: Exception,
+        has_generated_content: bool,
+        buffered_lifecycle_chunks: tuple[bytes, ...],
+        model: str,
+        initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
+        wrapper: "FallbackAwareAnthropicMessagesStream",
+    ) -> AsyncGenerator[bytes, None]:
+        """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
+        from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(stream_error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
+            has_generated_content, stream_error
+        ):
+            for buffered_chunk in buffered_lifecycle_chunks:
+                yield buffered_chunk
+            if stream_error.original_exception is not None:
+                raise stream_error.original_exception from stream_error
+            raise stream_error
+        fallback_error: Final = (
+            stream_error
+            if isinstance(stream_error, MidStreamFallbackError)
+            else _anthropic_stream_fallback_error_for_raised(stream_error, model, has_generated_content)
+        )
+        if fallback_error is None:
+            raise stream_error
+        async for item in self._aanthropic_messages_fallback_attempt(fallback_error, initial_kwargs, wrapper):
+            yield item
 
     async def _aanthropic_messages_fallback_attempt(
         self,
@@ -6982,9 +7048,13 @@ class Router:
             _sibling_metadata_key: Final = (
                 "metadata" if _fallback_metadata_key == "litellm_metadata" else "litellm_metadata"
             )
-            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict):
-                _sibling_metadata.pop("attempted_fallbacks", None)
-                _sibling_metadata.pop("original_model_group", None)
+            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict) and (
+                "attempted_fallbacks" in _sibling_metadata or "original_model_group" in _sibling_metadata
+            ):
+                _scrubbed_sibling_metadata: Final = _sibling_metadata.copy()
+                _scrubbed_sibling_metadata.pop("attempted_fallbacks", None)
+                _scrubbed_sibling_metadata.pop("original_model_group", None)
+                kwargs[_sibling_metadata_key] = _scrubbed_sibling_metadata
             if isinstance(_fallback_metadata := kwargs.get(_fallback_metadata_key), dict):
                 _fallback_metadata["attempted_fallbacks"] = 0
                 if model_group is not None:
@@ -10802,6 +10872,25 @@ class Router:
 
         return returned_models
 
+    def resolved_litellm_models(self, model_name: str, team_id: str | None = None) -> tuple[str, ...]:
+        """The provider model strings `model_name` can actually be served by on this proxy.
+
+        `get_model_list` composes every channel the request path itself uses (exact name,
+        model_group_alias, routing groups, wildcards), so this answers "which models will
+        answer a call to this name" rather than "what did the admin call it": the deployment
+        name is admin-arbitrary, and two names over one provider model are one model.
+
+        Empty when the name resolves to no deployment. That is not the same fact as "the
+        call will fail" - a provider-qualified public name is served by the SDK with no
+        deployment behind it - so the fallback for an empty result is the caller's policy,
+        never this function's.
+        """
+        return tuple(
+            litellm_model
+            for deployment in self.get_model_list(model_name=model_name, team_id=team_id) or ()
+            if isinstance(litellm_model := deployment.get("litellm_params", {}).get("model"), str) and litellm_model
+        )
+
     def _invalidate_model_group_info_cache(self) -> None:
         """Invalidate the cached model group info.
 
@@ -12025,10 +12114,7 @@ class Router:
             resolve_structured_messages,
         )
 
-        deployments: Final = self.get_model_list(model_name=model) or []
-        candidate_models: Final = [
-            d["litellm_params"]["model"] for d in deployments if d.get("litellm_params", {}).get("model")
-        ]
+        candidate_models: Final = list(self.resolved_litellm_models(model))
 
         metadata_key: Final = self._get_metadata_variable_name_from_kwargs(request_kwargs)
         metadata: Final = request_kwargs.setdefault(metadata_key, {})

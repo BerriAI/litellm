@@ -9315,6 +9315,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-kimi-k3-through-fireworks-ai-on-microsoft-foundry/4540187",
         "supported_modalities": [
             "text",
@@ -14640,6 +14645,22 @@
         ]
     },
     "dashscope/qwen-image-2.0-pro": {
+        "litellm_provider": "dashscope",
+        "mode": "image_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "dashscope/qwen-image-3.0": {
+        "litellm_provider": "dashscope",
+        "mode": "image_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "dashscope/qwen-image-3.0-pro": {
         "litellm_provider": "dashscope",
         "mode": "image_generation",
         "source": "https://www.alibabacloud.com/help/en/model-studio/models",
@@ -31881,6 +31902,11 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://platform.kimi.ai/docs/pricing/chat-k3",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -36489,6 +36515,14 @@
         "litellm_provider": "perplexity",
         "mode": "responses",
         "output_cost_per_token": 1.5e-05,
+        "reasoning_effort_levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
         "source": "https://docs.perplexity.ai/docs/agent-api/models",
         "supports_web_search": true,
         "supports_reasoning": true,
@@ -38791,14 +38825,14 @@
         "supports_reasoning": true
     },
     "together_ai/Qwen/Qwen3.7-Max": {
-        "cache_read_input_token_cost": 1.3e-07,
-        "input_cost_per_token": 1.25e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "max_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 3.75e-06,
+        "output_cost_per_token": 7.5e-06,
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_prompt_caching": true
     },
@@ -38970,6 +39004,11 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -39052,6 +39091,24 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "together_ai/zai-org/GLM-5.3-Flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1048575,
+        "max_output_tokens": 1048575,
+        "max_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://docs.together.ai/docs/serverless-models",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "tts-1": {
         "input_cost_per_character": 1.5e-05,
@@ -51045,6 +51102,26 @@
         "supports_reasoning": true,
         "supports_vision": false
     },
+    "tencent/minimax-m3": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_cache_hit": 6e-08,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://www.tencentcloud.com/products/tokenhub",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
     "cognition/swe-1.6": {
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 2.5e-06,
@@ -51740,6 +51817,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -51804,6 +51886,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -51820,6 +51907,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 2.25e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -51836,6 +51928,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -52008,6 +52105,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 2.25e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -52024,6 +52126,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
