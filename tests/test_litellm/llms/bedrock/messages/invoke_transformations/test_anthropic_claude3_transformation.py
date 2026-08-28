@@ -2,7 +2,6 @@ import asyncio
 import copy
 import json
 import os
-import sys
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -11,13 +10,12 @@ import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
+    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    remove_custom_field_from_tools,
 )
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -30,23 +28,6 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so adaptive-thinking detection reads this
-    branch's ``supports_adaptive_thinking`` flags, which the network-fetched
-    ``main`` copy lacks until merge."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -265,6 +246,174 @@ def test_chunk_parser_usage_transformation():
     assert parsed["usage"]["output_tokens"] == 5
 
 
+def test_chunk_parser_preserves_cache_usage_fields_with_invocation_metrics():
+    """Cache usage fields on the chunk must survive invocationMetrics conversion.
+
+    Bedrock reports cache_read_input_tokens / cache_creation_input_tokens on
+    message_stop.usage and attaches amazon-bedrock-invocationMetrics to the same
+    chunk. invocationMetrics.inputTokenCount excludes cache reads and writes, so
+    replacing the whole usage block with a metrics-only one drops the cache
+    fields and cache tokens end up billed at $0.
+    """
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_stop",
+        "usage": {
+            "cache_read_input_tokens": 9821,
+            "cache_creation_input_tokens": 0,
+        },
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 10174,
+            "outputTokenCount": 500,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert "amazon-bedrock-invocationMetrics" not in parsed
+    assert parsed["usage"]["cache_read_input_tokens"] == 9821
+    assert parsed["usage"]["cache_creation_input_tokens"] == 0
+    assert parsed["usage"]["input_tokens"] == 10174
+    assert parsed["usage"]["output_tokens"] == 500
+
+
+def test_chunk_parser_maps_cache_token_counts_from_invocation_metrics():
+    """Cache itemization inside invocationMetrics maps to Anthropic usage keys."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_stop",
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 10174,
+            "outputTokenCount": 500,
+            "cacheReadInputTokenCount": 9821,
+            "cacheWriteInputTokenCount": 42,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert parsed["usage"]["input_tokens"] == 10174
+    assert parsed["usage"]["output_tokens"] == 500
+    assert parsed["usage"]["cache_read_input_tokens"] == 9821
+    assert parsed["usage"]["cache_creation_input_tokens"] == 42
+
+
+def test_chunk_parser_keeps_existing_token_counts_over_invocation_metrics():
+    """Token counts reported in the chunk's own usage block win over invocationMetrics."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_stop",
+        "usage": {
+            "input_tokens": 7,
+            "output_tokens": 11,
+            "cache_read_input_tokens": 3,
+        },
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 999,
+            "outputTokenCount": 999,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert parsed["usage"]["input_tokens"] == 7
+    assert parsed["usage"]["output_tokens"] == 11
+    assert parsed["usage"]["cache_read_input_tokens"] == 3
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_preserves_cache_usage_with_invocation_metrics():
+    """Regression test: cache usage on message_stop must survive when the same
+    chunk also carries amazon-bedrock-invocationMetrics.
+
+    Mirrors the commercial Bedrock stream shape: message_start and message_delta
+    repeat uncached input_tokens only, while message_stop carries the cache
+    breakdown plus invocationMetrics. The decoder previously replaced
+    message_stop's usage with a metrics-only block, so
+    _promote_message_stop_usage had no cache fields left to promote and the
+    final usage billed cache reads and writes at $0.
+    """
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    raw_chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {
+                    "input_tokens": 10174,
+                    "output_tokens": 1,
+                },
+            },
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 500},
+        },
+        {
+            "type": "message_stop",
+            "usage": {
+                "cache_read_input_tokens": 9821,
+                "cache_creation_input_tokens": 0,
+            },
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 10174,
+                "outputTokenCount": 500,
+                "invocationLatency": 1000,
+                "firstByteLatency": 100,
+            },
+        },
+    ]
+
+    async def _decoded_stream():  # type: ignore[return-type]
+        for chunk in raw_chunks:
+            yield decoder._chunk_parser(copy.deepcopy(chunk))
+
+    collected: list[bytes] = []
+    async for chunk in cfg.bedrock_sse_wrapper(
+        _decoded_stream(),
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/invoke/anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_bedrock_sse_wrapper_preserves_cache_usage",
+            function_id="test_bedrock_sse_wrapper_preserves_cache_usage",
+        ),
+        request_body={},
+    ):
+        collected.append(chunk)
+
+    delta_chunk = next(c for c in collected if b"event: message_delta\n" in c)
+    delta_json = json.loads(delta_chunk.decode("utf-8").split("data: ", 1)[1].strip())
+
+    assert delta_json["usage"]["cache_read_input_tokens"] == 9821
+    assert delta_json["usage"]["cache_creation_input_tokens"] == 0
+    assert delta_json["usage"]["input_tokens"] == 10174
+    assert delta_json["usage"]["output_tokens"] == 500
+
+
 def test_remove_ttl_from_cache_control():
     """Ensure ttl field is removed from cache_control in messages."""
 
@@ -353,12 +502,13 @@ def test_remove_ttl_from_cache_control():
     assert request5 == {}
 
 
-def test_remove_custom_field_from_tools():
+def test_normalize_custom_field_on_tools():
     """
-    Ensure the `custom` field is stripped from every tool definition.
+    Ensure the `custom` field is stripped from every tool definition, and that a
+    boolean `custom.defer_loading` is hoisted onto the top-level `defer_loading`
+    flag Bedrock documents instead of being dropped with the wrapper.
 
-    Claude Code v2.1.69+ sends `custom: {defer_loading: true}` on tool
-    objects.  Bedrock does not accept this extra field and returns
+    Bedrock does not accept a `custom` object on a tool and returns
     "Extra inputs are not permitted".
 
     Ref: https://github.com/BerriAI/litellm/issues/22847
@@ -381,28 +531,93 @@ def test_remove_custom_field_from_tools():
         ]
     }
 
-    remove_custom_field_from_tools(request)
+    normalize_custom_field_on_tools(request)
 
     for tool in request["tools"]:
         assert "custom" not in tool, f"Tool {tool['name']} still has 'custom' field"
     # Other fields should be preserved
     assert request["tools"][0]["name"] == "Read"
     assert request["tools"][1]["name"] == "Write"
+    # `custom.defer_loading` is hoisted; the tool that never carried it is untouched
+    assert request["tools"][0]["defer_loading"] is True
+    assert "defer_loading" not in request["tools"][1]
 
     # Case 2: request without tools key (should not raise error)
     request2 = {"messages": [{"role": "user", "content": "hi"}]}
-    remove_custom_field_from_tools(request2)
+    normalize_custom_field_on_tools(request2)
     assert "tools" not in request2
 
     # Case 3: empty tools list (should not raise error)
     request3 = {"tools": []}
-    remove_custom_field_from_tools(request3)
+    normalize_custom_field_on_tools(request3)
     assert request3["tools"] == []
 
     # Case 4: tools with None value (should not raise error)
     request4 = {"tools": None}
-    remove_custom_field_from_tools(request4)
+    normalize_custom_field_on_tools(request4)
     assert request4["tools"] is None
+
+    # Case 5: an explicit top-level flag wins over a conflicting wrapped one
+    request5 = {
+        "tools": [
+            {"name": "Read", "defer_loading": False, "custom": {"defer_loading": True}}
+        ]
+    }
+    normalize_custom_field_on_tools(request5)
+    assert request5["tools"][0] == {"name": "Read", "defer_loading": False}
+
+    # Case 6: a non-boolean `custom.defer_loading` is dropped, never forwarded
+    for junk in ("true", 1, None, {"nested": True}):
+        request6 = {"tools": [{"name": "Read", "custom": {"defer_loading": junk}}]}
+        normalize_custom_field_on_tools(request6)
+        assert request6["tools"][0] == {"name": "Read"}, f"leaked defer_loading={junk!r}"
+
+    # Case 7: a `custom` that is not a dict is dropped without raising
+    request7 = {
+        "tools": [
+            {"name": "Read", "custom": "defer_loading"},
+            {"name": "Write", "custom": None},
+        ]
+    }
+    normalize_custom_field_on_tools(request7)
+    assert request7["tools"] == [{"name": "Read"}, {"name": "Write"}]
+
+
+@pytest.mark.parametrize(
+    "deferred_marker", [{"custom": {"defer_loading": True}}, {"defer_loading": True}]
+)
+def test_bedrock_invoke_messages_transform_emits_top_level_defer_loading(
+    deferred_marker,
+):
+    """A deferred tool must reach Bedrock as top-level ``defer_loading``, whether the
+    client wrapped the flag in ``custom`` or sent it top-level, and the outbound body
+    must still carry the Bedrock tool-search beta."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 128,
+            "stream": False,
+            "betas": ["advanced-tool-use-2025-11-20"],
+            "tools": [
+                {
+                    "name": "Read",
+                    "description": "Read a file",
+                    "input_schema": {"type": "object", "properties": {}},
+                    **deferred_marker,
+                },
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search"},
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"][0]["defer_loading"] is True
+    assert "custom" not in result["tools"][0]
+    assert result["anthropic_beta"] == ["tool-search-tool-2025-10-19"]
 
 
 def test_normalize_tool_input_schema_types_for_bedrock_invoke():
@@ -1172,7 +1387,7 @@ def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
         )
 
     assert "reasoning_effort" not in result
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": expected_effort}
 
 
@@ -2059,13 +2274,14 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
     ]
 
 
-def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claude(local_model_cost_map):
-    """Regression test for Claude Code 400s on pre-Opus-4.8 Bedrock models:
-    Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet 4.6,
-    Haiku 4.5, etc. ("role 'system' is not supported on this model"), so on
-    models without ``supports_mid_conversation_system`` every system entry must
-    be hoisted into the top-level ``system`` field, mid-conversation ones
-    included."""
+def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
+    """Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet
+    4.6, Haiku 4.5, etc. ("role 'system' is not supported on this model"), but
+    hoisting a mid-conversation reminder into the top-level ``system`` field
+    mutates the cached prefix and reprocesses the whole history. On models
+    without ``supports_mid_conversation_system`` the reminder is converted to a
+    user turn in place instead: the request stays valid and a cache breakpoint
+    before the reminder still hits."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2090,19 +2306,136 @@ def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claud
 
     assert result["messages"] == [
         {"role": "user", "content": "read the file"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+            ],
+        },
         {"role": "assistant", "content": "reading"},
         {"role": "user", "content": "continue"},
     ]
-    assert result["system"] == [
-        {"type": "text", "text": "Base."},
-        {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+    assert result["system"] == [{"type": "text", "text": "Base."}]
+
+
+def test_bedrock_invoke_transform_moves_converted_system_after_tool_result_turn(local_model_cost_map):
+    """A reminder wedged between an assistant ``tool_use`` turn and the user
+    ``tool_result`` turn cannot become a user turn in that position: the API
+    requires the result right after the call ("tool_use ids were found without
+    tool_result blocks immediately after"). The converted turn goes after the
+    tool-result turn instead, where consecutive user turns merge upstream."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    tool_use_turn = {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "read_file", "input": {"path": "big1.txt"}}],
+    }
+    tool_result_turn = {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": "first 100 lines"},
+            {"type": "text", "text": "keep going"},
+        ],
+    }
+    messages = [
+        {"role": "user", "content": "read the file"},
+        tool_use_turn,
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+        {"role": "system", "content": "<budget>low</budget>"},
+        tool_result_turn,
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": "read the file"},
+        tool_use_turn,
+        tool_result_turn,
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "<budget>low</budget>"},
+            ],
+        },
     ]
 
 
-def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_model_cost_map):
+def test_bedrock_invoke_transform_converted_system_carries_only_its_content(local_model_cost_map):
+    """Hoisting only ever kept a system entry's content, so the in-place
+    conversion must not forward the entry's other keys either ("messages.2.name:
+    Extra inputs are not permitted")."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "read the file"},
+        {"role": "assistant", "content": "reading"},
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]", "name": "ops"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"][2] == {
+        "role": "user",
+        "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+            {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+        ],
+    }
+
+
+def test_bedrock_invoke_transform_converts_system_for_unmapped_model(local_model_cost_map):
     """A model with no cost-map entry and no fallback-generalization rule gets
-    the hoist-everything behavior: the safe default is a mutated cache prefix,
-    never a provider 400 from forwarding a role the model may not accept."""
+    the unsupported-model treatment: the safe default converts the reminder to
+    a user turn in place, never a provider 400 from forwarding a role the model
+    may not accept, and never a mutated cache prefix."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2123,10 +2456,23 @@ def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_mod
 
     assert result["messages"] == [
         {"role": "user", "content": "hi"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "mid-conversation reminder"},
+            ],
+        },
         {"role": "assistant", "content": "hello"},
         {"role": "user", "content": "continue"},
     ]
-    assert result["system"] == [{"type": "text", "text": "mid-conversation reminder"}]
+    assert "system" not in result
 
 
 def test_bedrock_invoke_transform_keeps_system_in_place_for_unmapped_future_claude(local_model_cost_map):
@@ -2474,6 +2820,91 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
     assert out_converse == []
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config, model):
+    """
+    LIT-4522: Bedrock InvokeModel only admits ``tool_search_tool_*`` tool types
+    when the request body carries the ``tool-search-tool-2025-10-19`` beta;
+    without it Bedrock 400s with "Input tag 'tool_search_tool_regex_20251119'
+    ... does not match any of the expected tags". The allowlist in
+    ``_supports_tool_search_on_bedrock`` previously omitted Haiku 4.5 and
+    Opus 4.7, so the beta was silently dropped for those models and every
+    tool-search request failed. Verified live 2026-08-11: Bedrock returns 200
+    with ``server_tool_use`` for all three models once the beta is sent.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 64,
+        "tools": [
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {
+                "name": "add_numbers",
+                "description": "Add two integers",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                    "required": ["a", "b"],
+                },
+            },
+        ],
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "tool-search-tool-2025-10-19" in (result.get("anthropic_beta") or [])
+
+
+def test_bedrock_messages_tool_search_model_map_flag_is_authoritative(local_model_cost_map, monkeypatch):
+    """``supports_tool_search`` lives in the model map; the name patterns in
+    ``_supports_tool_search_on_bedrock`` are only a fallback for ids the map
+    cannot resolve. Flipping the mapped entry's flag to ``False`` must win even
+    though the model name still matches the ``haiku-4-5`` pattern."""
+    import litellm
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    assert AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock") is True
+    assert cfg._supports_tool_search_on_bedrock(model) is True
+
+    monkeypatch.setitem(litellm.model_cost[model], "supports_tool_search", False)
+    litellm.get_model_info.cache_clear()
+
+    assert cfg._supports_tool_search_on_bedrock(model) is False
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        pytest.param("us.anthropic.claude-opus-4-6-v99:9", True, id="unmapped_id_falls_back_to_patterns"),
+        pytest.param("anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="mapped_entry_without_flag_no_pattern"),
+    ],
+)
+def test_bedrock_messages_tool_search_pattern_fallback(local_model_cost_map, model, expected):
+    """Ids the model map cannot resolve (or resolves without a
+    ``supports_tool_search`` opinion) fall through to the name patterns, so
+    ARNs and unlisted regional variants of supported families keep working."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    assert cfg._supports_tool_search_on_bedrock(model) is expected
+
 
 def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
     local_model_cost_map, monkeypatch
@@ -2504,7 +2935,7 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
         )
 
     result = transform()
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
     monkeypatch.setitem(litellm.model_cost[model], "supports_adaptive_thinking", False)
@@ -2629,3 +3060,38 @@ def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
         headers={},
     )
     assert result["tools"][0]["name"] == "litellm_web_search"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
+    """
+    Regression test for LIT-5839: closing the outer bedrock_sse_wrapper
+    mid-stream (what the proxy does on a client disconnect) must close the
+    inner async_sse_wrapper deterministically so the partial-stream logging
+    fires. `completion_start_time` is only stamped on the logging object by
+    that dispatch, so it observing a value proves the whole chain ran.
+    """
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _hanging_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 25, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
+        await asyncio.Event().wait()
+
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="chat",
+        start_time=datetime.now(),
+        litellm_call_id="test_bedrock_sse_wrapper_disconnect_logging",
+        function_id="test_bedrock_sse_wrapper_disconnect_logging",
+    )
+    wrapped = cfg.bedrock_sse_wrapper(_hanging_stream(), litellm_logging_obj=logging_obj, request_body={})
+    await wrapped.__anext__()
+    await wrapped.__anext__()
+    assert logging_obj.completion_start_time is None
+
+    await wrapped.aclose()
+
+    assert logging_obj.completion_start_time is not None

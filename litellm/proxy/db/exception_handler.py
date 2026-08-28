@@ -167,6 +167,22 @@ class PrismaDBExceptionHandler:
         return False
 
     @staticmethod
+    def is_deadlock_error(e: Exception) -> bool:
+        """True iff ``e`` is a Postgres deadlock (P2034 / 40P01) surfaced through prisma."""
+        import prisma
+
+        if not isinstance(e, prisma.errors.PrismaError):
+            return False
+        if getattr(e, "code", None) == "P2034":
+            return True
+        error_message = str(e).lower()
+        return (
+            "deadlock detected" in error_message
+            or "40p01" in error_message
+            or "write conflict or a deadlock" in error_message
+        )
+
+    @staticmethod
     def is_prisma_engine_internal_error(e: Exception) -> bool:
         """True iff ``e`` is a non-``PrismaError`` exception raised from inside
         prisma-client-py's query-engine layer.
@@ -319,6 +335,7 @@ async def call_with_db_reconnect_retry(
     coro_factory: Callable[[], Awaitable[_ReadResultT]],
     *,
     reason: str,
+    retry_safe_error_types: tuple[type[Exception], ...] | None = None,
     timeout_seconds: float | None = None,
     lock_timeout_seconds: float | None = None,
 ) -> _ReadResultT:
@@ -334,7 +351,8 @@ async def call_with_db_reconnect_retry(
       2. On exception, if it is NOT a transport error (per
          `is_database_transport_error`), re-raise — data-layer errors like
          `UniqueViolationError` mean the DB is reachable, reconnect would be
-         pointless.
+         pointless. Transport errors outside `retry_safe_error_types` are
+         re-raised too.
       3. If `prisma_client` does not expose `attempt_db_reconnect`, re-raise.
          This guards against partial stand-ins / older clients in tests.
       4. Call `prisma_client.attempt_db_reconnect(reason=...)`. If it returns
@@ -355,6 +373,10 @@ async def call_with_db_reconnect_retry(
             `attempt_db_reconnect` and the `_db_auth_reconnect_*` defaults.
         coro_factory: Zero-arg callable returning the read awaitable.
         reason: Telemetry tag forwarded to `attempt_db_reconnect`.
+        retry_safe_error_types: Which transport errors may be replayed, or
+            None for every transport error. A non-idempotent write must narrow
+            this to `DB_RETRY_SAFE_ERROR_TYPES`, where the statements provably
+            never reached the database.
         timeout_seconds: Optional override for the reconnect cycle timeout.
             Defaults to `prisma_client._db_auth_reconnect_timeout_seconds`,
             then to 2.0s.
@@ -375,6 +397,8 @@ async def call_with_db_reconnect_retry(
         return await coro_factory()
     except Exception as first_exc:
         if not PrismaDBExceptionHandler.is_database_transport_error(first_exc):
+            raise
+        if retry_safe_error_types is not None and not isinstance(first_exc, retry_safe_error_types):
             raise
         if not hasattr(prisma_client, "attempt_db_reconnect"):
             raise

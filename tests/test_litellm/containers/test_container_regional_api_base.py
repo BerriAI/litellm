@@ -7,13 +7,11 @@ US Data Residency instead of defaulting to https://api.openai.com/v1.
 """
 
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 

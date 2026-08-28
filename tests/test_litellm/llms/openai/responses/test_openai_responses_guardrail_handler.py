@@ -5,16 +5,11 @@ Tests the handler's ability to process input/output for the Responses API
 with guardrail transformations.
 """
 
-import os
-import sys
 from typing import Any, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
 from openai.types.responses import ResponseFunctionToolCall

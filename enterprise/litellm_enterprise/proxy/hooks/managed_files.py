@@ -41,9 +41,12 @@ from litellm.proxy._types import (
     CallTypes,
     LiteLLM_ManagedFileTable,
     LiteLLM_ManagedObjectTable,
+    ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    FILE_LIST_CONTINUATION_CHUNK_SIZE,
+    MAX_FILE_LIST_LIMIT,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
     ensure_batch_response_managed_file_ids,
@@ -53,15 +56,20 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     map_raw_file_ids_to_unified,
     normalize_mime_type_for_provider,
     resolve_managed_output_file_model_name,
+    validate_file_list_limit,
+    validate_file_list_purpose,
+)
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    request_tags_from_metadata,
 )
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
     AsyncCursorPage,
     ChatCompletionFileObject,
     CreateFileRequest,
+    FileListPage,
     FileObject,
     OpenAIFileObject,
-    OpenAIFilesPurpose,
     ResponsesAPIResponse,
 )
 from litellm.types.utils import (
@@ -140,7 +148,14 @@ class _ManagedFileRow(Protocol):
 class _ManagedFileTableActions(Protocol):
     async def find_first(self, where: Mapping[str, object]) -> Optional[_ManagedFileRow]: ...
 
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_ManagedFileRow]: ...
+    async def find_many(
+        self,
+        where: Mapping[str, object],
+        take: int = ...,
+        order: Union[Mapping[str, str], Sequence[Mapping[str, str]]] = ...,
+        cursor: Mapping[str, str] = ...,
+        skip: int = ...,
+    ) -> Sequence[_ManagedFileRow]: ...
 
     async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, object]]) -> _ManagedFileRow: ...
 
@@ -420,13 +435,26 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         # This is because the encoded object ids stored in the managed objects table do not contain the provider information
         # To support provider filtering, we would need to store the provider information in the encoded object ids
         if provider:
-            raise Exception("Filtering by 'provider' is not supported when using managed batches.")
+            raise ProxyException(
+                message="Filtering by 'provider' is not supported when using managed batches.",
+                type="invalid_request_error",
+                param="provider",
+                code=400,
+            )
 
         # Model name filtering is not supported for managed batches
         # This is because the encoded object ids stored in the managed objects table do not contain the model name
         # A hash of the model name + litellm_params for the model name is encoded as the model id. This is not sufficient to reliably map the target model names to the model ids.
         if target_model_names:
-            raise Exception("Filtering by 'target_model_names' is not supported when using managed batches.")
+            raise ProxyException(
+                message="Filtering by 'target_model_names' is not supported when using managed batches.",
+                type="invalid_request_error",
+                param="target_model_names",
+                code=400,
+            )
+
+        if limit == 0:
+            return build_list_page([])
 
         owner_filter = build_owner_filter(user_api_key_dict)
         if owner_filter is None:
@@ -1146,6 +1174,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get("unified_file_id")  # managed file id
             unified_batch_id = response._hidden_params.get("unified_batch_id")  # managed batch id
+            is_batch_create: Final = unified_file_id is not None
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
 
@@ -1216,6 +1245,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             model_mappings={model_id: provider_file_id},
                             user_api_key_dict=user_api_key_dict,
                         )
+            request_metadata: Final = data.get("litellm_metadata")
             await self.store_unified_object_id(
                 unified_object_id=response.id,
                 file_object=response,
@@ -1223,6 +1253,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 model_object_id=original_response_id,
                 file_purpose="batch",
                 user_api_key_dict=user_api_key_dict,
+                request_tags=request_tags_from_metadata(request_metadata if isinstance(request_metadata, dict) else {}),
+                persist_attribution=is_batch_create,
             )
 
             # Only record batch creation metric on actual create (not retrieve/cancel).
@@ -1344,12 +1376,76 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
     async def afile_list(
         self,
-        purpose: Optional[OpenAIFilesPurpose],
+        purpose: Optional[str],
         litellm_parent_otel_span: Optional[Span],
+        user_api_key_dict: UserAPIKeyAuth,
+        limit: Optional[int] = None,
+        after: Optional[str] = None,
         **data: Dict,
-    ) -> List[OpenAIFileObject]:
-        """Handled in files_endpoints.py"""
-        return []
+    ) -> FileListPage:
+        """List the managed files the caller owns, newest first.
+
+        Pagination is keyset based on ``unified_file_id`` so a key that owns
+        every file on the proxy still reads one bounded page at a time.
+        ``purpose`` is applied after parsing, because the managed file table
+        keeps it inside the ``file_object`` blob instead of a column, and rows
+        whose blob will not parse drop out there too, so a chunk of rows can
+        yield fewer matches than the page holds. Successive chunks are read
+        until the page is full or the caller's rows run out, which keeps
+        ``data`` non-empty while matches remain and its last id usable as the
+        next cursor. A first chunk that fills the page costs one query; once a
+        scan has to continue past it, the chunk widens to
+        ``FILE_LIST_CONTINUATION_CHUNK_SIZE``, so the walk costs one query per
+        that many rows instead of one per page. That bound is per query, not
+        per request: the work is still linear in the rows the caller owns, and
+        a filter matching nothing reads every one of them, with no index
+        covering either the owner filter or the sort.
+        """
+        validate_file_list_limit(limit)
+        validate_file_list_purpose(purpose)
+
+        owner_filter: Final = build_owner_filter(user_api_key_dict)
+        if owner_filter is None:
+            return FileListPage(**build_list_page([]))
+
+        if after:
+            cursor_row = await _managed_file_table(self.prisma_client).find_first(
+                where={**owner_filter, "unified_file_id": after}
+            )
+            if cursor_row is None:
+                raise ProxyException(
+                    message=f"Invalid 'after' cursor: no file found with id '{after}'.",
+                    type="invalid_request_error",
+                    param="after",
+                    code=400,
+                    openai_code="invalid_value",
+                )
+
+        page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
+        matches: Final[List[OpenAIFileObject]] = []
+        cursor_id = after
+        chunk_size = page_size + 1
+
+        while len(matches) <= page_size:
+            cursor_args: _CursorPageArgs = {"cursor": {"unified_file_id": cursor_id}, "skip": 1} if cursor_id else {}
+            chunk = await _managed_file_table(self.prisma_client).find_many(
+                where=owner_filter,
+                take=chunk_size,
+                order=[{"created_at": "desc"}, {"unified_file_id": "desc"}],
+                **cursor_args,
+            )
+            matches.extend(
+                parsed_file_object.model_copy(update={"id": row.unified_file_id})
+                for row in chunk
+                if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
+                and (purpose is None or parsed_file_object.purpose == purpose)
+            )
+            if len(chunk) < chunk_size:
+                break
+            cursor_id = chunk[-1].unified_file_id
+            chunk_size = max(chunk_size, FILE_LIST_CONTINUATION_CHUNK_SIZE)
+
+        return FileListPage(**build_list_page(matches[:page_size], has_more=len(matches) > page_size))
 
     def _is_batch_polling_enabled(self) -> bool:
         """

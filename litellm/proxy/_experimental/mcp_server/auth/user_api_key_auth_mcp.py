@@ -1,6 +1,8 @@
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import HTTPException
@@ -13,6 +15,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
+    get_passthrough_www_authenticate,
     get_request_base_url,
     well_known_root_suffix,
 )
@@ -39,9 +42,11 @@ from litellm.proxy._types import (
     SpecialMCPServerName,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import (
+    _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
     _run_centralized_common_checks,
     user_api_key_auth,
 )
@@ -83,7 +88,7 @@ class UnloadableEntitlementError(Exception):
 def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: list[str] | None = None) -> list[str] | None:
     """Resolve the single MCP server name a cold-start passthrough bypass may
     target. Delegates parsing to
-    :meth:`MCPRequestHandler._extract_target_server_names_from_path` so the
+    :meth:`MCPRequestHandler.extract_target_server_names_from_path` so the
     names used here always match the names downstream routing uses; returns
     ``None`` whenever the bypass must not activate (aggregate ``/mcp``,
     multi-server CSV paths, or any other unrecognized path).
@@ -94,7 +99,7 @@ def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: list[str] |
     header/path mismatch here is a sign of a confused or hostile caller —
     refuse the cold-start bypass rather than admit anonymously based on the
     path while the header advertises a stricter, non-passthrough target."""
-    servers: Final = MCPRequestHandler._extract_target_server_names_from_path(path)
+    servers: Final = MCPRequestHandler.extract_target_server_names_from_path(path)
     if len(servers) != 1:
         verbose_logger.debug(
             "MCP cold-start: path %r resolved to %r; passthrough 401 bypass "
@@ -160,7 +165,7 @@ def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> b
     """True when this auth is a keyless subject admitted by the gateway session / bridge user
     path, as opposed to a JWT or other keyless auth that merely lacks a ``team_id``.
 
-    Reads the server-only ``mcp_admitted_user_subject`` field, set only by ``_reload_admitted_user``. It
+    Reads the server-only ``mcp_admitted_user_subject`` field, set only by ``reload_admitted_user``. It
     is deliberately NOT a ``metadata`` key, which is caller-controlled at key creation and so forgeable
     on a personal key to gain the team grant union or dodge the egress scrub; this field cannot be."""
     return user_api_key_auth is not None and user_api_key_auth.mcp_admitted_user_subject is True
@@ -215,7 +220,7 @@ def _is_gateway_dcr_challenge_scope(
         return False
     if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
         return False
-    if len(MCPRequestHandler._extract_target_server_names_from_path(route)) == 0:
+    if len(MCPRequestHandler.extract_target_server_names_from_path(route)) == 0:
         return True
     return _gateway_dcr_challenge_target(route, mcp_servers, client_ip) is not None
 
@@ -295,6 +300,16 @@ def _admission_failure_fallback(
     ):
         raise _gateway_dcr_challenge(request, request_route, mcp_servers, invalid_token=bearer_presented) from exc
     raise exc
+
+
+@dataclass(frozen=True, slots=True)
+class DcrBridgeTarget:
+    """The single DCR-bridge server a request targets, paired with the exact name the caller
+    used to reach it (alias or server_name, whichever they typed), which is the spelling an
+    ``invalid_token`` challenge must echo back."""
+
+    requested_name: str
+    server: MCPServer
 
 
 class MCPRequestHandler:
@@ -415,7 +430,10 @@ class MCPRequestHandler:
             # An explicit x-litellm-api-key is always a LiteLLM credential, even
             # for a delegated server, so validate it: identity / spend / rate
             # limits resolve and any stored upstream token can be forwarded.
-            validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
+            validated_user_api_key_auth = await user_api_key_auth(
+                api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
+                request=request,
+            )
         elif MCPRequestHandler._target_servers_delegate_auth_to_upstream(
             path=request_route,
             mcp_servers=mcp_servers,
@@ -436,27 +454,33 @@ class MCPRequestHandler:
             path=request_route,
             mcp_servers=mcp_servers,
             client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        ) or (
+            MCPRequestHandler._single_dcr_bridge_delegate_target(
+                path=request_route,
+                mcp_servers=mcp_servers,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
+            )
+            is not None
+            and not oauth2_headers
+            and not mcp_server_auth_headers
+            and not mcp_auth_header
         ):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
-            (
-                bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
-                    path=request_route,
-                    mcp_servers=mcp_servers,
-                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
-                )
+            bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                path=request_route,
+                mcp_servers=mcp_servers,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
             )
-            is not None
-            and oauth2_headers
-            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
-        ):
-            # A single DCR-bridge oauth_delegate target carrying an envelope-shaped
-            # Authorization: open the envelope, admit under its recovered identity, and
-            # inject the inner upstream token for egress. A non-envelope bearer on the same
-            # server is NOT admitted here — it falls through to the oauth2 arm, which 401s.
-            validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
-                server=bridge_delegate_target,
+        ) is not None and oauth2_headers:
+            (
+                validated_user_api_key_auth,
+                mcp_server_auth_headers,
+            ) = await MCPRequestHandler._admit_dcr_bridge_authorization(
+                server=bridge_delegate_target.server,
+                requested_name=bridge_delegate_target.requested_name,
                 authorization_value=oauth2_headers["Authorization"],
+                litellm_api_key=litellm_api_key,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 request=request,
                 route=request_route,
@@ -579,7 +603,7 @@ class MCPRequestHandler:
         return oauth2_headers, raw_headers, mcp_auth_header, mcp_server_auth_headers
 
     @staticmethod
-    def _extract_target_server_names_from_path(path: str) -> list[str]:
+    def extract_target_server_names_from_path(path: str) -> list[str]:
         """
         Extract the target MCP server name(s) from the standard MCP transport
         URL patterns: ``/mcp/{server_name_or_csv}[/...]`` and
@@ -722,10 +746,10 @@ class MCPRequestHandler:
     @staticmethod
     def _single_dcr_bridge_delegate_target(
         path: str, mcp_servers: list[str] | None, client_ip: str | None
-    ) -> MCPServer | None:
+    ) -> DcrBridgeTarget | None:
         """The one DCR-bridge ``oauth_delegate`` server this request targets, or ``None``.
 
-        Returns the server only when EXACTLY ONE target resolves and it is both
+        Returns the target only when EXACTLY ONE name resolves and its server is both
         ``is_oauth_delegate`` and ``is_dcr_bridge``. Fails closed (``None``) on a
         multi-target request, an unresolved target, or a non-matching server, so the
         envelope admission arm never fires for an aggregate scope or a server that did not
@@ -739,17 +763,21 @@ class MCPRequestHandler:
         if len(target_names) != 1:
             return None
         server: Final = global_mcp_server_manager.get_mcp_server_by_name(target_names[0], client_ip=client_ip)
-        if server is None or not server.is_oauth_delegate or not server.is_dcr_bridge:
+        # Both flags are security-sensitive opt-ins. Require literal booleans so
+        # partially populated objects and truthy proxy values cannot enable bridge
+        # admission accidentally.
+        if server is None or server.is_oauth_delegate is not True or server.is_dcr_bridge is not True:
             return None
         # Egress resolves the injected per-server token only by alias / server_name; a server with
         # neither cannot receive the forwarded token, so fail closed rather than admit-and-drop.
         if not (server.server_name or server.alias):
             return None
-        return server
+        return DcrBridgeTarget(requested_name=target_names[0], server=server)
 
     @staticmethod
     async def _admit_dcr_bridge_delegate(
         server: MCPServer,
+        requested_name: str,
         authorization_value: str,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         request: Request,
@@ -797,9 +825,61 @@ class MCPRequestHandler:
                 new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
-                raise HTTPException(status_code=401, detail="Invalid or expired credential")
+                raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(
+                    requested_name=requested_name, request=request
+                )
             case _:
                 assert_never(result)
+
+    @staticmethod
+    async def _admit_dcr_bridge_authorization(
+        server: MCPServer,
+        requested_name: str,
+        authorization_value: str,
+        litellm_api_key: str,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,  # mutable-ok: existing MCP sink shape
+        request: Request,
+        route: str,
+    ) -> tuple[UserAPIKeyAuth, dict[str, dict[str, str]] | None]:  # mutable-ok: existing MCP sink shape
+        if is_bridge_envelope_shaped(authorization_value):
+            return await MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=server,
+                requested_name=requested_name,
+                authorization_value=authorization_value,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=route,
+            )
+        try:
+            admitted: Final = await user_api_key_auth(api_key=litellm_api_key, request=request)
+        except (HTTPException, ProxyException) as exc:
+            if not _is_litellm_auth_admission_error(exc):
+                raise
+            raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(
+                requested_name=requested_name, request=request
+            ) from exc
+        return admitted, mcp_server_auth_headers
+
+    @staticmethod
+    def _dcr_bridge_invalid_token_challenge(requested_name: str, request: Request) -> HTTPException:
+        """The RFC 6750 ``invalid_token`` challenge for a failed bridge admission.
+
+        Named by the exact spelling the caller requested, matching the per-server well-known
+        document and the other challenge emitters, so ``resource_metadata`` always points at the
+        resource the client actually asked for even when alias and server_name differ."""
+        return HTTPException(
+            status_code=401,
+            detail="Invalid or expired credential",
+            headers=MappingProxyType(
+                {
+                    "www-authenticate": get_passthrough_www_authenticate(
+                        scope=request.scope,
+                        server_name=requested_name,
+                        invalid_token=True,
+                    )
+                }
+            ),
+        )
 
     @staticmethod
     async def _admit_gateway_session(
@@ -812,7 +892,7 @@ class MCPRequestHandler:
 
         Identity-only sibling of :meth:`_admit_dcr_bridge_delegate`: the session token seals no
         upstream credential (those are vaulted per user, resolved at egress), so authorization is
-        resolved fresh via :meth:`_reload_admitted_user` + the centralized policy gate rather than a
+        resolved fresh via :meth:`reload_admitted_user` + the centralized policy gate rather than a
         mint-time snapshot. Pre-DB gates (size, IP, route allowlist) run first, mirroring the standard
         pipeline. Fails closed with the requested scope's ``invalid_token`` challenge on an expired,
         tampered, foreign, or refresh token, or a missing/deactivated/policy-rejected user."""
@@ -835,7 +915,8 @@ class MCPRequestHandler:
         match result:
             case SessionBearerAdmitted():
                 try:
-                    admitted: Final = await MCPRequestHandler._reload_admitted_user(result.principal.user_id)
+                    admitted: Final = await MCPRequestHandler.reload_admitted_user(result.principal.user_id)
+                    admitted.mcp_session_resource_server_id = result.principal.resource_server_id
                     await MCPRequestHandler._enforce_admitted_live_policy(
                         admitted=admitted, request=request, route=route
                     )
@@ -892,12 +973,12 @@ class MCPRequestHandler:
             case "key_hash":
                 return await MCPRequestHandler._reload_admitted_key(identity.subject)
             case "user_id":
-                return await MCPRequestHandler._reload_admitted_user(identity.subject)
+                return await MCPRequestHandler.reload_admitted_user(identity.subject)
             case _:
                 assert_never(identity.subject_type)
 
     @staticmethod
-    async def _reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
+    async def reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
         """Reload the live user an interactively-minted envelope references and admit them as themselves.
 
         The user's own object permission and ``org_id`` ride on the returned ``UserAPIKeyAuth``, and the
@@ -1168,7 +1249,7 @@ class MCPRequestHandler:
         (header/path TOCTOU). For non-``/mcp/...`` paths (where the path
         does not encode targets), fall back to the header.
         """
-        path_targets: Final = MCPRequestHandler._extract_target_server_names_from_path(path)
+        path_targets: Final = MCPRequestHandler.extract_target_server_names_from_path(path)
         if path_targets:
             return path_targets
         # Path did not resolve to /mcp/... targets — trust the header
@@ -1190,7 +1271,7 @@ class MCPRequestHandler:
 
         DEPRECATED: This method is deprecated in favor of server-specific auth headers using the format x-mcp-{{server_alias}}-{{header_name}} instead.
         """
-        mcp_client_side_auth_header_name: Final[str] = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+        mcp_client_side_auth_header_name: Final[str] = MCPRequestHandler.get_mcp_client_side_auth_header_name()
         auth_header: Final = headers.get(mcp_client_side_auth_header_name)
         if auth_header:
             verbose_logger.warning(
@@ -1265,7 +1346,7 @@ class MCPRequestHandler:
         return oauth2_headers
 
     @staticmethod
-    def _get_mcp_client_side_auth_header_name() -> str:
+    def get_mcp_client_side_auth_header_name() -> str:
         """
         Get the header name used to pass the MCP auth header to the MCP server
 
@@ -1784,11 +1865,14 @@ class MCPRequestHandler:
             global_mcp_server_manager,
         )
 
-        # An OPEN channel (allow_all_keys, the user's own BYOM) makes the server REACHABLE through the
-        # user, though no grant source names it — without this the union returns [], listable but
-        # uninvokable. Reachability is ALL it confers, NOT a ceiling waiver: the user's own
-        # mcp_tool_permissions and org tool ceiling still bind, exactly as a key's do on an allow_all server.
-        reachable_via_open_channel: Final = server_id in await global_mcp_server_manager.operator_open_server_ids(auth)
+        # An OPEN channel (allow_all_keys, the user's own BYOM, an unscoped admin-view role) makes the
+        # server REACHABLE through the user, though no grant source names it — without this the union
+        # returns [], listable but uninvokable. Reachability is ALL it confers, NOT a ceiling waiver:
+        # the user's own mcp_tool_permissions and org tool ceiling still bind, exactly as a key's do
+        # on an allow_all server or an admin key's do on any server.
+        reachable_via_open_channel: Final = server_id in await global_mcp_server_manager.operator_open_server_ids(
+            auth
+        ) or await MCPRequestHandler.admin_view_unscoped(auth)
 
         allowed: Final[set[str]] = set()
         for source, granted in await MCPRequestHandler.admitted_source_grants(auth):
@@ -2721,6 +2805,32 @@ class MCPRequestHandler:
         """
         entitled_servers: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_user(user_api_key_auth)
         return entitled_servers is None or len(entitled_servers) > 0
+
+    @staticmethod
+    async def admin_view_unscoped(user_api_key_auth: UserAPIKeyAuth | None = None) -> bool:
+        """Whether this principal's admin-view role grants the unscoped MCP resolution, whatever
+        credential carries it (admin key, dashboard session, or OAuth-admitted session subject).
+
+        Two bounds disqualify, one per ownership of the row. A CREDENTIAL's explicit
+        ``object_permission.mcp_servers`` scope wins even for admins, including the empty list. An
+        admitted subject's object_permission is the user's own row, whose ``mcp_servers`` column is
+        [] by DB default, so for that shape the row binds through the entitlement ceiling instead
+        (any non-empty entitlement, or an unresolved one, disqualifies), exactly as
+        ``operator_open_server_ids`` reads the same row. The one owner of this predicate: the
+        server-axis registry resolution in ``get_allowed_mcp_servers`` and the tools-axis open
+        channel in ``_resolve_admitted_subject_tools`` both consult it, so the two axes cannot
+        disagree."""
+        if user_api_key_auth is None or not user_api_key_has_admin_view(user_api_key_auth):
+            return False
+        object_permission: Final = user_api_key_auth.object_permission
+        credential_scoped: Final = (
+            not _is_mcp_admitted_user_subject(user_api_key_auth)
+            and object_permission is not None
+            and object_permission.mcp_servers is not None
+        )
+        if credential_scoped:
+            return False
+        return not await MCPRequestHandler._user_places_mcp_ceiling(user_api_key_auth)
 
     @staticmethod
     async def _apply_user_tool_ceiling(

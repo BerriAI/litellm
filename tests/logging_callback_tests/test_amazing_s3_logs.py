@@ -1,11 +1,8 @@
-import sys
-import os
 import io, asyncio
 from collections import defaultdict
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import completion
 import litellm

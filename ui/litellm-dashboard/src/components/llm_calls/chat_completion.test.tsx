@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeOpenAIChatCompletionRequest } from "./chat_completion";
+import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
@@ -22,6 +23,10 @@ vi.mock("openai", () => ({
     OpenAI: vi.fn(() => mockClient),
   },
 }));
+
+const nonStreamingResponse = (data: unknown, headers: Record<string, string> = {}) => ({
+  withResponse: async () => ({ data, response: { headers: new Headers(headers) } }),
+});
 
 describe("chat_completion", () => {
   const mockUpdateUI = vi.fn();
@@ -225,25 +230,27 @@ describe("chat_completion", () => {
   });
 
   it("should send a non-streaming request and render the whole message at once when streaming is disabled", async () => {
-    mockCreate.mockResolvedValueOnce({
-      id: "chatcmpl-1",
-      object: "chat.completion",
-      created: 1,
-      model: "gpt-4",
-      choices: [
-        {
-          index: 0,
-          finish_reason: "stop",
-          message: { role: "assistant", content: "Hello there" },
+    mockCreate.mockReturnValueOnce(
+      nonStreamingResponse({
+        id: "chatcmpl-1",
+        object: "chat.completion",
+        created: 1,
+        model: "gpt-4",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant", content: "Hello there" },
+          },
+        ],
+        usage: {
+          completion_tokens: 2,
+          prompt_tokens: 5,
+          total_tokens: 7,
+          cost: 0.25,
         },
-      ],
-      usage: {
-        completion_tokens: 2,
-        prompt_tokens: 5,
-        total_tokens: 7,
-        cost: 0.25,
-      },
-    });
+      }),
+    );
 
     const onTimingData = vi.fn();
     const onUsageData = vi.fn();
@@ -297,24 +304,26 @@ describe("chat_completion", () => {
   });
 
   it("should surface reasoning content and MCP metadata from a non-streaming response", async () => {
-    mockCreate.mockResolvedValueOnce({
-      model: "gpt-4",
-      choices: [
-        {
-          index: 0,
-          finish_reason: "stop",
-          message: {
-            role: "assistant",
-            content: "done",
-            reasoning_content: "thinking",
-            provider_specific_fields: {
-              mcp_tool_calls: [{ id: "call_1", function: { name: "search_docs", arguments: "{}" } }],
-              mcp_call_results: [{ tool_call_id: "call_1", result: "found it" }],
+    mockCreate.mockReturnValueOnce(
+      nonStreamingResponse({
+        model: "gpt-4",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: "done",
+              reasoning_content: "thinking",
+              provider_specific_fields: {
+                mcp_tool_calls: [{ id: "call_1", function: { name: "search_docs", arguments: "{}" } }],
+                mcp_call_results: [{ tool_call_id: "call_1", result: "found it" }],
+              },
             },
           },
-        },
-      ],
-    });
+        ],
+      }),
+    );
 
     const onReasoningContent = vi.fn();
     const onMCPEvent = vi.fn();
@@ -392,5 +401,203 @@ describe("chat_completion", () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
     const callArgs = mockCreate.mock.calls[0][0];
     expect(callArgs).not.toHaveProperty("mock_testing_fallbacks");
+  });
+});
+
+describe("chat_completion prompt cache usage", () => {
+  const captureUsage = async (usage: Record<string, unknown>): Promise<TokenUsage> => {
+    async function* mockStream() {
+      yield {
+        choices: [{ delta: {}, index: 0 }],
+        model: "gpt-4",
+        usage: { completion_tokens: 2, prompt_tokens: 5000, total_tokens: 5002, ...usage },
+      };
+    }
+    mockCreate.mockResolvedValue(mockStream());
+
+    const onUsageData = vi.fn();
+    await makeOpenAIChatCompletionRequest(
+      [{ role: "user", content: "Hello" }],
+      vi.fn(),
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledTimes(1);
+    return onUsageData.mock.calls[0][0] as TokenUsage;
+  };
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("surfaces read and creation tokens from Anthropic-shape usage", async () => {
+    await expect(
+      captureUsage({ cache_read_input_tokens: 4695, cache_creation_input_tokens: 1234 }),
+    ).resolves.toMatchObject({ cacheReadTokens: 4695, cacheCreationTokens: 1234 });
+  });
+
+  it("surfaces read tokens from OpenAI-shape prompt_tokens_details", async () => {
+    await expect(
+      captureUsage({ prompt_tokens_details: { cached_tokens: 4695, cache_write_tokens: 0 } }),
+    ).resolves.toMatchObject({ cacheReadTokens: 4695, promptTokens: 5000 });
+  });
+
+  it("omits cache fields entirely for a provider that reports none", async () => {
+    const usageData = await captureUsage({});
+
+    expect(usageData).not.toHaveProperty("cacheReadTokens");
+    expect(usageData).not.toHaveProperty("cacheCreationTokens");
+    expect(usageData.promptTokens).toBe(5000);
+  });
+
+  it("omits cache fields when the provider reports zeroes", async () => {
+    const usageData = await captureUsage({
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      prompt_tokens_details: { cached_tokens: 0 },
+    });
+
+    expect(usageData).not.toHaveProperty("cacheReadTokens");
+    expect(usageData).not.toHaveProperty("cacheCreationTokens");
+  });
+});
+
+describe("chat_completion response cache", () => {
+  const mockUpdateUI = vi.fn();
+  const mockChatHistory = [{ role: "user", content: "Hello" }];
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("flags a non-streaming response-cache hit even though it replays provider prompt-cache usage", async () => {
+    mockCreate.mockReturnValueOnce(
+      nonStreamingResponse(
+        {
+          id: "chatcmpl-replayed",
+          model: "gpt-4",
+          choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "Hello there" } }],
+          usage: {
+            completion_tokens: 2,
+            prompt_tokens: 5000,
+            total_tokens: 5002,
+            prompt_tokens_details: { cached_tokens: 4695 },
+          },
+        },
+        { "x-litellm-cache-key": "cache-key-abc" },
+      ),
+    );
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      onUsageData,
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
+      undefined, // selectedMCPServers
+      undefined, // onImageGenerated
+      undefined, // onSearchResults
+      undefined, // temperature
+      undefined, // max_tokens
+      undefined, // onTotalLatency
+      undefined, // customBaseUrl
+      undefined, // mcpServers
+      undefined, // mcpServerToolRestrictions
+      undefined, // onMCPEvent
+      undefined, // mockTestFallbacks
+      undefined, // mcpToolsets
+      false, // streamingEnabled
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(
+      expect.objectContaining({ cacheReadTokens: 4695, servedFromResponseCache: true }),
+    );
+  });
+
+  it("does not flag a non-streaming response that missed the response cache", async () => {
+    mockCreate.mockReturnValueOnce(
+      nonStreamingResponse({
+        id: "chatcmpl-fresh",
+        model: "gpt-4",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "Hello there" } }],
+        usage: { completion_tokens: 2, prompt_tokens: 5, total_tokens: 7 },
+      }),
+    );
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false, // streamingEnabled
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ servedFromResponseCache: true }));
+  });
+
+  it("never flags a streaming response, even when the proxy reports a cache key", async () => {
+    async function* mockStream() {
+      yield {
+        choices: [{ delta: {}, index: 0 }],
+        model: "gpt-4",
+        usage: { completion_tokens: 2, prompt_tokens: 5, total_tokens: 7 },
+      };
+    }
+    mockCreate.mockResolvedValueOnce(mockStream());
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ servedFromResponseCache: true }));
   });
 });

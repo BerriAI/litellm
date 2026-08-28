@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from datetime import datetime
 from typing import Dict, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
 
@@ -912,7 +907,7 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
     ):
 
         mock_load_creds.return_value = (Mock(), "us-east-1")
-        mock_convert.return_value = {"source": "INPUT", "content": []}
+        mock_convert.return_value = {"source": "INPUT", "content": [{"text": {"text": "test"}}]}
         mock_get_params.return_value = {}
 
         mock_request_instance = Mock()

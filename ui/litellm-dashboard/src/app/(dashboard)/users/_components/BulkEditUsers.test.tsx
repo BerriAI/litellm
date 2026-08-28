@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
 import BulkEditUserModal from "./BulkEditUsers";
 import { userBulkUpdateUserCall, teamBulkMemberAddCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   userBulkUpdateUserCall: vi.fn(),
@@ -185,7 +185,7 @@ describe("BulkEditUserModal", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Access token not found");
+      expect(toast.fromError).toHaveBeenCalledWith("Access token not found");
     });
   });
 
@@ -239,7 +239,7 @@ describe("BulkEditUserModal", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Updated 2 user(s)");
+      expect(toast.success).toHaveBeenCalledWith("Updated 2 user(s)");
     });
   });
 
@@ -261,7 +261,7 @@ describe("BulkEditUserModal", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Updated all users (100 total)");
+      expect(toast.success).toHaveBeenCalledWith("Updated all users (100 total)");
     });
   });
 
@@ -275,7 +275,7 @@ describe("BulkEditUserModal", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to perform bulk operations");
+      expect(toast.fromError).toHaveBeenCalledWith("Failed to perform bulk operations");
     });
   });
 
