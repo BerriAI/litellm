@@ -526,6 +526,18 @@ async def create_file(
             proxy_config=proxy_config,
         )
 
+        hook_data: Final[dict] = {
+            **data,
+            "purpose": purpose,
+            "file": {"filename": file.filename, "content_type": file.content_type, "size": file.size},
+        }
+        hooked_data: Final[dict] = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=hook_data,
+            call_type="acreate_file",
+        )
+        data = {k: v for k, v in hooked_data.items() if k not in ("purpose", "file")}
+
         # /v1/files stores its proxy metadata under litellm_metadata, not metadata
         request_metadata: Final = data.get("metadata") or data.get("litellm_metadata") or EMPTY_MAPPING
         scan_result: Final = await _scan_batch_upload(
