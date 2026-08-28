@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from litellm.integrations.custom_guardrail import log_guardrail_information
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
@@ -32,8 +32,8 @@ class WingbackGuardrail(GenericGuardrailAPI):
         api_base: str | None = None,
         api_key: str | None = None,
         wingback_app_id: str | None = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         resolved_api_base: Final = api_base or os.environ.get("WINGBACK_API_BASE") or DEFAULT_WINGBACK_API_BASE
         resolved_api_key: Final = api_key or os.environ.get("WINGBACK_INTEGRATION_API_KEY")
 
