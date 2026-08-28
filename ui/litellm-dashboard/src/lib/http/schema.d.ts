@@ -28556,6 +28556,8 @@ export interface components {
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
             input_cost_per_query?: number | null;
+            /** Input Cost Per Request */
+            input_cost_per_request?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */
@@ -38166,6 +38168,8 @@ export interface components {
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
             input_cost_per_query?: number | null;
+            /** Input Cost Per Request */
+            input_cost_per_request?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */

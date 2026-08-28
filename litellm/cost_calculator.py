@@ -661,6 +661,7 @@ def cost_per_token(
         if (
             (model_info.get("input_cost_per_token") or 0.0) > 0
             or (model_info.get("output_cost_per_token") or 0.0) > 0
+            or (model_info.get("input_cost_per_request") or 0.0) > 0
             or model_info.get("tiered_pricing") is not None
         ):
             return generic_cost_per_token(

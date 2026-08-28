@@ -939,6 +939,11 @@ def generic_cost_per_token(
         service_tier=service_tier,
     )
 
+    ## FLAT PER-REQUEST COST
+    input_cost_per_request: Final = model_info.get("input_cost_per_request")
+    if input_cost_per_request:
+        prompt_cost += input_cost_per_request
+
     ## CALCULATE OUTPUT COST
     text_tokens = 0
     audio_tokens = 0
