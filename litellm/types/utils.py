@@ -543,6 +543,8 @@ CallTypesLiteral = Literal[
     "_arealtime",
     "create_batch",
     "acreate_batch",
+    "create_file",
+    "acreate_file",
     "pass_through_endpoint",
     "allm_passthrough_route",
     "anthropic_messages",
