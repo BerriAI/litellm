@@ -20,7 +20,7 @@ def cost_per_web_search_request(usage: Usage, model_info: "ModelInfo") -> float:
     search_costs: Final = model_info.get("search_context_cost_per_query")
     if isinstance(search_costs, Mapping):
         cost_per_search: Final = float(search_costs.get("search_context_size_medium", 0.0) or 0.0)
-    elif isinstance(search_costs, (int, float)):
+    elif isinstance(search_costs, (int, float)) and not isinstance(search_costs, bool):
         cost_per_search = float(search_costs)
     else:
         cost_per_search = 0.0
