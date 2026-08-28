@@ -99,6 +99,23 @@ MAX_TIER_DESCRIPTION_CHARS: Final[int] = 500
 MAX_CLASSIFICATION_PROMPT_CHARS: Final[int] = 2000
 
 
+def normalize_classification_prompt(value: str | None) -> str | None:
+    """Strip, reject blank, and cap an operator-written classifier preamble.
+
+    The single owner of the rule, so the dashboard's prompt preview normalizes exactly what the
+    write gate stores: previewing the raw value would render leading whitespace the router strips,
+    or an over-long prompt the write then rejects.
+    """
+    if value is None:
+        return None
+    stripped: Final = value.strip()
+    if not stripped:
+        raise ValueError("must be non-empty; omit the field instead")
+    if len(stripped) > MAX_CLASSIFICATION_PROMPT_CHARS:
+        raise ValueError(f"classification_prompt exceeds {MAX_CLASSIFICATION_PROMPT_CHARS} characters")
+    return stripped
+
+
 class TierDefinition(BaseModel):
     """An operator-defined tier: the name the LLM classifier must return and its rubric description."""
 
@@ -1056,7 +1073,7 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
-    @field_validator("fallback_tier", "classification_prompt")
+    @field_validator("fallback_tier")
     @classmethod
     def _reject_blank_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -1068,10 +1085,8 @@ class ComplexityRouterConfig(BaseModel):
 
     @field_validator("classification_prompt")
     @classmethod
-    def _cap_classification_prompt(cls, value: str | None) -> str | None:
-        if value is not None and len(value) > MAX_CLASSIFICATION_PROMPT_CHARS:
-            raise ValueError(f"classification_prompt exceeds {MAX_CLASSIFICATION_PROMPT_CHARS} characters")
-        return value
+    def _normalize_classification_prompt_field(cls, value: str | None) -> str | None:
+        return normalize_classification_prompt(value)
 
     @property
     def has_custom_tiers(self) -> bool:

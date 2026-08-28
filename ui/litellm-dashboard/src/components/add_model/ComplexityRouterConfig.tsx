@@ -373,6 +373,8 @@ export interface ComplexityRouterConfigValue {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  /** Opening instructions only; the router appends the tier bullets and the injection guard after them. */
+  classification_prompt?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
   session_affinity?: boolean;

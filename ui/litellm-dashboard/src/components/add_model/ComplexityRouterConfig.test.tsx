@@ -1135,13 +1135,6 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(screen.getByLabelText("Name for tier 1")).toBeInTheDocument();
   });
 
-  it("replaces the prompt editor with the reason an edited tier set forbids it", () => {
-    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByText("A replacement prompt drops the tier bullets", { exact: false })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Change default prompt" })).not.toBeInTheDocument();
-  });
-
   it("drops the scorer card entirely once an edited tier set replaces the heuristic", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
@@ -1261,6 +1254,27 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(
       screen.getByText("Session pinning escalates along the built-in tier ladder", { exact: false }),
     ).toBeInTheDocument();
+  });
+
+  it("lets an edited tier set write its own opening instructions instead of refusing a prompt outright", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("your own calibration examples", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit prompt" })).toBeInTheDocument();
+    expect(screen.queryByText("A replacement prompt drops the tier bullets", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps the whole-prompt replacement editor on built-in routers, which the backend still accepts there", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, classifier_type: "llm", classifier_llm_config: { model: "gpt-4", timeout_ms: 3000 } }}
+        onEditingTiersChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("Replace the built-in complexity rubric", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("your own calibration examples", { exact: false })).not.toBeInTheDocument();
   });
 
   it("leaves built-in routers with their display-name inputs and no restriction copy", () => {
