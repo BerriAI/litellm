@@ -1,7 +1,5 @@
 import json
 import os
-from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import Optional
 from fastapi import Request
 import pytest
@@ -32,16 +30,16 @@ class TestCustomLogger(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_assistants_passthrough_logging():
+async def test_untracked_openai_route_passthrough_logging():
+    """Keep this on a route `_is_supported_openai_endpoint` does not claim, or the
+    OpenAI-specific handler takes over and the generic payload stops being exercised."""
     test_custom_logger = TestCustomLogger()
     litellm._async_success_callback = [test_custom_logger]
 
-    TARGET_URL = "https://api.openai.com/v1/assistants"
+    TARGET_URL = "https://api.openai.com/v1/moderations"
     REQUEST_BODY = {
-        "instructions": "You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
-        "name": "Math Tutor",
-        "tools": [{"type": "code_interpreter"}],
-        "model": "gpt-4.1-mini",
+        "model": "omni-moderation-latest",
+        "input": "I want to bake a cake for my friend's birthday.",
     }
     TARGET_METHOD = "POST"
 
@@ -50,7 +48,7 @@ async def test_assistants_passthrough_logging():
             scope={
                 "type": "http",
                 "method": TARGET_METHOD,
-                "path": "/v1/assistants",
+                "path": "/v1/moderations",
                 "query_string": b"",
                 "headers": [
                     (b"content-type", b"application/json"),
@@ -58,7 +56,6 @@ async def test_assistants_passthrough_logging():
                         b"authorization",
                         f"Bearer {os.getenv('OPENAI_API_KEY')}".encode(),
                     ),
-                    (b"openai-beta", b"assistants=v2"),
                 ],
             },
         ),
@@ -66,7 +63,6 @@ async def test_assistants_passthrough_logging():
         custom_headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
-            "OpenAI-Beta": "assistants=v2",
         },
         user_api_key_dict=UserAPIKeyAuth(
             api_key="test",
@@ -82,6 +78,8 @@ async def test_assistants_passthrough_logging():
     print("got result", result)
     print("result status code", result.status_code)
     print("result content", result.body)
+
+    assert result.status_code == 200
 
     await asyncio.sleep(1)
 
@@ -92,79 +90,8 @@ async def test_assistants_passthrough_logging():
     assert passthrough_logging_payload is not None
     assert passthrough_logging_payload["url"] == TARGET_URL
     assert passthrough_logging_payload["request_body"] == REQUEST_BODY
-
-    # assert that the response body content matches the response body content
-    client_facing_response_body = json.loads(result.body)
-    assert passthrough_logging_payload["response_body"] == client_facing_response_body
-
-    # assert that the request method is correct
     assert passthrough_logging_payload["request_method"] == TARGET_METHOD
 
-
-@pytest.mark.asyncio
-async def test_threads_passthrough_logging():
-    test_custom_logger = TestCustomLogger()
-    litellm._async_success_callback = [test_custom_logger]
-
-    TARGET_URL = "https://api.openai.com/v1/threads"
-    REQUEST_BODY = {}
-    TARGET_METHOD = "POST"
-
-    result = await pass_through_request(
-        request=Request(
-            scope={
-                "type": "http",
-                "method": TARGET_METHOD,
-                "path": "/v1/threads",
-                "query_string": b"",
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (
-                        b"authorization",
-                        f"Bearer {os.getenv('OPENAI_API_KEY')}".encode(),
-                    ),
-                    (b"openai-beta", b"assistants=v2"),
-                ],
-            },
-        ),
-        target=TARGET_URL,
-        custom_headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
-            "OpenAI-Beta": "assistants=v2",
-        },
-        user_api_key_dict=UserAPIKeyAuth(
-            api_key="test",
-            user_id="test",
-            team_id="test",
-            end_user_id="test",
-        ),
-        custom_body=REQUEST_BODY,
-        forward_headers=False,
-        merge_query_params=False,
-    )
-
-    print("got result", result)
-    print("result status code", result.status_code)
-    print("result content", result.body)
-
-    await asyncio.sleep(1)
-
-    assert test_custom_logger.logged_kwargs is not None
-    passthrough_logging_payload = test_custom_logger.logged_kwargs[
-        "passthrough_logging_payload"
-    ]
-    assert passthrough_logging_payload is not None
-
-    # Fix for TypedDict access errors
-    assert passthrough_logging_payload.get("url") == TARGET_URL
-    assert passthrough_logging_payload.get("request_body") == REQUEST_BODY
-
-    # Fix for json.loads error with potential memoryview
-    response_body = result.body
-    client_facing_response_body = json.loads(response_body)
-
-    assert (
-        passthrough_logging_payload.get("response_body") == client_facing_response_body
-    )
-    assert passthrough_logging_payload.get("request_method") == TARGET_METHOD
+    client_facing_response_body = json.loads(result.body)
+    assert client_facing_response_body["results"]
+    assert passthrough_logging_payload["response_body"] == client_facing_response_body
