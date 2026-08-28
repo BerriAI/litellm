@@ -593,6 +593,28 @@ def _add_custom_logger_callback_to_specific_event(callback: str, logging_event: 
                 litellm.failure_callback.remove(callback)  # remove the string from the callback list
             if callback in litellm._async_failure_callback:
                 litellm._async_failure_callback.remove(callback)  # remove the string from the callback list
+    else:
+        # Custom-logger class could not be initialized (e.g. missing env
+        # credentials). Fall back to string registration so standard-route
+        # logging still works; pass-through endpoints only reach instance
+        # callbacks, so they keep missing out in this degraded state.
+        if logging_event == "success":
+            litellm.logging_callback_manager.add_litellm_success_callback(callback)
+        else:
+            litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+
+
+def register_config_custom_logger_callback(callback: str, logging_event: Literal["success", "failure"]) -> None:
+    """Register a config-file custom-logger name as an instance, not a string.
+
+    Config-file ``success_callback`` / ``failure_callback`` strings previously
+    landed in ``litellm.success_callback`` as bare strings; pass-through
+    endpoints log through the async path only, so they never saw them.
+    Registering the custom-logger instance covers both paths. Falls back to
+    string registration when the class cannot be initialized (e.g. missing env
+    credentials), so standard-route logging keeps working.
+    """
+    _add_custom_logger_callback_to_specific_event(callback, logging_event)
 
 
 def _custom_logger_class_exists_in_success_callbacks(
