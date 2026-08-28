@@ -17,8 +17,9 @@ whose toolset ceils the servers their own key grants.
 
 from __future__ import annotations
 
-import pytest
+import time
 
+import pytest
 from datadog_mcp import SEARCH_LOGS_TOOL, register_datadog_mcp
 from e2e_config import DD_SEARCH_FROM, unique_marker
 from e2e_http import unwrap
@@ -59,6 +60,25 @@ def _control_tools(client: McpClient, resources: ResourceManager, server_id: str
     return granted_tool, outside[0]
 
 
+def _await_exact_tools(client: McpClient, key: str, server_id: str, expected: frozenset[str]) -> None:
+    """Poll tools/list until the key's view of `server_id` is exactly `expected`.
+
+    A single successful listing proves one replica has synced the grant rows; the
+    next request may land on another. Polling the exact set to the shared deadline
+    is the propagation barrier, and a genuine enforcement leak stays red because
+    the leaked set never converges to `expected`."""
+    deadline = time.monotonic() + client.proxy.poll_timeout
+    while True:
+        listed = unwrap(client.list_tools(key)).tool_names_for_server(server_id)
+        if listed == expected:
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"toolset-scoped key must list exactly {sorted(expected)}; the toolset ceiling leaked: {sorted(listed)}"
+            )
+        time.sleep(client.proxy.poll_interval)
+
+
 def _assert_toolset_ceiling(
     client: McpClient,
     scoped_key: str,
@@ -68,12 +88,10 @@ def _assert_toolset_ceiling(
     outside_tool: str,
 ) -> None:
     """The scoped key sees exactly the toolset's tool, is 403-refused on a tool
-    outside it, and can still execute the granted one."""
-    _ = client.await_tool(scoped_key, server_id, SEARCH_LOGS_TOOL)
-    listed = unwrap(client.list_tools(scoped_key)).tool_names_for_server(server_id)
-    assert listed == frozenset({granted_tool}), (
-        f"toolset-scoped key must list exactly {granted_tool!r}; the toolset ceiling leaked: {sorted(listed)}"
-    )
+    outside it, and can still execute the granted one. Every leg polls to the
+    shared deadline so it cannot flake on a replica that has not synced the
+    just-created grant rows yet."""
+    _await_exact_tools(client, scoped_key, server_id, frozenset({granted_tool}))
 
     denied = client.await_call_tool_denied(scoped_key, server_id=server_id, name=outside_tool, arguments={})
     assert denied.status_code == 403
@@ -133,8 +151,7 @@ class TestMcpToolsetEnforcementPerLevel:
             object_permission=ObjectPermission(mcp_servers=[server_id], mcp_toolsets=[toolset_id]),
         )
         resources.defer(lambda: client.delete_org(org_id))
-        # The team declares no MCP grants of its own; whatever its key can reach
-        # comes from the org, so the org's toolset must cap it.
+        # the team declares no MCP grants of its own, so only the org's cap applies
         team_id = client.create_team(alias=f"e2e-ts-org-team-{unique_marker()}", organization_id=org_id)
         resources.defer(lambda: client.delete_team(team_id))
         team_key = client.generate_key(
@@ -162,8 +179,7 @@ class TestMcpToolsetEnforcementPerLevel:
         server_id, toolset_id = _open_server_and_toolset(client, resources)
         granted_tool, outside_tool = _control_tools(client, resources, server_id)
 
-        # The user's row holds only the toolset; their key grants the whole
-        # server. The user-level toolset is a ceiling over the key's grant.
+        # the key grants the whole server; the user row's toolset must ceil it
         user_id = client.create_user(
             user_email=f"e2e-ts-user-{unique_marker()}@example.com",
             object_permission=ObjectPermission(mcp_toolsets=[toolset_id]),
