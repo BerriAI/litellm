@@ -450,6 +450,29 @@ def test_one_bad_key_rejects_the_whole_multi_key_sort():
     assert _problem({"sort": "-created_at,api_key"}).type == f"{PROBLEM_TYPE_BASE}invalid-sort-field"
 
 
+def test_a_repeated_sort_field_is_rejected():
+    """An in-memory executor sorts once per key, so a repeat is unbounded work an
+    unauthenticated caller controls. Rejecting repeats caps it at len(sortable)."""
+    problem = _problem({"sort": "created_at,max_budget,created_at"})
+
+    assert problem.status == 400
+    assert problem.type == f"{PROBLEM_TYPE_BASE}duplicate-sort-field"
+    assert "created_at" in problem.detail
+    assert "max_budget" not in problem.detail
+
+
+def test_a_field_repeated_in_both_directions_is_still_a_repeat():
+    assert _problem({"sort": "created_at,-created_at"}).type == f"{PROBLEM_TYPE_BASE}duplicate-sort-field"
+
+
+def test_the_appended_tiebreaker_does_not_count_as_a_repeat():
+    """The tiebreaker is added after parsing, so sorting by it explicitly stays legal."""
+    assert _plan({"sort": "-budget_id"}).order == (
+        SortKey(field="budget_id", descending=True),
+        SortKey(field="budget_id", descending=False),
+    )
+
+
 def test_a_double_dash_prefix_is_not_a_descending_sort():
     assert _problem({"sort": "--created_at"}).type == f"{PROBLEM_TYPE_BASE}invalid-sort-field"
 

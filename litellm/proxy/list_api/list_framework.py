@@ -369,6 +369,19 @@ def _parse_sort(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> tuple[
             f"Cannot sort {spec.resource} by: {', '.join(repr(field) for field in rejected)}.",
             tuple(spec.sortable),
         )
+    # A repeated field cannot change the ordering, but an executor that sorts once per key
+    # does the work anyway. Rejecting repeats bounds that to the size of `sortable`, which
+    # matters because an unauthenticated caller can otherwise name one field a thousand times.
+    fields: Final = tuple(key.field for key in keys)
+    repeated: Final = tuple(sorted(frozenset(field for field in fields if fields.count(field) > 1)))
+    if repeated:
+        return _problem(
+            "duplicate-sort-field",
+            "Duplicate sort field",
+            400,
+            f"Sort field(s) named more than once: {', '.join(repeated)}. Each may appear once.",
+            tuple(spec.sortable),
+        )
     return keys
 
 

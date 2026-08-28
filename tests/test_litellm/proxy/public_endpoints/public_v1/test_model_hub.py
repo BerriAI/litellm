@@ -209,6 +209,18 @@ def test_an_undeclared_sort_field_is_a_problem_naming_the_allowed_fields(monkeyp
     ]
 
 
+def test_a_repeated_sort_field_is_rejected_rather_than_sorted_twice(monkeypatch):
+    """The route is unauthenticated and sorts in memory once per key, so an unbounded
+    key list is CPU any caller can spend."""
+    _publish(monkeypatch, _named(3))
+
+    response = _get("sort=model_group,model_group")
+
+    assert response.status_code == 400
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["type"] == "urn:litellm:error:duplicate-sort-field"
+
+
 def test_an_unknown_query_parameter_is_a_problem_outside_management_v1(monkeypatch):
     """The `ManagementProblem` handler is registered on the app, not on the `/management/v1` prefix."""
     _publish(monkeypatch, _named(3))
