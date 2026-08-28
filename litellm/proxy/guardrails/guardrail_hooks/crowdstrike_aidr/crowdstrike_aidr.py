@@ -385,7 +385,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         return [_extract_text_from_message(msg) for msg in tail]
 
     async def _call_or_fail_open(
-        self, payload: dict[str, Any], hook_name: str, request_data: dict
+        self, payload: dict[str, Any], hook_name: str, request_data: dict[str, object]
     ) -> _GuardChatCompletionsResult:
         start_time: Final = time.time()
         try:
@@ -421,7 +421,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         structured_messages: list[AllMessageValues],
         guard_output: _GuardInput,
         sent_indices: tuple[int, ...],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> list[AllMessageValues] | None:
         if effective_skip_system_message_for_guardrail(self) or effective_skip_tool_message_for_guardrail(self):
             request_messages: Final = request_data.get("messages")

@@ -819,7 +819,9 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def model_response_creator(self, chunk: dict | None = None, hidden_params: Mapping[str, object] | None = None):
+    def model_response_creator(
+        self, chunk: dict | None = None, hidden_params: Mapping[str, object] | None = None
+    ) -> ModelResponseStream:
         _model: Final = self._cached_model_name
         _logging_obj_llm_provider: Final = self._cached_logging_llm_provider
 
