@@ -342,7 +342,7 @@ class BaseAnthropicMessagesStreamingIterator:
         self.start_time = datetime.now()
         self.completion_start_time: datetime | None = None
 
-    async def _handle_streaming_logging(self, collected_chunks: list[bytes]):
+    async def _handle_streaming_logging(self, collected_chunks: list[bytes], *, stream_teardown: bool = False):
         """Handle the logging after all chunks have been collected."""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
@@ -354,21 +354,32 @@ class BaseAnthropicMessagesStreamingIterator:
         if self.completion_start_time is not None:
             self.litellm_logging_obj.completion_start_time = self.completion_start_time
             self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
+        logging_coroutine: Final = PassThroughStreamingHandler._route_streaming_logging_to_handler(
+            litellm_logging_obj=self.litellm_logging_obj,
+            passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+            url_route="/v1/messages",
+            request_body=self.request_body or {},
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=self.start_time,
+            raw_bytes=collected_chunks,
+            end_time=end_time,
+        )
+        deferred_dispatch_armed: Final = (
+            getattr(self.litellm_logging_obj, "_on_deferred_stream_complete", None) is not None
+        )
+        # Post-call guardrails run their end-of-stream scan AFTER this iterator
+        # is exhausted, so enqueueing now would build the spend log before the
+        # scan writes guardrail_information. Park the coroutine instead; the
+        # proxy fires it via _fire_deferred_stream_logging once the guardrail
+        # chain drains. Teardown (client disconnect) keeps enqueueing
+        # immediately: the scan never runs there and billing must not be lost.
+        if deferred_dispatch_armed and not stream_teardown:
+            self.litellm_logging_obj._deferred_stream_complete_args = (logging_coroutine,)
+            return
         # Enqueue on the rooted logging worker rather than asyncio.create_task:
         # this also runs during generator teardown after a client disconnect,
         # where an unrooted task could be garbage-collected before it bills.
-        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=PassThroughStreamingHandler._route_streaming_logging_to_handler(
-                litellm_logging_obj=self.litellm_logging_obj,
-                passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-                url_route="/v1/messages",
-                request_body=self.request_body or {},
-                endpoint_type=EndpointType.ANTHROPIC,
-                start_time=self.start_time,
-                raw_bytes=collected_chunks,
-                end_time=end_time,
-            )
-        )
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
 
     def get_async_streaming_response_iterator(
         self,
@@ -433,7 +444,7 @@ class BaseAnthropicMessagesStreamingIterator:
             # post-loop logging below never runs and the tokens already streamed
             # (and billed by the provider) would never reach spend tracking. See LIT-5839.
             if collected_chunks:
-                await self._handle_streaming_logging(collected_chunks)
+                await self._handle_streaming_logging(collected_chunks, stream_teardown=True)
             raise
 
         if not saw_terminal_event:
