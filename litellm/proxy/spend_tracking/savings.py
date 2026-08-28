@@ -502,14 +502,11 @@ def autorouter_savings_for_request(
     usage: Final = _usage_from_spend_log(usage_object)
     if usage is None or not model:
         return None
-    # The configured `autorouter_savings_baseline_model` wins; otherwise the baseline
-    # the deciding router recorded on its decision; neither means the driver is off.
     decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
     recorded: Final = decision.get("savings_baseline_model")
     recorded_id: Final = decision.get("savings_baseline_deployment_id")
-    configured: Final = litellm.autorouter_savings_baseline_model
-    baseline_model: Final = configured or (recorded if isinstance(recorded, str) else None)
-    baseline_id: Final = recorded_id if configured is None and isinstance(recorded_id, str) else None
+    baseline_model: Final = recorded if isinstance(recorded, str) else None
+    baseline_id: Final = recorded_id if isinstance(recorded_id, str) else None
     if not decision or not baseline_model:
         return None
     router_instance: Final = llm_router() if llm_router else None

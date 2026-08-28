@@ -947,17 +947,15 @@ class ComplexityRouter(CustomLogger):
     def savings_baseline(self) -> Baseline | None:
         """The derived counterfactual this router's savings are measured against.
 
-        ``None`` when `litellm_settings.autorouter_savings_baseline_model` is set (the
-        spend writer reads that setting directly and it wins) or when this router was
-        built with ``derive_savings_baseline=False``. Derived once on first use and
-        pinned for the instance's lifetime: creating or editing the router rebuilds
-        the instance, which re-derives. Deferred past ``__init__`` because during a
-        config load this router can be constructed before its tier deployments are.
+        ``None`` when this router was built with ``derive_savings_baseline=False``.
+        Derived once on first use and pinned for the instance's lifetime: creating or
+        editing the router rebuilds the instance, which re-derives. Deferred past
+        ``__init__`` because during a config load this router can be constructed
+        before its tier deployments are.
         """
-        import litellm
         from litellm.router_strategy.savings_baseline import resolve_baseline
 
-        if not self._derive_savings_baseline or litellm.autorouter_savings_baseline_model is not None:
+        if not self._derive_savings_baseline:
             return None
         if not self._savings_baseline_derived:
             self._savings_baseline = resolve_baseline(self.litellm_router_instance, self._hardest_tier_models())

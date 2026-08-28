@@ -540,16 +540,15 @@ def test_autorouter_savings_zero_without_baseline():
     assert result.autorouter == 0.0
 
 
-def test_compute_savings_spend_carries_a_losing_switch_through(monkeypatch):
+def test_compute_savings_spend_carries_a_losing_switch_through():
     """The signed value must survive into SavingsSpend; clamping it here would put the
     dashboard back to only ever showing gains."""
-    monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-sonnet-5")
     result = compute_savings_spend(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
         gateway_injected_cache=True,
-        routing_decision={"conversation_continuing": True},
+        routing_decision={"conversation_continuing": True, "savings_baseline_model": "anthropic/claude-sonnet-5"},
         usage_object=_cached_usage_object(),
     )
     assert result.autorouter < 0
@@ -911,26 +910,17 @@ def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
     assert result.autorouter != 0.0
 
 
-def test_the_configured_baseline_overrides_the_recorded_one(monkeypatch):
-    """The recorded baseline and its deployment id are both ignored under the setting."""
-    monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-sonnet-5")
-    with_override = compute_savings_spend(
+def test_a_leftover_configured_baseline_does_not_override_the_recorded_one(monkeypatch):
+    """The proxy config loader setattrs unknown litellm_settings keys, so a stale
+    autorouter_savings_baseline_model key must stay inert."""
+    monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-sonnet-5", raising=False)
+    result = compute_savings_spend(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
         gateway_injected_cache=True,
-        routing_decision={
-            "conversation_continuing": True,
-            "savings_baseline_model": "anthropic/claude-opus-5",
-            "savings_baseline_deployment_id": "some-deployment-id",
-        },
+        routing_decision={"conversation_continuing": True, "savings_baseline_model": "anthropic/claude-opus-5"},
         usage_object=_cached_usage_object(),
-    )
-    against_sonnet = compute_autorouter_savings(
-        baseline_model="claude-sonnet-5",
-        selected_model="claude-haiku-4-5",
-        selected_provider="anthropic",
-        usage=Usage(**_cached_usage_object()),
     )
     against_opus = compute_autorouter_savings(
         baseline_model="anthropic/claude-opus-5",
@@ -938,8 +928,7 @@ def test_the_configured_baseline_overrides_the_recorded_one(monkeypatch):
         selected_provider="anthropic",
         usage=Usage(**_cached_usage_object()),
     )
-    assert against_sonnet != against_opus, "the test needs baselines that price apart"
-    assert with_override.autorouter == against_sonnet
+    assert result.autorouter == against_opus
 
 
 def test_a_non_string_recorded_baseline_is_ignored():
