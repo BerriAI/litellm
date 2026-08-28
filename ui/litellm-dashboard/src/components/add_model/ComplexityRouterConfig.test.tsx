@@ -1094,6 +1094,25 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(screen.queryByRole("button", { name: "Edit tiers" })).not.toBeInTheDocument();
   });
 
+  it("surfaces the caller's orphaned-rule verdict while editing, so Done is not a silent exit", () => {
+    renderEditor(customValue, { keywordRulesError: "Keyword rule(s) 1 route to a tier this router no longer has" });
+    expect(
+      screen.getByText("Keyword rule(s) 1 route to a tier this router no longer has", { exact: false }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the orphaned-rule verdict out of the collapsed view, where the submit tooltip owns it", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={customValue}
+        onEditingTiersChange={vi.fn()}
+        keywordRulesError="Keyword rule(s) 1 route to a tier this router no longer has"
+      />,
+    );
+    expect(screen.queryByText("route to a tier this router no longer has", { exact: false })).not.toBeInTheDocument();
+  });
+
   it("renders the four built-in tiers before any edit, unchanged", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Edit tiers" })).toBeInTheDocument();

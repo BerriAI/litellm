@@ -581,6 +581,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
                       keywordTierRules={keywordTierRules}
                       onKeywordTierRulesChange={setKeywordTierRules}
+                      keywordRulesError={getKeywordTierRulesError(
+                        keywordTierRules,
+                        activeTierRows(complexityRouterConfig),
+                      )}
                       semanticMatchingEnabled={semanticMatchingEnabled}
                       onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
                       embeddingModel={embeddingModel}

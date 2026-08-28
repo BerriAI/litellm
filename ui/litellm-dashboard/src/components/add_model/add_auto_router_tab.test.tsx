@@ -283,6 +283,25 @@ describe("AddAutoRouterTab", () => {
     expect(screen.queryByText("At least one keyword is required")).not.toBeInTheDocument();
   });
 
+  it("shows the orphaned-rule reason in the tier editor when a rule's tier is removed", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "orphan-rule-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
+    await addKeyword(user, screen.getByText("Keywords 1").closest("div") as HTMLElement, "invoice");
+
+    await user.click(screen.getByRole("button", { name: "Edit tiers" }));
+    await user.click(screen.getByRole("button", { name: "Remove the COMPLEX tier" }));
+
+    expect(await screen.findByText(/route to a tier this router no longer has/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
+  });
+
   it("marks only the offending keyword row, leaving a filled one alone", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
