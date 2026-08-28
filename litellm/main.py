@@ -8464,7 +8464,9 @@ async def ahealth_check(
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
-        if mode is None and custom_llm_provider in {provider.value for provider in LlmProviders}:
+        if mode is None and custom_llm_provider in {  # mutable-ok: short-lived provider-value membership set
+            provider.value for provider in LlmProviders
+        }:
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model,
                 provider=LlmProviders(custom_llm_provider),

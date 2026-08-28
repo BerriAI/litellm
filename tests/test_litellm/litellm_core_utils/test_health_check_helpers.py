@@ -145,17 +145,17 @@ async def test_ahealth_check_uses_provider_mode_and_responses_message_input():
     mock_acompletion = AsyncMock()
 
     with (
-        patch(
+        patch(  # test-quality-ok: isolate provider and handler calls for focused health-check routing
             "litellm.main.get_llm_provider",
             return_value=("gpt-5.6-sol", "chatgpt", None, None),
         ),
-        patch.object(
+        patch.object(  # test-quality-ok: isolate health-check metadata plumbing for routing assertion
             HealthCheckHelpers,
             "_update_model_params_with_health_check_tracking_information",
             side_effect=lambda model_params: model_params,
         ),
-        patch("litellm.aresponses", new=mock_aresponses),
-        patch("litellm.acompletion", new=mock_acompletion),
+        patch("litellm.aresponses", new=mock_aresponses),  # test-quality-ok: verify provider-mode dispatch
+        patch("litellm.acompletion", new=mock_acompletion),  # test-quality-ok: verify chat fallback dispatch
     ):
         result = await ahealth_check(
             model_params={"model": "chatgpt/gpt-5.6-sol"},
@@ -179,17 +179,17 @@ async def test_ahealth_check_provider_without_default_mode_keeps_chat():
     mock_acompletion = AsyncMock(return_value=mock_response)
 
     with (
-        patch(
+        patch(  # test-quality-ok: isolate provider and handler calls for focused health-check routing
             "litellm.main.get_llm_provider",
             return_value=("custom-model", "custom", None, None),
         ),
-        patch.object(
+        patch.object(  # test-quality-ok: isolate health-check metadata plumbing for routing assertion
             HealthCheckHelpers,
             "_update_model_params_with_health_check_tracking_information",
             side_effect=lambda model_params: model_params,
         ),
-        patch("litellm.aresponses", new=mock_aresponses),
-        patch("litellm.acompletion", new=mock_acompletion),
+        patch("litellm.aresponses", new=mock_aresponses),  # test-quality-ok: verify provider-mode dispatch
+        patch("litellm.acompletion", new=mock_acompletion),  # test-quality-ok: verify chat fallback dispatch
     ):
         result = await ahealth_check(
             model_params={"model": "custom/custom-model"},
@@ -483,7 +483,7 @@ async def test_realtime_health_check_uses_model_level_vertex_params():
             "websockets.connect",
             lambda url, **kwargs: _FakeWebsocketConnect(connect_calls, url, **kwargs),
         ),
-        patch.object(
+        patch.object(  # test-quality-ok: isolate health-check metadata plumbing for routing assertion
             HealthCheckHelpers,
             "_update_model_params_with_health_check_tracking_information",
             staticmethod(lambda model_params: model_params),
