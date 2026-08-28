@@ -555,6 +555,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params["aws_sts_endpoint"] = self.aws_sts_endpoint
 
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params)
+        credentials: Final = boto3_credentials_info.credentials
+        if credentials is None:
+            raise ValueError("AWS credentials are required for Secrets Manager authentication")
 
         # Get endpoint
         _, endpoint_url = self.get_runtime_endpoint(
@@ -581,7 +584,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         # Sign request
         request: Final = AWSRequest(method="POST", url=endpoint_url, data=body, headers=headers)
         SigV4Auth(
-            boto3_credentials_info.credentials,
+            credentials,
             "secretsmanager",
             boto3_credentials_info.aws_region_name,
         ).add_auth(request)
