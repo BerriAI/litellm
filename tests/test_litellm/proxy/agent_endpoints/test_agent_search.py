@@ -77,6 +77,16 @@ class FakeEmbedder:
         return tuple(VECTORS[text] for text in texts)
 
 
+class FixedDimensionEmbedder:
+    def __init__(self, dimensions: int) -> None:
+        self.dimensions: Final = dimensions
+        self.calls: list[tuple[str, ...]] = []  # mutable-ok: test spy recording embed inputs
+
+    async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
+        self.calls.append(tuple(texts))
+        return tuple((1.0,) * self.dimensions for _ in texts)
+
+
 class TestAgentSearchText:
     def test_joins_name_description_and_skills_with_tags(self) -> None:
         assert agent_search_text(TRANSLATOR) == (
@@ -109,7 +119,9 @@ class TestCosineSimilarity:
 class TestAgentSearchIndex:
     @pytest.mark.asyncio
     async def test_ranks_by_similarity_and_truncates_to_top_k(self) -> None:
-        outcome = await AgentSearchIndex().search("language translation", AGENTS, top_k=2, embed=FakeEmbedder())
+        outcome = await AgentSearchIndex().search(
+            "language translation", AGENTS, top_k=2, embed=FakeEmbedder(), embedding_model="m"
+        )
         assert isinstance(outcome, AgentSearchHits)
         assert [hit.agent.agent_id for hit in outcome.hits] == ["translator", "trip"]
         assert outcome.hits[0].score > outcome.hits[1].score
@@ -118,15 +130,42 @@ class TestAgentSearchIndex:
     async def test_second_search_only_embeds_the_query(self) -> None:
         index = AgentSearchIndex()
         embedder = FakeEmbedder()
-        await index.search("language translation", AGENTS, top_k=5, embed=embedder)
-        await index.search("language translation", AGENTS, top_k=5, embed=embedder)
+        await index.search("language translation", AGENTS, top_k=5, embed=embedder, embedding_model="m")
+        await index.search("language translation", AGENTS, top_k=5, embed=embedder, embedding_model="m")
         assert len(embedder.calls[0]) == 1 + len(AGENTS)
         assert embedder.calls[1] == ("language translation",)
 
     @pytest.mark.asyncio
+    async def test_switching_embedding_models_does_not_reuse_cached_vectors(self) -> None:
+        index = AgentSearchIndex()
+        await index.search("language translation", AGENTS, top_k=5, embed=FakeEmbedder(), embedding_model="small")
+        wide = FixedDimensionEmbedder(2)
+        outcome = await index.search("language translation", AGENTS, top_k=5, embed=wide, embedding_model="wide")
+        assert isinstance(outcome, AgentSearchHits)
+        assert len(wide.calls[0]) == 1 + len(AGENTS)
+
+    @pytest.mark.asyncio
+    async def test_cached_vectors_of_another_dimension_are_re_embedded(self) -> None:
+        index = AgentSearchIndex()
+        await index.search("language translation", AGENTS, top_k=5, embed=FakeEmbedder(), embedding_model="m")
+        fallback = FixedDimensionEmbedder(2)
+        outcome = await index.search("language translation", AGENTS, top_k=5, embed=fallback, embedding_model="m")
+        assert isinstance(outcome, AgentSearchHits)
+        assert fallback.calls == [("language translation",), tuple(agent_search_text(agent) for agent in AGENTS)]
+
+    @pytest.mark.asyncio
+    async def test_mixed_dimensions_in_one_batch_become_embedding_failed(self) -> None:
+        async def mixed(texts: Sequence[str]) -> Sequence[Vector]:
+            return ((1.0, 0.0), *((1.0, 0.0, 0.0) for _ in texts[1:]))
+
+        outcome = await AgentSearchIndex().search("q", AGENTS, top_k=5, embed=mixed, embedding_model="m")
+        assert isinstance(outcome, AgentSearchEmbeddingFailed)
+        assert "mixed dimensions" in outcome.reason
+
+    @pytest.mark.asyncio
     async def test_empty_registry_returns_no_hits_without_embedding(self) -> None:
         embedder = FakeEmbedder()
-        outcome = await AgentSearchIndex().search("anything", (), top_k=5, embed=embedder)
+        outcome = await AgentSearchIndex().search("anything", (), top_k=5, embed=embedder, embedding_model="m")
         assert outcome == AgentSearchHits(hits=())
         assert embedder.calls == []
 
@@ -135,7 +174,7 @@ class TestAgentSearchIndex:
         async def failing(texts: Sequence[str]) -> Sequence[Vector]:
             raise APIConnectionError(request=MagicMock())
 
-        outcome = await AgentSearchIndex().search("q", AGENTS, top_k=5, embed=failing)
+        outcome = await AgentSearchIndex().search("q", AGENTS, top_k=5, embed=failing, embedding_model="m")
         assert isinstance(outcome, AgentSearchEmbeddingFailed)
         assert "embedding the search query failed" in outcome.reason
 
@@ -144,7 +183,7 @@ class TestAgentSearchIndex:
         async def short(texts: Sequence[str]) -> Sequence[Vector]:
             return ((1.0, 0.0, 0.0),)
 
-        outcome = await AgentSearchIndex().search("q", AGENTS, top_k=5, embed=short)
+        outcome = await AgentSearchIndex().search("q", AGENTS, top_k=5, embed=short, embedding_model="m")
         assert isinstance(outcome, AgentSearchEmbeddingFailed)
 
 
