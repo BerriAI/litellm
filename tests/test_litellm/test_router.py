@@ -10709,10 +10709,15 @@ async def test_anthropic_messages_double_failure_holds_back_fallback_lifecycle_f
             response=primary_stream,
             initial_kwargs={"model": "primary"},
         )
+
         collected = []
-        with pytest.raises(litellm.APIError) as exc_info:
+
+        async def collect_chunks():
             async for chunk in wrapped:
                 collected.append(chunk)
+
+        with pytest.raises(litellm.APIError) as exc_info:
+            await collect_chunks()
 
     assert collected == []
     assert exc_info.value is fallback_error
