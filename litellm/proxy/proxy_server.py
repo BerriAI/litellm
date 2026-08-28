@@ -5121,7 +5121,10 @@ class ProxyConfig:
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
-                            litellm.logging_callback_manager.add_litellm_success_callback(callback)
+                            if callback in litellm._known_custom_logger_compatible_callbacks:
+                                _add_custom_logger_callback_to_specific_event(callback, "success")
+                            else:
+                                litellm.logging_callback_manager.add_litellm_success_callback(callback)
                             if "prometheus" in callback:
                                 from litellm.integrations.prometheus import (
                                     PrometheusLogger,
@@ -5148,7 +5151,10 @@ class ProxyConfig:
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
-                            litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+                            if callback in litellm._known_custom_logger_compatible_callbacks:
+                                _add_custom_logger_callback_to_specific_event(callback, "failure")
+                            else:
+                                litellm.logging_callback_manager.add_litellm_failure_callback(callback)
                     print(  # noqa: T201
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )

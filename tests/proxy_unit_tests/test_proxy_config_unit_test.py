@@ -158,6 +158,50 @@ async def test_multiple_includes():
     assert config["litellm_settings"]["callbacks"] == ["prometheus"]
 
 
+@pytest.mark.asyncio
+async def test_config_file_success_callback_registers_custom_logger_instance():
+    """Config-file success_callback must register a custom-logger instance, not just the
+    string.
+
+    Pass-through endpoints log through the async success path only; string registration
+    leaves langfuse out of both callback lists because
+    `_should_run_sync_callbacks_for_async_calls` filters strings in
+    `_known_custom_logger_compatible_callbacks`.
+    """
+    import tempfile
+
+    import yaml
+
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
+    config_content = {"litellm_settings": {"success_callback": ["langfuse"]}}
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=None,
+            config_file_path=temp_file_path,
+        )
+
+        assert "langfuse" not in litellm.success_callback
+        num_langfuse_instances = sum(
+            isinstance(callback, LangfusePromptManagement) for callback in litellm._async_success_callback
+        )
+        assert num_langfuse_instances == 1
+    finally:
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+        os.unlink(temp_file_path)
+
+
 def test_add_callbacks_from_db_config():
     """Test that callbacks are added correctly and duplicates are prevented"""
     # Setup
