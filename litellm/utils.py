@@ -3389,7 +3389,7 @@ def get_optional_params_embeddings(
     # Remove function objects from passed_params to avoid JSON serialization errors
     passed_params.pop("get_supported_openai_params", None)
 
-    def _check_valid_arg(supported_params: list | None):
+    def _check_valid_arg(supported_params: Sequence[str] | None):
         if supported_params is None:
             return
         unsupported_params: Final = {}
@@ -3543,16 +3543,14 @@ def get_optional_params_embeddings(
         elif "nova" in model.lower():
             object = litellm.AmazonNovaEmbeddingConfig()
         else:  # unmapped model
-            supported_params = []
-            if non_default_params.get("encoding_format") == "float":
-                non_default_params = {k: v for k, v in non_default_params.items() if k != "encoding_format"}
+            supported_params = ("encoding_format",) if non_default_params.get("encoding_format") == "float" else ()
             _check_valid_arg(supported_params=supported_params)
             final_params = {**kwargs}
             return final_params
 
         supported_params = object.get_supported_openai_params()
         if non_default_params.get("encoding_format") == "float" and "encoding_format" not in supported_params:
-            non_default_params = {k: v for k, v in non_default_params.items() if k != "encoding_format"}
+            supported_params = (*supported_params, "encoding_format")
         _check_valid_arg(supported_params=supported_params)
         optional_params = object.map_openai_params(non_default_params=non_default_params, optional_params={})
     elif custom_llm_provider == "mistral":
