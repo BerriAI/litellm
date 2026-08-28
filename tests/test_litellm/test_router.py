@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import functools
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 
 
@@ -10595,11 +10597,26 @@ async def test_async_function_with_fallbacks_skips_stamp_on_genuine_reentrant_ho
     assert metadata["original_model_group"] == "prod-chat"
 
 
+def _record_router_acompletion_kwargs(router: litellm.Router) -> list:
+    """Spy on router._acompletion, recording each call's kwargs while delegating through."""
+    records = []
+    original_acompletion = router._acompletion
+
+    @functools.wraps(original_acompletion)
+    async def _spy(*args, **spy_kwargs):
+        records.append(spy_kwargs)
+        return await original_acompletion(*args, **spy_kwargs)
+
+    router._acompletion = _spy
+    return records
+
+
 @pytest.mark.asyncio
 async def test_async_function_with_fallbacks_scrubs_spoofed_values_from_sibling_bucket():
     """Spend logs read a truthy litellm_metadata dict in preference to metadata, so spoofed
-    stamp keys planted in the bucket the route does not own are removed on entry instead of
-    flowing into the spend log row."""
+    stamp keys planted in the bucket the route does not own are removed from the request's
+    downstream view on entry instead of flowing into the spend log row. The caller's own
+    dict object is never mutated: the scrub replaces the kwargs entry with a cleaned copy."""
     router = litellm.Router(
         model_list=[
             {
@@ -10614,6 +10631,7 @@ async def test_async_function_with_fallbacks_scrubs_spoofed_values_from_sibling_
         "original_model_group": "spoofed-group",
         "client_key": "client_value",
     }
+    downstream_calls = _record_router_acompletion_kwargs(router)
 
     await router.acompletion(
         model="gpt-3.5-turbo",
@@ -10622,11 +10640,206 @@ async def test_async_function_with_fallbacks_scrubs_spoofed_values_from_sibling_
         litellm_metadata=litellm_metadata,
     )
 
-    assert "attempted_fallbacks" not in litellm_metadata
-    assert "original_model_group" not in litellm_metadata
-    assert litellm_metadata["client_key"] == "client_value"
+    assert len(downstream_calls) == 1
+    downstream_sibling = downstream_calls[0]["litellm_metadata"]
+    assert "attempted_fallbacks" not in downstream_sibling
+    assert "original_model_group" not in downstream_sibling
+    assert downstream_sibling["client_key"] == "client_value"
+    assert litellm_metadata == {
+        "attempted_fallbacks": 99,
+        "original_model_group": "spoofed-group",
+        "client_key": "client_value",
+    }
     assert metadata["attempted_fallbacks"] == 0
     assert metadata["original_model_group"] == "gpt-3.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_leaves_caller_sibling_dict_object_untouched():
+    """The sibling-bucket scrub hands downstream a cleaned copy and never edits the dict
+    object the caller passed in: callers reuse metadata dicts across requests, and logging
+    callbacks observe the caller's object."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    litellm_metadata = {
+        "attempted_fallbacks": 7,
+        "original_model_group": "planted-group",
+        "client_key": "client_value",
+    }
+    caller_snapshot = copy.deepcopy(litellm_metadata)
+    downstream_calls = _record_router_acompletion_kwargs(router)
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata={},
+        litellm_metadata=litellm_metadata,
+    )
+
+    assert len(downstream_calls) == 1
+    assert downstream_calls[0]["litellm_metadata"] is not litellm_metadata
+    assert litellm_metadata == caller_snapshot
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_passes_clean_sibling_bucket_through_unchanged():
+    """A sibling bucket carrying no reserved stamp keys is forwarded downstream as the
+    caller's own object with no copy made, matching pre-scrub behavior. Retry accounting
+    stamped into that bucket downstream predates the scrub and is out of its scope."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    litellm_metadata = {"client_key": "client_value"}
+    downstream_calls = _record_router_acompletion_kwargs(router)
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata={},
+        litellm_metadata=litellm_metadata,
+    )
+
+    assert len(downstream_calls) == 1
+    assert downstream_calls[0]["litellm_metadata"] is litellm_metadata
+    assert litellm_metadata["client_key"] == "client_value"
+    assert "attempted_fallbacks" not in litellm_metadata
+    assert "original_model_group" not in litellm_metadata
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_keeps_caller_metadata_keys_on_the_wire(monkeypatch):
+    """Under enable_preview_features, add_openai_metadata forwards only the first 16
+    string pairs of request metadata to the provider body, so the fallback hop must
+    spread caller keys before the router's own stamps: a stamp inserted first evicts
+    the caller's 16th key from the wire while the internal stamp rides in its place."""
+    monkeypatch.setattr(litellm, "enable_preview_features", True)
+    caller_metadata = {f"user_key_{i}": f"value_{i}" for i in range(16)}
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary-group",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+            },
+            {
+                "model_name": "fallback-group",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+            },
+        ],
+        fallbacks=[{"primary-group": ["fallback-group"]}],
+        num_retries=0,
+    )
+
+    wire_bodies = []
+
+    def _respond(request: httpx.Request) -> httpx.Response:
+        wire_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-wire",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-3.5-turbo",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    client = openai.AsyncOpenAI(
+        api_key="sk-test",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_respond)),
+    )
+
+    await router.acompletion(
+        model="primary-group",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata=dict(caller_metadata),
+        mock_testing_fallbacks=True,
+        client=client,
+    )
+
+    assert len(wire_bodies) == 1
+    assert wire_bodies[0]["metadata"] == caller_metadata
+
+    wire_bodies.clear()
+    small_metadata = {"team": "alpha", "env": "prod"}
+    await router.acompletion(
+        model="primary-group",
+        messages=[{"role": "user", "content": "hey again"}],
+        metadata=dict(small_metadata),
+        mock_testing_fallbacks=True,
+        client=client,
+    )
+
+    assert len(wire_bodies) == 1
+    small_wire = wire_bodies[0]["metadata"]
+    assert {k: small_wire[k] for k in small_metadata} == small_metadata
+    assert small_wire["original_model_group"] == "primary-group"
+    assert small_wire["model_group"] == "fallback-group"
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_two_hop_chain_reports_entry_group_and_hop_count():
+    """A two-hop fallback chain stamps attempted_fallbacks=2 on the final leg and keeps
+    original_model_group at the group requested on entry: a later hop's stamp appends
+    after caller keys without overriding the value stamped by an earlier hop."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "group-a",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "litellm.InternalServerError"},
+            },
+            {
+                "model_name": "group-b",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "litellm.InternalServerError"},
+            },
+            {
+                "model_name": "group-c",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "ok"},
+            },
+        ],
+        fallbacks=[{"group-a": ["group-b"]}, {"group-b": ["group-c"]}],
+        num_retries=0,
+    )
+    metadata = {}
+    leg_records = []
+    original_acompletion = router._acompletion
+
+    @functools.wraps(original_acompletion)
+    async def _spy(*args, **spy_kwargs):
+        leg_records.append((spy_kwargs.get("model"), copy.deepcopy(spy_kwargs.get("metadata"))))
+        return await original_acompletion(*args, **spy_kwargs)
+
+    router._acompletion = _spy
+
+    await router.acompletion(
+        model="group-a",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata=metadata,
+    )
+
+    assert [model for model, _ in leg_records] == ["group-a", "group-b", "group-c"]
+    hop_one_metadata = leg_records[1][1]
+    assert hop_one_metadata["attempted_fallbacks"] == 1
+    assert hop_one_metadata["original_model_group"] == "group-a"
+    assert hop_one_metadata["model_group"] == "group-b"
+    hop_two_metadata = leg_records[2][1]
+    assert hop_two_metadata["attempted_fallbacks"] == 2
+    assert hop_two_metadata["original_model_group"] == "group-a"
+    assert hop_two_metadata["model_group"] == "group-c"
+    assert metadata["attempted_fallbacks"] == 0
+    assert metadata["original_model_group"] == "group-a"
 
 
 def _permission_denied_error() -> litellm.PermissionDeniedError:
@@ -10669,3 +10882,68 @@ def test_permission_denied_error_is_retried_when_other_deployments_exist():
         )
         is True
     )
+
+
+class _AllowlistFallbackAccessCheck:
+    def __init__(self, allowed_models: frozenset[str]):
+        self.allowed_models = allowed_models
+        self.checked_models = []
+
+    async def __call__(self, *, model, request_kwargs, llm_router):
+        self.checked_models.append(model)
+        return model in self.allowed_models
+
+
+def _router_with_failing_primary(fallback_access_check) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "k",
+                    "mock_response": Exception("primary is down"),
+                },
+            },
+            {
+                "model_name": "secret-fallback",
+                "litellm_params": {
+                    "model": "openai/secret",
+                    "api_key": "k",
+                    "mock_response": "served by secret-fallback",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["secret-fallback"]}],
+        num_retries=0,
+        fallback_access_check=fallback_access_check,
+    )
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_blocks_config_fallback_the_caller_cannot_use():
+    access_check = _AllowlistFallbackAccessCheck(allowed_models=frozenset())
+    router = _router_with_failing_primary(access_check)
+
+    with pytest.raises(Exception, match="primary is down"):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert access_check.checked_models == ["secret-fallback"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_lets_an_authorized_config_fallback_through():
+    router = _router_with_failing_primary(_AllowlistFallbackAccessCheck(allowed_models=frozenset({"secret-fallback"})))
+
+    response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "served by secret-fallback"
+
+
+@pytest.mark.asyncio
+async def test_router_without_fallback_access_check_attempts_every_config_fallback():
+    router = _router_with_failing_primary(None)
+
+    response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "served by secret-fallback"

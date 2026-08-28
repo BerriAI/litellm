@@ -196,6 +196,7 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    FallbackAccessCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
@@ -604,6 +605,7 @@ class Router:
         health_check_ignore_transient_errors: bool = False,
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
+        fallback_access_check: FallbackAccessCheck | None = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -640,6 +642,7 @@ class Router:
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+            fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -679,6 +682,7 @@ class Router:
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
+        self.fallback_access_check: Final = fallback_access_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
@@ -6982,9 +6986,13 @@ class Router:
             _sibling_metadata_key: Final = (
                 "metadata" if _fallback_metadata_key == "litellm_metadata" else "litellm_metadata"
             )
-            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict):
-                _sibling_metadata.pop("attempted_fallbacks", None)
-                _sibling_metadata.pop("original_model_group", None)
+            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict) and (
+                "attempted_fallbacks" in _sibling_metadata or "original_model_group" in _sibling_metadata
+            ):
+                _scrubbed_sibling_metadata: Final = _sibling_metadata.copy()
+                _scrubbed_sibling_metadata.pop("attempted_fallbacks", None)
+                _scrubbed_sibling_metadata.pop("original_model_group", None)
+                kwargs[_sibling_metadata_key] = _scrubbed_sibling_metadata
             if isinstance(_fallback_metadata := kwargs.get(_fallback_metadata_key), dict):
                 _fallback_metadata["attempted_fallbacks"] = 0
                 if model_group is not None:

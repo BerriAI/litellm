@@ -108,6 +108,9 @@ export interface BuildComplexityRouterConfigParams {
   tierModelParams?: TierModelParamsByTier;
 }
 
+export const dryRunRejection = (verdict: { valid: boolean; error?: string | null }): string | null =>
+  verdict.valid ? null : verdict.error?.trim() || "The proxy rejected this auto-router configuration";
+
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
   default_model?: string;
