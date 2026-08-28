@@ -5409,6 +5409,20 @@ class ProxyConfig:
                         reset_audit_log_callback_cache()
                         _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if not isinstance(cb, S3V2Logger)]
 
+        # Fall back to REDIS_* after explicit coordination Redis and response-cache Redis.
+        if redis_usage_cache is None:
+            environment_redis_cache = _build_redis_usage_cache_from_environment()
+            if environment_redis_cache is not None:
+                verbose_proxy_logger.info(
+                    "Built standalone Redis from REDIS_* environment variables "
+                    "for usage tracking, rate limiting, and cross-pod coordination."
+                )
+                _attach_redis_usage_cache(
+                    environment_redis_cache,
+                    enable_redis_auth_cache=(litellm_settings.get("enable_redis_auth_cache", False) is True),
+                )
+                _set_redis_usage_cache(environment_redis_cache)
+
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})
         if general_settings is None:

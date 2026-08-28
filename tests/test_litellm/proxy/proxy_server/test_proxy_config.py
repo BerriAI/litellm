@@ -29,7 +29,7 @@ from litellm.proxy.proxy_server import (
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
 )
-
+import litellm.proxy.proxy_server as ps
 from .conftest import normalize
 from pydantic import ValidationError
 
@@ -1661,6 +1661,47 @@ async def test_ProxyConfig_load_config_blank_callback_settings_does_not_crash(tm
     finally:
         litellm.callbacks = original_callbacks
 
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_initializes_coordination_redis_from_environment_without_response_cache(
+    tmp_path,
+    monkeypatch,
+):
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "litellm_settings: {}\n"
+    )
+
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    monkeypatch.setenv("REDIS_HOST", "localhost")
+    monkeypatch.setenv("REDIS_PORT", "6379")
+
+    fake_redis = MagicMock()
+    build_redis = MagicMock(return_value=fake_redis)
+    attach_redis = MagicMock()
+
+    monkeypatch.setattr(ps, "redis_usage_cache", None)
+    monkeypatch.setattr(ps, "_build_redis_usage_cache", build_redis)
+    monkeypatch.setattr(ps, "_attach_redis_usage_cache", attach_redis)
+
+    await ProxyConfig().load_config(
+        router=None,
+        config_file_path=str(f),
+    )
+
+    build_redis.assert_called_once()
+
+    attach_redis.assert_called_once_with(
+        fake_redis,
+        enable_redis_auth_cache=False,
+    )
+
+    assert ps.redis_usage_cache is fake_redis
 
 # ---------------------------------------------------------------------------
 # ProxyConfig._init_non_llm_configs
