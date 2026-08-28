@@ -83,3 +83,22 @@ def test_stream_chunk_builder_without_citation_deltas_sets_no_citations_key():
     assert fields is not None
     assert "citations" not in fields
     assert fields["web_search_results"] == [{"url": "https://example.com"}]
+
+
+def test_stream_chunk_builder_keeps_block_list_citation_deltas_unnested():
+    block_one: Final = [dict(_CITATION_ONE), dict(_CITATION_TWO)]
+    block_two: Final = [dict(_CITATION_ONE)]
+    chunks: Final = [
+        _chunk(Delta(content="Green sky.", role="assistant")),
+        _chunk(Delta(content="", provider_specific_fields={"citation": block_one})),
+        _chunk(Delta(content="", provider_specific_fields={"citation": block_two})),
+        _chunk(Delta(content=""), finish_reason="stop"),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    fields: Final = response.choices[0].message.provider_specific_fields
+    assert fields is not None
+    assert fields["citations"] == [block_one, block_two]
+    assert "citation" not in fields
