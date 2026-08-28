@@ -276,6 +276,57 @@ describe("PaginatedSearchSelect", () => {
     await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("gamma"));
   });
 
+  it("commits the first server-filtered match on Enter when autoHighlight is always", async () => {
+    const user = userEvent.setup();
+
+    function ServerBacked() {
+      const [search, setSearch] = useState("");
+      const [value, setValue] = useState("");
+      return (
+        <PaginatedSearchSelect
+          options={OPTIONS.filter((option) => option.label.includes(search))}
+          value={value}
+          onValueChange={setValue}
+          onSearchChange={setSearch}
+          onLoadMore={vi.fn()}
+          autoHighlight="always"
+        />
+      );
+    }
+    render(<ServerBacked />);
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "gamma");
+    await waitFor(() => expect(screen.queryByText("alias-alpha")).not.toBeInTheDocument());
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(input).toHaveValue("gamma-key"));
+  });
+
+  it("highlights the picked label on focus so typing starts over", async () => {
+    const user = userEvent.setup();
+    renderSelect({ value: "alias-alpha" });
+
+    await user.tab();
+
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("alias-alpha".length);
+  });
+
+  it("takes a paste over the highlighted label wholesale even when it shares a prefix", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange, value: "alias-alpha" });
+
+    await user.tab();
+    await user.paste("alias-alphabet");
+
+    expect(screen.getByRole("combobox")).toHaveValue("alias-alphabet");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("alias-alphabet"));
+  });
+
   it("starts a fresh query when typing lands inside the selected label", async () => {
     const user = userEvent.setup();
     const onSearchChange = vi.fn();
