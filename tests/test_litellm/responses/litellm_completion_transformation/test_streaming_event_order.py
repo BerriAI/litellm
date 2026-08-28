@@ -133,7 +133,7 @@ async def test_reasoning_then_text_emits_native_event_order():
     events = await _collect_events(_reasoning_then_text_chunks())
 
     item_events = _output_item_events(events)
-    seq = [f"{_event_type(event)}[{ _item_type(event) }]" for event in item_events]
+    seq = [f"{_event_type(event)}[{_item_type(event)}]" for event in item_events]
 
     assert seq == [
         f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[reasoning]",
@@ -145,9 +145,7 @@ async def test_reasoning_then_text_emits_native_event_order():
     # text deltas must come after the message item announcement
     types = [_event_type(event) for event in events]
     message_added_idx = types.index(str(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED))
-    assert (
-        types.index(str(ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)) > message_added_idx
-    )
+    assert types.index(str(ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)) > message_added_idx
 
 
 @pytest.mark.asyncio
@@ -159,10 +157,7 @@ async def test_reasoning_delta_carries_summary_index():
     events = await _collect_events(_reasoning_then_text_chunks())
 
     deltas = [
-        event
-        for event in events
-        if _event_type(event)
-        == str(ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA)
+        event for event in events if _event_type(event) == str(ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA)
     ]
     assert len(deltas) == 2
     for event in deltas:
@@ -180,11 +175,7 @@ async def test_content_part_done_is_output_text_when_reasoning_present():
     """
     events = await _collect_events(_reasoning_then_text_chunks())
 
-    part_done = [
-        event
-        for event in events
-        if _event_type(event) == str(ResponsesAPIStreamEvents.CONTENT_PART_DONE)
-    ]
+    part_done = [event for event in events if _event_type(event) == str(ResponsesAPIStreamEvents.CONTENT_PART_DONE)]
     assert len(part_done) == 1
     assert part_done[0].part.type == "output_text"
     assert part_done[0].part.text == "Hello world"
@@ -216,24 +207,19 @@ async def test_tool_call_only_stream_skips_ghost_message_done():
     events = await _collect_events(chunks)
 
     # reasoning lifecycle must be complete
-    item_seq = [
-        f"{_event_type(event)}[{ _item_type(event) }]"
-        for event in _output_item_events(events)
-    ]
-    assert (
-        f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[reasoning]" in item_seq
-    ), f"missing reasoning added: {item_seq}"
-    assert (
-        f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE}[reasoning]" in item_seq
-    ), f"missing reasoning done: {item_seq}"
+    item_seq = [f"{_event_type(event)}[{_item_type(event)}]" for event in _output_item_events(events)]
+    assert f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[reasoning]" in item_seq, (
+        f"missing reasoning added: {item_seq}"
+    )
+    assert f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE}[reasoning]" in item_seq, f"missing reasoning done: {item_seq}"
 
     # no ghost message item: never added, so it must never be done
-    assert (
-        f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[message]" not in item_seq
-    ), f"unexpected message added: {item_seq}"
-    assert (
-        f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE}[message]" not in item_seq
-    ), f"ghost message done emitted: {item_seq}"
+    assert f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[message]" not in item_seq, (
+        f"unexpected message added: {item_seq}"
+    )
+    assert f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE}[message]" not in item_seq, (
+        f"ghost message done emitted: {item_seq}"
+    )
 
     # no trailing message text/part done events either
     types = [_event_type(event) for event in events]
@@ -268,18 +254,13 @@ async def test_reasoning_after_tool_call_still_gets_item_declaration():
     ]
     events = await _collect_events(chunks)
 
-    item_seq = [
-        f"{_event_type(event)}[{ _item_type(event) }]"
-        for event in _output_item_events(events)
-    ]
-    assert (
-        f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[reasoning]" in item_seq
-    ), f"reasoning item was never declared: {item_seq}"
+    item_seq = [f"{_event_type(event)}[{_item_type(event)}]" for event in _output_item_events(events)]
+    assert f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[reasoning]" in item_seq, (
+        f"reasoning item was never declared: {item_seq}"
+    )
 
     # reasoning lifecycle must close before the message item is announced
-    assert item_seq.index(
-        f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE}[reasoning]"
-    ) < item_seq.index(
+    assert item_seq.index(f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE}[reasoning]") < item_seq.index(
         f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[message]"
     ), f"reasoning done overlaps message added: {item_seq}"
 
@@ -287,14 +268,10 @@ async def test_reasoning_after_tool_call_still_gets_item_declaration():
     reasoning_added = [
         event
         for event in _output_item_events(events)
-        if f"{_event_type(event)}[reasoning]"
-        == f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[reasoning]"
+        if f"{_event_type(event)}[{_item_type(event)}]" == f"{ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED}[reasoning]"
     ][0]
     deltas = [
-        event
-        for event in events
-        if _event_type(event)
-        == str(ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA)
+        event for event in events if _event_type(event) == str(ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA)
     ]
     assert len(deltas) == 1
     assert deltas[0].item_id == reasoning_added.item.id
@@ -324,27 +301,17 @@ async def test_annotation_events_wait_for_message_item_announcement():
     events = await _collect_events(chunks)
 
     types = [_event_type(event) for event in events]
-    message_added_idx = next(
-        i
-        for i, t in enumerate(types)
-        if t == str(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED)
-    )
+    message_added_idx = next(i for i, t in enumerate(types) if t == str(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED))
     annotation_idx = next(
-        i
-        for i, t in enumerate(types)
-        if t == str(ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED)
+        i for i, t in enumerate(types) if t == str(ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED)
     )
     assert annotation_idx > message_added_idx, (
-        "annotation.added must not precede the message output_item.added:"
-        f" types={types}"
+        f"annotation.added must not precede the message output_item.added: types={types}"
     )
 
     # the annotation must reference the announced message item
     annotation_events = [
-        event
-        for event in events
-        if _event_type(event)
-        == str(ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED)
+        event for event in events if _event_type(event) == str(ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED)
     ]
     assert len(annotation_events) == 1
     message_added = events[message_added_idx]
