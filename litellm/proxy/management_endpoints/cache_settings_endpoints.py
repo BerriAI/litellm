@@ -105,6 +105,15 @@ _EMPTY_CACHE_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _CACHE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
+def _effective_cache_params(base: Mapping[str, object], config_params: Mapping[str, object]) -> dict[str, Any]:
+    """Resolve what the cache actually runs with: config file first, then url-vs-discrete.
+
+    Every caller has to agree on this, or the settings page reports one thing
+    while ``Cache(**params)`` receives another.
+    """
+    return _resolve_cache_url_precedence(_apply_config_yaml_precedence(base, config_params))
+
+
 def _as_config_mapping(value: object) -> Mapping[str, object]:
     try:
         return _CACHE_PARAMS_ADAPTER.validate_python(value)
@@ -134,7 +143,6 @@ def _config_yaml_cache_params(proxy_config: object) -> Mapping[str, object]:
 
 
 def _connection_fields_superseded_by(config_params: Mapping[str, object]) -> frozenset[str]:
-    # litellm._redis prefers `url` unconditionally, so the losing mode must be dropped
     if _has_connection_target(config_params.get("url")):
         return _URL_OVERRIDDEN_CONNECTION_FIELDS
     if any(_has_connection_target(config_params.get(field)) for field in _URL_OVERRIDDEN_CONNECTION_FIELDS):
@@ -449,7 +457,7 @@ class CacheSettingsManager:
 
                 # Remove redis_type if present (UI-only field, not a Cache parameter)
                 # We derive it for UI in get_cache_settings endpoint
-                cache_params: Final = _apply_config_yaml_precedence(
+                cache_params: Final = _effective_cache_params(
                     _cache_params_without_ui_fields(decrypted_settings), _config_yaml_cache_params(proxy_config)
                 )
 
@@ -491,7 +499,10 @@ class CacheSettingsResponse(BaseModel):
     redis_type_descriptions: dict[str, str] = Field(description="Descriptions for each Redis type option")
     config_sourced_fields: tuple[str, ...] = Field(
         default_factory=tuple,
-        description="Settings whose effective value comes from litellm_settings.cache_params in the config file. These take precedence over stored values and cannot be changed from this endpoint.",
+        description=(
+            "Settings whose effective value comes from litellm_settings.cache_params in the config file. "
+            "These take precedence over stored values and cannot be changed from this endpoint."
+        ),
     )
 
 
@@ -545,9 +556,7 @@ async def get_cache_settings(
         # so a url-mode config does not surface conflicting discrete fields (which
         # would otherwise let a no-op save silently switch it to host/port).
         config_params: Final = _config_yaml_cache_params(proxy_config)
-        effective: Final = _resolve_cache_url_precedence(
-            _apply_config_yaml_precedence(_overlay_environment(stored), config_params)
-        )
+        effective: Final = _effective_cache_params(_overlay_environment(stored), config_params)
 
         # Derive redis_type for UI based on settings
         # UI uses redis_type to show/hide fields, backend only stores 'type'
@@ -613,8 +622,8 @@ async def test_cache_connection(
             except Exception:  # noqa: BLE001 - a saved-settings lookup failure must not block a connection test
                 saved_settings = {}
         config_params: Final = _config_yaml_cache_params(proxy_config)
-        cache_settings: Final = _resolve_cache_url_precedence(
-            _merge_over_saved(request.cache_settings, saved_settings, config_params)
+        cache_settings: Final = _effective_cache_params(
+            _merge_over_saved(request.cache_settings, saved_settings, config_params), config_params
         )
         # cache_settings now carries the resolved plaintext credential; never log it raw
         verbose_proxy_logger.debug("Testing cache connection with settings: %s", _redact_credentials(cache_settings))
@@ -722,7 +731,7 @@ async def update_cache_settings(
         decrypted_settings: Final = proxy_config._decrypt_db_variables(variables_dict=encrypted_settings)
 
         # Remove redis_type if present (UI-only field, not a Cache parameter)
-        cache_params: Final = _apply_config_yaml_precedence(
+        cache_params: Final = _effective_cache_params(
             _cache_params_without_ui_fields(decrypted_settings), config_params
         )
 

@@ -195,6 +195,23 @@ describe("CacheSettings", () => {
       expect(updateCacheSettingsCall.mock.calls[0][1]).not.toHaveProperty("type");
     });
 
+    it("should still let the deployment topology be switched when config.yaml only pins type redis", async () => {
+      getCacheSettingsCall.mockResolvedValue({
+        current_values: { type: "redis", host: "localhost" },
+        config_sourced_fields: ["type"],
+      });
+      const user = userEvent.setup();
+      renderSettings();
+
+      await user.click(await screen.findByRole("combobox"));
+
+      expect(await screen.findByRole("option", { name: "Semantic" })).toHaveAttribute("data-disabled");
+      expect(screen.getByRole("option", { name: "Cluster" })).not.toHaveAttribute("data-disabled");
+
+      await user.click(screen.getByRole("option", { name: "Cluster" }));
+      expect(await screen.findByLabelText("Startup Nodes")).toBeInTheDocument();
+    });
+
     it("should still send config-sourced fields when testing the connection", async () => {
       getCacheSettingsCall.mockResolvedValue(configSourcedResponse);
       const user = userEvent.setup();

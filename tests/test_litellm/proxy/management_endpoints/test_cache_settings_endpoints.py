@@ -1357,3 +1357,53 @@ class TestConfigYamlCacheParams:
 
         assert result["settings"]["namespace"] == "yamlns"
         assert result["settings"]["ttl"] == 1234
+
+    @pytest.mark.asyncio
+    async def test_connection_test_uses_the_config_yaml_value_not_the_stored_one(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        proxy_config = _proxy_config_with_yaml_cache_params(
+            {"type": "redis", "host": "yaml-host", "password": "yaml-pw"}
+        )
+        prisma = _prisma_with_cache_row({"type": "redis", "host": "stored-host", "password": "stored-pw"})
+        cache_instance = MagicMock()
+        cache_instance.cache.test_connection = AsyncMock(return_value={"status": "healthy", "message": "ok"})
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+            patch("litellm.Cache", MagicMock(return_value=cache_instance)) as cache_cls,
+        ):
+            await test_cache_connection(
+                request=CacheTestRequest(cache_settings={"type": "redis"}),
+                user_api_key_dict=_admin_auth(),
+            )
+
+        assert cache_cls.call_args.kwargs["password"] == "yaml-pw"
+        assert cache_cls.call_args.kwargs["host"] == "yaml-host"
+
+    @pytest.mark.asyncio
+    async def test_a_config_yaml_url_drops_its_own_discrete_fields_everywhere(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        yaml_params = {"type": "redis", "url": "redis://cfg:6379/2", "host": "cfg-discrete", "port": 7000}
+        proxy_config = _proxy_config_with_yaml_cache_params(yaml_params)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_cache_row(None)),
+            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            reported = await get_cache_settings(user_api_key_dict=_admin_auth())
+            await update_cache_settings(
+                request=CacheSettingsUpdateRequest(cache_settings={"type": "redis"}),
+                user_api_key_dict=_admin_auth(),
+            )
+
+        applied = proxy_config._init_cache.call_args.kwargs["cache_params"]
+        assert "host" not in reported.current_values
+        assert "host" not in applied
+        assert applied["url"] == "redis://cfg:6379/2"
+        assert set(reported.config_sourced_fields) == {"type", "url"}
