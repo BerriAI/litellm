@@ -875,6 +875,107 @@ async def test_user_api_key_auth_websocket():
 
 
 @pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_does_not_relog_invalid_virtual_key():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import WebSocketException, user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer undefined"}
+    mock_websocket.scope = {"headers": [(b"authorization", b"Bearer undefined")]}
+    mock_websocket.url = URL(url="/v1/responses")
+    invalid_virtual_key = ProxyException(
+        message="LiteLLM Virtual Key expected",
+        type="auth_error",
+        param="None",
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
+
+    with (
+        patch(  # test-quality-ok: delegates auth; this test isolates the WebSocket adapter branch
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            side_effect=invalid_virtual_key,
+            autospec=True,
+        ),
+        patch(  # test-quality-ok: assert non-target errors retain the adapter's legacy logger call
+            "litellm.proxy.auth.user_api_key_auth.verbose_proxy_logger.exception"
+        ) as exception_log,
+        pytest.raises(WebSocketException, match="LiteLLM Virtual Key expected") as exc_info,
+    ):
+        await user_api_key_auth_websocket(mock_websocket)
+
+    assert exc_info.value.code == status.WS_1008_POLICY_VIOLATION
+    exception_log.assert_not_called()
+    mock_websocket.close.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_caps_invalid_virtual_key_close_reason():
+    from litellm.litellm_core_utils.realtime_errors import WEBSOCKET_CLOSE_REASON_MAX_BYTES
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import WebSocketException, user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer undefined"}
+    mock_websocket.scope = {"headers": [(b"authorization", b"Bearer undefined")]}
+    mock_websocket.url = URL(url="/v1/responses")
+    invalid_virtual_key = ProxyException(
+        message="LiteLLM Virtual Key expected" + "x" * WEBSOCKET_CLOSE_REASON_MAX_BYTES,
+        type="auth_error",
+        param="None",
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
+
+    with (
+        patch(  # test-quality-ok: delegates auth; this test isolates the WebSocket adapter branch
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            side_effect=invalid_virtual_key,
+            autospec=True,
+        ),
+        pytest.raises(WebSocketException) as exc_info,
+    ):
+        await user_api_key_auth_websocket(mock_websocket)
+
+    assert len(exc_info.value.reason.encode()) <= WEBSOCKET_CLOSE_REASON_MAX_BYTES
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_preserves_non_target_error_handling():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer sk-unknown"}
+    mock_websocket.scope = {"headers": [(b"authorization", b"Bearer sk-unknown")]}
+    mock_websocket.url = URL(url="/v1/responses")
+    unknown_key = ProxyException(
+        message="Authentication Error, key not found in db",
+        type="auth_error",
+        param="None",
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
+
+    with (
+        patch(  # test-quality-ok: delegates auth; this test isolates the WebSocket adapter branch
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            side_effect=unknown_key,
+            autospec=True,
+        ),
+        patch(  # test-quality-ok: assert non-target errors retain the adapter's legacy logger call
+            "litellm.proxy.auth.user_api_key_auth.verbose_proxy_logger.exception"
+        ) as exception_log,
+        pytest.raises(HTTPException, match="key not found in db") as exc_info,
+    ):
+        await user_api_key_auth_websocket(mock_websocket)
+
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    exception_log.assert_called_once_with(unknown_key)
+    mock_websocket.close.assert_awaited_once_with(code=status.WS_1008_POLICY_VIOLATION)
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_auth_websocket_carries_asgi_path():
     """
     The synthetic Request must carry the ASGI scope's ``path`` so
@@ -894,7 +995,9 @@ async def test_user_api_key_auth_websocket_carries_asgi_path():
     }
     mock_websocket.url = URL(url="/v1/realtime")
 
-    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
+    with patch(  # test-quality-ok: delegates auth; this test inspects the synthetic ASGI request
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_user_api_key_auth:
         await user_api_key_auth_websocket(mock_websocket)
 
         request_arg = mock_user_api_key_auth.call_args.kwargs["request"]

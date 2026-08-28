@@ -128,6 +128,25 @@ def test_json_formatter_includes_extra_attributes():
     assert obj["authorization"] == "Bearer sk-***"
 
 
+def test_json_formatter_excludes_stream_routing_controls():
+    """Stream routing controls must not become JSON event attributes."""
+    formatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM Proxy",
+        level=logging.WARNING,
+        pathname="",
+        lineno=0,
+        msg="invalid virtual key",
+        args=(),
+        exc_info=None,
+    )
+    record.route_to_stdout = True
+
+    obj = json.loads(formatter.format(record))
+
+    assert "route_to_stdout" not in obj
+
+
 def test_json_formatter_plain_message_unchanged():
     """
     Test that non-JSON messages are passed through as-is in the message field.
@@ -845,7 +864,29 @@ class _FakeStream:
         return self._tty
 
 
-def test_records_below_warning_go_to_stdout_and_the_rest_to_stderr(capsys):
+def test_selected_warning_routes_as_json_to_stdout(capsys):
+    logger = logging.getLogger("test_json_level_routing")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(JsonFormatter())
+    logger.addHandler(handler)
+
+    try:
+        logger.warning("invalid virtual key", extra={"route_to_stdout": True})
+    finally:
+        logger.handlers.clear()
+
+    out, err = capsys.readouterr()
+    assert err == ""
+    log_record = json.loads(out)
+    assert log_record["message"] == "invalid virtual key"
+    assert log_record["level"] == "WARNING"
+    assert "route_to_stdout" not in log_record
+
+
+def test_records_below_warning_and_selected_warnings_go_to_stdout(capsys):
     logger = logging.getLogger("test_level_routing")
     logger.handlers.clear()
     logger.propagate = False
@@ -858,14 +899,16 @@ def test_records_below_warning_go_to_stdout_and_the_rest_to_stderr(capsys):
         logger.debug("d")
         logger.info("i")
         logger.warning("w")
+        logger.warning("marked-warning", extra={"route_to_stdout": True})
         logger.error("e")
+        logger.error("marked-error", extra={"route_to_stdout": True})
         logger.critical("c")
     finally:
         logger.handlers.clear()
 
     out, err = capsys.readouterr()
-    assert out.splitlines() == ["DEBUG d", "INFO i"]
-    assert err.splitlines() == ["WARNING w", "ERROR e", "CRITICAL c"]
+    assert out.splitlines() == ["DEBUG d", "INFO i", "WARNING marked-warning"]
+    assert err.splitlines() == ["WARNING w", "ERROR e", "ERROR marked-error", "CRITICAL c"]
 
 
 def test_verbose_loggers_route_records_by_level():

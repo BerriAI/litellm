@@ -786,7 +786,7 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
         patch(  # test-quality-ok: handler reads proxy_server globals at call time
             "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
         ),
-        patch(
+        patch(  # test-quality-ok: handler reads this global flag at call time
             "litellm.proxy.auth.auth_exception_handler.litellm.log_client_error_tracebacks",
             log_client_error_tracebacks,
         ),
@@ -815,4 +815,7 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
     records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert records[0].levelno == expected_level
-    assert (records[0].exc_info is not None) is expect_traceback
+    assert bool(records[0].exc_info) is expect_traceback
+    assert getattr(records[0], "route_to_stdout", False) is (
+        expected_level == logging.WARNING and not log_client_error_tracebacks
+    )

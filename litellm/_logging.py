@@ -264,13 +264,16 @@ def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
-    """Writes records below WARNING to stdout and WARNING and above to stderr.
+    """Writes records below WARNING and selected WARNING records to stdout.
 
     Collectors that derive severity from the stream report every stderr line as an error.
     """
 
     def emit(self, record: logging.LogRecord) -> None:
-        preferred: Final = sys.stdout if record.levelno < logging.WARNING else sys.stderr
+        is_stdout_record: Final = record.levelno < logging.WARNING or (
+            record.levelno == logging.WARNING and record.__dict__.get("route_to_stdout") is True
+        )
+        preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
             self.stream = sys.stderr  # rebind-ok: fall back to the pre-fix stream rather than raising per record
         else:
@@ -357,6 +360,8 @@ def _get_standard_record_attrs() -> frozenset:
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
+# Stream-routing controls the local handler only; it is not an event attribute.
+_JSON_EXCLUDED_LOG_RECORD_ATTRS: Final = frozenset(("route_to_stdout",))
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content
@@ -397,7 +402,11 @@ class JsonFormatter(Formatter):
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
         for key, value in record.__dict__.items():
-            if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
+            if (
+                key not in _STANDARD_RECORD_ATTRS
+                and key not in _JSON_EXCLUDED_LOG_RECORD_ATTRS
+                and key not in json_record
+            ):
                 json_record[key] = value
 
         # trace_id/session_id are reserved: CorrelationContextFilter is the only

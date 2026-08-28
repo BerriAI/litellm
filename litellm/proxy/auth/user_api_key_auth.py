@@ -19,6 +19,7 @@ import fastapi
 import orjson
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from starlette.exceptions import WebSocketException
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -32,6 +33,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.litellm_core_utils.realtime_errors import websocket_close_reason
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
@@ -539,6 +541,16 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     try:
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
+        is_invalid_virtual_key: Final = (
+            isinstance(e, ProxyException)
+            and e.code == str(status.HTTP_401_UNAUTHORIZED)
+            and "LiteLLM Virtual Key expected" in e.message
+        )
+        if is_invalid_virtual_key:
+            raise WebSocketException(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason=websocket_close_reason(str(e), fallback="Invalid API key"),
+            )
         verbose_proxy_logger.exception(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
