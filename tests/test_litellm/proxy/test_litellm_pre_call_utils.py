@@ -20,7 +20,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
-    _get_dynamic_logging_metadata,
+    get_dynamic_logging_metadata,
     _get_enforced_params,
     _get_metadata_variable_name,
     _promoted_trace_control_fields,
@@ -2311,7 +2311,7 @@ def test_team_dynamic_logging_settings_decrypts_callback_vars(monkeypatch):
 
 def test_get_dynamic_logging_metadata_with_arize_team_logging():
     """
-    Test _get_dynamic_logging_metadata function with arize team logging and dynamic parameters
+    Test get_dynamic_logging_metadata function with arize team logging and dynamic parameters
     """
     # Setup user with arize team logging including callback_vars
     user_api_key_dict = UserAPIKeyAuth(
@@ -2335,7 +2335,7 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     mock_proxy_config = MagicMock()
 
     # Call the function
-    result = _get_dynamic_logging_metadata(
+    result = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=mock_proxy_config
     )
 
@@ -2386,7 +2386,7 @@ def test_get_dynamic_logging_metadata_ignores_env_reference_from_key_metadata(
         team_metadata={},
     )
 
-    result = _get_dynamic_logging_metadata(
+    result = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=MagicMock()
     )
 
@@ -6568,6 +6568,22 @@ def test_redact_credential_headers_classifies_each_header(header, expected_redac
     assert redacted[header] == ("***REDACTED***" if expected_redacted else "secret-value")
     assert headers[header] == "secret-value"
 
+
+def test_redact_credential_headers_redacts_configured_litellm_key_header_without_mutating_input():
+    from litellm.proxy.litellm_pre_call_utils import redact_credential_headers
+
+    headers = {
+        "X-Custom-LiteLLM-Key": "virtual-key-secret",
+        "x-request-id": "request-123",
+    }
+
+    redacted = redact_credential_headers(headers, litellm_key_header_name="x-custom-litellm-key")
+
+    assert redacted == {
+        "X-Custom-LiteLLM-Key": "***REDACTED***",
+        "x-request-id": "request-123",
+    }
+    assert headers["X-Custom-LiteLLM-Key"] == "virtual-key-secret"
 
 
 @pytest.mark.asyncio

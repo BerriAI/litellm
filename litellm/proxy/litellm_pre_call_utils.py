@@ -801,7 +801,7 @@ class KeyAndTeamLoggingSettings:
         return None
 
 
-def _get_dynamic_logging_metadata(
+def get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> TeamCallbackMetadata | None:
     callback_settings_obj: TeamCallbackMetadata | None = None
@@ -915,12 +915,16 @@ def clean_headers(
     return clean_headers
 
 
-def _is_credential_header(header: str) -> bool:
+def _is_credential_header(header: str, litellm_key_header_name: str | None = None) -> bool:
     """Whether `header` carries a caller credential rather than request context."""
-    return header.lower() in _CREDENTIAL_HEADER_NAMES
+    return header.lower() in _CREDENTIAL_HEADER_NAMES or (
+        litellm_key_header_name is not None and header.lower() == litellm_key_header_name.lower()
+    )
 
 
-def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+def redact_credential_headers(
+    headers: Mapping[str, str], litellm_key_header_name: str | None = None
+) -> Mapping[str, str]:
     """Return a copy of `headers` with credential-bearing values masked.
 
     `clean_headers` deliberately preserves some credential headers so they can be
@@ -934,7 +938,7 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     the stored copy and the logging callbacks JSON-serialize it.
     """
     return {
-        header: (_REDACTED_HEADER_VALUE if _is_credential_header(header) else value)
+        header: (_REDACTED_HEADER_VALUE if _is_credential_header(header, litellm_key_header_name) else value)
         for header, value in headers.items()
     }
 
@@ -2135,7 +2139,7 @@ async def add_litellm_data_to_request(
     )
 
     # Team Callbacks controls
-    callback_settings_obj: Final = _get_dynamic_logging_metadata(
+    callback_settings_obj: Final = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
     if callback_settings_obj is not None:

@@ -539,7 +539,7 @@ async def test_get_team_callbacks_returns_callbacks_registered_via_post(monkeypa
 async def test_get_team_callbacks_prefers_logging_over_deprecated_callback_settings():
     """A team carrying both shapes must report only the one that actually fires.
 
-    Request-time resolution in _get_dynamic_logging_metadata stops at the
+    Request-time resolution in get_dynamic_logging_metadata stops at the
     first populated slot: metadata["logging"] wins and callback_settings is
     never consulted. Reporting the union here would tell an operator that
     gcs_bucket is active on a team whose requests never send to it.
@@ -752,7 +752,7 @@ async def test_disable_team_logging_stops_callbacks_registered_via_api():
     the endpoint and then asks the real request-time resolver what the written
     row would do.
     """
-    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
 
     metadata = {
         "logging": [
@@ -780,7 +780,7 @@ async def test_disable_team_logging_stops_callbacks_registered_via_api():
     written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
     assert written["logging"] == []
 
-    resolved = _get_dynamic_logging_metadata(
+    resolved = get_dynamic_logging_metadata(
         UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
         proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
     )
@@ -859,7 +859,7 @@ async def test_add_team_callbacks_refreshes_cached_team(stub_team_cache_refresh)
 @pytest.mark.asyncio
 async def test_disable_team_logging_clears_both_metadata_shapes():
     """A team carrying both shapes ends up with neither active."""
-    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
 
     metadata = {
         "logging": [
@@ -893,7 +893,7 @@ async def test_disable_team_logging_clears_both_metadata_shapes():
     assert written["callback_settings"]["success_callback"] == []
     assert written["callback_settings"]["failure_callback"] == []
 
-    resolved = _get_dynamic_logging_metadata(
+    resolved = get_dynamic_logging_metadata(
         UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
         proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
     )
@@ -1023,7 +1023,7 @@ async def test_delete_team_callback_leaves_the_other_callback_firing():
     Asks the real request-time resolver what the written row would do, the same
     way the disable_logging regression test does.
     """
-    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
 
     mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata=_two_callback_metadata()))
 
@@ -1040,7 +1040,7 @@ async def test_delete_team_callback_leaves_the_other_callback_firing():
         )
 
     written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
-    resolved = _get_dynamic_logging_metadata(
+    resolved = get_dynamic_logging_metadata(
         UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
         proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
     )
@@ -1215,7 +1215,7 @@ async def test_delete_team_callback_keeps_last_removal_from_reviving_legacy_shap
     dropping the key would fall through to a legacy callback_settings block and
     silently re-enable a destination the caller just removed.
     """
-    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
 
     metadata = {
         "logging": [
@@ -1249,7 +1249,7 @@ async def test_delete_team_callback_keeps_last_removal_from_reviving_legacy_shap
     assert written["logging"] == []
     assert response.data.success_callbacks == ()
 
-    resolved = _get_dynamic_logging_metadata(
+    resolved = get_dynamic_logging_metadata(
         UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
         proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
     )

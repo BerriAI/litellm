@@ -77,7 +77,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    get_dynamic_logging_metadata,
+    redact_credential_headers,
+)
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -89,7 +93,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import Usage
+from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, Usage
 
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
@@ -605,7 +609,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                     "url": str(request.url),
                     "method": request.method,
                     "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
-                    "headers": request.headers,
+                    "headers": redact_credential_headers(
+                        _safe_get_request_headers(request),
+                        litellm_key_header_name=_get_custom_litellm_key_header_name(),
+                    ),
                 },
             },
             "call_type": "pass_through_endpoint",
@@ -750,10 +757,33 @@ def _build_passthrough_failure_request_payload(
     return request_payload
 
 
+async def _dispatch_passthrough_dynamic_failure(
+    logging_obj: LiteLLMLoggingObj,
+    exception: Exception,
+    traceback_str: str,
+) -> None:
+    if logging_obj.model_call_details.get("has_logged_async_failure", False):
+        return
+    try:
+        await logging_obj.dispatch_failure_handlers(
+            exception=exception,
+            traceback_exception=traceback_str,
+            prefer_async_handlers=True,
+        )
+    except Exception:
+        verbose_proxy_logger.warning(
+            "pass_through_endpoint: dynamic failure callback raised",
+            exc_info=True,
+        )
+    finally:
+        logging_obj.model_call_details["has_logged_async_failure"] = True
+
+
 async def _log_passthrough_upstream_failure(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,
+    logging_obj: LiteLLMLoggingObj,
 ) -> None:
     """Fire LiteLLM-side failure hooks (spend tracking, alerting callbacks) for
     an upstream 4xx/5xx passthrough response.
@@ -781,18 +811,68 @@ async def _log_passthrough_upstream_failure(
             status_code=response.status_code,
             detail=f"Upstream passthrough request failed with status {response.status_code}",
         )
+        traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        await _dispatch_passthrough_dynamic_failure(
+            logging_obj=logging_obj,
+            exception=synthetic_exception,
+            traceback_str=traceback_str,
+        )
         try:
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=synthetic_exception,
                 request_data=request_payload,
-                traceback_str=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+                traceback_str=traceback_str,
             )
         except Exception:  # noqa: BLE001 - a failing logging callback must never break the passthrough response
             verbose_proxy_logger.warning(
                 "pass_through_endpoint: post_call_failure_hook raised for upstream error",
                 exc_info=True,
             )
+
+
+def _get_custom_litellm_key_header_name() -> str | None:
+    from litellm.proxy.proxy_server import general_settings
+
+    configured_header: Final = general_settings.get("litellm_key_header_name") if general_settings else None
+    return configured_header if isinstance(configured_header, str) and configured_header else None
+
+
+def _get_passthrough_logging_init_params(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[
+    list[str | Callable | CustomLogger] | None,
+    list[str | Callable | CustomLogger] | None,
+    dict[str, object] | None,
+]:
+    from litellm.proxy.proxy_server import proxy_config
+
+    callback_settings: Final = get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config,
+    )
+    if callback_settings is None:
+        return None, None, None
+
+    success_callback_names: Final = callback_settings.success_callback
+    dynamic_success_callbacks: Final[list[str | Callable | CustomLogger] | None] = (
+        [*success_callback_names] if success_callback_names is not None else None
+    )
+    failure_callback_names: Final = callback_settings.failure_callback
+    dynamic_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = (
+        [*failure_callback_names] if failure_callback_names is not None else None
+    )
+    callback_vars: Final = callback_settings.callback_vars
+    if not callback_vars:
+        return dynamic_success_callbacks, dynamic_failure_callbacks, None
+
+    return (
+        dynamic_success_callbacks,
+        dynamic_failure_callbacks,
+        dict(
+            (*callback_vars.items(), (TRUSTED_CALLBACK_VARS_FIELD, callback_vars)),
+        ),
+    )
 
 
 from litellm.passthrough.timeout_utils import (
@@ -902,7 +982,10 @@ async def pass_through_request(
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
-            headers,
+            redact_credential_headers(
+                headers,
+                litellm_key_header_name=_get_custom_litellm_key_header_name(),
+            ),
             _parsed_body,
         )
 
@@ -928,6 +1011,9 @@ async def pass_through_request(
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
         passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
         start_time: Final = datetime.now()
+        dynamic_success_callbacks, dynamic_failure_callbacks, callback_kwargs = _get_passthrough_logging_init_params(
+            user_api_key_dict=user_api_key_dict
+        )
         logging_obj = Logging(
             model=passthrough_model,
             messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
@@ -936,6 +1022,9 @@ async def pass_through_request(
             start_time=start_time,
             litellm_call_id=litellm_call_id,
             function_id="1245",
+            dynamic_success_callbacks=dynamic_success_callbacks,
+            dynamic_failure_callbacks=dynamic_failure_callbacks,
+            kwargs=callback_kwargs,
         )
 
         # Store passthrough guardrails config on logging_obj for field targeting
@@ -1132,7 +1221,10 @@ async def pass_through_request(
             additional_args={
                 "complete_input_dict": _parsed_body,
                 "api_base": str(logging_url),
-                "headers": headers,
+                "headers": redact_credential_headers(
+                    headers,
+                    litellm_key_header_name=_get_custom_litellm_key_header_name(),
+                ),
             },
         )
         stream = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
@@ -1191,6 +1283,7 @@ async def pass_through_request(
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
                 ),
+                logging_obj=logging_obj,
             )
 
             # Call response headers hook for streaming pass-through
@@ -1272,6 +1365,7 @@ async def pass_through_request(
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
                 ),
+                logging_obj=logging_obj,
             )
 
             # Call response headers hook for detected streaming pass-through
@@ -1366,6 +1460,7 @@ async def pass_through_request(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_payload=failure_request_payload,
+            logging_obj=logging_obj,
         )
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:
@@ -1580,13 +1675,18 @@ async def pass_through_request(
 
         _carry_guardrail_logging_info(request_payload, post_call_guardrail_data)
 
+        traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        if logging_obj is not None:
+            await _dispatch_passthrough_dynamic_failure(
+                logging_obj=logging_obj,
+                exception=e,
+                traceback_str=traceback_str,
+            )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=request_payload,
-            traceback_str=traceback.format_exc(
-                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
-            ),
+            traceback_str=traceback_str,
         )
 
         #########################################################
@@ -2032,6 +2132,10 @@ async def websocket_passthrough_request(
 
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
 
+    dynamic_success_callbacks, dynamic_failure_callbacks, callback_kwargs = _get_passthrough_logging_init_params(
+        user_api_key_dict=user_api_key_dict
+    )
+
     # Only accept the WebSocket if requested (for generic usage)
     if accept_websocket:
         await websocket.accept()
@@ -2052,7 +2156,6 @@ async def websocket_passthrough_request(
             ]:
                 upstream_headers[header_name] = header_value
 
-    # Initialize logging object similar to HTTP passthrough
     logging_obj: Final = Logging(
         model="unknown",
         messages=[{"role": "user", "content": "WebSocket connection"}],
@@ -2061,6 +2164,9 @@ async def websocket_passthrough_request(
         start_time=start_time,
         litellm_call_id=litellm_call_id,
         function_id="websocket_passthrough",
+        dynamic_success_callbacks=dynamic_success_callbacks,
+        dynamic_failure_callbacks=dynamic_failure_callbacks,
+        kwargs=callback_kwargs,
     )
 
     # Create passthrough logging payload
@@ -2115,7 +2221,10 @@ async def websocket_passthrough_request(
         additional_args={
             "complete_input_dict": {},
             "api_base": target,
-            "headers": upstream_headers,
+            "headers": redact_credential_headers(
+                upstream_headers,
+                litellm_key_header_name=_get_custom_litellm_key_header_name(),
+            ),
         },
     )
 
@@ -2399,15 +2508,24 @@ async def websocket_passthrough_request(
         if logging_obj is not None:
             request_payload["litellm_logging_obj"] = logging_obj
 
-        # Log the connection failure using the same pattern as HTTP
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=exc,
-            request_data=request_payload,
-            traceback_str=traceback.format_exc(
-                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
-            ),
+        traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        await _dispatch_passthrough_dynamic_failure(
+            logging_obj=logging_obj,
+            exception=exc,
+            traceback_str=traceback_str,
         )
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=exc,
+                request_data=request_payload,
+                traceback_str=traceback_str,
+            )
+        except Exception:  # noqa: BLE001 - a failing logging callback must never change the WebSocket close behavior
+            verbose_proxy_logger.warning(
+                "pass_through_endpoint: post_call_failure_hook raised for WebSocket connection failure",
+                exc_info=True,
+            )
 
         if _client_socket_is_open(websocket):
             await websocket.close(
@@ -2427,15 +2545,24 @@ async def websocket_passthrough_request(
         if logging_obj is not None:
             request_payload["litellm_logging_obj"] = logging_obj
 
-        # Log the unexpected error using the same pattern as HTTP
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=request_payload,
-            traceback_str=traceback.format_exc(
-                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
-            ),
+        traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        await _dispatch_passthrough_dynamic_failure(
+            logging_obj=logging_obj,
+            exception=e,
+            traceback_str=traceback_str,
         )
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=request_payload,
+                traceback_str=traceback_str,
+            )
+        except Exception:  # noqa: BLE001 - a failing logging callback must never change the WebSocket close behavior
+            verbose_proxy_logger.warning(
+                "pass_through_endpoint: post_call_failure_hook raised for WebSocket failure",
+                exc_info=True,
+            )
 
         if _client_socket_is_open(websocket):
             await websocket.close(code=1011, reason="WebSocket passthrough error")

@@ -14,30 +14,28 @@ from fastapi import Request, UploadFile
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
-    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     _registered_pass_through_routes,
     create_pass_through_route,
     initialize_pass_through_endpoints,
     pass_through_request,
-    resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
+    resolve_pass_through_request_timeout,
     websocket_passthrough_request,
-)
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-
-import litellm
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+)
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 
@@ -1308,7 +1306,14 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
                         mock_request.method = "POST"
                         mock_request.url = "http://test-proxy.com/api/endpoint"
                         mock_request.body = AsyncMock(return_value=b'{"message": "test request"}')
-                        mock_request.headers = Headers({})
+                        mock_request.headers = Headers(
+                            {
+                                "authorization": "Bearer caller-secret",
+                                "x-api-key": "caller-secret",
+                                "x-goog-api-key": "caller-secret",
+                                "langfuse_trace_id": "preserved-context",
+                            }
+                        )
                         mock_request.query_params = QueryParams({})
 
                         # Create mock user API key dict
@@ -1355,6 +1360,12 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
                         assert proxy_server_request["method"] == mock_request.method
                         # The body should be the value returned by pre_call_hook, not the original request body
                         assert proxy_server_request["body"] == {"test": "data"}
+                        assert proxy_server_request["headers"] == {
+                            "authorization": "***REDACTED***",
+                            "x-api-key": "***REDACTED***",
+                            "x-goog-api-key": "***REDACTED***",
+                            "langfuse_trace_id": "preserved-context",
+                        }
 
                         # Verify other required kwargs are present
                         assert "call_type" in call_kwargs
@@ -4096,8 +4107,10 @@ class _FakeUpstreamTransport(httpx.AsyncBaseTransport):
         self._status_code = status_code
         self._headers = headers
         self._stream = stream
+        self.request = None
 
     async def handle_async_request(self, request):
+        self.request = request
         return httpx.Response(
             status_code=self._status_code,
             headers=self._headers,
@@ -5367,6 +5380,381 @@ def test_passthrough_budget_metadata_cannot_be_forged_by_the_request_body():
 
     metadata = kwargs["litellm_params"]["metadata"]
     assert metadata["user_api_key_model_max_budget"] == key_budget
+
+
+def _team_scoped_langfuse_otel_key(callback_type: str = "success") -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        team_id="team-id",
+        team_metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse_otel",
+                    "callback_type": callback_type,
+                    "callback_vars": {
+                        "langfuse_public_key": "team-public-key",
+                        "langfuse_secret_key": "team-secret-key",
+                        "langfuse_host": "https://team.langfuse.example",
+                    },
+                },
+            ]
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_initializes_team_logging_before_dispatch():
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            stream=_RecordingUpstreamByteStream((b'{"answer": "ok"}',)),
+        ),
+        timeout=None,
+    )
+
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+            mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+            mock_proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+            enqueued = []
+            stack.enter_context(
+                patch.object(
+                    GLOBAL_LOGGING_WORKER,
+                    "ensure_initialized_and_enqueue",
+                    new=MagicMock(side_effect=lambda async_coroutine: enqueued.append(async_coroutine)),
+                )
+            )
+            stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
+
+            response = await pass_through_request(
+                request=_relay_client_request(method="POST"),
+                target="http://upstream.test/v1/chat/completions",
+                custom_headers={},
+                user_api_key_dict=_team_scoped_langfuse_otel_key(),
+            )
+
+        assert response.status_code == 200
+        pre_call_logging_obj = mock_proxy_logging.pre_call_hook.await_args.kwargs["data"]["litellm_logging_obj"]
+        success_logging_obj = mock_success_handler.call_args.kwargs["logging_obj"]
+        assert pre_call_logging_obj is success_logging_obj
+        assert success_logging_obj.standard_callback_dynamic_params == {
+            "langfuse_public_key": "team-public-key",
+            "langfuse_secret_key": "team-secret-key",
+            "langfuse_host": "https://team.langfuse.example",
+        }
+        assert success_logging_obj._trusted_callback_vars == (
+            ("langfuse_public_key", "team-public-key"),
+            ("langfuse_secret_key", "team-secret-key"),
+            ("langfuse_host", "https://team.langfuse.example"),
+        )
+        assert [callback.callback_name for callback in success_logging_obj.dynamic_success_callbacks] == [
+            "langfuse_otel"
+        ]
+        assert [callback.callback_name for callback in success_logging_obj.dynamic_async_success_callbacks] == [
+            "langfuse_otel"
+        ]
+        for async_coroutine in enqueued:
+            async_coroutine.close()
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_initializes_team_logging_before_dispatch():
+    upstream_ws = FakeUpstreamWebSocket(b'{"type": "session.created"}')
+    websocket = _client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"}))
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
+        mock_success_handler = stack.enter_context(
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+                "pass_through_endpoint_logging.pass_through_async_success_handler",
+                new=AsyncMock(),
+            )
+        )
+        with _patched_websocket_passthrough_environment(upstream_ws):
+            await websocket_passthrough_request(
+                websocket=websocket,
+                target="wss://upstream.test/v1/realtime",
+                custom_headers={},
+                user_api_key_dict=_team_scoped_langfuse_otel_key(),
+                endpoint="/openai/v1/realtime",
+            )
+
+    success_logging_obj = mock_success_handler.call_args.kwargs["logging_obj"]
+    assert success_logging_obj.standard_callback_dynamic_params == {
+        "langfuse_public_key": "team-public-key",
+        "langfuse_secret_key": "team-secret-key",
+        "langfuse_host": "https://team.langfuse.example",
+    }
+    assert success_logging_obj._trusted_callback_vars == (
+        ("langfuse_public_key", "team-public-key"),
+        ("langfuse_secret_key", "team-secret-key"),
+        ("langfuse_host", "https://team.langfuse.example"),
+    )
+    assert [callback.callback_name for callback in success_logging_obj.dynamic_success_callbacks] == ["langfuse_otel"]
+    assert [callback.callback_name for callback in success_logging_obj.dynamic_async_success_callbacks] == [
+        "langfuse_otel"
+    ]
+
+
+class _FailureCallbackRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failure_event_kwargs: list[dict] = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_event_kwargs.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_dispatches_team_failure_callback_once_for_upstream_error():
+    failure_callback_recorder = _FailureCallbackRecorder()
+    upstream_transport = _FakeUpstreamTransport(
+        status_code=403,
+        headers={"content-type": "application/json"},
+        stream=_RecordingUpstreamByteStream((b'{"error": "upstream denied"}',)),
+    )
+    fake_client, cleanup = _inject_fake_passthrough_client(upstream_transport, timeout=None)
+    request = _relay_client_request(method="POST")
+    request.headers = Headers(
+        {
+            "Authorization": "Bearer provider-secret",
+            "x-api-key": "provider-api-key",
+            "X-Custom-LiteLLM-Key": "virtual-key-secret",
+            "x-request-id": "request-123",
+        }
+    )
+
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+            mock_proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+            stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
+            stack.enter_context(
+                patch("litellm.proxy.proxy_server.general_settings", {"litellm_key_header_name": "x-custom-litellm-key"})
+            )
+            stack.enter_context(
+                patch.object(
+                    litellm,
+                    "_known_custom_logger_compatible_callbacks",
+                    ["langfuse_otel"],
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "litellm.litellm_core_utils.litellm_logging."
+                    "_init_custom_logger_compatible_class",
+                    return_value=failure_callback_recorder,
+                )
+            )
+
+            response = await pass_through_request(
+                request=request,
+                target="http://upstream.test/v1/chat/completions",
+                custom_headers={},
+                user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+                forward_headers=True,
+            )
+
+        assert response.status_code == 403
+        assert json.loads(response.body) == {"error": "upstream denied"}
+        assert len(failure_callback_recorder.failure_event_kwargs) == 1
+        callback_kwargs = failure_callback_recorder.failure_event_kwargs[0]
+        assert callback_kwargs["has_logged_async_failure"] is True
+        callback_headers = callback_kwargs["additional_args"]["headers"]
+        assert callback_headers == {
+            "authorization": "***REDACTED***",
+            "x-api-key": "***REDACTED***",
+            "x-custom-litellm-key": "***REDACTED***",
+            "x-request-id": "request-123",
+        }
+        serialized_callback_kwargs = json.dumps(callback_kwargs, default=str)
+        assert "provider-secret" not in serialized_callback_kwargs
+        assert "provider-api-key" not in serialized_callback_kwargs
+        assert "virtual-key-secret" not in serialized_callback_kwargs
+        assert upstream_transport.request is not None
+        assert upstream_transport.request.headers["authorization"] == "Bearer provider-secret"
+        assert upstream_transport.request.headers["x-api-key"] == "provider-api-key"
+        assert upstream_transport.request.headers["X-Custom-LiteLLM-Key"] == "virtual-key-secret"
+        assert request.headers["Authorization"] == "Bearer provider-secret"
+        mock_success_handler.assert_not_called()
+        mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_dispatches_team_failure_callback_once():
+    failure_callback_recorder = _FailureCallbackRecorder()
+    websocket = _client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"}))
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
+        stack.enter_context(
+            patch.object(
+                litellm,
+                "_known_custom_logger_compatible_callbacks",
+                ["langfuse_otel"],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+                return_value=failure_callback_recorder,
+            )
+        )
+        with _patched_websocket_passthrough_environment(ClosingUpstreamWebSocket(RuntimeError("upstream failed"))):
+            await websocket_passthrough_request(
+                websocket=websocket,
+                target="wss://upstream.test/v1/realtime",
+                custom_headers={},
+                user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+                endpoint="/openai/v1/realtime",
+            )
+
+    assert len(failure_callback_recorder.failure_event_kwargs) == 1
+    assert failure_callback_recorder.failure_event_kwargs[0]["additional_args"]["headers"] == {}
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_dispatches_team_failure_callback_when_upstream_rejects_handshake():
+    from websockets.datastructures import Headers as WebSocketHeaders
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response as WebSocketResponse
+
+    failure_callback_recorder = _FailureCallbackRecorder()
+    websocket = _client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"}))
+    upstream_response = WebSocketResponse(
+        status_code=403,
+        reason_phrase="Forbidden",
+        headers=WebSocketHeaders(),
+    )
+
+    with ExitStack() as stack:
+        mock_proxy_logging = stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj"))
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        stack.enter_context(
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+                side_effect=InvalidStatus(upstream_response),
+            )
+        )
+        mock_worker = stack.enter_context(
+            patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER")
+        )
+        mock_worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: async_coroutine.close()
+        )
+        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
+        stack.enter_context(
+            patch.object(
+                litellm,
+                "_known_custom_logger_compatible_callbacks",
+                ["langfuse_otel"],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+                return_value=failure_callback_recorder,
+            )
+        )
+
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://upstream.test/v1/realtime",
+            custom_headers={},
+            user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+            endpoint="/openai/v1/realtime",
+        )
+
+    assert len(failure_callback_recorder.failure_event_kwargs) == 1
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    websocket.close.assert_awaited_once_with(code=1011, reason="Upstream connection rejected")
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_forwards_credentials_without_exposing_them_to_failure_callback():
+    failure_callback_recorder = _FailureCallbackRecorder()
+    websocket = _client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"}))
+    websocket.headers = Headers(
+        {
+            "Authorization": "Bearer provider-secret",
+            "x-api-key": "provider-api-key",
+            "x-request-id": "request-123",
+        }
+    )
+    upstream_ws = ClosingUpstreamWebSocket(RuntimeError("upstream failed"))
+
+    with ExitStack() as stack:
+        mock_proxy_logging = stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj"))
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_connect = stack.enter_context(
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+                return_value=FakeUpstreamConnect(upstream_ws),
+            )
+        )
+        mock_worker = stack.enter_context(
+            patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER")
+        )
+        mock_worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: async_coroutine.close()
+        )
+        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
+        stack.enter_context(
+            patch("litellm.proxy.proxy_server.general_settings", {"litellm_key_header_name": "x-custom-litellm-key"})
+        )
+        stack.enter_context(
+            patch.object(
+                litellm,
+                "_known_custom_logger_compatible_callbacks",
+                ["langfuse_otel"],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+                return_value=failure_callback_recorder,
+            )
+        )
+
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://upstream.test/v1/realtime",
+            custom_headers={"X-Custom-LiteLLM-Key": "virtual-key-secret"},
+            user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+            endpoint="/openai/v1/realtime",
+            forward_headers=True,
+        )
+
+    assert len(failure_callback_recorder.failure_event_kwargs) == 1
+    callback_kwargs = failure_callback_recorder.failure_event_kwargs[0]
+    callback_headers = callback_kwargs["additional_args"]["headers"]
+    assert callback_headers == {
+        "X-Custom-LiteLLM-Key": "***REDACTED***",
+        "authorization": "***REDACTED***",
+        "x-api-key": "***REDACTED***",
+    }
+    serialized_callback_kwargs = json.dumps(callback_kwargs, default=str)
+    assert "provider-secret" not in serialized_callback_kwargs
+    assert "provider-api-key" not in serialized_callback_kwargs
+    assert "virtual-key-secret" not in serialized_callback_kwargs
+    assert mock_connect.call_args.kwargs["additional_headers"] == {
+        "X-Custom-LiteLLM-Key": "virtual-key-secret",
+        "authorization": "Bearer provider-secret",
+        "x-api-key": "provider-api-key",
+    }
+    assert websocket.headers["Authorization"] == "Bearer provider-secret"
 
 
 def _marked_pass_through_endpoint():

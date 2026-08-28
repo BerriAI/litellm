@@ -122,7 +122,7 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
     ``metadata["logging"]`` holds the ``AddTeamCallback`` entries written by
     ``POST /team/{team_id}/callback`` and by the Admin UI, while
     ``metadata["callback_settings"]`` holds the older ``TeamCallbackMetadata``
-    shape. Request-time resolution in ``_get_dynamic_logging_metadata`` treats
+    shape. Request-time resolution in ``get_dynamic_logging_metadata`` treats
     the two as mutually exclusive: a populated ``logging`` slot wins outright
     and ``callback_settings`` is consulted only as the deprecated fallback.
     This reader applies the same precedence so it reports what a request would
@@ -605,7 +605,7 @@ async def disable_team_logging(
 
         # Update metadata
         team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
-        # _get_dynamic_logging_metadata stops at metadata["logging"], where the API
+        # get_dynamic_logging_metadata stops at metadata["logging"], where the API
         # and Admin UI register callbacks, without ever reading callback_settings.
         team_metadata["logging"] = []  # mutable-ok: the disabled state is persisted as an empty JSON array
         team_metadata = encrypt_callback_vars(team_metadata)

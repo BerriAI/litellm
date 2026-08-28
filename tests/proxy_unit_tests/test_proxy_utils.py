@@ -22,7 +22,7 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
 )
 from litellm.proxy.litellm_pre_call_utils import (
-    _get_dynamic_logging_metadata,
+    get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
 from pydantic import ValidationError
@@ -294,7 +294,7 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -332,7 +332,7 @@ def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
         team_metadata={},
     )
 
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -410,7 +410,7 @@ def test_dynamic_turn_off_message_logging(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
