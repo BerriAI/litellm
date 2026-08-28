@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from litellm_proxy_extras.utils import (
+    _PRISMA_ATTEMPTS,
     ProxyExtrasDBManager,
     _max_migration_timestamp,
     _migration_timestamp,
@@ -423,6 +424,40 @@ def test_v2_db_push_retries_transient_failures(monkeypatch, tmp_path):
 
     assert ok is True
     assert pushes["n"] == 2
+
+
+def test_v2_db_push_retries_are_bounded_and_report_the_prisma_error(
+    monkeypatch, tmp_path
+):
+    """v2: a database that never comes back stops after _PRISMA_ATTEMPTS and
+    surfaces the prisma error, rather than retrying the boot forever."""
+    _prepare_v2_resolver(monkeypatch, tmp_path)
+
+    pushes = {"n": 0}
+
+    def _run(*args, **kwargs):
+        cmd = list(args[0] if args else kwargs.get("args", []))
+        if cmd[-3:] != ["db", "push", "--accept-data-loss"]:
+            return _DeployApplied()
+        pushes["n"] += 1
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=cmd,
+            stderr="Error: P1001: Can't reach database server at `db`:`5432`",
+            output="",
+        )
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", lambda: False
+    )
+    with patch("subprocess.run", side_effect=_run):
+        with pytest.raises(RuntimeError) as exc:
+            ProxyExtrasDBManager.setup_database(
+                use_migrate=False, use_v2_resolver=True
+            )
+
+    assert pushes["n"] == _PRISMA_ATTEMPTS
+    assert "P1001" in str(exc.value)
 
 
 def test_v2_unclassified_failure_is_not_treated_as_transient(monkeypatch, tmp_path):
