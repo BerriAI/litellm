@@ -194,9 +194,6 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({ team_id: "team-1" });
   });
 
-  // The dry-run exists so a config the write gate would refuse shows the backend's own message
-  // inline instead of coming back as a raw 400. Nothing asserted that its verdict actually stops
-  // the submit, so the whole gate could be deleted with the suite still green.
   it("does not submit when the backend's dry-run rejects the config", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);

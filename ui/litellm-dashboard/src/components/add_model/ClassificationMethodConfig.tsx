@@ -98,7 +98,6 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
     value.reasoning_override_min_score,
   );
 
-  // The whole card describes the heuristic scorer, which an edited tier set replaces outright.
   if (value.custom_tier_set) return null;
 
   return (
