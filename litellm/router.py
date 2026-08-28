@@ -4984,6 +4984,7 @@ class Router:
         self,
         response: AsyncIterator[bytes],
         initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        allow_fallback: bool = True,
     ) -> AsyncIterator[bytes]:
         """
         Wrap an anthropic_messages (/v1/messages) streaming response so a
@@ -5100,6 +5101,10 @@ class Router:
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
             except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
+                if not allow_fallback:
+                    if isinstance(stream_error, MidStreamFallbackError) and stream_error.original_exception is not None:
+                        raise stream_error.original_exception from stream_error
+                    raise
                 async for item in self._aanthropic_messages_recover_stream_error(
                     stream_error,
                     has_generated_content,
@@ -5201,7 +5206,12 @@ class Router:
             wrapper.merge_fallback_hidden_params(fallback_hidden_params, fallback_headers)
             wrapper.adopt_fallback_source(fallback_response)
             if hasattr(fallback_response, "__aiter__"):
-                async for fallback_item in fallback_response:
+                fallback_stream: Final = await self._aanthropic_messages_streaming_iterator(
+                    response=cast("AsyncIterator[bytes]", fallback_response),
+                    initial_kwargs=initial_kwargs,
+                    allow_fallback=False,
+                )
+                async for fallback_item in fallback_stream:
                     yield fallback_item
             else:
                 # A fallback can resolve to a complete AnthropicMessagesResponse

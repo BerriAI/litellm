@@ -10686,6 +10686,38 @@ async def test_anthropic_messages_fallback_also_failing_raises_original_exceptio
     assert exc_info.value is original_exception
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_double_failure_holds_back_fallback_lifecycle_frames():
+    router = _anthropic_messages_make_router()
+    primary_stream = _AnthropicMessagesFakeByteStream([_anthropic_messages_overloaded_error_chunk()])
+    fallback_error = litellm.APIError(
+        status_code=503,
+        message="fallback also overloaded",
+        llm_provider="bedrock",
+        model="fallback",
+    )
+    fallback_stream = _AnthropicMessagesRaisingByteStream(
+        [_anthropic_messages_message_start_chunk()], fallback_error
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=fallback_stream),
+    ):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=primary_stream,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = []
+        with pytest.raises(litellm.APIError) as exc_info:
+            async for chunk in wrapped:
+                collected.append(chunk)
+
+    assert collected == []
+    assert exc_info.value is fallback_error
+
+
 # -------- _dispatch_generic_call_type --------
 
 
