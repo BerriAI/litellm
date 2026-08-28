@@ -3261,6 +3261,7 @@ class StandardLoggingPayload(TypedDict):
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     standard_built_in_tools_params: StandardBuiltInToolsParams | None
+    system_prompt: str | list | None  # noqa: LIT012  # system prompt can be str or Anthropic content-block list
 
 
 from collections.abc import AsyncIterator, Iterator

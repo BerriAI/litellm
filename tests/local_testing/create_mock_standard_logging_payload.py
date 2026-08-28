@@ -74,6 +74,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             response_cost="0.1",
             additional_headers=None,
         ),
+        system_prompt=None,
     )
 
 
@@ -125,4 +126,5 @@ def create_standard_logging_payload_with_long_content() -> StandardLoggingPayloa
             response_cost="0.1",
             additional_headers=None,
         ),
+        system_prompt=None,
     )

@@ -5973,3 +5973,45 @@ def test_failure_handler_helper_fn_builds_payload_once_per_exception():
     other_exc = _raise_and_catch(_ClientError(status_code=429, message="rate limited"))
     obj._failure_handler_helper_fn(exception=other_exc, traceback_exception="")
     assert obj.model_call_details["standard_logging_object"] is not first_payload
+
+
+def test_get_system_prompt_from_kwargs():
+    """Test get_system_prompt_from_kwargs extracts system prompt from all known kwarg sources."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # None kwargs → None
+    assert StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(None) is None
+
+    # Empty kwargs → None
+    assert StandardLoggingPayloadSetup.get_system_prompt_from_kwargs({}) is None
+
+    # String system prompt (Anthropic /messages form)
+    assert (
+        StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+            {"system": "Be helpful"}
+        )
+        == "Be helpful"
+    )
+
+    # List-of-content-blocks system prompt (Anthropic prompt caching form)
+    blocks = [{"type": "text", "text": "Be helpful", "cache_control": {"type": "ephemeral"}}]
+    assert (
+        StandardLoggingPayloadSetup.get_system_prompt_from_kwargs({"system": blocks})
+        == blocks
+    )
+
+    # instructions key (OpenAI Responses API) takes priority over system
+    assert (
+        StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+            {"instructions": "You are a coder", "system": "ignored"}
+        )
+        == "You are a coder"
+    )
+
+    # system_instructions key (Vertex Gemini) takes highest priority
+    assert (
+        StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+            {"system_instructions": "vertex prompt", "instructions": "ignored", "system": "also ignored"}
+        )
+        == "vertex prompt"
+    )
