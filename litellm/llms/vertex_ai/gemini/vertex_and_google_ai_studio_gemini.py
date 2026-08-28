@@ -1212,8 +1212,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
-
-        self._drop_search_tools_mixed_with_functions(optional_params)
+        else:
+            self._drop_search_tools_mixed_with_functions(optional_params)
 
         return optional_params
 

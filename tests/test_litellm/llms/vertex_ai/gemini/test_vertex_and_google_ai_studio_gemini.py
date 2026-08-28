@@ -5757,3 +5757,36 @@ def test_calculate_web_search_requests_counts_unique_queries():
 
     assert VertexGeminiConfig._calculate_web_search_requests([]) is None
     assert VertexGeminiConfig._calculate_web_search_requests([{"webSearchQueries": ["", ""]}]) is None
+
+
+def test_gemini_3_mixed_tools_keeps_search_grounding():
+    """Gemini 3+ models support mixing function declarations and search tools."""
+    config = VertexGeminiConfig()
+    tools = [
+        {"function_declarations": [{"name": "get_weather"}]},
+        {"googleSearch": {}},
+    ]
+    params = config.map_openai_params(
+        non_default_params={"tools": tools},
+        optional_params={"tools": list(tools)},
+        model="gemini-3.7-flash",
+        drop_params=False,
+    )
+    assert len(params["tools"]) == 2
+
+
+def test_gemini_2_mixed_tools_drops_search_grounding():
+    """Older Gemini models (< Gemini 3) drop search tools when mixed with functions."""
+    config = VertexGeminiConfig()
+    tools = [
+        {"function_declarations": [{"name": "get_weather"}]},
+        {"googleSearch": {}},
+    ]
+    params = config.map_openai_params(
+        non_default_params={"tools": tools},
+        optional_params={"tools": list(tools)},
+        model="gemini-2.0-flash",
+        drop_params=False,
+    )
+    assert len(params["tools"]) == 1
+    assert "function_declarations" in params["tools"][0]
