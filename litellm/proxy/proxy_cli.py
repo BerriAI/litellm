@@ -913,13 +913,14 @@ class ProxyInitializationHelpers:
     envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
 )
 @click.option(
-    "--use_v2_migration_resolver",
-    is_flag=True,
-    default=False,
+    "--use_v2_migration_resolver/--use_legacy_migration_resolver",
+    default=True,
     help=(
-        "Opt into the v2 migration resolver. Avoids the diff-and-force recovery "
-        "path that can cause schema thrashing during rolling deploys where two "
-        "LiteLLM versions contend for the same DB. Default is the v1 resolver."
+        "Which database migration resolver to run at startup. The default v2 "
+        "resolver avoids the diff-and-force recovery path that can cause schema "
+        "thrashing during rolling deploys where two LiteLLM versions contend for "
+        "the same DB. Pass --use_legacy_migration_resolver, or set "
+        "USE_V2_MIGRATION_RESOLVER=false, to fall back to v1."
     ),
     envvar="USE_V2_MIGRATION_RESOLVER",
 )
@@ -1310,10 +1311,11 @@ def run_server(
                 else:
                     if not use_v2_migration_resolver:
                         print(
-                            "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
-                            "If your deployment has seen schema thrashing during rolling "
-                            "deploys, try --use_v2_migration_resolver (safer: avoids the "
-                            "diff-and-force recovery that caused the thrash).\033[0m"
+                            "\033[1;33mLiteLLM Proxy: Using the legacy (v1) migration resolver. "
+                            "The default v2 resolver is safer: it avoids the diff-and-force "
+                            "recovery that caused schema thrashing during rolling deploys. "
+                            "Remove --use_legacy_migration_resolver / "
+                            "USE_V2_MIGRATION_RESOLVER=false to switch back to it.\033[0m"
                         )
                     try:
                         setup_ok: Final = PrismaManager.setup_database(

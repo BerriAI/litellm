@@ -7,7 +7,8 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from types import MappingProxyType
+from typing import Final, Optional
 
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.replica_identity import (
@@ -49,6 +50,35 @@ _SPEND_LOGS_PK_CLAUSE_RE = re.compile(
     r'|ADD\s+(?:CONSTRAINT\s+"[^"]*"\s+)?PRIMARY\s+KEY\s*\([^)]*\))$',
     re.IGNORECASE,
 )
+
+_MIGRATE_DEPLOY_ATTEMPTS: Final = 4
+
+_TRANSIENT_DEPLOY_FAILURES: Final = MappingProxyType(
+    {
+        "deadlock detected": "a deadlock on the migration advisory lock (a concurrent migrate deploy)",
+        "P1001": "an unreachable database server",
+        "P1002": "a database server that timed out",
+    }
+)
+
+
+def _transient_deploy_failure(stderr: str) -> str | None:
+    """Describe why a failed `prisma migrate deploy` is worth retrying, or None.
+
+    These are environment failures, not migration failures: the database is not
+    up yet, or another instance holds the migration lock. v1 retried every
+    failed deploy and absorbed them; failing fast on them instead would turn a
+    database that is ten seconds late into a dead proxy.
+    """
+    return next(
+        (
+            reason
+            for marker, reason in _TRANSIENT_DEPLOY_FAILURES.items()
+            if marker in stderr
+        ),
+        None,
+    )
+
 
 PARTITIONED_SPEND_LOGS_PUSH_ERROR = (
     "LiteLLM_SpendLogs is a partitioned table (see db_scripts/partition_spend_logs.sql), "
@@ -648,7 +678,7 @@ class ProxyExtrasDBManager:
     @staticmethod
     def _setup_database_v2(use_migrate: bool) -> bool:
         """
-        v2 migration resolver (opt-in via --use_v2_migration_resolver).
+        v2 migration resolver (what the proxy CLI selects by default).
 
         Runs `prisma migrate deploy` and handles standard recovery paths
         (P3005 baseline, P3009/P3018 idempotent errors). Critically, it does
@@ -692,7 +722,7 @@ class ProxyExtrasDBManager:
         original_dir = os.getcwd()
         os.chdir(migrations_dir)
         try:
-            for attempt in range(4):
+            for attempt in range(_MIGRATE_DEPLOY_ATTEMPTS):
                 try:
                     result = subprocess.run(
                         [_get_prisma_command(), "migrate", "deploy"],
@@ -807,16 +837,36 @@ class ProxyExtrasDBManager:
                             f"Manual intervention required.\n\nPrisma error:\n{stderr}"
                         ) from e
 
-                    raise RuntimeError(
-                        "Database migration failed and cannot be auto-recovered. "
-                        f"Manual intervention required.\n\nPrisma error:\n{stderr}"
-                    ) from e
+                    transient = _transient_deploy_failure(stderr)
+                    if transient is None:
+                        raise RuntimeError(
+                            "Database migration failed and cannot be auto-recovered. "
+                            f"Manual intervention required.\n\nPrisma error:\n{stderr}"
+                        ) from e
+
+                    if attempt == _MIGRATE_DEPLOY_ATTEMPTS - 1:
+                        raise RuntimeError(
+                            f"Database migration failed after "
+                            f"{_MIGRATE_DEPLOY_ATTEMPTS} attempts on {transient}. "
+                            "Check database connectivity and load."
+                            f"\n\nPrisma error:\n{stderr}"
+                        ) from e
+
+                    logger.info(
+                        "prisma migrate deploy attempt %s failed on %s, retrying. "
+                        "Prisma error:\n%s",
+                        attempt + 1,
+                        transient,
+                        stderr,
+                    )
+                    time.sleep(random.randrange(5, 15))
+                    continue
 
             raise RuntimeError(
-                "Database migration failed after 4 attempts (retry loop "
-                "exhausted by timeouts or repeated idempotent-recovery "
-                "continues). Check database connectivity, load, and "
-                "_prisma_migrations ledger state."
+                f"Database migration failed after {_MIGRATE_DEPLOY_ATTEMPTS} "
+                "attempts (retry loop exhausted by timeouts or repeated "
+                "idempotent-recovery continues). Check database connectivity, "
+                "load, and _prisma_migrations ledger state."
             )
         finally:
             os.chdir(original_dir)
@@ -864,10 +914,11 @@ class ProxyExtrasDBManager:
 
         Args:
             use_migrate: Whether to use prisma migrate instead of db push
-            use_v2_resolver: Opt into the v2 migration resolver (safer during
+            use_v2_resolver: Run the v2 migration resolver (safer during
                 rolling deploys; does not run the diff-and-force recovery
-                that causes schema thrashing). Defaults to False for
-                backwards compatibility.
+                that causes schema thrashing). Defaults to False here so
+                direct callers keep the old behavior; the proxy CLI passes
+                True, so the proxy's runtime default is v2.
 
         Returns:
             bool: True if setup was successful, False otherwise
@@ -885,7 +936,7 @@ class ProxyExtrasDBManager:
     @staticmethod
     def _run_migrations(use_migrate: bool, use_v2_resolver: bool) -> bool:
         if use_v2_resolver:
-            logger.info("Using v2 migration resolver (--use_v2_migration_resolver)")
+            logger.info("Using v2 migration resolver")
             return ProxyExtrasDBManager._setup_database_v2(use_migrate=use_migrate)
 
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
