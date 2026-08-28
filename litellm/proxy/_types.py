@@ -2599,6 +2599,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
     )
+    enforce_fallback_model_access: bool | None = Field(
+        None,
+        description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.",
+    )
     scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
         None,
         description=(

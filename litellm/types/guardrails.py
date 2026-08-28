@@ -392,6 +392,16 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
     )
+    presidio_analyze_chunk_size_bytes: int | None = Field(
+        default=None,
+        description=(
+            "Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. "
+            "Longer texts are split into overlapping chunks of at most this size "
+            "and the merged results are remapped onto the original text. "
+            "Defaults to 500000; set it below your analyzer deployment's request "
+            "body limit, leaving headroom for the rest of the analyze payload."
+        ),
+    )
     mock_redacted_text: dict | None = Field(default=None, description="Mock redacted text for testing")
 
 
@@ -845,7 +855,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=True,
         description=(
             "Whether to fail the request if the guardrail encounters an error. "
-            "Implemented by guardrail='model_armor' and 'generic_guardrail_api'. "
+            "Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. "
             "True (default) raises the error. False logs a critical error and lets the request proceed, "
             "so only a valid guardrail response can block or modify it."
         ),
