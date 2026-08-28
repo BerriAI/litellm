@@ -76,7 +76,10 @@ from litellm.llms.perplexity.cost_calculator import (
 from litellm.llms.tencent.cost_calculator import (
     cost_per_token as tencent_cost_per_token,
 )
-from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
+from litellm.llms.together_ai.cost_calculator import (
+    get_model_params_and_category,
+    has_together_registry_pricing,
+)
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
 )
@@ -557,9 +560,10 @@ def cost_per_token(
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_usage_has_token_details(usage_block):
-            return openai_cost_per_token(
+            return generic_cost_per_token(
                 model=model_without_prefix,
                 usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
             )
@@ -1568,10 +1572,9 @@ def completion_cost(
 
                     return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
                 # Calculate cost based on prompt_tokens, completion_tokens
-                if "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai":
-                    # together ai prices based on size of llm
-                    # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
-
+                if (
+                    "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
+                ) and not has_together_registry_pricing(model, litellm.model_cost):
                     model = get_model_params_and_category(model, call_type=CallTypes(call_type))
 
                 # replicate llms are calculate based on time for request running

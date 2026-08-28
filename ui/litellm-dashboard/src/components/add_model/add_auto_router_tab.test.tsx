@@ -70,9 +70,14 @@ const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(()
   mockFetchAllModelDeployments: vi.fn(),
 }));
 
+const { validateAutoRouterConfig } = vi.hoisted(() => ({
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+}));
+
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
+  validateAutoRouterConfig,
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -187,6 +192,60 @@ describe("AddAutoRouterTab", () => {
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({ team_id: "team-1" });
+  });
+
+  it("does not submit when the backend's dry-run rejects the config", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    validateAutoRouterConfig.mockResolvedValueOnce({
+      valid: false,
+      error: "session_affinity cannot be combined with tier_definitions",
+    });
+
+    renderWithProviders(<Harness />);
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "rejected-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalled());
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
+  it("submits when the dry-run passes, so the gate is not simply blocking everything", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    validateAutoRouterConfig.mockResolvedValueOnce({ valid: true });
+
+    renderWithProviders(<Harness />);
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "accepted-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+  });
+
+  // A second submit while the dry-run round-trip is pending must not start another create: the
+  // button disables, and the handler itself refuses re-entry since a form submit (Enter) fires it
+  // regardless of the button's disabled state.
+  it("creates the router once when the form is submitted again mid dry-run", async () => {
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    let resolveVerdict: (verdict: { valid: boolean }) => void = () => {};
+    validateAutoRouterConfig.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveVerdict = resolve;
+        }),
+    );
+
+    const { container } = renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "double-submit-router" } });
+
+    fireEvent.submit(container.querySelector("form")!);
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled());
+    fireEvent.submit(container.querySelector("form")!);
+
+    resolveVerdict({ valid: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
+    expect(validateAutoRouterConfig).toHaveBeenCalledTimes(1);
+    expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1);
   });
 
   // LIT-5133: "Add keyword rule" seeds a row with no keywords, and the semantic toggle that used
@@ -589,6 +648,28 @@ describe("AddAutoRouterTab", () => {
       expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
         auto_router_default_model: ANTHROPIC_TIERS.MEDIUM[0],
         complexity_router_config: { tiers: ANTHROPIC_TIERS },
+      });
+    });
+
+    // Every step between the bundled JSON and the payload drops these params silently.
+    it("carries a preset's per-tier reasoning effort through to the create payload", async () => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      await selectTemplate("Anthropic Family");
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
+        complexity_router_config: {
+          tier_model_configs: {
+            REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+          },
+        },
       });
     });
 

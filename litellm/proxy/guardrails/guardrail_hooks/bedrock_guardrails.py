@@ -1038,6 +1038,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         aws_profile_name: Final = self.optional_params.get("aws_profile_name", None)
         aws_web_identity_token: Final = self.optional_params.get("aws_web_identity_token", None)
         aws_sts_endpoint: Final = self.optional_params.get("aws_sts_endpoint", None)
+        aws_external_id: Final = self.optional_params.get("aws_external_id", None)
 
         ### SET REGION NAME ###
         aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
@@ -1054,6 +1055,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
         )
         return credentials, aws_region_name
 

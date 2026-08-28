@@ -531,6 +531,7 @@ async def acompletion(
             tools=tools,
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
+            request_kwargs=kwargs,
         )
         #########################################################
         # if the chat completion logging hook removed all tools,
@@ -1219,6 +1220,7 @@ def _register_custom_pricing_for_request(
             shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
         },
         persist_across_reloads=False,
+        warning_display_name=shared_key,
     )
 
 
@@ -5245,6 +5247,7 @@ def completion(
             prompt_variables=prompt_variables,
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
+            request_kwargs=kwargs,
         )
 
     ### LITELLM SYSTEM PROMPT ###

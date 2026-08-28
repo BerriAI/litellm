@@ -1747,6 +1747,46 @@ def hoist_images_from_tool_messages(
     ]
 
 
+def _is_tool_reference_part(part: object) -> bool:
+    return isinstance(part, dict) and part.get("type") == "tool_reference"
+
+
+def _tool_message_carries_tool_reference(message: AllMessageValues) -> bool:
+    if message.get("role") != "tool":
+        return False
+    content = message.get("content")
+    return isinstance(content, list) and any(_is_tool_reference_part(part) for part in content)
+
+
+def _drop_tool_reference_parts(message: AllMessageValues) -> AllMessageValues:
+    if not _tool_message_carries_tool_reference(message):
+        return message
+    content = cast(list, message.get("content"))  # cast-ok: shape checked by _tool_message_carries_tool_reference
+    remaining_parts = [  # mutable-ok: tool message content must stay a json list
+        part for part in content if not _is_tool_reference_part(part)
+    ]
+    new_content = remaining_parts if remaining_parts else ""
+    rewritten = {**message, "content": new_content}  # mutable-ok: chat messages are plain json dicts
+    return cast(AllMessageValues, rewritten)  # cast-ok: dict spread keeps keys like cache_control
+
+
+def drop_tool_reference_parts_from_tool_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    """
+    Remove tool_reference content parts from role:"tool" messages.
+
+    The OpenAI chat spec only accepts text in tool messages, so a tool_reference
+    part carried through the Anthropic adapter makes strict providers reject the
+    request. The reference names an already-declared tool rather than carrying
+    content, so it is dropped; a reference-only result keeps its tool message with
+    empty text so the preceding tool_call stays answered.
+    """
+    if not any(_tool_message_carries_tool_reference(message) for message in messages):
+        return messages
+    return [_drop_tool_reference_parts(message) for message in messages]  # mutable-ok: pipelines mutate message lists
+
+
 def _attempt_json_repair(s: str) -> Any | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.

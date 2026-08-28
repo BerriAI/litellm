@@ -40,7 +40,7 @@ import anyio
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json, JsonValue
-from typing_extensions import NotRequired, assert_never
+from typing_extensions import NotRequired, ReadOnly, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -115,6 +115,11 @@ from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
+)
+from litellm.router_utils.auto_router_model_naming import (
+    STRATEGY_ROUTER_PARAM_FIELDS,
+    carries_complexity_router_settings,
+    validate_complexity_router_config_placement,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -290,6 +295,7 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
     warn_once_if_custom_auth_skips_common_checks,
 )
+from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
@@ -381,6 +387,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.config_resolvers import resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
     EMAIL_DESCRIPTORS,
+    MS_TEAMS_DESCRIPTORS,
     SLACK_DESCRIPTORS,
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
@@ -411,7 +418,9 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
+    filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
+    parse_background_health_check_model_groups,
     perform_health_check,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
@@ -3660,6 +3669,13 @@ async def _run_background_health_check():
         _llm_model_list = [
             m for m in _llm_model_list if not m.get("model_info", {}).get("disable_background_health_check", False)
         ]
+        scoped_model_groups = llm_router.background_health_check_model_groups if llm_router is not None else None
+        _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
+        if scoped_model_groups is not None and not _llm_model_list:
+            verbose_proxy_logger.warning(
+                "background_health_check_model_groups matched no deployments; groups=%s",
+                sorted(scoped_model_groups),
+            )
         model_count_enabled = len(_llm_model_list)
         expected_peak_in_flight = model_count_enabled
         if isinstance(health_check_concurrency, int) and health_check_concurrency > 0 and model_count_enabled > 0:
@@ -4139,6 +4155,28 @@ def validate_deployment_max_agentic_loops(model: Mapping[str, object]) -> None:
         litellm_params["max_agentic_loops"],
         field=f"litellm_params.max_agentic_loops on model {model_name!r}",
     )
+
+
+def validate_deployment_complexity_router_placement(model: Mapping[str, object]) -> None:
+    """
+    Reject a complexity-router setting written one level above `complexity_router_config`.
+
+    Checked here rather than on `LiteLLM_Params` for the same reason as
+    `max_agentic_loops`: the proxy builds its router with
+    `ignore_invalid_deployments=True`, so a rejection further down turns a bad
+    deployment into a silently missing model instead of a refusal to start.
+    """
+    litellm_params: Final = model.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return
+    present_fields: Final = frozenset(
+        field for field in STRATEGY_ROUTER_PARAM_FIELDS if litellm_params.get(field) is not None
+    )
+    if not carries_complexity_router_settings(str(litellm_params.get("model") or ""), present_fields):
+        return
+    violation: Final = validate_complexity_router_config_placement(litellm_params)
+    if violation is not None:
+        raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
 def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
@@ -5239,6 +5277,7 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+        _bg_hc_model_groups: Final = parse_background_health_check_model_groups(general_settings)
         _enable_hc_routing = False
         _hc_staleness = None
         _hc_ignore_transient = False
@@ -5434,13 +5473,14 @@ class ProxyConfig:
             _hc_staleness = general_settings.get("health_check_staleness_threshold", None)
             _hc_ignore_transient = general_settings.get("health_check_ignore_transient_errors", False)
             verbose_proxy_logger.info(
-                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s health_check_routing=%s",
+                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s health_check_routing=%s model_groups=%s",
                 use_background_health_checks,
                 use_shared_health_check,
                 health_check_interval,
                 health_check_concurrency,
                 health_check_details,
                 _enable_hc_routing,
+                sorted(_bg_hc_model_groups) if _bg_hc_model_groups is not None else None,
             )
 
             ### RBAC ###
@@ -5472,6 +5512,8 @@ class ProxyConfig:
             router_params["health_check_staleness_threshold"] = _hc_staleness
         if _hc_ignore_transient:
             router_params["health_check_ignore_transient_errors"] = True
+        if _bg_hc_model_groups is not None:
+            router_params["background_health_check_model_groups"] = sorted(_bg_hc_model_groups)
         ## MODEL LIST
         model_list: Final = config.get("model_list", None)
         if model_list:
@@ -5485,6 +5527,7 @@ class ProxyConfig:
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
                 validate_deployment_max_agentic_loops(model)
+                validate_deployment_complexity_router_placement(model)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
@@ -5567,6 +5610,7 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
+            fallback_access_check=router_fallback_access_check,
         )
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
@@ -6026,6 +6070,7 @@ class ProxyConfig:
                         ),
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
+                        fallback_access_check=router_fallback_access_check,
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
             else:
@@ -9240,6 +9285,7 @@ class ProxyStartupEvent:
                     prisma_client,
                     pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
                     alert=_alert_ptu_rollup_failure,
+                    router=llm_router,
                 )
 
             scheduler.add_job(
@@ -16286,6 +16332,11 @@ def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
     return [{**entry, "variables": _redact_callback_env_vars(entry.get("variables") or {})} for entry in entries]
 
 
+class _AlertingDestinationEntry(TypedDict):
+    name: ReadOnly[str]
+    variables: ReadOnly[Mapping[str, str | None]]
+
+
 def _apply_alerting_env_role_gate(env_vars: dict, is_full_admin: bool) -> dict:
     if is_full_admin:
         return mask_sensitive_keys(env_vars, _ALERTING_SENSITIVE_VARS)
@@ -16401,6 +16452,13 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "options": ("5m", "1h"),
         "tab": "prompt_caching",
         "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
+    },
+    "budget_rollover": {  # mutable-ok: registry literal, frozen with its siblings below
+        "type": "Boolean",
+        "description": (
+            "Carry spend beyond max_budget into the next window when budgets reset, instead of "
+            "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
+        ),
     },
     "max_ui_session_budget": {
         "type": "Dollar",
@@ -16928,6 +16986,17 @@ async def get_config(
             }
         )
 
+        _ms_teams_values, _ = resolve_fields(
+            MS_TEAMS_DESCRIPTORS, environment_variables, os.environ, empty_db_is_set=True
+        )
+        _ms_teams_env_vars: Final = _apply_alerting_env_role_gate(_ms_teams_values, is_full_admin)
+
+        ms_teams_alerting_entry: Final[_AlertingDestinationEntry] = {
+            "name": "ms_teams",
+            "variables": _ms_teams_env_vars,
+        }
+        alerting_data.append(ms_teams_alerting_entry)
+
         if llm_router is None:
             _router_settings = {}
         else:
@@ -16937,6 +17006,7 @@ async def get_config(
             "status": "success",
             "callbacks": _data_to_return,
             "alerts": alerting_data,
+            "active_alerting_destinations": tuple(_alerting),
             "router_settings": _router_settings,
             "available_callbacks": all_available_callbacks,
         }

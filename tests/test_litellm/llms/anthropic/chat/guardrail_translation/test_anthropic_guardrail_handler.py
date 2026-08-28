@@ -291,6 +291,24 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
 
     @pytest.mark.asyncio
+    async def test_provider_native_tools_survive_guardrail_round_trip(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        data = {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "coffee shops near Union Square?"}],
+            "tools": [
+                {"googleMaps": {"enable_widget": True}},
+                {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert {"googleMaps": {"enable_widget": True}} in data["tools"]
+        assert [tool["name"] for tool in data["tools"] if "name" in tool] == ["get_weather"]
+
+    @pytest.mark.asyncio
     async def test_midturn_system_correction_is_guardrailed_when_top_level_system_is_skipped(
         self,
     ):
@@ -1904,3 +1922,72 @@ class TestAnthropicMessagesScanOnlyToolResults:
 
         assert guardrail.captured_inputs is not None
         assert guardrail.captured_inputs.get("images") == ["TOOL_IMG"]
+
+
+class TestStructuredWriteBackKeepsToolResults:
+    """A guardrail rewrite must never leave a tool_use without its tool_result (Claude Code ToolSearch, LIT-6103)."""
+
+    @staticmethod
+    def _claude_code_tool_search_turns(tool_result_content):
+        return [
+            {"role": "user", "content": "load WebFetch for bob@example.com"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01",
+                        "name": "ToolSearch",
+                        "input": {"query": "select:WebFetch"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content},
+                    {"type": "text", "text": "Now fetch the page."},
+                ],
+            },
+        ]
+
+    @staticmethod
+    def _blocks(message):
+        return message["content"] if isinstance(message["content"], list) else []
+
+    @pytest.mark.parametrize(
+        ("tool_result_content", "expected_written_back_content"),
+        [
+            (
+                [{"type": "tool_reference", "tool_name": "WebFetch"}],
+                [{"type": "tool_reference", "tool_name": "WebFetch"}],
+            ),
+            ([], ""),
+        ],
+        ids=["tool_reference", "empty"],
+    )
+    async def test_tool_result_stays_right_after_its_tool_use(
+        self, tool_result_content, expected_written_back_content
+    ):
+        handler = AnthropicMessagesHandler()
+        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=MockStructuredMaskingGuardrail())
+
+        serialized = json.dumps(data["messages"])
+        assert "bob@example.com" not in serialized
+        assert "<EMAIL>" in serialized
+
+        messages = data["messages"]
+        tool_use_index = next(
+            i for i, m in enumerate(messages) if any(b.get("type") == "tool_use" for b in self._blocks(m))
+        )
+        answer = messages[tool_use_index + 1]
+        assert answer["role"] == "user"
+        assert answer["content"][0] == {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": expected_written_back_content,
+        }
+        later_blocks = [b for m in messages[tool_use_index + 1 :] for b in self._blocks(m)]
+        assert {"type": "text", "text": "Now fetch the page."} in later_blocks

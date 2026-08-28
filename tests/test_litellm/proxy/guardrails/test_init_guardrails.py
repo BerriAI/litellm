@@ -152,3 +152,38 @@ def test_initialize_bedrock_forwards_on_unscannable_image():
     ]
     assert initialized, "bedrock guardrail was not registered as a callback"
     assert initialized[-1].on_unscannable_image == "allow"
+
+
+def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
+    """Regression (LIT-4785): `presidio_analyze_chunk_size_bytes` set in
+    config.yaml must reach the guardrail instance. The field lives on
+    PresidioConfigModel, so LitellmParams parses it, but initialize_presidio
+    enumerates its constructor kwargs explicitly and would silently drop it.
+    """
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    test_guardrail = {
+        "guardrail_name": "test_presidio_chunk_size",
+        "litellm_params": {
+            "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+            "mode": "pre_call",
+            "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+            "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            "presidio_analyze_chunk_size_bytes": 250_000,
+        },
+    }
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    guardrail_handler.initialize_guardrail(guardrail=test_guardrail)
+
+    initialized = [
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, _OPTIONAL_PresidioPIIMasking)
+        and callback.guardrail_name == "test_presidio_chunk_size"
+    ]
+    assert initialized, "presidio guardrail was not registered as a callback"
+    assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000
