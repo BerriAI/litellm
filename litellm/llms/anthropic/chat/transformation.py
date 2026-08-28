@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.constants import (
+    ADVISOR_INJECTED_PARAM,
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
@@ -89,6 +90,7 @@ from ..common_utils import (
     AnthropicModelInfo,
     process_anthropic_headers,
     strip_advisor_blocks_from_messages,
+    stripped_response_content_for_injected_advisor,
 )
 
 if TYPE_CHECKING:
@@ -2605,6 +2607,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _candidate: Final = litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
             if isinstance(_candidate, dict):
                 tool_name_reverse_map = _candidate
+
+        if litellm_params.get(ADVISOR_INJECTED_PARAM):
+            _stripped_content: Final = stripped_response_content_for_injected_advisor(
+                completion_response.get("content")
+            )
+            if _stripped_content is not None:
+                completion_response["content"] = list(_stripped_content)  # mutable-ok: response JSON list
 
         model_response = self.transform_parsed_response(
             completion_response=completion_response,

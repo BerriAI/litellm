@@ -2,6 +2,7 @@ from collections.abc import Mapping, MutableMapping
 from types import MappingProxyType
 from typing import Final
 
+from litellm.constants import ADVISOR_INJECTED_PARAM
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -27,7 +28,7 @@ RUST_KWARG_KEY: Final = "rust"
 # Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
 # which are otherwise invisible to it because that call site passes explicit
 # named arguments rather than `**kwargs`.
-FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset({RUST_KWARG_KEY})
+FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset({RUST_KWARG_KEY, ADVISOR_INJECTED_PARAM})
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -59,6 +60,10 @@ OPTIONAL_KWARGS_KEYS: Final = (
             # of the provider body; this keeps it *in* litellm_params, which is
             # where the chat completions handlers read it from.
             RUST_KWARG_KEY,
+            # Router-injected advisor marker: same pattern as RUST_KWARG_KEY, read by
+            # the Anthropic response transform to strip advisor blocks the caller
+            # never asked for.
+            ADVISOR_INJECTED_PARAM,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS

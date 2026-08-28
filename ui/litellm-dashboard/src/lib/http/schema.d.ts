@@ -22294,6 +22294,32 @@ export interface components {
             };
         };
         /**
+         * AdvisorConfig
+         * @description Advisor pairing for a tier: the executor consults this model via Anthropic's advisor tool.
+         *
+         *     `extra="forbid"` keeps the surface to routing intent only: credentials or endpoints
+         *     (api_key, api_base) are deliberately not configurable here.
+         */
+        AdvisorConfig: {
+            /**
+             * Caching
+             * @description Advisor-side cache block, sent verbatim
+             */
+            caching?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Max Uses
+             * @description Consult budget per request
+             */
+            max_uses?: number | null;
+            /**
+             * Model
+             * @description Router model_name or provider model id to consult
+             */
+            model: string;
+        };
+        /**
          * AgentCapabilities
          * @description Defines optional capabilities supported by an agent.
          */
@@ -24858,6 +24884,7 @@ export interface components {
         ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
         /** ComplexityTierModel */
         ComplexityTierModel: {
+            advisor?: components["schemas"]["AdvisorConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -35095,6 +35122,10 @@ export interface components {
          * @description Per-request provenance for a pre-routing strategy (auto-router) decision.
          */
         StandardLoggingRoutingDecision: {
+            /** Advisor Model */
+            advisor_model?: string;
+            /** Advisor Offered */
+            advisor_offered?: boolean;
             /**
              * Cause
              * @enum {string}

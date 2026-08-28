@@ -17,7 +17,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import ADVISOR_INJECTED_PARAM, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -9762,3 +9762,390 @@ class TestHeuristicFirst:
         )
         outcome = await router.aclassify(NO_SIGNAL_PROMPT)
         assert outcome.cause == "default_model_fallback"
+
+
+class TestAdvisorTiers:
+    """An `advisor:` block on a tier entry injects Anthropic's advisor tool into the routed
+    request (merged with the caller's tools, never replacing them) and reports the decision,
+    failing closed everywhere it cannot apply."""
+
+    CALLER_TOOL = {
+        "type": "function",
+        "function": {"name": "bash", "description": "run", "parameters": {"type": "object", "properties": {}}},
+    }
+
+    @staticmethod
+    def _advised_model_list(tier_entry: Dict | None = None, executor_model: str = "anthropic/claude-haiku-4-5"):
+        return [
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": tier_entry
+                            or {
+                                "model_name": "haiku-tier",
+                                "advisor": {"model": "opus-tier", "max_uses": 2},
+                            }
+                        }
+                    },
+                },
+            },
+            {"model_name": "haiku-tier", "litellm_params": {"model": executor_model, "api_key": "sk-test"}},
+            {"model_name": "opus-tier", "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "sk-test"}},
+        ]
+
+    @staticmethod
+    def _hook_router(config_tiers: Dict, deployments: Dict | None = None, **config_extra) -> ComplexityRouter:
+        deployments = deployments or {  # rebind-ok: default fixture fill-in
+            "haiku-tier": [{"model_name": "haiku-tier", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}}],
+            "opus-tier": [{"model_name": "opus-tier", "litellm_params": {"model": "anthropic/claude-opus-5"}}],
+            "gpt-tier": [{"model_name": "gpt-tier", "litellm_params": {"model": "openai/gpt-4o-mini"}}],
+        }
+        instance = MagicMock()
+        instance.get_model_list = lambda model_name=None, team_id=None: deployments.get(model_name, [])
+        instance.cache = DualCache()
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=instance,
+            complexity_router_config={"tiers": config_tiers, **config_extra},
+        )
+
+    @classmethod
+    def _pool_router(cls, pool_models: List[str]) -> ComplexityRouter:
+        return cls._hook_router(
+            {"SIMPLE": {"model_name": "haiku-tier", "advisor": {"model": "opus-pool"}}},
+            deployments={
+                "haiku-tier": [
+                    {"model_name": "haiku-tier", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}}
+                ],
+                "opus-pool": [{"model_name": "opus-pool", "litellm_params": {"model": m}} for m in pool_models],
+            },
+        )
+
+    def test_advisor_config_rejects_credential_keys(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig.model_validate(
+                {
+                    "tiers": {
+                        "SIMPLE": {
+                            "model_name": "haiku-tier",
+                            "advisor": {"model": "opus-tier", "api_key": "sk-evil"},
+                        }
+                    }
+                }
+            )
+
+    def test_advisor_config_rejects_non_positive_max_uses(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig.model_validate(
+                {"tiers": {"SIMPLE": {"model_name": "haiku-tier", "advisor": {"model": "opus-tier", "max_uses": 0}}}}
+            )
+
+    @pytest.mark.asyncio
+    async def test_advisor_tool_is_appended_to_caller_tools(self):
+        """The caller's own tools survive byte-identical, the advisor tool is appended with the
+        model resolved through the router, and the injected-marker rides the request."""
+        router = Router(model_list=self._advised_model_list())
+        request_kwargs = {"tools": [dict(self.CALLER_TOOL)]}
+
+        deployment = await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert deployment["model_name"] == "haiku-tier"
+        assert request_kwargs["tools"][0] == self.CALLER_TOOL
+        assert request_kwargs["tools"][1] == {
+            "type": "advisor_20260301",
+            "name": "advisor",
+            "model": "claude-opus-5",
+            "max_uses": 2,
+        }
+        assert request_kwargs[ADVISOR_INJECTED_PARAM] is True
+
+    @pytest.mark.asyncio
+    async def test_advisor_tool_alone_when_caller_sends_no_tools(self):
+        router = Router(model_list=self._advised_model_list())
+        request_kwargs = {}
+
+        await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert [tool["type"] for tool in request_kwargs["tools"]] == ["advisor_20260301"]
+        assert request_kwargs[ADVISOR_INJECTED_PARAM] is True
+
+    @pytest.mark.asyncio
+    async def test_streaming_request_is_not_advised(self):
+        """The response strip is non-streaming only, so a streaming request must not be advised."""
+        router = Router(model_list=self._advised_model_list())
+        request_kwargs = {"stream": True}
+
+        await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert "tools" not in request_kwargs
+        assert ADVISOR_INJECTED_PARAM not in request_kwargs
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_advisor_tool_is_left_untouched(self):
+        """A caller who brought their own advisor keeps it: no double tool, no marker."""
+        router = Router(model_list=self._advised_model_list())
+        caller_advisor = {"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-4-6"}
+        request_kwargs = {"tools": [dict(caller_advisor)]}
+
+        await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert request_kwargs["tools"] == [caller_advisor]
+        assert ADVISOR_INJECTED_PARAM not in request_kwargs
+
+    @pytest.mark.asyncio
+    async def test_advisor_skipped_when_tier_group_is_not_all_anthropic(self):
+        router = Router(model_list=self._advised_model_list(executor_model="openai/gpt-4o-mini"))
+        request_kwargs = {}
+
+        await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert "tools" not in request_kwargs
+        assert ADVISOR_INJECTED_PARAM not in request_kwargs
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_advisor_model_passes_through_verbatim(self):
+        """A name serving no deployment is an operator-stated raw Anthropic model id; new model
+        ids lag the local catalogs, so the router must not reject them."""
+        tier_entry = {"model_name": "haiku-tier", "advisor": {"model": "claude-opus-5-20991231"}}
+        router = Router(model_list=self._advised_model_list(tier_entry=tier_entry))
+        request_kwargs = {}
+
+        await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert request_kwargs["tools"] == [
+            {"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-5-20991231"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_decision_reports_advisor_and_declared_params_not_merged_tools(self):
+        """The decision names the advisor outcome and declared tier params; the merged tool list
+        stays off the record, or every agentic request would write its tool schemas to spend logs."""
+        router = self._hook_router(
+            {"SIMPLE": {"model_name": "haiku-tier", "advisor": {"model": "opus-tier", "max_uses": 2}}}
+        )
+        request_kwargs = {"tools": [dict(self.CALLER_TOOL)]}
+
+        response = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert response.routing_decision["advisor_offered"] is True
+        assert response.routing_decision["advisor_model"] == "claude-opus-5"
+        assert "tier_litellm_params" not in response.routing_decision
+        assert response.litellm_params["tools"][0] == self.CALLER_TOOL
+        assert response.litellm_params[ADVISOR_INJECTED_PARAM] is True
+
+    @pytest.mark.asyncio
+    async def test_decision_reports_advisor_not_offered_on_skip(self):
+        router = self._hook_router(
+            {"SIMPLE": {"model_name": "haiku-tier", "advisor": {"model": "opus-tier", "max_uses": 2}}}
+        )
+
+        response = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"stream": True},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response.routing_decision["advisor_offered"] is False
+        assert "advisor_model" not in response.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_tier_without_advisor_config_records_no_advisor_fields(self):
+        router = self._hook_router({"SIMPLE": {"model_name": "haiku-tier"}})
+
+        response = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert "advisor_offered" not in response.routing_decision
+        assert "advisor_model" not in response.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_session_pin_turn_reapplies_the_advisor(self):
+        """The pin stores (model, tier) and re-derives tier params per turn, so a pinned turn 2
+        must carry the advisor tool exactly like the classified turn 1."""
+        router = self._hook_router(
+            {"SIMPLE": {"model_name": "haiku-tier", "advisor": {"model": "opus-tier", "max_uses": 2}}},
+            session_affinity=True,
+        )
+        first_kwargs = {"metadata": {"session_id": "advisor-session"}}
+        second_kwargs = {"metadata": {"session_id": "advisor-session"}}
+
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=first_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=second_kwargs, messages=[{"role": "user", "content": "hi again"}]
+        )
+
+        assert first.routing_decision["advisor_offered"] is True
+        assert second.routing_decision["cause"] in ("session_affinity_pin", "session_affinity_escalation")
+        assert second.routing_decision["advisor_offered"] is True
+        assert [tool["type"] for tool in second.litellm_params["tools"]] == ["advisor_20260301"]
+
+    @pytest.mark.asyncio
+    async def test_plan_mode_short_circuit_carries_tier_litellm_params(self):
+        """The plan-mode top-tier short-circuit skips classification, not the tier's params: a
+        tier's litellm_params (and advisor) apply on this path the same as on every other."""
+        router = self._hook_router(
+            {
+                "SIMPLE": {"model_name": "gpt-tier"},
+                "REASONING": {"model_name": "haiku-tier", "litellm_params": {"reasoning_effort": "xhigh"}},
+            },
+            plan_mode_min_tier="REASONING",
+        )
+
+        response = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {"role": "system", "content": 'You are currently running in "Plan" mode.'},
+                {"role": "user", "content": "hi"},
+            ],
+        )
+
+        assert response.routing_decision["cause"] == "plan_mode"
+        assert response.litellm_params == {"reasoning_effort": "xhigh"}
+        assert response.routing_decision["tier_litellm_params"] == {"reasoning_effort": "xhigh"}
+
+    @pytest.mark.asyncio
+    async def test_tier_declared_tools_stay_deliberate_overrides_and_gain_the_advisor(self):
+        """Tier litellm_params are deliberate overrides: declared tier tools replace the caller's
+        and the advisor appends to the list that ships, pinning the pre-existing carrier semantics."""
+        declared_tool = {"type": "function", "function": {"name": "operator_tool", "parameters": {}}}
+        router = self._hook_router(
+            {
+                "SIMPLE": {
+                    "model_name": "haiku-tier",
+                    "advisor": {"model": "opus-tier", "max_uses": 2},
+                    "litellm_params": {"tools": [dict(declared_tool)]},
+                }
+            }
+        )
+        request_kwargs = {"tools": [dict(self.CALLER_TOOL)]}
+
+        response = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        effective_tools = response.litellm_params["tools"]
+        assert effective_tools[0] == declared_tool
+        assert [tool.get("type") for tool in effective_tools] == ["function", "advisor_20260301"]
+
+    @pytest.mark.asyncio
+    async def test_advisor_group_with_one_underlying_model_across_deployments_resolves(self):
+        router = self._pool_router(["anthropic/claude-opus-5", "anthropic/claude-opus-5"])
+
+        response = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert response.routing_decision["advisor_model"] == "claude-opus-5"
+
+    @pytest.mark.asyncio
+    async def test_advisor_group_with_distinct_underlying_models_is_skipped(self):
+        """Two deployments serving different models under one advisor name would make config
+        order pick the consulted model; the router fails closed instead."""
+        router = self._pool_router(["anthropic/claude-opus-5", "anthropic/claude-opus-4-6"])
+
+        response = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert response.routing_decision["advisor_offered"] is False
+        assert "tools" not in response.litellm_params
+
+    def test_advisor_survives_a_config_dump_and_revalidate_round_trip(self):
+        """The normalizer restores per-entry state from tier_model_configs when tiers arrives
+        flattened; it must carry the whole entry, advisor included, or a dumped-and-revalidated
+        config silently routes to the bare executor."""
+        first = ComplexityRouterConfig.model_validate(
+            {
+                "tiers": {
+                    "SIMPLE": {
+                        "model_name": "haiku-tier",
+                        "advisor": {"model": "opus-tier", "max_uses": 2},
+                        "litellm_params": {"reasoning_effort": "low"},
+                    }
+                }
+            }
+        )
+
+        round_tripped = ComplexityRouterConfig.model_validate(first.model_dump())
+
+        entry = round_tripped.tier_model_configs["SIMPLE"][0]
+        assert entry.advisor is not None
+        assert entry.advisor.model == "opus-tier"
+        assert entry.advisor.max_uses == 2
+        assert dict(entry.litellm_params) == {"reasoning_effort": "low"}
+
+    def test_inline_advisor_beats_a_stale_stored_tier_entry(self):
+        """An inline entry that itself carries state is the operator's newest statement of intent
+        and replaces the stored copy wholesale; stored configs only backfill flattened bare names."""
+        cfg = ComplexityRouterConfig.model_validate(
+            {
+                "tiers": {"SIMPLE": {"model_name": "haiku-tier", "advisor": {"model": "opus-tier"}}},
+                "tier_model_configs": {"SIMPLE": [{"model_name": "haiku-tier", "litellm_params": {"temperature": 0.2}}]},
+            }
+        )
+
+        entry = cfg.tier_model_configs["SIMPLE"][0]
+        assert entry.advisor is not None
+        assert entry.advisor.model == "opus-tier"
+        assert dict(entry.litellm_params) == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("allowed_tools,offered", [(["bash"], False), (["bash", "advisor"], True)])
+    async def test_advisor_honors_the_callers_tool_allowlist(self, allowed_tools, offered):
+        """check_tools_allowlist runs at auth against the raw request body, so the injection point
+        must apply the same policy or a key whose allowed_tools excludes advisor gets it anyway."""
+        router = Router(model_list=self._advised_model_list())
+        request_kwargs = {
+            "tools": [dict(self.CALLER_TOOL)],
+            "metadata": {"user_api_key_metadata": {"allowed_tools": allowed_tools}},
+        }
+
+        await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert any(t.get("type") == "advisor_20260301" for t in request_kwargs["tools"]) is offered
+        assert (request_kwargs.get(ADVISOR_INJECTED_PARAM) is True) is offered
+
+    @pytest.mark.asyncio
+    async def test_wildcard_served_advisor_name_resolves_and_literal_wildcard_fails_closed(self):
+        """A wildcard-served model id resolves concretely (the pattern router substitutes the
+        matched segments); a wildcard surviving resolution is a literal and fails closed."""
+        real_router = Router(
+            model_list=[
+                {"model_name": "haiku-tier", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+                {"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "sk-test"}},
+            ]
+        )
+        wildcard_served = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=real_router,
+            complexity_router_config={
+                "tiers": {"SIMPLE": {"model_name": "haiku-tier", "advisor": {"model": "anthropic/claude-opus-5"}}}
+            },
+        )
+        assert wildcard_served._resolve_advisor_model("anthropic/claude-opus-5") == "claude-opus-5"
+
+        literal_wildcard = self._pool_router(["anthropic/claude-*"])
+        assert literal_wildcard._resolve_advisor_model("opus-pool") is None

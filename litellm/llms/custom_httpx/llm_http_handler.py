@@ -19,7 +19,7 @@ import litellm.types
 import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
-from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.constants import ADVISOR_INJECTED_PARAM, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -2339,6 +2339,12 @@ class BaseLLMHTTPHandler:
         api_key: str | None,
         kwargs: dict,
     ) -> AnthropicMessagesResponse | AsyncIterator:
+        if kwargs.get(ADVISOR_INJECTED_PARAM):
+            from litellm.llms.anthropic.common_utils import stripped_response_content_for_injected_advisor
+
+            stripped_content: Final = stripped_response_content_for_injected_advisor(initial_response.get("content"))
+            if stripped_content is not None:
+                initial_response["content"] = list(stripped_content)  # mutable-ok: response JSON list
         # Inject api_key into kwargs so follow-up calls in agentic hooks can
         # authenticate. api_key is a named param here (not in kwargs), so
         # _prepare_followup_kwargs would miss it otherwise.

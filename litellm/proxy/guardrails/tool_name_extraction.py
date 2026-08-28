@@ -60,6 +60,19 @@ TOOL_CAPABLE_CALL_TYPES: Final = frozenset(
 )
 
 
+def effective_allowed_tools(key_metadata: object, team_metadata: object) -> frozenset[str] | None:
+    """The allowlist in force for a caller: key-level allowed_tools beats team-level.
+    None means no allowlist is configured and every tool is permitted."""
+    key_meta: Final = key_metadata if isinstance(key_metadata, dict) else {}
+    team_meta: Final = team_metadata if isinstance(team_metadata, dict) else {}
+    key_allowed: Final = key_meta.get("allowed_tools")
+    team_allowed: Final = team_meta.get("allowed_tools")
+    effective: Final = key_allowed if isinstance(key_allowed, list) and key_allowed else team_allowed
+    if not isinstance(effective, list) or not effective:
+        return None
+    return frozenset(str(tool) for tool in effective)
+
+
 def extract_request_tool_names(route: str, data: dict) -> list[str]:
     """
     Extract tool names from the request body for the given route.

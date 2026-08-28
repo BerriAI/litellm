@@ -1787,6 +1787,10 @@ DEFAULT_COMPETITOR_DISCOVERY_MODEL: Final = "gpt-4o-mini"
 ADVISOR_NATIVE_PROVIDERS: Final[frozenset] = frozenset({"anthropic"})
 # Hard cap on advisor iterations per request to prevent runaway loops.
 ADVISOR_MAX_USES: Final[int] = 5
+# Request marker set by the complexity router when IT injected the advisor tool for a tier,
+# so the response transformations strip advisor blocks only for callers who never asked for
+# them. Must stay listed in types/utils.py all_litellm_params so it never reaches a provider.
+ADVISOR_INJECTED_PARAM: Final[str] = "_advisor_injected_by_router"
 # Description injected into the synthetic advisor tool definition sent to non-native providers.
 ADVISOR_TOOL_DESCRIPTION: Final[str] = (
     "Consult a highly intelligent advisor model when you need expert guidance, "

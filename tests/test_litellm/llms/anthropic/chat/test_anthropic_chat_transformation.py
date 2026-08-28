@@ -6207,3 +6207,115 @@ def test_disabled_thinking_omitted_only_for_always_on_models(
         assert "thinking" not in request
     else:
         assert request["thinking"] == {"type": "disabled"}
+
+
+def _advised_completion_response() -> dict:
+    return {
+        "id": "msg_advised",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5",
+        "content": [
+            {"type": "text", "text": "Let me consult the advisor."},
+            {"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}},
+            {
+                "type": "advisor_tool_result",
+                "tool_use_id": "srvtoolu_1",
+                "content": [{"type": "text", "text": "Use a token bucket."}],
+            },
+            {"type": "text", "text": "Final answer: token bucket."},
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 50},
+    }
+
+
+def _run_transform_response(litellm_params: dict, response: dict | None = None):
+    import httpx
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+    raw_response = httpx.Response(status_code=200, headers={}, json=response or _advised_completion_response())
+    return config.transform_response(
+        model="claude-haiku-4-5",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Redis or Postgres?"}],
+        optional_params={},
+        litellm_params=litellm_params,
+        encoding=None,
+    )
+
+
+def test_transform_response_strips_router_injected_advisor_blocks():
+    """With the router-injected marker set, the advisor exchange collapses into an
+    <advisor_feedback> text block: no phantom tool_call named advisor, no advisor
+    tool_results, and the guidance survives as ordinary assistant text."""
+    from litellm.constants import ADVISOR_INJECTED_PARAM
+
+    result = _run_transform_response({ADVISOR_INJECTED_PARAM: True})
+
+    message = result.choices[0].message
+    assert not message.tool_calls
+    content = message.content or ""
+    assert "<advisor_feedback>" in content
+    assert "Use a token bucket." in content
+    assert "Final answer: token bucket." in content
+    tool_results = (message.provider_specific_fields or {}).get("tool_results") or []
+    assert not any(block.get("type") == "advisor_tool_result" for block in tool_results)
+
+
+def test_transform_response_keeps_advisor_blocks_without_marker():
+    """A caller who supplied their own advisor tool gets the blocks back untouched."""
+    result = _run_transform_response({})
+
+    message = result.choices[0].message
+    assert any(call.function.name == "advisor" for call in (message.tool_calls or []))
+    tool_results = (message.provider_specific_fields or {}).get("tool_results") or []
+    assert any(block.get("type") == "advisor_tool_result" for block in tool_results)
+
+
+def test_transform_response_leaves_unorchestrated_advisor_tool_use():
+    """A plain tool_use named advisor means the upstream never ran the consult; stripping
+    it would orphan stop_reason=tool_use, so it passes through even with the marker."""
+    from litellm.constants import ADVISOR_INJECTED_PARAM
+
+    unorchestrated = {
+        **_advised_completion_response(),
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "advisor", "input": {}}],
+        "stop_reason": "tool_use",
+    }
+
+    result = _run_transform_response({ADVISOR_INJECTED_PARAM: True}, response=unorchestrated)
+
+    message = result.choices[0].message
+    assert any(call.function.name == "advisor" for call in (message.tool_calls or []))
+
+
+def test_advisor_feedback_joins_all_result_text_blocks():
+    """A multi-block advisor result keeps every text block, not just the first."""
+    from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_content
+
+    content = [
+        {"type": "server_tool_use", "id": "srv_1", "name": "advisor", "input": {}},
+        {
+            "type": "advisor_tool_result",
+            "tool_use_id": "srv_1",
+            "content": [
+                {"type": "text", "text": "First part of the plan."},
+                {"type": "text", "text": "Second part of the plan."},
+            ],
+        },
+    ]
+
+    rewritten = strip_advisor_blocks_from_content(content, replace_with_text=True)
+
+    assert rewritten is not None
+    feedback = rewritten[0]["text"]
+    assert "First part of the plan." in feedback
+    assert "Second part of the plan." in feedback

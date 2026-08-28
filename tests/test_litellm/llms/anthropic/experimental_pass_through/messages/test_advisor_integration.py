@@ -364,3 +364,67 @@ async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs()
     assert captured["thinking"] == {"type": "enabled", "budget_tokens": 2048}
     assert captured["system"] == "Hook overrode the system prompt."
     assert captured["temperature"] == 0.1
+
+
+async def _finalize_advised(kwargs: Dict) -> Dict:
+    from unittest.mock import MagicMock
+
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    advised = {
+        "id": "msg_native",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5",
+        "content": [
+            {"type": "text", "text": "Consulting."},
+            {"type": "server_tool_use", "id": "srv_1", "name": "advisor", "input": {}},
+            {
+                "type": "advisor_tool_result",
+                "tool_use_id": "srv_1",
+                "content": [{"type": "text", "text": "Advisor plan text."}],
+            },
+            {"type": "text", "text": "Done."},
+        ],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    return await BaseLLMHTTPHandler()._finalize_anthropic_messages_response(
+        initial_response=advised,
+        model="claude-haiku-4-5",
+        messages=list(MESSAGES),
+        anthropic_messages_provider_config=MagicMock(),
+        anthropic_messages_optional_request_params={},
+        logging_obj=logging_obj,
+        custom_llm_provider="anthropic",
+        api_key=None,
+        kwargs=kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_finalize_strips_router_injected_advisor_blocks():
+    """On the native /v1/messages path the response strip lives in
+    _finalize_anthropic_messages_response, gated on the router-injected marker in kwargs:
+    the caller gets <advisor_feedback> text instead of advisor tool machinery."""
+    from litellm.constants import ADVISOR_INJECTED_PARAM
+
+    result = await _finalize_advised({ADVISOR_INJECTED_PARAM: True})
+
+    block_types = [block["type"] for block in result["content"]]
+    assert "server_tool_use" not in block_types
+    assert "advisor_tool_result" not in block_types
+    feedback_blocks = [b for b in result["content"] if b["type"] == "text" and "<advisor_feedback>" in b["text"]]
+    assert len(feedback_blocks) == 1
+    assert "Advisor plan text." in feedback_blocks[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_keeps_advisor_blocks_without_marker():
+    result = await _finalize_advised({})
+
+    block_types = [block["type"] for block in result["content"]]
+    assert "server_tool_use" in block_types
+    assert "advisor_tool_result" in block_types

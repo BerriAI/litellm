@@ -68,6 +68,45 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
+### Advisor-backed tiers (Anthropic executors only)
+
+A tier entry may pair its executor with a higher-tier advisor via Anthropic's advisor tool
+(`advisor_20260301`). The router appends the tool to the caller's own tools on the way out
+(the beta header is added by the Anthropic transformation) and strips the advisor exchange
+from the response on the way back, replacing it with an `<advisor_feedback>` text block so
+the guidance survives in the caller's history. Callers see an unchanged request and
+response shape and never have to know the advisor exists
+
+```yaml
+        tiers:
+          SIMPLE: haiku
+          MEDIUM:
+            model_name: haiku
+            advisor:
+              model: opus            # a model_list name (resolved to its Anthropic model id) or a raw Anthropic model id
+              max_uses: 2            # optional consult budget per request; omitted means Anthropic's default
+              caching: {type: ephemeral, ttl: 5m}   # optional, forwarded verbatim
+          COMPLEX:
+            model_name: sonnet
+            advisor: {model: opus, max_uses: 2}
+          REASONING: opus
+```
+
+Scope and fail-closed rules, all reported as `advisor_offered: false` on the routing
+decision instead of erroring:
+
+- The tier's model group must resolve entirely to Anthropic deployments (the only provider
+  that orchestrates the advisor natively). Prefix executor models with `anthropic/` or set
+  `custom_llm_provider`
+- Streaming requests are not advised; the response strip is non-streaming only
+- A caller who already sends their own advisor tool keeps it untouched, blocks included
+- A key or team whose `allowed_tools` excludes `advisor` never has the tool injected, matching
+  the allowlist auth enforces on caller-sent tools
+- `max_uses` resets per request, not per session; keep it small for agentic traffic
+- Advisor tokens (`usage.iterations[]`, type `advisor_message`) are counted in the request's
+  usage but priced at the executor's rate for now; the split advisor-rate pricing is a
+  known follow-up
+
 ### Renaming the tiers
 
 `tier_labels` puts your own vocabulary on the four tiers:

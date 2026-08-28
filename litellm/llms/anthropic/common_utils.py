@@ -4,7 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal
@@ -23,10 +23,13 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_ADVISOR_TOOL_NAME,
+    ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     AllAnthropicToolsValues,
+    AnthropicAdvisorTool,
     AnthropicMcpServerTool,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -888,6 +891,102 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
+def _advisor_result_text(block: Mapping[str, Any]) -> str:
+    raw: Final = block.get("content") or ""
+    if isinstance(raw, str):
+        return raw
+    return "\n".join(b.get("text", "") for b in raw if isinstance(b, dict) and b.get("type") == "text").strip()
+
+
+def _is_advisor_use(block: Mapping[str, Any]) -> bool:
+    return block.get("type") == "server_tool_use" and block.get("name") == ANTHROPIC_ADVISOR_TOOL_NAME
+
+
+def build_advisor_tool(
+    model: str, max_uses: int | None = None, caching: Mapping[str, object] | None = None
+) -> AnthropicAdvisorTool:
+    """The one place the advisor wire tool is assembled, so non-provider layers
+    (e.g. the complexity router's tier injection) never hand-write the block."""
+    return {
+        "type": ANTHROPIC_ADVISOR_TOOL_TYPE,
+        "name": ANTHROPIC_ADVISOR_TOOL_NAME,
+        "model": model,
+        **({"max_uses": max_uses} if max_uses is not None else {}),
+        **({"caching": {**caching}} if caching is not None else {}),
+    }
+
+
+def _advisor_feedback_block(advice: str) -> Mapping[str, str]:
+    return {"type": "text", "text": f"<advisor_feedback>\n{advice}\n</advisor_feedback>"}  # mutable-ok: JSON block
+
+
+def strip_advisor_blocks_from_content(content: Sequence[Any], replace_with_text: bool = False) -> Sequence[Any] | None:
+    """Rewrite one content-block list without its advisor exchange.
+
+    Returns the rewritten blocks, or None when the list carries no advisor
+    server_tool_use. In replace mode the exchange collapses into an <advisor_feedback>
+    text block so the guidance survives as ordinary text, otherwise it is stripped
+    silently; paired advisor_tool_result blocks are always dropped."""
+    advisor_ids: Final[frozenset[str]] = frozenset(
+        block_id
+        for block in content
+        if isinstance(block, dict)
+        and _is_advisor_use(block)
+        and isinstance(block_id := block.get("id"), str)
+        and block_id
+    )
+    if not advisor_ids:
+        return None
+    advice_by_id: Final[Mapping[str, str]] = MappingProxyType(
+        {
+            tool_use_id: _advisor_result_text(block)
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == "advisor_tool_result"
+            and isinstance(tool_use_id := block.get("tool_use_id"), str)
+            and tool_use_id in advisor_ids
+        }
+    )
+
+    def _rewritten_blocks() -> Iterator[Any]:
+        for block in content:
+            if not isinstance(block, dict):
+                yield block
+            elif _is_advisor_use(block) and block.get("id") in advisor_ids:
+                advice = advice_by_id.get(str(block.get("id")), "") if replace_with_text else ""
+                if advice:
+                    yield _advisor_feedback_block(advice)
+            elif block.get("type") == "advisor_tool_result" and block.get("tool_use_id") in advisor_ids:
+                continue
+            else:
+                yield block
+
+    return tuple(_rewritten_blocks())
+
+
+def stripped_response_content_for_injected_advisor(content: object) -> Sequence[Any] | None:
+    """Response-side strip for an advisor tool the router injected.
+
+    Returns the rewritten content blocks (advice kept as <advisor_feedback> text so a
+    caller replaying the history keeps the plan), or None when no advisor exchange is
+    present. A plain tool_use named advisor means the upstream account never orchestrated
+    the consult (advisor beta not enabled); it stays untouched, because stripping it
+    would orphan the response's stop_reason."""
+    if not isinstance(content, list):
+        return None
+    rewritten: Final = strip_advisor_blocks_from_content(content, replace_with_text=True)
+    if rewritten is None:
+        blocks: Final = [block for block in content if isinstance(block, dict)]
+        if any(b.get("type") == "tool_use" and b.get("name") == ANTHROPIC_ADVISOR_TOOL_NAME for b in blocks):
+            litellm.verbose_logger.warning(
+                "Advisor tool_use came back unorchestrated (upstream may lack the advisor beta); returning unchanged"
+            )
+        return None
+    consults: Final = sum(1 for block in content if isinstance(block, dict) and _is_advisor_use(block))
+    litellm.verbose_logger.info("Advisor: stripped %d consult(s) from the response", consults)
+    return rewritten
+
+
 def strip_advisor_blocks_from_messages(messages: list[Any], replace_with_text: bool = False) -> list[Any]:
     """
     Remove (or replace) server_tool_use (name='advisor') and advisor_tool_result blocks
@@ -910,67 +1009,9 @@ def strip_advisor_blocks_from_messages(messages: list[Any], replace_with_text: b
         content = message.get("content")
         if not isinstance(content, list):
             continue
-
-        # Collect advisor server_tool_use ids and their advice text (for replace mode).
-        advisor_id_to_text: dict = {}
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "server_tool_use" and block.get("name") == "advisor":
-                bid = block.get("id")
-                if bid:
-                    advisor_id_to_text[bid] = None  # text filled in below
-
-        if not advisor_id_to_text:
-            continue
-
-        # If replacing, collect the advisor response text from advisor_tool_result blocks.
-        if replace_with_text:
-            for block in content:
-                if (
-                    isinstance(block, dict)
-                    and block.get("type") == "advisor_tool_result"
-                    and block.get("tool_use_id") in advisor_id_to_text
-                ):
-                    raw = block.get("content") or ""
-                    text = (
-                        raw
-                        if isinstance(raw, str)
-                        else next(
-                            (b.get("text", "") for b in raw if isinstance(b, dict) and b.get("type") == "text"),
-                            "",
-                        )
-                    )
-                    advisor_id_to_text[block["tool_use_id"]] = text
-
-        new_content = []
-        for block in content:
-            if not isinstance(block, dict):
-                new_content.append(block)
-                continue
-            is_advisor_use = (
-                block.get("type") == "server_tool_use"
-                and block.get("name") == "advisor"
-                and block.get("id") in advisor_id_to_text
-            )
-            is_advisor_result = (
-                block.get("type") == "advisor_tool_result" and block.get("tool_use_id") in advisor_id_to_text
-            )
-            if is_advisor_use:
-                if replace_with_text:
-                    advice = advisor_id_to_text.get(block.get("id")) or ""
-                    if advice:
-                        new_content.append(
-                            {
-                                "type": "text",
-                                "text": f"<advisor_feedback>\n{advice}\n</advisor_feedback>",
-                            }
-                        )
-                # else: drop silently
-            elif is_advisor_result:
-                pass  # always drop — replaced above (or stripped)
-            else:
-                new_content.append(block)
-
-        message["content"] = new_content
+        rewritten = strip_advisor_blocks_from_content(content, replace_with_text)
+        if rewritten is not None:
+            message["content"] = list(rewritten)  # mutable-ok: request content stays a JSON list
     return messages
 
 
