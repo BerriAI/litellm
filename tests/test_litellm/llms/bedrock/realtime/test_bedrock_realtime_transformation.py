@@ -874,6 +874,37 @@ class TestBedrockRealtimeUserEventsAndUsage:
             "input_audio_buffer.speech_stopped",
         ]
         assert all(e["event_id"] and e["item_id"] for e in events)
+        assert events[0]["item_id"] == events[1]["item_id"]
+
+    def test_utterance_lifecycle_shares_one_item_id(self):
+        events = self._run(
+            BedrockRealtimeConfig(),
+            [
+                {"event": {"userSpeechStart": {}}},
+                {"event": {"userSpeechEnd": {}}},
+                {
+                    "event": {
+                        "contentStart": {
+                            "role": "USER",
+                            "type": "TEXT",
+                            "additionalModelFields": json.dumps({"generationStage": "FINAL"}),
+                        }
+                    }
+                },
+                {"event": {"textOutput": {"content": "ready"}}},
+                {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN"}}},
+            ],
+        )
+        item_ids = {e["item_id"] for e in events if "item_id" in e}
+        assert len(item_ids) == 1
+
+    def test_new_utterance_gets_new_item_id(self):
+        config = BedrockRealtimeConfig()
+        first = self._run(config, [{"event": {"userSpeechStart": {}}}, {"event": {"userSpeechEnd": {}}}])
+        second = self._run(config, [{"event": {"userSpeechStart": {}}}, {"event": {"userSpeechEnd": {}}}])
+        assert first[0]["item_id"] == first[1]["item_id"]
+        assert second[0]["item_id"] == second[1]["item_id"]
+        assert first[0]["item_id"] != second[0]["item_id"]
 
     def test_user_transcript_emits_input_audio_transcription_events(self):
         events = self._run(

@@ -156,7 +156,9 @@ class BedrockRealtime(BaseAWSLLM):
                 )
             )
 
-            logged_events: Final[list[OpenAIRealtimeEvents]] = []  # mutable-ok: events accumulate across stream loop iterations for spend logging
+            logged_events: Final[
+                list[OpenAIRealtimeEvents]
+            ] = []  # mutable-ok: events accumulate across stream loop iterations for spend logging
             bedrock_to_client_task: Final = asyncio.create_task(
                 self._forward_bedrock_to_client(
                     bedrock_stream,

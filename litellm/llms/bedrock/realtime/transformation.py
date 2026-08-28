@@ -117,6 +117,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # so the USER/ASSISTANT split from contentStart is tracked here)
         self._user_transcript_active = False
         self._user_transcript_generation_stage: str | None = None
+        self._user_item_id: str | None = None
         self._latest_usage: OpenAIRealtimeResponseUsage | None = None
 
     def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
@@ -818,13 +819,19 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         stage: Final = parsed.get("generationStage") if isinstance(parsed, dict) else None
         return stage if isinstance(stage, str) else None
 
+    def _current_user_item_id(self, new_utterance: bool = False) -> str:
+        """Item id shared by all events of one user utterance (speech boundaries and transcript)."""
+        if new_utterance or self._user_item_id is None:
+            self._user_item_id = f"item_{uuid.uuid4()}"
+        return self._user_item_id
+
     def transform_user_speech_event(self, is_speech_start: bool) -> tuple[OpenAIRealtimeEvents, ...]:
         """Transform Bedrock userSpeechStart/userSpeechEnd to OpenAI speech boundary events."""
         verbose_logger.debug("Handling userSpeech%s", "Start" if is_speech_start else "End")
         speech_event: Final[OpenAIRealtimeInputAudioBufferSpeechEvent] = {
             "type": "input_audio_buffer.speech_started" if is_speech_start else "input_audio_buffer.speech_stopped",
             "event_id": f"event_{uuid.uuid4()}",
-            "item_id": f"item_{uuid.uuid4()}",
+            "item_id": self._current_user_item_id(new_utterance=is_speech_start),
         }
         return (speech_event,)
 
@@ -852,7 +859,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
     def transform_user_transcript_event(self, transcript: str) -> tuple[OpenAIRealtimeEvents, ...]:
         """Transform a USER-role Bedrock textOutput (ASR transcript) to OpenAI transcription events."""
         verbose_logger.debug("Handling USER textOutput (ASR transcript)")
-        item_id: Final = f"item_{uuid.uuid4()}"
+        item_id: Final = self._current_user_item_id()
         delta_event: Final[OpenAIRealtimeInputAudioTranscriptionDelta] = {
             "type": "conversation.item.input_audio_transcription.delta",
             "event_id": f"event_{uuid.uuid4()}",
