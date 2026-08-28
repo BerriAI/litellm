@@ -137,28 +137,34 @@ describe("UsageTab", () => {
   });
 
   it("sums compression and caching dollars across days into the summary cards", () => {
+    // Total caching and the LiteLLM-injected share deliberately differ so these
+    // assertions pin which one each figure uses: the caching headline and the
+    // Total-saved tile take the injected share, the secondary keeps the total.
     const { getByText } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.04,
         prompt_caching_savings_spend: 0.006,
+        gateway_injected_caching_savings_spend: 0.004,
         compression_saved_tokens: 40000,
       }),
       day("2026-07-13", {
         compression_savings_spend: 0.1,
         prompt_caching_savings_spend: 0.01,
+        gateway_injected_caching_savings_spend: 0.006,
         compression_saved_tokens: 100000,
       }),
     ]);
 
-    expect(getByText("$0.1560")).toBeInTheDocument();
+    expect(getByText("$0.1500")).toBeInTheDocument();
     expect(getByText("$0.1400")).toBeInTheDocument();
+    expect(getByText("$0.0100")).toBeInTheDocument();
     expect(getByText("$0.0160")).toBeInTheDocument();
     expect(getByText("140,000 tokens compressed")).toBeInTheDocument();
   });
 
   const twoDays = () => [
-    day("2026-07-12", { compression_savings_spend: 0.04, prompt_caching_savings_spend: 0.006 }),
-    day("2026-07-13", { compression_savings_spend: 0.1, prompt_caching_savings_spend: 0.01 }),
+    day("2026-07-12", { compression_savings_spend: 0.04, gateway_injected_caching_savings_spend: 0.006 }),
+    day("2026-07-13", { compression_savings_spend: 0.1, gateway_injected_caching_savings_spend: 0.01 }),
   ];
 
   it("opens on a running total anchored at $0 at the start of the range", () => {
@@ -179,7 +185,7 @@ describe("UsageTab", () => {
     // synthetic start anchor gives the line a zero origin to climb from.
     const oneDay = new Date(2026, 6, 24);
     const { getByTestId } = renderWith(
-      [day("2026-07-24", { compression_savings_spend: 0.2, prompt_caching_savings_spend: 0.05 })],
+      [day("2026-07-24", { compression_savings_spend: 0.2, gateway_injected_caching_savings_spend: 0.05 })],
       { from: oneDay, to: oneDay },
     );
 
@@ -194,8 +200,8 @@ describe("UsageTab", () => {
     // still read left to right in time, and the running total must climb toward
     // the newest day, not fall away from it.
     const newestFirst = [
-      day("2026-07-13", { prompt_caching_savings_spend: 0.1 }),
-      day("2026-07-12", { prompt_caching_savings_spend: 0.04 }),
+      day("2026-07-13", { gateway_injected_caching_savings_spend: 0.1 }),
+      day("2026-07-12", { gateway_injected_caching_savings_spend: 0.04 }),
     ];
     const { getByTestId, getByRole } = renderWith(newestFirst);
 
@@ -260,7 +266,7 @@ describe("UsageTab", () => {
     const { getByRole, getByTestId } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.02,
+        gateway_injected_caching_savings_spend: 0.02,
         autorouter_savings_spend: -0.05,
       }),
     ]);
@@ -312,7 +318,7 @@ describe("UsageTab", () => {
     const { getByText, getByTestId } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.02,
+        gateway_injected_caching_savings_spend: 0.02,
         autorouter_savings_spend: -0.05,
       }),
     ]);
@@ -329,12 +335,12 @@ describe("UsageTab", () => {
     const { getByText, getByTestId } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.04,
-        prompt_caching_savings_spend: 0.006,
+        gateway_injected_caching_savings_spend: 0.006,
         autorouter_savings_spend: 0.02,
       }),
       day("2026-07-13", {
         compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.01,
+        gateway_injected_caching_savings_spend: 0.01,
         autorouter_savings_spend: 0.05,
       }),
     ]);

@@ -22,13 +22,14 @@ export const useSavingsTotals = (results: DailyData[]) =>
     const compression = sumOf(compressionOf);
     const caching = sumOf(cachingOf);
     const autorouter = sumOf(autorouterOf);
+    const gatewayAttributedCaching = sumOf(gatewayAttributedCachingOf);
     return {
       compression,
       caching,
       autorouter,
-      gatewayAttributedCaching: sumOf(gatewayAttributedCachingOf),
+      gatewayAttributedCaching,
       savedTokens: sumOf(savedTokensOf),
-      total: compression + caching + autorouter,
+      total: compression + gatewayAttributedCaching + autorouter,
     };
   }, [results]);
 
@@ -41,6 +42,7 @@ const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading:
         label="Total saved"
         value={usd(totals.total)}
         hint={isLoading ? "Loading..." : "Compression + prompt caching + auto-router"}
+        info="The sum of the three tiles beside it. Its caching term is the LiteLLM-injected share, so this total is what the gateway itself delivered; caching that clients or providers brought on their own appears only in the caching tile's Total figure."
       />
       <SummaryCard
         label="Compression savings"

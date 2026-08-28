@@ -11,9 +11,9 @@ import { getToolSpend, ToolSpendResponse } from "@/components/networking";
 import {
   autorouterOf,
   buildDailyToolSeries,
-  cachingOf,
   compressionOf,
   formatRangeLabel,
+  gatewayAttributedCachingOf,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
   SAVINGS_COLORS,
@@ -88,7 +88,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         .map((d) => ({
           date: shortDate(d.date),
           Compression: compressionOf(d.metrics),
-          "Prompt caching": cachingOf(d.metrics),
+          "Prompt caching": gatewayAttributedCachingOf(d.metrics),
           "Auto-router": autorouterOf(d.metrics),
         })),
     [results],
@@ -119,9 +119,11 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       SAVINGS_DRIVERS.map(({ name, color }) => ({
         driver: name,
         color,
-        usd: { Compression: totals.compression, "Prompt caching": totals.caching, "Auto-router": totals.autorouter }[
-          name
-        ],
+        usd: {
+          Compression: totals.compression,
+          "Prompt caching": totals.gatewayAttributedCaching,
+          "Auto-router": totals.autorouter,
+        }[name],
       })).filter((d) => d.usd > 0),
     [totals],
   );

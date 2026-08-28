@@ -87,7 +87,7 @@ describe("KeySavingsTab", () => {
 
     renderTab();
 
-    expect(screen.getByTestId("summary-card-total-saved")).toHaveTextContent("$6.00");
+    expect(screen.getByTestId("summary-card-total-saved")).toHaveTextContent("$5.40");
     expect(screen.getByTestId("summary-card-compression-savings")).toHaveTextContent("$2.00");
     expect(screen.getByTestId("summary-card-compression-savings")).toHaveTextContent("1,000 tokens compressed");
     // the card leads with what LiteLLM's own injection earned and carries the total beneath it,
