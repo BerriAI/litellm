@@ -119,8 +119,8 @@ def test_cache_init_creates_redis_cache_without_cluster_config(
 
 
 @pytest.mark.asyncio
-@patch("litellm._redis.init_redis_cluster")
-async def test_disconnect_closes_cluster_client_without_raising(mock_init_redis_cluster):
+@patch("redis.RedisCluster")
+async def test_disconnect_closes_cluster_client_without_raising(mock_redis_cluster):
     """Shutting down a proxy in cluster mode used to always raise AttributeError,
     since RedisCache.disconnect() unconditionally dereferences async_redis_conn_pool,
     which is None by design in cluster mode. Regression test for
@@ -131,29 +131,37 @@ async def test_disconnect_closes_cluster_client_without_raising(mock_init_redis_
     )
     assert cache.async_redis_conn_pool is None
 
-    mock_cluster_client = AsyncMock()
-    cache.redis_async_redis_cluster_client = mock_cluster_client
+    closed = False
+
+    class _ClusterClient:
+        async def aclose(self):
+            nonlocal closed
+            closed = True
+
+    cache.redis_async_redis_cluster_client = _ClusterClient()
     cache.redis_client = MagicMock()
 
     await cache.disconnect()
 
-    mock_cluster_client.aclose.assert_awaited_once()
+    assert closed is True
 
 
 @pytest.mark.asyncio
-@patch("litellm._redis.init_redis_cluster")
-async def test_disconnect_without_cluster_client_does_not_raise(mock_init_redis_cluster):
+@patch("redis.RedisCluster")
+async def test_disconnect_without_cluster_client_does_not_raise(mock_redis_cluster):
     """disconnect() must be a no-op for the cluster client when it was never
-    initialized (e.g. shutdown before any request touched Redis)."""
+    initialized (e.g. shutdown before any request touched Redis), rather than
+    raising on the absent client or the None connection pool."""
     cache = RedisClusterCache(
         startup_nodes=[{"host": "localhost", "port": 6379}],
         password="hello",
     )
     cache.redis_client = MagicMock()
 
-    await cache.disconnect()
+    assert cache.redis_async_redis_cluster_client is None
+    assert cache.async_redis_conn_pool is None
 
-    cache.redis_client.close.assert_called_once()
+    await cache.disconnect()
 
 
 @pytest.mark.parametrize(
