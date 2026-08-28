@@ -1027,3 +1027,81 @@ async def test_tool_block_start_flush_does_not_duplicate_or_drop_events(is_async
     ]
     assert _input_json_deltas(events) == ['{"file_text":', ' "hello"}']
     _assert_deltas_match_their_block_type(events)
+
+
+def _thinking_block_starts(events: List[dict]) -> List[dict]:
+    return [
+        e["content_block"]
+        for e in events
+        if e.get("type") == "content_block_start" and e["content_block"].get("type") == "thinking"
+    ]
+
+
+def _empty_thinking_then_tool_chunks(thinking: str = "", signature: str = "") -> List[MagicMock]:
+    return [
+        _thinking_chunk(thinking, signature=signature),
+        _tool_chunk("call_paris", "get_weather", '{"city": "Paris"}'),
+        _make_chunk(Delta(content=None), finish_reason="tool_calls"),
+    ]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "thinking,signature",
+    [("", ""), (" \n\t ", ""), ("", "sig_abc")],
+    ids=["empty", "whitespace-only", "empty-but-signed"],
+)
+@pytest.mark.asyncio
+async def test_contentless_thinking_chunk_opens_no_thinking_block(is_async: bool, thinking: str, signature: str):
+    """LIT-6357 producer half: a reasoning model that goes straight to tool
+    calls streams a ``thinking_blocks`` entry with no real thinking text; the
+    wrapper used to open ``{"type": "thinking", "thinking": ""}`` for it and
+    close the block with no delta. Clients (Claude Code) replay that block as
+    history and Anthropic rejects the next tool-loop request with
+    "each thinking block must contain thinking" — empty-but-signed included.
+    The contentless chunk must open nothing; the tool_use block must be
+    unaffected."""
+    chunks = _empty_thinking_then_tool_chunks(thinking, signature)
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    assert _thinking_block_starts(events) == []
+    assert _thinking_deltas(events) == []
+    tool_starts = [
+        e["content_block"]
+        for e in events
+        if e.get("type") == "content_block_start" and e["content_block"].get("type") == "tool_use"
+    ]
+    assert [b["name"] for b in tool_starts] == ["get_weather"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_empty_first_thinking_chunk_then_real_text_still_opens_one_block(is_async: bool):
+    """The contentless-chunk skip must not eat a thinking stream whose first
+    chunk is empty but whose later chunks carry real text: exactly one thinking
+    block opens and the text flows into it."""
+    chunks = [
+        _thinking_chunk(""),
+        _thinking_chunk("Let me think"),
+        _thinking_chunk("", signature="sig123"),
+        _make_chunk(Delta(content="Hello")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    assert len(_thinking_block_starts(events)) == 1
+    assert _thinking_deltas(events) == ["Let me think"]
+    assert _signature_deltas(events) == ["sig123"]
+    assert _text_deltas(events) == ["Hello"]
+    _assert_deltas_match_their_block_type(events)
