@@ -5225,35 +5225,26 @@ def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple
     return tuple(raw_window if isinstance(raw_window, dict) else raw_window.model_dump() for raw_window in raw_windows)
 
 
-async def _reset_one_key_budget_window(hashed_api_key: str, window: Mapping[str, object]) -> Mapping[str, object]:
-    """Zero one budget window's Redis counter and restart its window from now.
-
-    `get_current_spend` re-derives a window counter from real
-    `LiteLLM_SpendLogs` rows inside `[window_start, now)` on every read below
-    max_budget (window counters always recheck, see `get_current_spend`'s
-    `is_window` branch), so merely zeroing the Redis counter is not durable:
-    the next request would re-sum the unchanged historical spend log rows
-    still inside the open window and put the counter right back where it was.
+def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str, object]:
+    """Restart one budget window from now, by advancing its `reset_at`.
 
     `window_start` is derived elsewhere as `reset_at - budget_duration`
     (`get_budget_window_start`), so `reset_at` must be set to `now +
     budget_duration` -- a window floating from THIS moment -- to make
-    `window_start` land at `now` and exclude the historical spend. Reusing
-    `get_budget_reset_time`/`ResetBudgetJob._reset_expired_window`'s
-    calendar-standardized boundary (e.g. "next midnight") would not do that:
-    for a "1d" window `next midnight - 1d` is simply the START of the
-    calendar day already in progress, which still covers the spend that
-    triggered the block. That reuse is only safe for the scheduled job,
-    which runs right as `reset_at` naturally elapses, so the elapsed boundary
-    it computes is already close to "now". A manual reset can happen at any
-    point mid-window, so it needs the floating form instead. A window with no
-    `budget_duration` is returned unchanged.
+    `window_start` land at `now` and exclude the historical spend that
+    triggered the block. Reusing `get_budget_reset_time`/
+    `ResetBudgetJob._reset_expired_window`'s calendar-standardized boundary
+    (e.g. "next midnight") would not do that: for a "1d" window `next
+    midnight - 1d` is simply the START of the calendar day already in
+    progress, which still covers that spend. That reuse is only safe for the
+    scheduled job, which runs right as `reset_at` naturally elapses, so the
+    elapsed boundary it computes is already close to "now". A manual reset
+    can happen at any point mid-window, so it needs the floating form
+    instead. A window with no `budget_duration` is returned unchanged.
     """
     duration = window.get("budget_duration")
     if not isinstance(duration, str) or not duration:
         return window
-    counter_key: Final = f"spend:key:{hashed_api_key}:window:{duration}"
-    await _set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
     new_reset_at: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
     return {  # mutable-ok: this is the JSON payload persisted to budget_limits' Json column, which requires a plain dict
         **window,
@@ -5269,14 +5260,23 @@ async def _reset_key_budget_windows(
     """Force-expire every one of a key's own `budget_limits` windows (extra
     time-windowed caps layered on top of the lifetime max_budget, e.g. a daily
     limit) so a manual spend reset also clears them, not just the lifetime
-    counter."""
+    counter.
+
+    Persists the advanced `reset_at` boundaries BEFORE zeroing any window's
+    Redis counter, not after: a window counter reading zero is only durable
+    once every reader recomputing its floor from the DB sees the new
+    boundary too (`get_current_spend` re-derives a window counter from real
+    `LiteLLM_SpendLogs` rows inside `[window_start, now)` on every read below
+    max_budget, see its `is_window` branch). Zeroing first would let a
+    request racing the DB write compute `window_start` from the stale
+    pre-reset boundary, re-sum the unchanged historical spend, and put the
+    counter right back where it was before the write ever landed.
+    """
     windows: Final = _budget_limit_windows(budget_limits)
     if not windows:
         return
 
-    reset_windows: Final = tuple(
-        [await _reset_one_key_budget_window(hashed_api_key=hashed_api_key, window=w) for w in windows]
-    )
+    reset_windows: Final = tuple(_advance_one_key_budget_window(w) for w in windows)
 
     # prisma-client-py's typed update() takes plain dict literals for `where`/`data`; there is no
     # frozen-mapping equivalent to pass instead.
@@ -5285,6 +5285,12 @@ async def _reset_key_budget_windows(
         where={"token": hashed_api_key},  # mutable-ok: prisma where kwarg
         data=reset_payload,
     )
+
+    for window in reset_windows:
+        duration = window.get("budget_duration")
+        if isinstance(duration, str) and duration:
+            counter_key = f"spend:key:{hashed_api_key}:window:{duration}"
+            await _set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
 
 
 @router.post(
