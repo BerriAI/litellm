@@ -15,6 +15,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     perform_redaction,
+    redact_message_input_output_from_logging,
     redact_streaming_responses_for_custom_logger,
     should_redact_message_logging,
 )
@@ -182,6 +183,9 @@ class TestPerformRedaction:
             "input": "sensitive input",
             "standard_logging_object": {
                 "messages": [{"role": "user", "content": "sensitive input"}],
+                "system_prompt": [
+                    {"type": "text", "text": "SHAPE-SECRET", "cache_control": {"type": "ephemeral"}},
+                ],
                 "response": {
                     "output": [
                         {"text": "top-level text"},
@@ -208,6 +212,7 @@ class TestPerformRedaction:
         ]
         assert details["prompt"] == ""
         assert details["input"] == ""
+        assert details["standard_logging_object"]["system_prompt"] == "redacted-by-litellm"
 
         logged_response = details["standard_logging_object"]["response"]
         assert logged_response["usage"] == {"total_tokens": 1}
@@ -858,3 +863,47 @@ class TestRedactStreamingResponsesForCustomLogger:
 
         assert result_details is model_call_details
         assert response_obj.choices[0].message.content == "secret content"
+
+
+class TestSystemPromptRedaction:
+    REDACTED = "redacted-by-litellm"
+    SYSTEM_PROMPT = [{"type": "text", "text": "SHAPE-SECRET"}]
+
+    def _details_with_system_prompt(self, **extra):
+        details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "standard_logging_object": {
+                "messages": [{"role": "user", "content": "hi"}],
+                "system_prompt": self.SYSTEM_PROMPT,
+                "response": {"choices": [{"message": {"content": "secret"}}]},
+            },
+            "litellm_params": {"metadata": {}},
+        }
+        details.update(extra)
+        return details
+
+    def test_global_turn_off_message_logging_redacts_system_prompt(self):
+        litellm.turn_off_message_logging = True
+        details = self._details_with_system_prompt()
+
+        redact_message_input_output_from_logging(details, result=None)
+
+        assert details["standard_logging_object"]["system_prompt"] == self.REDACTED
+
+    def test_request_level_dynamic_param_redacts_system_prompt(self):
+        details = self._details_with_system_prompt(
+            standard_callback_dynamic_params={"turn_off_message_logging": True}
+        )
+
+        redact_message_input_output_from_logging(details, result=None)
+
+        assert details["standard_logging_object"]["system_prompt"] == self.REDACTED
+
+    def test_per_callback_turn_off_message_logging_redacts_system_prompt(self):
+        details = self._details_with_system_prompt()
+        logger = CustomLogger(turn_off_message_logging=True)
+
+        result = logger.redact_standard_logging_payload_from_model_call_details(details)
+
+        assert result["standard_logging_object"]["system_prompt"] == self.REDACTED
+        assert details["standard_logging_object"]["system_prompt"] == self.SYSTEM_PROMPT

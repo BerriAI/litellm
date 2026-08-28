@@ -927,6 +927,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if "messages" not in (excluded_fields or []) and standard_logging_object_copy.get("messages") is not None:
                 standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
 
+            if (
+                "system_prompt" not in (excluded_fields or [])
+                and standard_logging_object_copy.get("system_prompt") is not None
+            ):
+                standard_logging_object_copy["system_prompt"] = redacted_str
+
             if "response" not in (excluded_fields or []) and standard_logging_object_copy.get("response") is not None:
                 response: Final = standard_logging_object_copy["response"]
                 # Check if this is a ResponsesAPIResponse (has "output" field)

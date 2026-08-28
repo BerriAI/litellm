@@ -3254,6 +3254,7 @@ class StandardLoggingPayload(TypedDict):
     requester_ip_address: str | None
     user_agent: str | None
     messages: str | list | dict | None
+    system_prompt: str | list | dict | None
     response: str | list | dict | None
     error_str: str | None
     error_information: StandardLoggingPayloadErrorInformation | None

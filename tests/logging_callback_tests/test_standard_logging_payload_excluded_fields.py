@@ -59,6 +59,7 @@ def create_sample_standard_logging_payload() -> Dict:
         "requester_ip_address": None,
         "user_agent": None,
         "messages": [{"role": "user", "content": "Hello, this is sensitive data!"}],
+        "system_prompt": [{"type": "text", "text": "sensitive system prompt"}],
         "response": {
             "choices": [{"message": {"content": "This is a sensitive response!"}}]
         },
@@ -223,6 +224,7 @@ class TestStandardLoggingPayloadExcludedFields:
         assert (
             result["standard_logging_object"]["messages"][0]["content"] == redacted_str
         )
+        assert result["standard_logging_object"]["system_prompt"] == redacted_str
         assert (
             result["standard_logging_object"]["response"]["choices"][0]["message"][
                 "content"

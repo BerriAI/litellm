@@ -2465,63 +2465,103 @@ def test_get_usage_as_dict():
     assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
-def test_append_system_prompt_messages():
-    """
-    Test append_system_prompt_messages prepends system message from kwargs to messages list.
-    """
+def test_get_system_prompt_from_kwargs():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
-    # Test case 1: system in kwargs with existing messages
-    kwargs = {"system": "You are a helpful assistant"}
-    messages = [{"role": "user", "content": "Hello"}]
-    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
-        kwargs=kwargs, messages=messages
-    )
-    assert len(result) == 2
-    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
-    assert result[1] == {"role": "user", "content": "Hello"}
-
-    # Test case 2: system in kwargs with None messages
-    kwargs = {"system": "You are a helpful assistant"}
-    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
-        kwargs=kwargs, messages=None
-    )
-    assert len(result) == 1
-    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
-
-    # Test case 3: system in kwargs with empty messages list
-    kwargs = {"system": "You are a helpful assistant"}
-    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
-        kwargs=kwargs, messages=[]
-    )
-    assert len(result) == 1
-    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
-
-    # Test case 4: duplicate system message should not be added
-    kwargs = {"system": "You are a helpful assistant"}
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant"},
-        {"role": "user", "content": "Hello"},
+    system_blocks = [
+        {"type": "text", "text": "SHAPE-SECRET", "cache_control": {"type": "ephemeral"}},
     ]
-    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
-        kwargs=kwargs, messages=messages
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+        kwargs={"system": system_blocks, "messages": [{"role": "user", "content": "hi"}]}
     )
-    assert len(result) == 2
-    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
+    assert result == system_blocks
 
-    # Test case 5: no system in kwargs returns messages unchanged
-    kwargs = {}
-    messages = [{"role": "user", "content": "Hello"}]
-    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
-        kwargs=kwargs, messages=messages
-    )
-    assert result == messages
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs={"system": "Be helpful"})
+    assert result == "Be helpful"
 
-    # Test case 6: None kwargs returns messages unchanged
-    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
-        kwargs=None, messages=messages
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs={"instructions": "Follow policy"})
+    assert result == "Follow policy"
+
+    gemini_system = [{"role": "system", "content": "Be concise."}]
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+        kwargs={"system_instructions": gemini_system}
     )
-    assert result == messages
+    assert result == gemini_system
+
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+        kwargs={
+            "system_instructions": "From Gemini",
+            "instructions": "From Responses",
+            "system": "From Anthropic",
+        }
+    )
+    assert result == "From Gemini"
+
+    result = StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(
+        kwargs={"system_instructions": [], "instructions": "From Responses"}
+    )
+    assert result == []
+
+    assert StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs={}) is None
+    assert StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs=None) is None
+
+
+def test_get_standard_logging_object_payload_keeps_system_prompt_separate_from_messages(logging_obj):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    user_messages = [{"role": "user", "content": "hello"}]
+    mock_response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "model": "claude-sonnet-4-5",
+        "usage": {"input_tokens": 5, "output_tokens": 2},
+    }
+    now = datetime.datetime.now()
+
+    system_blocks = [
+        {"type": "text", "text": "SHAPE-SECRET", "cache_control": {"type": "ephemeral"}},
+    ]
+    list_kwargs = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "system": system_blocks,
+        "messages": user_messages,
+        "litellm_params": {},
+    }
+    list_payload = get_standard_logging_object_payload(
+        kwargs=list_kwargs,
+        init_response_obj=mock_response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert list_payload is not None
+    assert list_payload["system_prompt"] == system_blocks
+    assert list_payload["messages"] == user_messages
+
+    string_kwargs = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "system": "Be helpful",
+        "messages": user_messages,
+        "litellm_params": {},
+    }
+    string_payload = get_standard_logging_object_payload(
+        kwargs=string_kwargs,
+        init_response_obj=mock_response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert string_payload is not None
+    assert string_payload["system_prompt"] == "Be helpful"
+    assert string_payload["messages"] == user_messages
 
 
 @pytest.mark.asyncio

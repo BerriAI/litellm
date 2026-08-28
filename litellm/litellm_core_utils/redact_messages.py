@@ -173,6 +173,9 @@ def _redact_standard_logging_object(model_call_details: dict):
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
 
+    if standard_logging_object.get("system_prompt") is not None:
+        standard_logging_object["system_prompt"] = redacted_str
+
     response: Final = standard_logging_object.get("response")
     if response is not None:
         if isinstance(response, dict) and "output" in response:

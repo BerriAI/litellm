@@ -5074,29 +5074,17 @@ class StandardLoggingPayloadSetup:
         return start_time_float, end_time_float, completion_start_time_float
 
     @staticmethod
-    def append_system_prompt_messages(kwargs: dict | None = None, messages: Any | None = None):
-        """
-        Append system prompt messages to the messages
-        """
-        if kwargs is not None:
-            if kwargs.get("system") is not None and isinstance(kwargs.get("system"), str):
-                if messages is None:
-                    return [{"role": "system", "content": kwargs.get("system")}]
-                elif isinstance(messages, list):
-                    if len(messages) == 0:
-                        return [{"role": "system", "content": kwargs.get("system")}]
-                    # check for duplicates
-                    if messages[0].get("role") == "system" and messages[0].get("content") == kwargs.get("system"):
-                        return messages
-                    messages = [{"role": "system", "content": kwargs.get("system")}] + messages
-                elif isinstance(messages, str):
-                    messages = [
-                        {"role": "system", "content": kwargs.get("system")},
-                        {"role": "user", "content": messages},
-                    ]
-                return messages
+    def get_system_prompt_from_kwargs(kwargs: dict | None = None) -> str | list | dict | None:
+        if kwargs is None:
+            return None
 
-        return messages
+        for key in ("system_instructions", "instructions", "system"):
+            value = kwargs.get(key)
+            if value is None:
+                continue
+            if isinstance(value, (str, list, dict)):
+                return value
+        return None
 
     @staticmethod
     def merge_litellm_metadata(litellm_params: Mapping[str, object]) -> dict:
@@ -6046,11 +6034,8 @@ def get_standard_logging_object_payload(
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             user_agent=clean_metadata.get("user_agent", None),
-            messages=truncate_base64_in_messages(
-                StandardLoggingPayloadSetup.append_system_prompt_messages(
-                    kwargs=kwargs, messages=kwargs.get("messages")
-                )
-            ),
+            messages=truncate_base64_in_messages(kwargs.get("messages")),
+            system_prompt=StandardLoggingPayloadSetup.get_system_prompt_from_kwargs(kwargs=kwargs),
             response=final_response_obj,
             model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
                 kwargs.get("optional_params", None) or {}
