@@ -168,7 +168,7 @@ def _executor(
 
 @router.get(
     "/model_hub",
-    tags=("public", "model management"),
+    tags=["public", "model management"],  # mutable-ok: fastapi types tags as list[str | Enum]
     dependencies=(Depends(user_api_key_auth),),
     response_model=ListResponse[ModelGroupInfoProxy],
 )
@@ -192,7 +192,7 @@ async def public_model_hub_list(
     """
     try:
         from litellm.proxy.proxy_server import (
-            _get_model_group_info,
+            _get_model_group_info,  # pyright: ignore[reportPrivateUsage]  # /public/model_hub imports it the same way
             llm_router,
             prisma_client,
         )
