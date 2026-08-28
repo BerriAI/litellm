@@ -4136,6 +4136,20 @@ def get_optional_params(
         model=model,
         provider_config=provider_config,
     )
+    # include_usage in stream_options is only meaningful for streaming requests;
+    # OpenAI-compatible backends (e.g. vLLM) reject it with a 400 when stream is
+    # not True. Strip just that key for non-streaming requests (other keys such as
+    # include_obfuscation stay). Fixes #29431.
+    if stream is not True:
+        _stream_options: Final = non_default_params.get("stream_options")
+        if isinstance(_stream_options, dict) and "include_usage" in _stream_options:
+            _without_usage: Final = {  # mutable-ok: normalized stream_options for the non-streaming request
+                k: v for k, v in _stream_options.items() if k != "include_usage"
+            }
+            if _without_usage:
+                non_default_params["stream_options"] = _without_usage
+            else:
+                non_default_params.pop("stream_options", None)
     optional_params = pre_process_optional_params(
         passed_params=passed_params,
         non_default_params=non_default_params,
