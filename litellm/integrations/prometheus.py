@@ -2620,11 +2620,6 @@ class PrometheusLogger(CustomLogger):
                 label_litellm_model_name = litellm_model_name
                 label_model_id = model_id
                 label_api_base = api_base
-                # custom_llm_provider can be absent from litellm_params when a
-                # resolved deployment fails (e.g. fallbacks); fall back to the
-                # best-effort resolver and coalesce to "" so the label never
-                # serializes as the literal "None" (same pattern as
-                # set_deployment_partial_outage below).
                 label_api_provider = (  # pyright: ignore[reportUnknownVariableType]  # bare-dict kwargs, same pattern as every label reader in this handler
                     llm_provider
                     or self._extract_api_provider_from_request_data(

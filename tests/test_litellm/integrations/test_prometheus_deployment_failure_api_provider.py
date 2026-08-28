@@ -21,31 +21,32 @@ def prometheus_logger():
 
 def _failure_samples(logger: PrometheusLogger):
     """Collected samples of the deployment-failure counter, as (labels, value)."""
-    samples = []
-    for metric in logger.litellm_deployment_failure_responses.collect():
-        for sample in metric.samples:
-            if sample.name == "litellm_deployment_failure_responses_total":
-                samples.append((dict(sample.labels), sample.value))
-    return samples
+    return [
+        (dict(sample.labels), sample.value)
+        for metric in logger.litellm_deployment_failure_responses.collect()
+        for sample in metric.samples
+        if sample.name == "litellm_deployment_failure_responses_total"
+    ]
 
 
-def _request_kwargs(model: str, standard_custom_provider: str | None = None) -> dict:
-    standard_logging_object = {
-        "model_id": "resolved-deployment-id",
-        "model_group": "my-model-group",
-        "api_base": "https://example.com",
-        "metadata": {},
-    }
-    if standard_custom_provider is not None:
-        standard_logging_object["custom_llm_provider"] = standard_custom_provider
+def _request_kwargs(model: str, litellm_params_provider: str | None = None) -> dict:
+    """A deployment-failure request as the proxy hands it to the logger.
+
+    Omitting litellm_params_provider leaves custom_llm_provider unset — the #38531 scenario.
+    """
     return {
         "model": model,
         "exception": Exception("upstream 503"),
         "litellm_params": {
-            # no "custom_llm_provider" key — the #38531 scenario
+            "metadata": {},
+            **({} if litellm_params_provider is None else {"custom_llm_provider": litellm_params_provider}),
+        },
+        "standard_logging_object": {
+            "model_id": "resolved-deployment-id",
+            "model_group": "my-model-group",
+            "api_base": "https://example.com",
             "metadata": {},
         },
-        "standard_logging_object": standard_logging_object,
     }
 
 
@@ -73,10 +74,9 @@ def test_missing_provider_infers_from_provider_prefixed_model(prometheus_logger)
 def test_explicit_provider_still_wins(prometheus_logger):
     """Behavior is unchanged when custom_llm_provider is present."""
 
-    kwargs = _request_kwargs("openai/gpt-4o-mini")
-    kwargs["litellm_params"]["custom_llm_provider"] = "azure"
-
-    prometheus_logger.set_llm_deployment_failure_metrics(kwargs)
+    prometheus_logger.set_llm_deployment_failure_metrics(
+        _request_kwargs("openai/gpt-4o-mini", litellm_params_provider="azure")
+    )
 
     samples = _failure_samples(prometheus_logger)
     assert len(samples) == 1
