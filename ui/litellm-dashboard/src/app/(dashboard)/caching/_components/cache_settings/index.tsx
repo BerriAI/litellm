@@ -37,16 +37,21 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [configuredSecrets, setConfiguredSecrets] = useState<ReadonlySet<string>>(new Set());
+  const [configSourcedFields, setConfigSourcedFields] = useState<ReadonlySet<string>>(new Set());
 
   const loadCacheSettings = useCallback(async () => {
     if (!accessToken) {
       return;
     }
     try {
-      const data = (await getCacheSettingsCall(accessToken)) as { current_values?: Record<string, unknown> };
+      const data = (await getCacheSettingsCall(accessToken)) as {
+        current_values?: Record<string, unknown>;
+        config_sourced_fields?: string[];
+      };
       const currentValues = data.current_values ?? {};
       form.reset(buildInitialValues(currentValues));
       setConfiguredSecrets(configuredSecretFields(currentValues));
+      setConfigSourcedFields(new Set(data.config_sourced_fields ?? []));
       setRedisType(toRedisType(currentValues.redis_type));
     } catch (error) {
       console.error("Failed to load cache settings:", error);
@@ -128,7 +133,10 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
 
     setIsSaving(true);
     try {
-      await updateCacheSettingsCall(accessToken, buildCachePayload(redisType, values, { forTesting: false }));
+      await updateCacheSettingsCall(
+        accessToken,
+        buildCachePayload(redisType, values, { forTesting: false, configSourcedFields }),
+      );
       toast.success("Cache settings updated successfully");
       await loadCacheSettings();
     } catch (error) {
@@ -156,6 +164,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
             redisType={redisType}
             redisTypeDescriptions={REDIS_TYPE_DESCRIPTIONS}
             onTypeChange={(type) => setRedisType(toRedisType(type))}
+            disabled={configSourcedFields.has("type")}
           />
 
           <div className="pt-4 border-t border-border">
@@ -165,6 +174,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
               redisType={redisType}
               embeddingModels={embeddingModels}
               configuredSecrets={configuredSecrets}
+              configSourcedFields={configSourcedFields}
             />
           </div>
 
@@ -175,6 +185,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
                 section="cluster"
                 redisType={redisType}
                 embeddingModels={embeddingModels}
+                configSourcedFields={configSourcedFields}
                 gridCols="grid-cols-1 gap-6"
               />
             </div>
@@ -188,6 +199,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
                 redisType={redisType}
                 embeddingModels={embeddingModels}
                 configuredSecrets={configuredSecrets}
+                configSourcedFields={configSourcedFields}
               />
             </div>
           )}
@@ -199,6 +211,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
                 section="semantic"
                 redisType={redisType}
                 embeddingModels={embeddingModels}
+                configSourcedFields={configSourcedFields}
               />
             </div>
           )}
@@ -215,6 +228,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
                   section="ssl"
                   redisType={redisType}
                   embeddingModels={embeddingModels}
+                  configSourcedFields={configSourcedFields}
                   headingLevel="h5"
                 />
                 <CacheFieldSection
@@ -222,6 +236,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
                   section="cacheManagement"
                   redisType={redisType}
                   embeddingModels={embeddingModels}
+                  configSourcedFields={configSourcedFields}
                   headingLevel="h5"
                 />
                 <CacheFieldSection
@@ -229,6 +244,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
                   section="gcp"
                   redisType={redisType}
                   embeddingModels={embeddingModels}
+                  configSourcedFields={configSourcedFields}
                   headingLevel="h5"
                 />
               </div>

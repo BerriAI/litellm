@@ -24,27 +24,44 @@ export interface EmbeddingModelOption {
 
 export const SECRET_ALREADY_SET_PLACEHOLDER = "Already set. Enter a new value to replace it.";
 
+export const CONFIG_SOURCED_DESCRIPTION = "Set in config.yaml. Change it there, or remove it to edit this here.";
+
 interface CacheFormFieldProps {
   field: CacheField;
   embeddingModels: EmbeddingModelOption[];
   isSecretConfigured?: boolean;
+  isConfigSourced?: boolean;
 }
 
-const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels, isSecretConfigured = false }) => {
+const CacheFormField: React.FC<CacheFormFieldProps> = ({
+  field,
+  embeddingModels,
+  isSecretConfigured = false,
+  isConfigSourced = false,
+}) => {
   const form = useFormContext<CacheFormValues>();
   const placeholder = isSecretConfigured ? SECRET_ALREADY_SET_PLACEHOLDER : field.helpText;
+  const description = isConfigSourced ? CONFIG_SOURCED_DESCRIPTION : field.helpText;
 
   return (
-    <FormField control={form.control} name={field.name} label={field.label} description={field.helpText}>
+    <FormField control={form.control} name={field.name} label={field.label} description={description}>
       {({ ref, value, onChange, ...rest }) => {
         if (field.type === "boolean") {
-          return <Switch {...rest} checked={value === true} onCheckedChange={(checked) => onChange(checked)} />;
+          return (
+            <Switch
+              {...rest}
+              disabled={isConfigSourced}
+              checked={value === true}
+              onCheckedChange={(checked) => onChange(checked)}
+            />
+          );
         }
         if (field.type === "password") {
           return (
             <PasswordInput
               {...rest}
               ref={ref}
+              disabled={isConfigSourced}
               value={typeof value === "string" ? value : ""}
               onChange={onChange}
               placeholder={placeholder}
@@ -57,6 +74,7 @@ const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels,
             <Textarea
               {...rest}
               ref={ref}
+              disabled={isConfigSourced}
               rows={4}
               value={typeof value === "string" ? value : ""}
               onChange={onChange}
@@ -76,7 +94,12 @@ const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels,
                 model.value === other.value
               }
             >
-              <ComboboxInput {...rest} placeholder="Search and select a model..." className="w-full">
+              <ComboboxInput
+                {...rest}
+                disabled={isConfigSourced}
+                placeholder="Search and select a model..."
+                className="w-full"
+              >
                 <ComboboxClear />
               </ComboboxInput>
               <ComboboxContent>
@@ -96,6 +119,7 @@ const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels,
           <Input
             {...rest}
             ref={ref}
+            disabled={isConfigSourced}
             inputMode={field.type === "integer" || field.type === "float" ? "decimal" : undefined}
             value={typeof value === "string" ? value : ""}
             onChange={onChange}

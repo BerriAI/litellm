@@ -12,10 +12,11 @@ import asyncio
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._redis import _redis_kwargs_from_environment
@@ -30,6 +31,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.repositories.table_repositories import CacheConfigRepository
+from litellm.secret_managers.main import get_secret
 from litellm.types.management_endpoints import (
     CACHE_SETTINGS_FIELDS,
     REDIS_TYPE_DESCRIPTIONS,
@@ -78,7 +80,7 @@ _CREDENTIAL_CLASSIFIER: Final = SensitiveDataMasker()
 _REDACTED_VALUE: Final = "***REDACTED***"
 
 
-_URL_OVERRIDDEN_CONNECTION_FIELDS: Final[frozenset] = frozenset({"host", "port", "db", "password", "username"})
+_URL_OVERRIDDEN_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset({"host", "port", "db", "password", "username"})
 
 
 def _resolve_cache_url_precedence(settings: Mapping[str, object]) -> dict[str, Any]:
@@ -96,6 +98,62 @@ def _resolve_cache_url_precedence(settings: Mapping[str, object]) -> dict[str, A
     if not has_url or settings.get("redis_startup_nodes"):
         return dict(settings)
     return {k: v for k, v in settings.items() if k not in _URL_OVERRIDDEN_CONNECTION_FIELDS}
+
+
+_EMPTY_CACHE_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+_CACHE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _as_config_mapping(value: object) -> Mapping[str, object]:
+    try:
+        return _CACHE_PARAMS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return _EMPTY_CACHE_PARAMS
+
+
+def _resolved_env_reference(value: object) -> object:
+    return get_secret(value) if isinstance(value, str) and value.startswith("os.environ/") else value
+
+
+@runtime_checkable
+class _ConfigStateProvider(Protocol):
+    def get_config_state(self) -> object: ...
+
+
+def _config_yaml_cache_params(proxy_config: object) -> Mapping[str, object]:
+    if not isinstance(proxy_config, _ConfigStateProvider):
+        return _EMPTY_CACHE_PARAMS
+    litellm_settings: Final = _as_config_mapping(
+        _as_config_mapping(proxy_config.get_config_state()).get("litellm_settings")
+    )
+    if litellm_settings.get("cache") is not True:
+        return _EMPTY_CACHE_PARAMS
+    cache_params: Final = _as_config_mapping(litellm_settings.get("cache_params"))
+    return MappingProxyType({key: _resolved_env_reference(value) for key, value in cache_params.items()})
+
+
+def _connection_fields_superseded_by(config_params: Mapping[str, object]) -> frozenset[str]:
+    # litellm._redis prefers `url` unconditionally, so the losing mode must be dropped
+    if _has_connection_target(config_params.get("url")):
+        return _URL_OVERRIDDEN_CONNECTION_FIELDS
+    if any(_has_connection_target(config_params.get(field)) for field in _URL_OVERRIDDEN_CONNECTION_FIELDS):
+        return frozenset({"url"})
+    return frozenset()
+
+
+def _apply_config_yaml_precedence(base: Mapping[str, object], config_params: Mapping[str, object]) -> dict[str, object]:
+    superseded: Final = _connection_fields_superseded_by(config_params)
+    return {
+        key: config_params[key] if key in config_params else base[key]
+        for key in (*base, *config_params)
+        if key in config_params or key not in superseded
+    }
+
+
+def _cache_params_without_ui_fields(decrypted_settings: object) -> Mapping[str, object]:
+    validated: Final = _CACHE_PARAMS_ADAPTER.validate_python(decrypted_settings)
+    return MappingProxyType({key: value for key, value in validated.items() if key != "redis_type"})
 
 
 def _parse_stored_settings(cache_settings_value: object) -> dict[str, object]:
@@ -215,7 +273,11 @@ def _saved_secret_is_reusable(incoming: Mapping[str, object], saved: Mapping[str
     return True
 
 
-def _merge_over_saved(incoming: Mapping[str, object], saved: Mapping[str, object]) -> Mapping[str, object]:
+def _merge_over_saved(
+    incoming: Mapping[str, object],
+    saved: Mapping[str, object],
+    config_owned: Mapping[str, object] = _EMPTY_CACHE_PARAMS,
+) -> Mapping[str, object]:
     """Keep the stored secret behind any credential the caller echoed back redacted or omitted.
 
     GET returns credentials as the marker and the form never re-prefills a
@@ -238,7 +300,10 @@ def _merge_over_saved(incoming: Mapping[str, object], saved: Mapping[str, object
         or _has_connection_target(incoming.get("sentinel_nodes"))
     )
     reuse_saved_secret: Final = _saved_secret_is_reusable(incoming, saved)
-    merged: Final = dict(incoming)
+    merged: Final = {
+        key: incoming[key] if key in incoming else saved[key]
+        for key in (*(field for field in config_owned if field in saved), *incoming)
+    }
     for field in _CACHE_SENSITIVE_FIELDS:
         # A value the caller explicitly supplied is honored verbatim: a new
         # secret, or an empty string / null to clear the stored one. Only an
@@ -332,17 +397,17 @@ class CacheSettingsManager:
     Tracks last cache params to avoid unnecessary reinitialization.
     """
 
-    _last_cache_params: dict[str, object] | None = None
+    _last_cache_params: Mapping[str, object] | None = None
 
     @staticmethod
-    def _cache_params_equal(params1: dict[str, object], params2: dict[str, object]) -> bool:
+    def _cache_params_equal(params1: Mapping[str, object], params2: Mapping[str, object]) -> bool:
         """
         Compare two cache parameter dictionaries for equality.
         Normalizes values and filters out UI-only fields.
         """
 
         # Normalize by removing None values and UI-only fields
-        def normalize(params: dict[str, object]) -> dict[str, object]:
+        def normalize(params: Mapping[str, object]) -> dict[str, object]:
             normalized: Final = {}
             for k, v in params.items():
                 if k == "redis_type":  # Skip UI-only field
@@ -384,7 +449,9 @@ class CacheSettingsManager:
 
                 # Remove redis_type if present (UI-only field, not a Cache parameter)
                 # We derive it for UI in get_cache_settings endpoint
-                cache_params: Final = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
+                cache_params: Final = _apply_config_yaml_precedence(
+                    _cache_params_without_ui_fields(decrypted_settings), _config_yaml_cache_params(proxy_config)
+                )
 
                 # Check if cache params have changed
                 if CacheSettingsManager._last_cache_params is not None and CacheSettingsManager._cache_params_equal(
@@ -397,7 +464,7 @@ class CacheSettingsManager:
                 proxy_config._init_cache(cache_params=cache_params)
 
                 # Store the params we just initialized
-                CacheSettingsManager._last_cache_params = cache_params.copy()
+                CacheSettingsManager._last_cache_params = cache_params
 
                 # Switch on LLM response caching
                 proxy_config.switch_on_llm_response_caching()
@@ -410,18 +477,22 @@ class CacheSettingsManager:
             )
 
     @staticmethod
-    def update_cache_params(cache_params: dict[str, object]):
+    def update_cache_params(cache_params: Mapping[str, object]):
         """
         Update the last cache params after initialization.
         Called after cache settings are updated via the API.
         """
-        CacheSettingsManager._last_cache_params = cache_params.copy()
+        CacheSettingsManager._last_cache_params = MappingProxyType(dict(cache_params))
 
 
 class CacheSettingsResponse(BaseModel):
     fields: list[CacheSettingsField] = Field(description="List of all configurable cache settings with metadata")
     current_values: dict[str, object] = Field(description="Current values of cache settings")
     redis_type_descriptions: dict[str, str] = Field(description="Descriptions for each Redis type option")
+    config_sourced_fields: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="Settings whose effective value comes from litellm_settings.cache_params in the config file. These take precedence over stored values and cannot be changed from this endpoint.",
+    )
 
 
 class CacheTestRequest(BaseModel):
@@ -473,7 +544,10 @@ async def get_cache_settings(
         # from when the stored config leaves them unset, then apply url precedence
         # so a url-mode config does not surface conflicting discrete fields (which
         # would otherwise let a no-op save silently switch it to host/port).
-        effective: Final = _resolve_cache_url_precedence(_overlay_environment(stored))
+        config_params: Final = _config_yaml_cache_params(proxy_config)
+        effective: Final = _resolve_cache_url_precedence(
+            _apply_config_yaml_precedence(_overlay_environment(stored), config_params)
+        )
 
         # Derive redis_type for UI based on settings
         # UI uses redis_type to show/hide fields, backend only stores 'type'
@@ -498,6 +572,7 @@ async def get_cache_settings(
             fields=cache_fields,
             current_values=current_values,
             redis_type_descriptions=REDIS_TYPE_DESCRIPTIONS,
+            config_sourced_fields=tuple(key for key in config_params if key in effective),
         )
     except Exception as e:
         verbose_proxy_logger.error("Error fetching cache settings: %s", e)
@@ -537,7 +612,10 @@ async def test_cache_connection(
                     )
             except Exception:  # noqa: BLE001 - a saved-settings lookup failure must not block a connection test
                 saved_settings = {}
-        cache_settings: Final = _resolve_cache_url_precedence(_merge_over_saved(request.cache_settings, saved_settings))
+        config_params: Final = _config_yaml_cache_params(proxy_config)
+        cache_settings: Final = _resolve_cache_url_precedence(
+            _merge_over_saved(request.cache_settings, saved_settings, config_params)
+        )
         # cache_settings now carries the resolved plaintext credential; never log it raw
         verbose_proxy_logger.debug("Testing cache connection with settings: %s", _redact_credentials(cache_settings))
 
@@ -617,7 +695,10 @@ async def update_cache_settings(
 
         # Preserve stored secrets behind any redacted or omitted credential, then
         # resolve the url-vs-discrete-fields precedence.
-        cache_settings: Final = _resolve_cache_url_precedence(_merge_over_saved(request.cache_settings, saved_settings))
+        config_params: Final = _config_yaml_cache_params(proxy_config)
+        cache_settings: Final = _resolve_cache_url_precedence(
+            _merge_over_saved(request.cache_settings, saved_settings, config_params)
+        )
 
         # Encrypt sensitive fields (keep redis_type for storage)
         encrypted_settings: Final = proxy_config._encrypt_env_variables(environment_variables=cache_settings)
@@ -641,7 +722,9 @@ async def update_cache_settings(
         decrypted_settings: Final = proxy_config._decrypt_db_variables(variables_dict=encrypted_settings)
 
         # Remove redis_type if present (UI-only field, not a Cache parameter)
-        cache_params: Final = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
+        cache_params: Final = _apply_config_yaml_precedence(
+            _cache_params_without_ui_fields(decrypted_settings), config_params
+        )
 
         # Initialize cache (frontend sends type="redis", not redis_type)
         proxy_config._init_cache(cache_params=cache_params)
@@ -667,7 +750,7 @@ async def update_cache_settings(
         return {
             "message": "Cache settings updated successfully",
             "status": "success",
-            "settings": _redact_credentials(cache_settings),
+            "settings": _redact_credentials(cache_params),
         }
     except Exception as e:
         verbose_proxy_logger.error("Error updating cache settings: %s", e)
