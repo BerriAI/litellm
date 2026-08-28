@@ -99,7 +99,7 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 44526
+    "limit": 44519
   },
   "reportUnknownLambdaType": {
     "limit": 109
@@ -111,7 +111,7 @@
     "limit": 19829
   },
   "reportUnknownVariableType": {
-    "limit": 30349
+    "limit": 30348
   },
   "reportUnnecessaryCast": {
     "limit": 117

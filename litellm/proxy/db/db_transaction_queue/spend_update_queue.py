@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
@@ -23,6 +24,22 @@ class SpendUpdateQueue(BaseUpdateQueue):
     def __init__(self):
         super().__init__()
         self.update_queue: asyncio.Queue[SpendUpdateQueueItem] = asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
+        self._pending_updates: Final[
+            dict[
+                tuple[Litellm_EntityType | None, str | None], SpendUpdateQueueItem
+            ]  # mutable-ok: [LIT001] queue-owned index
+        ] = {}  # mutable-ok: [LIT002] index owns only entries still in the bounded queue
+
+    async def flush_all_updates_from_in_memory_queue(
+        self,
+    ) -> list[SpendUpdateQueueItem]:  # mutable-ok: [LIT001] preserves the base queue's mutable batch contract
+        updates: Final[list[SpendUpdateQueueItem]] = (  # mutable-ok: [LIT001] batch owned by the base queue
+            await super().flush_all_updates_from_in_memory_queue()
+        )
+        for key, update in (((item.get("entity_type"), item.get("entity_id")), item) for item in updates):
+            if self._pending_updates.get(key) is update:
+                del self._pending_updates[key]
+        return updates
 
     async def flush_and_get_aggregated_db_spend_update_transactions(
         self,
@@ -37,27 +54,28 @@ class SpendUpdateQueue(BaseUpdateQueue):
         verbose_proxy_logger.debug("Aggregating updates by entity type: %s", updates)
         return self.get_aggregated_db_spend_update_transactions(updates)
 
-    async def add_update(self, update: SpendUpdateQueueItem):
+    async def add_update(self, update: SpendUpdateQueueItem) -> None:
         """Enqueue an update to the spend update queue"""
         verbose_proxy_logger.debug("Adding update to queue: %s", update)
-        await self.update_queue.put(update)
+        key: Final = (update.get("entity_type"), update.get("entity_id"))
+        pending: Final = self._pending_updates.get(key)
+        if pending is not None:
+            pending["response_cost"] = (pending.get("response_cost") or 0) + (update.get("response_cost") or 0)
+            return
 
-        # if the queue is full, aggregate the updates
-        if self.update_queue.qsize() >= self.MAX_SIZE_IN_MEMORY_QUEUE:
-            verbose_proxy_logger.warning(
-                "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
-            )
-            await self.aggregate_queue_updates()
+        queued_update: Final = update.copy()
+        await self.update_queue.put(queued_update)
+        self._pending_updates[key] = queued_update
 
     async def aggregate_queue_updates(self):
         """Concatenate all updates in the queue to reduce the size of in-memory queue"""
-        updates: Final[list[SpendUpdateQueueItem]] = await self.flush_all_updates_from_in_memory_queue()
+        updates: Final = await self.flush_all_updates_from_in_memory_queue()
         aggregated_updates: Final = self._get_aggregated_spend_update_queue_item(updates)
         for update in aggregated_updates:
-            await self.update_queue.put(update)
+            await self.add_update(update)
 
     def _get_aggregated_spend_update_queue_item(
-        self, updates: list[SpendUpdateQueueItem]
+        self, updates: Sequence[SpendUpdateQueueItem]
     ) -> list[SpendUpdateQueueItem]:
         """
         This is used to reduce the size of the in-memory queue by aggregating updates by entity type + id
@@ -126,7 +144,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         return aggregated_spend_updates
 
     def get_aggregated_db_spend_update_transactions(
-        self, updates: list[SpendUpdateQueueItem]
+        self, updates: Sequence[SpendUpdateQueueItem]
     ) -> DBSpendUpdateTransactions:
         """Aggregate updates by entity type."""
         # Initialize all transaction lists as empty dicts
