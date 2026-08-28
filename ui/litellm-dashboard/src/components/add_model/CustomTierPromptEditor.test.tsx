@@ -78,6 +78,32 @@ describe("CustomTierPromptEditor", () => {
     );
   });
 
+  it("ignores a stale response that resolves after a newer one", async () => {
+    let resolveFirst: (text: string) => void = () => {};
+    getAutoRouterCustomTierPromptCall
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce("assembled from the edited draft");
+    renderEditor();
+    fireEvent.click(screen.getByRole("button", { name: "Edit prompt" }));
+    await vi.waitFor(() => expect(getAutoRouterCustomTierPromptCall).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText("Classifier opening instructions"), { target: { value: "edited" } });
+    expect(await screen.findByLabelText("Assembled classifier prompt")).toHaveTextContent(
+      "assembled from the edited draft",
+    );
+
+    resolveFirst("assembled from the stale draft");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByLabelText("Assembled classifier prompt")).toHaveTextContent(
+      "assembled from the edited draft",
+    );
+  });
+
   it("keeps the editor usable when the preview cannot be fetched", async () => {
     getAutoRouterCustomTierPromptCall.mockRejectedValue(new Error("boom"));
     renderEditor();

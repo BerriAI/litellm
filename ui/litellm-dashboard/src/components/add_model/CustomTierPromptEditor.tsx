@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { getAutoRouterCustomTierPromptCall } from "@/components/networking";
 import { Button } from "@/components/ui/button";
@@ -33,30 +33,27 @@ const CustomTierPromptEditor: React.FC<CustomTierPromptEditorProps> = ({
   >({ status: "loading" });
   const isOverridden = Boolean(classificationPrompt?.trim());
 
-  // Debounced so the preview follows the draft without a request per keystroke. Nothing is saved
-  // from here, so a failed fetch leaves the preview empty rather than blocking the edit.
-  const refreshPreview = useCallback(async () => {
-    if (!accessToken) return;
-    try {
-      const text = await getAutoRouterCustomTierPromptCall(
-        accessToken,
-        contextWindowSize,
-        tierDefinitionsFromRows(tierRows),
-        draft,
-      );
-      setPreview({ status: "ready", text });
-    } catch {
-      // Distinct from loading: a role that may not call the preview, or a prompt the write gate
-      // would reject, otherwise leaves the panel claiming it is still fetching, forever.
-      setPreview({ status: "error" });
-    }
-  }, [accessToken, contextWindowSize, tierRows, draft]);
-
   useEffect(() => {
-    if (!isOpen) return;
-    const timer = setTimeout(refreshPreview, 300);
-    return () => clearTimeout(timer);
-  }, [isOpen, refreshPreview]);
+    if (!isOpen || !accessToken) return;
+    let stale = false;
+    const timer = setTimeout(async () => {
+      try {
+        const text = await getAutoRouterCustomTierPromptCall(
+          accessToken,
+          contextWindowSize,
+          tierDefinitionsFromRows(tierRows),
+          draft,
+        );
+        if (!stale) setPreview({ status: "ready", text });
+      } catch {
+        if (!stale) setPreview({ status: "error" });
+      }
+    }, 300);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [isOpen, accessToken, contextWindowSize, tierRows, draft]);
 
   const openEditor = () => {
     setDraft(classificationPrompt ?? "");
