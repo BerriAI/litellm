@@ -1396,3 +1396,17 @@ class TestConfigYamlCacheParams:
         assert "host" not in applied
         assert applied["url"] == "redis://cfg:6379/2"
         assert set(reported.config_sourced_fields) == {"type", "url"}
+
+    @pytest.mark.asyncio
+    async def test_a_config_yaml_semantic_cache_reports_the_semantic_topology(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        proxy_config = _proxy_config_with_yaml_cache_params(
+            {"type": "redis-semantic", "host": "h", "similarity_threshold": 0.9}
+        )
+
+        with _proxy_server_state(_prisma_with_cache_row(None), proxy_config):
+            reported = await get_cache_settings(user_api_key_dict=_admin_auth())
+
+        assert reported.current_values["redis_type"] == "semantic"

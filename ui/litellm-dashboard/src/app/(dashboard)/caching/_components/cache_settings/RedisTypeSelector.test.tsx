@@ -23,7 +23,7 @@ describe("RedisTypeSelector", () => {
       />,
     );
 
-    await user.click(screen.getByRole("combobox"));
+    await user.click(screen.getByLabelText("Redis Type"));
 
     expect(await screen.findByRole("option", { name: "Semantic" })).toHaveAttribute("data-disabled");
     expect(screen.getByRole("option", { name: "Cluster" })).not.toHaveAttribute("data-disabled");

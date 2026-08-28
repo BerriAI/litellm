@@ -24,9 +24,11 @@ const RedisTypeSelector: React.FC<RedisTypeSelectorProps> = ({
 }) => {
   return (
     <div className="space-y-2">
-      <label className="text-sm font-medium">Redis Type</label>
+      <label className="text-sm font-medium" htmlFor="redis-type-select">
+        Redis Type
+      </label>
       <Select value={redisType} onValueChange={(value) => value !== null && onTypeChange(value)}>
-        <SelectTrigger className="w-full">
+        <SelectTrigger id="redis-type-select" className="w-full">
           <SelectValue>{REDIS_TYPE_LABELS[redisType] ?? redisType}</SelectValue>
         </SelectTrigger>
         <SelectContent>

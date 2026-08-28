@@ -560,7 +560,9 @@ async def get_cache_settings(
 
         # Derive redis_type for UI based on settings
         # UI uses redis_type to show/hide fields, backend only stores 'type'
-        if effective.get("type") == "redis":
+        if effective.get("type") == "redis-semantic":
+            effective["redis_type"] = "semantic"
+        elif effective.get("type") == "redis":
             if effective.get("redis_startup_nodes"):
                 effective["redis_type"] = "cluster"
             elif effective.get("sentinel_nodes"):
