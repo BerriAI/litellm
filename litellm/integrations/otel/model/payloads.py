@@ -95,6 +95,22 @@ class LLMUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+
+    @classmethod
+    def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> LLMUsage:
+        # Cache token counts live on the raw provider usage object (kept under
+        # metadata), not on the top-level payload token fields.
+        metadata: Final = cast(Mapping[str, object], payload.get("metadata") or {})
+        usage_object: Final = cast(Mapping[str, object], metadata.get("usage_object") or {})
+        return cls(
+            input_tokens=as_int(payload.get("prompt_tokens")),
+            output_tokens=as_int(payload.get("completion_tokens")),
+            total_tokens=as_int(payload.get("total_tokens")),
+            cache_creation_input_tokens=as_int(usage_object.get("cache_creation_input_tokens")),
+            cache_read_input_tokens=as_int(usage_object.get("cache_read_input_tokens")),
+        )
 
 
 @dataclass(frozen=True)
@@ -363,11 +379,7 @@ class LLMCallSpanData:
             response_model=context.response_model,
             response_id=as_str(response.get("id")),
             request_params=LLMRequestParams.from_model_parameters(params),
-            usage=LLMUsage(
-                input_tokens=as_int(payload.get("prompt_tokens")),
-                output_tokens=as_int(payload.get("completion_tokens")),
-                total_tokens=as_int(payload.get("total_tokens")),
-            ),
+            usage=LLMUsage.from_standard_logging_payload(payload),
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
