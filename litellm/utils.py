@@ -3544,11 +3544,15 @@ def get_optional_params_embeddings(
             object = litellm.AmazonNovaEmbeddingConfig()
         else:  # unmapped model
             supported_params = []
+            if non_default_params.get("encoding_format") == "float":
+                non_default_params.pop("encoding_format")
             _check_valid_arg(supported_params=supported_params)
             final_params = {**kwargs}
             return final_params
 
         supported_params = object.get_supported_openai_params()
+        if non_default_params.get("encoding_format") == "float" and "encoding_format" not in supported_params:
+            non_default_params.pop("encoding_format")
         _check_valid_arg(supported_params=supported_params)
         optional_params = object.map_openai_params(non_default_params=non_default_params, optional_params={})
     elif custom_llm_provider == "mistral":

@@ -4412,6 +4412,45 @@ class TestVertexEmbeddingEncodingFormat:
         assert optional_params.get("outputDimensionality") == 256
 
 
+class TestBedrockEmbeddingDefaultEncodingFormat:
+    """Bedrock embedding models that don't map encoding_format must tolerate
+    encoding_format="float": OpenAI SDKs and litellm's openai-compatible proxy
+    hop send it by default, and float is exactly what Bedrock returns anyway.
+    Issue #38661."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "amazon.titan-embed-text-v1",
+            "amazon.titan-embed-image-v1",
+            "some-unmapped-bedrock-model",
+        ],
+    )
+    def test_encoding_format_float_is_dropped(self, model):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model=model,
+            encoding_format="float",
+            custom_llm_provider="bedrock",
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_encoding_format_base64_still_rejected(self):
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            litellm.utils.get_optional_params_embeddings(
+                model="amazon.titan-embed-text-v1",
+                encoding_format="base64",
+                custom_llm_provider="bedrock",
+            )
+
+    def test_titan_v2_still_maps_encoding_format(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="amazon.titan-embed-text-v2:0",
+            encoding_format="float",
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("embeddingTypes") == ["float"]
+
+
 @pytest.mark.parametrize(
     "model",
     [
