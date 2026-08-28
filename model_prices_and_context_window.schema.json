@@ -191,6 +191,11 @@
         "gemini_native_audio": {
           "type": "boolean"
         },
+        "google_maps_grounding_cost_per_query": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
+        },
         "guardrail_cost_per_unit": {
           "type": "object",
           "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
@@ -526,6 +531,22 @@
         "provider_specific_entry": {
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
+        },
+        "reasoning_effort_levels": {
+          "type": "array",
+          "description": "Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         "regional_endpoint_uplift_multiplier": {
           "type": "number",

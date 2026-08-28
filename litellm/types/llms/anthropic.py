@@ -324,7 +324,12 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
     is_error: bool
     content: (
         str
-        | Iterable[AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam]
+        | Iterable[
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
+        ]
     )
     cache_control: dict | ChatCompletionCachedContent | None
 
@@ -502,11 +507,16 @@ class MessageDelta(TypedDict, total=False):
     stop_reason: str | None
 
 
+class ServerToolUsage(TypedDict, total=False):
+    web_search_requests: ReadOnly[int]
+
+
 class UsageDelta(TypedDict, total=False):
     input_tokens: int
     output_tokens: int
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+    server_tool_use: ReadOnly[ServerToolUsage]
 
 
 class AppliedEdit(TypedDict, total=False):

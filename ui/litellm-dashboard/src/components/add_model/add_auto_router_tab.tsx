@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
-import { modelAvailableCall } from "../networking";
+import { modelAvailableCall, validateAutoRouterConfig } from "../networking";
 import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
@@ -33,7 +33,9 @@ import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
+  dryRunRejection,
   getKeywordTierRulesError,
+  getClassifierModelError,
   getMissingTiersError,
   getPlanModeTierError,
   getSemanticConfigError,
@@ -116,7 +118,7 @@ const tierConfigSummary = (config: ComplexityRouterConfigValue): string => {
 // itself and to say what is missing, so the two can never give different answers. Checks the
 // config actually being built, not which preset (if any) it came from: a preset only ever
 // prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
-const getSubmitBlockedReason = (
+export const getSubmitBlockedReason = (
   config: ComplexityRouterConfigValue,
   keywordTierRules: KeywordTierRule[],
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
@@ -125,7 +127,8 @@ const getSubmitBlockedReason = (
   getMissingTiersError(activeTierRows(config)) ??
   getTierLabelsError(config.tier_labels) ??
   getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
-  getKeywordTierRulesError(keywordTierRules) ??
+  getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
+  getClassifierModelError(config) ??
   getReferencedModelsError(referencedModelsParams, availability);
 
 const autoRouterSchema = (requiresTeamScope: boolean) =>
@@ -194,6 +197,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
   // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
@@ -342,6 +346,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tiers: complexityRouterConfig.tiers,
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
+    heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
@@ -370,50 +375,21 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const submitRecommendedRouter = async (name: string) => {
-    const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
+    const { tiers } = complexityRouterConfigParams;
 
-    const missingTiersError = getMissingTiersError(activeTierRows(complexityRouterConfig));
-    if (missingTiersError) {
+    // The one answer the submit button reads, so a disabled button and a refused submit cannot
+    // disagree about why. The handler needs it in its own right: the form fires this on Enter
+    // regardless of the button's disabled state.
+    const blockedReason =
+      getSubmitBlockedReason(
+        complexityRouterConfig,
+        keywordTierRules,
+        referencedModelsParams,
+        groupsOnlyAvailability,
+      ) ?? getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
+    if (blockedReason) {
       setShowValidationErrors(true);
-      toast.fromError(missingTiersError);
-      return;
-    }
-
-    const tierLabelsError = getTierLabelsError(tierLabels);
-    if (tierLabelsError) {
-      setShowValidationErrors(true);
-      toast.fromError(tierLabelsError);
-      return;
-    }
-
-    if (classifierType === "llm" && !classifierLlmConfig?.model) {
-      setShowValidationErrors(true);
-      toast.fromError("Please select a classifier model, or switch back to Heuristic");
-      return;
-    }
-
-    const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
-    if (keywordRulesError) {
-      setShowValidationErrors(true);
-      toast.fromError(keywordRulesError);
-      return;
-    }
-
-    const semanticError = getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
-    if (semanticError) {
-      setShowValidationErrors(true);
-      toast.fromError(semanticError);
-      return;
-    }
-
-    // submitBlockedReason already disables the button for this, but the form's submit handler (wired to
-    // this same function) fires on Enter regardless of the button's disabled state - without this check,
-    // Enter in the name field could still create a router referencing a model that disappeared from
-    // availableModelSet after the tiers were filled in.
-    const referencedModelsError = getReferencedModelsError(referencedModelsParams, groupsOnlyAvailability);
-    if (referencedModelsError) {
-      setShowValidationErrors(true);
-      toast.fromError(referencedModelsError);
+      toast.fromError(blockedReason);
       return;
     }
 
@@ -427,6 +403,19 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
+    const complexityRouterConfigPayload = buildComplexityRouterConfig(complexityRouterConfigParams);
+    const serverVerdict = await validateAutoRouterConfig(
+      accessToken,
+      complexityRouterConfigPayload as unknown as Record<string, unknown>,
+      requiresTeamScope ? form.getValues("team_id") : undefined,
+    );
+    const dryRunError = dryRunRejection(serverVerdict);
+    if (dryRunError) {
+      setShowValidationErrors(true);
+      toast.fromError(dryRunError);
+      return;
+    }
+
     // auto_router_default_model (-> litellm_params, read by the backend at init) and
     // complexity_router_config.default_model (-> the pin marker read back on edit, see
     // hydratePinnedDefaultModel in edit_auto_router_modal.tsx) must both come from the same
@@ -436,14 +425,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
       auto_router_default_model: defaultModel,
       model_type: "complexity_router",
-      complexity_router_config: buildComplexityRouterConfig(complexityRouterConfigParams),
+      complexity_router_config: complexityRouterConfigPayload,
       model_access_group: form.getValues("model_access_group"),
     };
 
-    handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
+    await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
   };
 
   const handleAutoRouterSubmit = async () => {
+    if (isSubmitting) return;
     const name = form.getValues("auto_router_name");
     if (!name) {
       setShowValidationErrors(true);
@@ -452,7 +442,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    await submitRecommendedRouter(name);
+    setIsSubmitting(true);
+    try {
+      await submitRecommendedRouter(name);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleTestConnection = () => {
@@ -666,11 +661,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   <BlockedReasonTooltip reason={submitBlockedReason}>
                     <Button
                       type="button"
-                      disabled={submitBlockedReason !== null}
+                      disabled={submitBlockedReason !== null || isSubmitting}
                       onClick={() => {
                         void handleAutoRouterSubmit();
                       }}
                     >
+                      {isSubmitting && <UiLoadingSpinner className="size-4" />}
                       Add Auto Router
                     </Button>
                   </BlockedReasonTooltip>

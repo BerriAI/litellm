@@ -343,6 +343,31 @@ def test_transcription_cost_uses_token_pricing(_local_model_cost_map):
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_transcription_token_pricing_is_provider_aware(_local_model_cost_map):
+    """Regression: the token-priced transcription path hardcoded provider openai,
+    so gemini transcription models raised "This model isn't mapped yet"."""
+    from litellm import completion_cost
+
+    usage = Usage(
+        prompt_tokens=200,
+        completion_tokens=10,
+        total_tokens=210,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=1, audio_tokens=199),
+    )
+    response = TranscriptionResponse(text="demo text")
+    response.usage = usage
+
+    cost = completion_cost(
+        completion_response=response,
+        model="gemini/gemini-3.5-transcribe",
+        custom_llm_provider="gemini",
+        call_type="atranscription",
+    )
+
+    expected_cost = (199 * 2e-06) + (1 * 2e-06) + (10 * 1.2e-05)
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
 def test_transcription_cost_falls_back_to_duration(_local_model_cost_map):
     from litellm import completion_cost
 
@@ -2619,6 +2644,49 @@ def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate(_local_mo
     assert cost == pytest.approx(expected_priority)
 
 
+def test_completion_cost_vertex_ai_gemini_flex_traffic_type(_local_model_cost_map):
+    """
+    Vertex AI flex-tier billing regression for issue #37647.
+
+    Vertex Gemini 3.x models route through ``cost_per_character`` (the
+    ``cost_router`` token-path gate only matches "gemini-2"), and its token
+    fallbacks dropped ``service_tier``. A response served with
+    ``trafficType=ON_DEMAND_FLEX`` must be billed at the flex rate, not the
+    standard rate.
+    """
+    from litellm import completion_cost
+
+    model = "gemini-3-test-flex-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 1.5e-6,
+                "output_cost_per_token": 9e-6,
+                "input_cost_per_token_flex": 7.5e-7,
+                "output_cost_per_token_flex": 4.5e-6,
+                "litellm_provider": "vertex_ai",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    def _cost_for_traffic_type(traffic_type):
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        response = ModelResponse(usage=usage, model=model)
+        response._hidden_params["provider_specific_fields"] = {"traffic_type": traffic_type}
+        return completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="vertex_ai",
+        )
+
+    standard_cost = _cost_for_traffic_type("ON_DEMAND")
+    flex_cost = _cost_for_traffic_type("ON_DEMAND_FLEX")
+
+    assert standard_cost == pytest.approx(1000 * 1.5e-6 + 500 * 9e-6)
+    assert flex_cost == pytest.approx(1000 * 7.5e-7 + 500 * 4.5e-6)
+
+
 def test_completion_cost_non_string_service_tier_defers_to_served_tier(_local_model_cost_map):
     """
     Regression: a non-string request-level ``service_tier`` (reachable via
@@ -3909,6 +3977,74 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
 
 
+def _together_chat_response(model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-together-cache",
+        choices=[{"finish_reason": "stop", "index": 0, "message": {"content": "acknowledged", "role": "assistant"}}],
+        created=1756164000,
+        model=model,
+        object="chat.completion",
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
+
+
+def test_completion_cost_prices_together_cached_tokens_at_cache_read_rate(_local_model_cost_map):
+    """Regression: Together reports prompt_tokens_details.cached_tokens but no together_ai
+    registry entry carried cache_read_input_token_cost, so cache-hit tokens were priced at
+    0.0 and spend on cache-heavy workloads was understated."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="deepseek-ai/DeepSeek-V4-Flash-0731", prompt_tokens=7864, completion_tokens=16, cached_tokens=7863
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(1 * 1.4e-07 + 7863 * 3e-08 + 16 * 2.8e-07, rel=1e-9)
+
+
+def test_completion_cost_together_mapped_model_skips_size_bucket(_local_model_cost_map):
+    """Regression: any together model whose name matches (\\d+b) was rewritten to a
+    together-ai-* size bucket before the registry lookup, so mapped models like
+    Muse-Glimmer-30B never used their per-model rates, cache fields included."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="meta-models/Muse-Glimmer-30B", prompt_tokens=63, completion_tokens=16, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(63 * 3.5e-07 + 16 * 1.5e-06, rel=1e-9)
+
+
+def test_completion_cost_together_unmapped_model_still_uses_size_bucket(_local_model_cost_map):
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="qwen/Qwen2-72B-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 9e-07, rel=1e-9)
+
+
+def test_completion_cost_together_metadata_only_model_still_uses_size_bucket(_local_model_cost_map):
+    assert "input_cost_per_token" not in litellm.model_cost["together_ai/togethercomputer/CodeLlama-34b-Instruct"]
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="togethercomputer/CodeLlama-34b-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 8e-07, rel=1e-9)
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
     """A router-facing model_name alias containing "/" whose leading segment is NOT a
     registered provider must not be double-prefixed into a non-existent cost key.
@@ -4116,3 +4252,101 @@ def test_every_one_hour_cache_write_rate_is_double_its_input_rate():
     }
 
     assert deviations == {}
+
+
+def test_gemini_live_native_audio_ga_realtime_cost(_local_model_cost_map: None) -> None:
+    """Regression for https://github.com/BerriAI/litellm/issues/31087."""
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gemini-live-2.5-flash-native-audio"}},
+    ]
+    combined_usage_object = Usage(
+        prompt_tokens=8,
+        completion_tokens=25,
+        total_tokens=33,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=8, audio_tokens=0),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=2, audio_tokens=23),
+    )
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name="vertex_ai/gemini-live-2.5-flash-native-audio",
+    )
+
+    expected_cost = 8 * 5e-07 + 2 * 2e-06 + 23 * 1.2e-05
+    assert cost == pytest.approx(expected_cost, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    "priceless_entry",
+    [
+        {"litellm_provider": "vertex_ai", "mode": "realtime"},
+        {
+            "litellm_provider": "vertex_ai",
+            "mode": "realtime",
+            "input_cost_per_token": None,
+            "output_cost_per_token": None,
+            "input_cost_per_audio_token": None,
+        },
+    ],
+    ids=["registered_without_price_fields", "registered_with_none_valued_price_fields"],
+)
+def test_realtime_priceless_deployment_entry_falls_through_to_priced_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, priceless_entry: dict
+) -> None:
+    """Regression for https://github.com/BerriAI/litellm/issues/31087 (router-registered priceless entries)."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/some-unmapped-live-model",
+        priceless_entry,
+    )
+    priced_model = "vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025"
+    priced_entry = litellm.model_cost["gemini-live-2.5-flash-preview-native-audio-09-2025"]
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "some-unmapped-live-model"}},
+    ]
+    combined_usage_object = Usage(prompt_tokens=8, completion_tokens=25, total_tokens=33)
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name=priced_model,
+    )
+
+    expected_cost = 8 * priced_entry["input_cost_per_token"] + 25 * priced_entry["output_cost_per_token"]
+    assert cost == pytest.approx(expected_cost, rel=1e-9)
+    assert cost > 0
+
+
+def test_realtime_explicitly_free_session_model_still_bills_zero(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/free-live-model",
+        {
+            "litellm_provider": "vertex_ai",
+            "mode": "realtime",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+    )
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "free-live-model"}},
+    ]
+    combined_usage_object = Usage(prompt_tokens=8, completion_tokens=25, total_tokens=33)
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name="vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025",
+    )
+
+    assert cost == 0.0

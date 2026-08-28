@@ -1021,19 +1021,7 @@ async def delete_prompt(
         # Delete versions from the database (scoped to environment if provided)
         await _prompt_table(prisma_client).delete_many(where=delete_where)
 
-        # Remove matching prompts from memory — scope to environment if provided
-        if environment:
-            prompts_to_delete: Final = [
-                pid
-                for pid, prompt in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.items()
-                if get_base_prompt_id(prompt_id=pid) == base_prompt_id and prompt.environment == environment
-            ]
-            for pid in prompts_to_delete:
-                del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[pid]
-                if pid in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
-                    del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[pid]
-        else:
-            IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id)
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id, environment=environment or None)
 
         env_msg: Final = f" from {environment}" if environment else ""
         return {"message": f"Prompt {base_prompt_id} deleted successfully{env_msg}"}
@@ -1045,15 +1033,8 @@ async def delete_prompt(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _reload_prompt_in_registry(
-    registry: "InMemoryPromptRegistry", versioned_id: str, updated_prompt_spec: PromptSpec
-) -> PromptSpec:
-    """Remove stale entry and re-initialize the prompt in the in-memory registry."""
-    if versioned_id in registry.IN_MEMORY_PROMPTS:
-        del registry.IN_MEMORY_PROMPTS[versioned_id]
-    if versioned_id in registry.prompt_id_to_custom_prompt:
-        del registry.prompt_id_to_custom_prompt[versioned_id]
-    initialized: Final = registry.initialize_prompt(prompt=updated_prompt_spec, config_file_path=None)
+def _reload_prompt_in_registry(registry: "InMemoryPromptRegistry", updated_prompt_spec: PromptSpec) -> PromptSpec:
+    initialized: Final = registry.reload_prompt(prompt=updated_prompt_spec)
     if initialized is None:
         raise HTTPException(status_code=500, detail="Failed to patch prompt")
     return initialized
@@ -1146,25 +1127,15 @@ async def patch_prompt(
                 detail="Cannot update config prompts.",
             )
 
-        # Use existing prompt from memory or build from DB row for field merging
-        if existing_prompt:
-            current_litellm_params = existing_prompt.litellm_params
-            current_prompt_info = existing_prompt.prompt_info
-        else:
-            current_spec: Final = create_versioned_prompt_spec(db_prompt=target_row)
-            current_litellm_params = current_spec.litellm_params
-            current_prompt_info = current_spec.prompt_info
+        current_spec: Final = create_versioned_prompt_spec(db_prompt=target_row)
 
-        # Update fields if provided
         updated_litellm_params: Final = (
-            request.litellm_params if request.litellm_params is not None else current_litellm_params
+            request.litellm_params if request.litellm_params is not None else current_spec.litellm_params
         )
 
-        updated_prompt_info: Final = request.prompt_info if request.prompt_info is not None else current_prompt_info
-
-        # Ensure we have valid litellm_params
-        if updated_litellm_params is None:
-            raise HTTPException(status_code=400, detail="litellm_params cannot be None")
+        updated_prompt_info: Final = (
+            request.prompt_info if request.prompt_info is not None else current_spec.prompt_info
+        )
 
         # Build update data dict
         update_data: Final[dict[str, str]] = {
@@ -1188,7 +1159,7 @@ async def patch_prompt(
 
         updated_prompt_spec: Final = create_versioned_prompt_spec(db_prompt=updated_prompt_db_entry)
 
-        return _reload_prompt_in_registry(IN_MEMORY_PROMPT_REGISTRY, versioned_id, updated_prompt_spec)
+        return _reload_prompt_in_registry(IN_MEMORY_PROMPT_REGISTRY, updated_prompt_spec)
 
     except HTTPException as e:
         raise e

@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Final, Optional
 from pydantic import BaseModel, ValidationError
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _get_web_search_requests,
     generic_cost_per_token,
     get_provider_specific_geo_multiplier,
+    get_web_search_requests_from_usage,
 )
 
 if TYPE_CHECKING:
@@ -104,7 +104,7 @@ def get_cost_for_anthropic_web_search(
 
     if usage is None:
         return 0.0
-    web_search_requests: Final = _get_web_search_requests(getattr(usage, "server_tool_use", None))
+    web_search_requests: Final = get_web_search_requests_from_usage(usage)
     if web_search_requests is None:
         return 0.0
 

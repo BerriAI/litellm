@@ -235,6 +235,40 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_key_otel_service_name_outranks_team_metadata_merge():
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"otel_service_name": "key-svc"},
+        team_metadata={"otel_service_name": "team-svc", "other_setting": "team-val"},
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    auth_metadata = updated_data["metadata"]["user_api_key_auth_metadata"]
+    assert auth_metadata["otel_service_name"] == "key-svc"
+    assert auth_metadata["other_setting"] == "team-val"
+
+
+@pytest.mark.asyncio
 async def test_stamped_auth_object_reflects_header_derived_identity():
     """
     Regression (LIT-5487): the stamped object is a copy taken partway through request setup,
