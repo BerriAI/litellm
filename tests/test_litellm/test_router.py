@@ -9051,6 +9051,25 @@ def test_model_group_info_reasoning_efforts_ignore_a_deployment_off_the_map():
     assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high", "max")
 
 
+
+def test_model_group_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
+    """``/model_group/info`` folds each deployment's registry flags into the group; a deployment whose
+    registry entry declares parallel function calling must flip the group to True instead of False."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "glm-group",
+                "litellm_params": {"model": "together_ai/zai-org/GLM-5.3-Flash", "api_key": "fake-key"},
+            }
+        ]
+    )
+
+    result = router._set_model_group_info(model_group="glm-group", user_facing_model_group_name="glm-group")
+
+    assert result is not None
+    assert result.supports_parallel_function_calling is True
+
+
 def test_model_group_info_reasoning_efforts_empty_on_a_mapped_non_reasoning_deployment():
     """A group mixing a reasoning model with one the map knows is not a reasoning model shares no
     level, so it advertises none and the picker offers nothing rather than a level routing would
