@@ -91,7 +91,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
-from litellm.litellm_core_utils.core_helpers import coerce_token_limit, is_expected_client_error
+from litellm.litellm_core_utils.core_helpers import (
+    coerce_token_limit,
+    independent_snapshot,
+    is_expected_client_error,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -1387,6 +1391,83 @@ class ProxyLogging:
 
         return data
 
+    async def _run_sequential_guardrail_callback(
+        self,
+        callback: CustomGuardrail,
+        data: dict,  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
+        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> dict:  # mutable-ok: callers reassign the loop's own data from this return value
+        """
+        Run one guardrail from the sequential pre_call loop and return what the
+        rest of the loop should carry forward.
+
+        A guardrail opted into ``scan_raw_request`` always evaluates a fresh
+        copy of ``raw_request_snapshot`` (taken before any guardrail in this
+        hook ran) instead of ``data`` (the live, possibly already-mutated
+        payload), so its block/pass decision can never depend on where it's
+        declared relative to a guardrail that masks or rewrites content. It's
+        declared block-only, same contract as ``run_in_parallel``: any data it
+        returns is discarded, since applying its view on top of a stale
+        snapshot would silently undo whatever a later guardrail already did to
+        the live request. A guardrail that mutates content (e.g. PII masking)
+        should never set this flag -- if one does anyway, its returned
+        mutation is discarded and a warning is logged so the misconfiguration
+        is visible instead of silently forwarding unredacted content.
+        """
+        scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+        should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
+        input_data: Final = (  # mutable-ok: same request-payload shape as data
+            independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
+        )
+        # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
+        # successful run, which unconditionally stamps bookkeeping metadata onto
+        # the dict regardless of whether the guardrail's own hook mutated
+        # anything -- so comparing `result` straight against `input_data` would
+        # warn on every single scan_raw_request call. Apply that same stamp to a
+        # throwaway, guaranteed-independent copy first (never the live request or
+        # raw_request_snapshot itself) so the comparison isolates the guardrail's
+        # own content mutation from this bookkeeping noise without risking a
+        # premature marker write into shared state.
+        expected_if_unmutated: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
+            independent_snapshot(input_data) if scans_raw_request else None
+        )
+        if expected_if_unmutated is not None:
+            callback.mark_pre_call_hook_ran(expected_if_unmutated)
+        result: Final = await self._process_guardrail_callback(
+            callback=callback,
+            data=input_data,
+            user_api_key_dict=user_api_key_dict,
+            call_type=call_type,
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        if (
+            scans_raw_request
+            and expected_if_unmutated is not None
+            and result is not None
+            and result != expected_if_unmutated
+        ):
+            verbose_proxy_logger.warning(
+                "Guardrail '%s' has scan_raw_request=True but returned a modified payload; "
+                "scan_raw_request is for block-only guardrails and this mutation is being "
+                "discarded. Remove scan_raw_request from this guardrail's config if it needs "
+                "to mask/rewrite content.",
+                getattr(callback, "guardrail_name", None) or callback.__class__.__name__,
+            )
+        if scans_raw_request:
+            if result is not None:
+                # _process_guardrail_callback only stamped input_data (a throwaway
+                # snapshot copy), never the live data returned here -- without this,
+                # a deployment-level guardrail sharing this name would see no marker
+                # via _pre_call_hook_already_ran and re-run the same guardrail a
+                # second time on live kwargs.
+                callback.mark_pre_call_hook_ran(data)
+            return data
+        if result is None:
+            return data
+        return result
+
     async def _process_prompt_template(
         self,
         data: dict,
@@ -1496,12 +1577,18 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         event_hook: str,
+        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
     ) -> dict:
         """
         Execute guardrail pipelines if any are configured for this request.
 
         Checks metadata for pipelines resolved by the policy engine
         and executes them. Handles the result (allow/block/modify_response).
+
+        ``raw_request_snapshot`` (taken before any guardrail or pipeline ran)
+        is forwarded so a pipeline step whose guardrail opted into
+        ``scan_raw_request`` evaluates the pristine request, not whatever an
+        earlier ``pass_data`` step in the same pipeline already rewrote.
 
         Returns the (possibly modified) data dict.
         """
@@ -1520,6 +1607,7 @@ class ProxyLogging:
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 policy_name=policy_name,
+                raw_request_snapshot=raw_request_snapshot,
             )
 
             data = self._handle_pipeline_result(
@@ -1679,6 +1767,24 @@ class ProxyLogging:
                 call_type=call_type,
             )
 
+        # Snapshotted here, before _maybe_execute_pipelines or any guardrail in
+        # this hook has run, so a scan_raw_request guardrail's block/pass
+        # decision never depends on its position in the guardrails list or on
+        # a pipeline that runs ahead of it: an earlier guardrail (pipelined or
+        # not) that masks/rewrites content can't hide a violation from a later
+        # one that opted into scanning the original request. Only computed
+        # when at least one registered guardrail actually opted in, and via
+        # independent_snapshot (not safe_deep_copy) since this isolation
+        # guarantee must hold even under litellm.safe_memory_mode, which
+        # otherwise makes deep copies return the original object.
+        needs_raw_request_snapshot: Final = any(
+            isinstance(cb, CustomGuardrail) and getattr(cb, "scan_raw_request", False)
+            for cb in ProxyLogging._callback_capabilities().resolved_callbacks
+        )
+        raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
+            independent_snapshot(data) if needs_raw_request_snapshot else None
+        )
+
         try:
             # Execute guardrail pipelines before the normal callback loop
             data = await self._maybe_execute_pipelines(
@@ -1686,6 +1792,7 @@ class ProxyLogging:
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 event_hook="pre_call",
+                raw_request_snapshot=raw_request_snapshot,
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
@@ -1726,16 +1833,13 @@ class ProxyLogging:
                         if getattr(_callback, "run_in_parallel", False):
                             continue
 
-                        result = await self._process_guardrail_callback(
+                        data = await self._run_sequential_guardrail_callback(
                             callback=_callback,
                             data=data,
+                            raw_request_snapshot=raw_request_snapshot,
                             user_api_key_dict=user_api_key_dict,
                             call_type=call_type,
-                            event_type=GuardrailEventHooks.pre_call,
                         )
-                        if result is None:
-                            continue
-                        data = result
 
                     elif (
                         _callback is not None
@@ -1787,6 +1891,7 @@ class ProxyLogging:
                 await self._run_parallel_pre_call_guardrails(
                     guardrails=parallel_guardrails,
                     data=data,
+                    raw_request_snapshot=raw_request_snapshot,
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
                 )
@@ -1807,6 +1912,7 @@ class ProxyLogging:
         self,
         guardrails: tuple[CustomGuardrail, ...],
         data: dict,
+        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> None:
@@ -1823,12 +1929,24 @@ class ProxyLogging:
         the LLM, preserving the pre-call barrier that ``during_call`` guardrails
         cannot provide. Per-guardrail latency is recorded by
         ``_process_guardrail_callback``'s own metrics.
+
+        A guardrail that also opted into ``scan_raw_request`` evaluates
+        ``raw_request_snapshot`` (taken before the sequential loop ran) instead
+        of ``data`` (the sequential loop's output), for the same reason the
+        sequential branch does: its block decision must not depend on what a
+        sequential guardrail already masked or rewrote.
         """
+
+        def _input_for(callback: CustomGuardrail) -> dict:  # mutable-ok: same request-payload shape as data
+            if not getattr(callback, "scan_raw_request", False) or raw_request_snapshot is None:
+                return data
+            return independent_snapshot(raw_request_snapshot)
+
         results: Final = await asyncio.gather(
             *(
                 self._process_guardrail_callback(
                     callback=callback,
-                    data=data,
+                    data=_input_for(callback),
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
                     event_type=GuardrailEventHooks.pre_call,
@@ -1837,6 +1955,19 @@ class ProxyLogging:
             ),
             return_exceptions=True,
         )
+        for callback, result in zip(guardrails, results, strict=True):
+            # _process_guardrail_callback stamped mark_pre_call_hook_ran on
+            # _input_for's throwaway snapshot copy for a scan_raw_request
+            # guardrail, never on the live, shared `data` -- without this, a
+            # deployment-level guardrail sharing this name would see no marker
+            # via _pre_call_hook_already_ran and re-run it a second time on
+            # live kwargs.
+            if (
+                getattr(callback, "scan_raw_request", False)
+                and not isinstance(result, BaseException)
+                and result is not None
+            ):
+                callback.mark_pre_call_hook_ran(data)
         raised: Final = tuple(result for result in results if isinstance(result, BaseException))
         blocking: Final = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
         if blocking is not None:
