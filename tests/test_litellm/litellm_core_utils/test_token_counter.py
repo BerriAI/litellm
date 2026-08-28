@@ -1172,16 +1172,7 @@ def test_count_content_list_rejects_unknown_type():
     ids=["base64", "url", "file"],
 )
 def test_token_counter_with_anthropic_image_block(source: dict[str, str]):
-    """
-    Anthropic-native `image` blocks must NOT raise, for every source variant.
-
-    Before this fix `_count_content_list` raised
-    `Invalid content item type: image`. That 500s /v1/messages/count_tokens and
-    /utils/token_counter, and it makes the router's context-window pre-call
-    check swallow the error and return every deployment unfiltered, so an
-    oversized prompt carrying an image is dispatched upstream instead of being
-    rejected locally.
-    """
+    """Anthropic `image` blocks must count for every source variant, not raise `Invalid content item type` (which the router's context-window pre-call check swallows into an unfiltered dispatch)."""
     from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 
     messages = [
@@ -1205,11 +1196,7 @@ def test_token_counter_with_anthropic_image_block(source: dict[str, str]):
 
 
 def test_anthropic_image_block_matches_equivalent_image_url():
-    """
-    An Anthropic `image` block must price identically to the OpenAI `image_url`
-    block carrying the same bytes, so the count does not depend on which
-    endpoint shape the caller used.
-    """
+    """An Anthropic `image` block prices identically to the OpenAI `image_url` carrying the same bytes."""
     anthropic_messages = [
         {
             "role": "user",
@@ -1247,11 +1234,7 @@ def test_anthropic_image_block_matches_equivalent_image_url():
 
 
 def test_anthropic_image_block_nested_in_tool_result():
-    """
-    An `image` block nested inside a `tool_result.content` list must be counted
-    too. `_count_anthropic_content` recurses back into `_count_content_list`, so
-    the nested case failed for the same reason the top-level one did.
-    """
+    """An `image` block nested in a `tool_result.content` list is counted through the same recursion."""
     messages = [
         {
             "role": "user",
@@ -1292,22 +1275,14 @@ def test_anthropic_image_block_nested_in_tool_result():
     ids=["base64", "url", "file"],
 )
 def test_anthropic_image_source_resolves_to_what_the_image_pricer_reads(source: dict[str, str], expected: str):
-    """
-    The image pricer reads either a data URI or a fetchable URL: a base64 source keeps its
-    media type inside the URI, a url source passes through untouched, and a file source has
-    no bytes the proxy can measure locally.
-    """
+    """base64 sources become a data URI, url sources pass through, file sources resolve to an empty string."""
     from litellm.litellm_core_utils.token_counter import _anthropic_image_source_data
 
     assert _anthropic_image_source_data(source) == expected
 
 
 def test_anthropic_image_block_with_empty_base64_data():
-    """
-    A base64 source carrying no bytes must still price as an image rather than
-    raise: the block is well-formed enough to count, and an empty `data` only
-    means there is nothing to measure the dimensions from.
-    """
+    """A base64 source with empty `data` prices as an image rather than raising."""
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
     tokens = _count_content_list(
@@ -1322,11 +1297,7 @@ def test_anthropic_image_block_with_empty_base64_data():
 
 
 def test_anthropic_image_block_without_source_raises():
-    """
-    An `image` block with no `source` is malformed, and must fail the same way
-    the OpenAI `image_url` block with no `url` does - a ValueError the caller
-    can turn into a 400 - instead of being silently counted as a valid image.
-    """
+    """An `image` block with no `source` raises, matching the OpenAI `image_url`-without-`url` behavior."""
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
     with pytest.raises(ValueError, match="Error getting number of tokens from content list"):
@@ -1369,10 +1340,7 @@ def _count_user_content(content: list[dict]) -> int:
     ids=["base64", "url", "file"],
 )
 def test_anthropic_document_block_with_opaque_source_is_priced_like_an_image(source: dict[str, str]):
-    """
-    A `document` whose bytes cannot be tokenized locally must not raise (it 500ed
-    /v1/messages/count_tokens before) and is priced exactly like an `image` block.
-    """
+    """A `document` whose bytes can't be tokenized locally is priced like an `image`, not raised on."""
     prompt = {"type": "text", "text": "Summarize this file."}
 
     assert _count_user_content([prompt, {"type": "document", "source": source}]) == _count_user_content(
