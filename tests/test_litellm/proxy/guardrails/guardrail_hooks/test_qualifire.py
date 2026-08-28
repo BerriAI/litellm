@@ -136,6 +136,28 @@ class TestQualifireGuardrailInit:
                 api_key="test_key", guardrail_name="test_guardrail", on_flagged="inject_system_message"
             )
 
+    def test_in_memory_update_reintroducing_inject_system_message_raises(self):
+        """
+        Bugbot finding on BerriAI/litellm#34940: on_flagged is validated only in
+        __init__. The base CustomGuardrail.update_in_memory_litellm_params is a
+        blind setattr loop with no revalidation, so a live config update (PUT
+        /guardrails/{id}, no restart) could setattr on_flagged="inject_system_message"
+        straight onto a running instance, bypassing the constructor's rejection.
+        Mirrors LakeraAIGuardrail's own update_in_memory_litellm_params override.
+        """
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        guardrail = QualifireGuardrail(api_key="test_key", guardrail_name="test_guardrail", on_flagged="block")
+        updated_params = LitellmParams(
+            guardrail="qualifire", mode="pre_call", on_flagged="inject_system_message"
+        )
+        with pytest.raises(ValueError, match="does not support on_flagged"):
+            guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
+        assert guardrail.on_flagged == "block", "a rejected update must leave the live instance untouched"
+
 
 class TestQualifireGuardrailMessageConversion:
     """Tests for message conversion to API format."""

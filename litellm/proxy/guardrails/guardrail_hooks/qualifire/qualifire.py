@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -87,16 +87,7 @@ class QualifireGuardrail(CustomGuardrail):
         self.tool_selection_quality_check = tool_selection_quality_check
         self.assertions = assertions
         self.on_flagged = on_flagged or "block"
-        if self.on_flagged not in ("block", "monitor"):
-            # on_flagged is defined on LakeraV2GuardrailConfigModel but LitellmParams
-            # flattens every guardrail config mixin together, so a value Lakera
-            # supports (e.g. "inject_system_message") type-checks for any guardrail,
-            # including this one, which never implements it. Reject it explicitly
-            # instead of silently falling through to a block-on-anything-else branch.
-            raise ValueError(
-                f"Qualifire guardrail does not support on_flagged={self.on_flagged!r}; "
-                "only 'block' and 'monitor' are supported."
-            )
+        self._validate_on_flagged(self.on_flagged)
 
         # If no checks are specified and no evaluation_id, default to prompt_injections
         if not self._has_any_check_enabled() and not self.evaluation_id:
@@ -107,6 +98,32 @@ class QualifireGuardrail(CustomGuardrail):
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
+
+    def _validate_on_flagged(self, on_flagged: str) -> None:
+        if on_flagged not in ("block", "monitor"):
+            # on_flagged is defined on LakeraV2GuardrailConfigModel but LitellmParams
+            # flattens every guardrail config mixin together, so a value Lakera
+            # supports (e.g. "inject_system_message") type-checks for any guardrail,
+            # including this one, which never implements it. Reject it explicitly
+            # instead of silently falling through to a block-on-anything-else branch.
+            raise ValueError(
+                f"Qualifire guardrail does not support on_flagged={on_flagged!r}; "
+                "only 'block' and 'monitor' are supported."
+            )
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """
+        The base implementation blindly ``setattr``s every field on ``litellm_params``
+        (including ``on_flagged``) onto this live instance with no revalidation, so an
+        in-place config update (via the DB/UI, without a restart) could otherwise
+        reintroduce the exact invalid on_flagged value __init__ rejects. Validate the
+        prospective post-update value *before* mutating, so a rejected update leaves
+        the live instance untouched instead of raising after it's already been
+        corrupted. Mirrors LakeraAIGuardrail's own override of this same method.
+        """
+        prospective_on_flagged: Final = getattr(litellm_params, "on_flagged", None) or self.on_flagged
+        self._validate_on_flagged(prospective_on_flagged)
+        super().update_in_memory_litellm_params(litellm_params=litellm_params)
 
     def _has_any_check_enabled(self) -> bool:
         """Check if any evaluation check is explicitly enabled."""
