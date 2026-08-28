@@ -803,3 +803,38 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
         infer_model_from_keys=False,
     )
     assert result == []
+
+
+def test_get_provider_models_admits_providers_without_a_static_catalog():
+    """litellm_proxy and hosted_vllm have no entry in litellm.models_by_provider
+    (their model list only exists behind the provider's own endpoint), so the
+    static-dict gate must not reject them before endpoint discovery runs.
+    """
+    import litellm
+    from litellm.proxy.auth.model_checks import get_provider_models
+    from litellm.types.router import LiteLLM_Params
+
+    assert "litellm_proxy" not in litellm.models_by_provider
+    assert "hosted_vllm" not in litellm.models_by_provider
+
+    with patch(
+        "litellm.proxy.auth.model_checks.get_valid_models",
+        return_value=["litellm_proxy/gpt-4o"],
+    ) as mock_get_valid_models:
+        result = get_provider_models(
+            "litellm_proxy",
+            litellm_params=LiteLLM_Params(
+                model="litellm_proxy/*",
+                api_base="http://upstream:4000",
+                api_key="sk-upstream",
+            ),
+        )
+
+    assert result == ["litellm_proxy/gpt-4o"]
+    mock_get_valid_models.assert_called_once()
+
+
+def test_get_provider_models_returns_none_for_an_unknown_provider():
+    from litellm.proxy.auth.model_checks import get_provider_models
+
+    assert get_provider_models("not-a-real-provider") is None
