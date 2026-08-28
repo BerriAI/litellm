@@ -105,7 +105,7 @@ class TestVertexBaseGetVertexRegionGemma:
             )
             assert result == "global"
 
-    def test_global_model_with_unsupported_user_region_overrides(self):
+    def test_global_model_preserves_explicit_user_region(self):
         vertex_base = VertexBase()
 
         with patch.dict(
@@ -121,7 +121,7 @@ class TestVertexBaseGetVertexRegionGemma:
                 vertex_region="us-central1",
                 model="google/gemma-4-26b-a4b-it-maas",
             )
-            assert result == "global"
+            assert result == "us-central1"
 
 
 class TestCreateVertexURLGemma:
