@@ -2609,3 +2609,37 @@ class TestResponsesWebSocketUsageLogging:
         ]
 
         assert ResponseAPILoggingUtils.build_response_from_websocket_events(events=events) is None
+
+    def test_build_response_from_websocket_events_without_usage(self):
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        events = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "r1",
+                    "created_at": 1,
+                    "output": [],
+                },
+            },
+        ]
+
+        response = ResponseAPILoggingUtils.build_response_from_websocket_events(events=events)
+        assert response is not None
+        assert response.id == "r1"
+        assert response.usage is None
+
+    def test_build_response_from_websocket_events_invalid_response_returns_none(self):
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        events = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": 12345,  # id must be str, will cause validation error
+                    "output": "invalid_not_list",
+                },
+            },
+        ]
+
+        assert ResponseAPILoggingUtils.build_response_from_websocket_events(events=events) is None
