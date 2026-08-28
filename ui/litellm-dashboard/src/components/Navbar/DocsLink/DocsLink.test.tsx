@@ -24,4 +24,19 @@ describe("DocsLink", () => {
     }
     expect(link).not.toHaveClass("text-muted-foreground");
   });
+
+  it("carries a focus ring, so tabbing to Docs looks like tabbing to Blog", () => {
+    render(<DocsLink />);
+
+    const link = screen.getByRole("link", { name: "Docs" });
+    expect(link).toHaveClass("focus-visible:ring-3");
+    expect(link).toHaveClass("focus-visible:ring-ring/50");
+  });
+
+  it("stays a link rather than being relabelled as a button by the Button primitive", () => {
+    render(<DocsLink />);
+
+    expect(screen.getByRole("link", { name: "Docs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Docs" })).not.toBeInTheDocument();
+  });
 });
