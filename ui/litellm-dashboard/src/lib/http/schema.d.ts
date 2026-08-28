@@ -8126,6 +8126,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch User
+         * @description Partially update one internal user, as an RFC 7396 JSON merge patch.
+         *
+         *     An omitted field is left alone and an explicit `null` clears the setting, which is the whole
+         *     reason this route exists: `POST /user/update` drops nulls, so it answers `200` to a clear it
+         *     silently discarded, and only `max_budget` was ever made clearable. Unknown body keys are
+         *     refused with a `422` rather than ignored. `null` on `models`, `metadata` or `model_max_budget`
+         *     resets the column to empty, since the schema declares those NOT NULL.
+         *
+         *     Requires a proxy admin: the route is in no non-admin allowlist, so everyone else is refused at
+         *     the route gate, and the shared write path's self-service guards stand behind that as defense in
+         *     depth. Unlike `/user/update`, a user id that does not exist is a `404` rather than a silent
+         *     create, since the underlying write is an upsert.
+         *
+         *     Example curl, clearing a rate limit and setting another:
+         *     ```
+         *     curl --location --request PATCH 'http://0.0.0.0:4000/management/v1/users/user123'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"tpm_limit": null, "rpm_limit": 60}'
+         *     ```
+         */
+        patch: operations["patch_user_management_v1_users__user_id__patch"];
+        trace?: never;
+    };
     "/mcp": {
         parameters: {
             query?: never;
@@ -27267,6 +27303,10 @@ export interface components {
             /** Is Accepted */
             is_accepted: boolean;
         };
+        /** ItemResponse[UserItem] */
+        ItemResponse_UserItem_: {
+            data: components["schemas"]["UserItem"];
+        };
         /** JWTKeyMappingResponse */
         JWTKeyMappingResponse: {
             /**
@@ -27294,6 +27334,7 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -33095,6 +33136,25 @@ export interface components {
              */
             version_status: string;
         };
+        /**
+         * ProblemDetail
+         * @description RFC 9457 problem details, served as `application/problem+json`.
+         */
+        ProblemDetail: {
+            /**
+             * Allowed
+             * @default null
+             */
+            allowed: string[] | null;
+            /** Detail */
+            detail: string;
+            /** Status */
+            status: number;
+            /** Title */
+            title: string;
+            /** Type */
+            type: string;
+        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
@@ -37692,6 +37752,58 @@ export interface components {
             user_role?: string | null;
         };
         /**
+         * UserItem
+         * @description One internal user as the control plane returns it, read back off the row the write produced.
+         *
+         *     Re-reading rather than echoing the request is the point of the endpoint: a caller can tell a
+         *     clear that landed from one that was dropped by looking at the response.
+         */
+        UserItem: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Models */
+            models?: string[];
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Teams */
+            teams?: string[];
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
+            /** User Role */
+            user_role?: string | null;
+        };
+        /**
          * UserListResponse
          * @description Response model for the user list endpoint
          */
@@ -37706,6 +37818,43 @@ export interface components {
             total_pages: number;
             /** Users */
             users: components["schemas"]["LiteLLM_UserTableWithKeyCount"][];
+        };
+        /**
+         * UserPatchRequest
+         * @description Body of `PATCH /management/v1/users/{user_id}`, read as an RFC 7396 JSON merge patch.
+         *
+         *     Every field is optional and nullable, and the two are not the same thing: an omitted field is
+         *     left alone, an explicit `null` clears the setting. `extra="forbid"` is what makes that promise
+         *     keepable, since a misspelled key would otherwise read as "omitted" and silently do nothing.
+         */
+        UserPatchRequest: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Models */
+            models?: string[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Role */
+            user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
         /**
          * UserUpdateResult
@@ -48768,6 +48917,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_user_management_v1_users__user_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The id of the user to update. */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemResponse_UserItem_"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Invalid request body */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Database not connected */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
         };

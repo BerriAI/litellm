@@ -15,9 +15,9 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final, Literal, TypeAlias, cast
+from typing import Any, Final, Literal, Protocol, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -1181,13 +1181,20 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
-UserUpdateFieldResolver: TypeAlias = Callable[
-    [dict, "UpdateUserRequest | UpdateUserRequestNoUserIDorEmail"],
-    dict,
-]
+class UserUpdateFieldResolver(Protocol):
+    """Decides which fields a user-update request writes; see `update_single_user`."""
+
+    def __call__(
+        self,
+        data_json: Mapping[str, object],
+        data: "UpdateUserRequest | UpdateUserRequestNoUserIDorEmail",
+    ) -> Mapping[str, object]: ...
 
 
-def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
+def _update_internal_user_params(
+    data_json: Mapping[str, object],
+    data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail,
+) -> dict:  # mutable-ok: `/user/bulk_update` pops identity fields off this result before writing it
     """Legacy `/user/update` field resolution: a null (or `[]`/`{}`) means "not sent", so it is dropped.
 
     Retained verbatim for backwards compatibility. It dates to when `data_json` came from
@@ -1284,7 +1291,7 @@ def _check_user_update_authz(
     # Presence, not truthiness: a merge-patch caller clearing their own role to null would otherwise
     # slip past a `is not None` check and demote themselves out of whatever an admin assigned.
     sends_role: Final = (
-        "user_role" in (user_request.fields_set() if hasattr(user_request, "fields_set") else set())
+        "user_role" in (user_request.fields_set() if hasattr(user_request, "fields_set") else frozenset())
         or user_request.user_role is not None
     )
     if sends_role and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -1400,7 +1407,8 @@ async def update_single_user(
     )
 
     data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
-    non_default_values = resolve_fields(data_json, user_request)
+    resolved_fields: Final = resolve_fields(data_json, user_request)
+    non_default_values = dict(resolved_fields)  # mutable-ok: the write path stamps into this before prisma takes it
     _hash_password_in_dict(non_default_values)
 
     existing_user_row: BaseModel | None = None

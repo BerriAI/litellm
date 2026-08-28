@@ -1,6 +1,6 @@
 """`PATCH /management/v1/users/{user_id}`."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal
@@ -48,6 +48,8 @@ _CLEARS_TO_EMPTY: Final[Mapping[str, Callable[[], object]]] = MappingProxyType(
     {"models": list, "metadata": dict, "model_max_budget": dict}
 )
 
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
 
 class UserPatchRequest(BaseModel):
     """Body of `PATCH /management/v1/users/{user_id}`, read as an RFC 7396 JSON merge patch.
@@ -70,14 +72,14 @@ class UserPatchRequest(BaseModel):
         ]
         | None
     ) = None
-    models: list[str] | None = None
+    models: Sequence[str] | None = None
     max_budget: float | None = None
     budget_duration: str | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     max_parallel_requests: int | None = None
-    metadata: dict[str, JsonValue] | None = None
-    model_max_budget: dict[str, JsonValue] | None = None
+    metadata: Mapping[str, JsonValue] | None = None
+    model_max_budget: Mapping[str, JsonValue] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
@@ -94,7 +96,7 @@ class UserItem(BaseModel):
     user_email: str | None = None
     user_alias: str | None = None
     user_role: str | None = None
-    models: list[str] = Field(default_factory=list)
+    models: Sequence[str] = Field(default_factory=list)
     spend: float = 0.0
     max_budget: float | None = None
     budget_duration: str | None = None
@@ -102,18 +104,18 @@ class UserItem(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     max_parallel_requests: int | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-    model_max_budget: dict[str, JsonValue] = Field(default_factory=dict)
+    metadata: Mapping[str, JsonValue] = Field(default_factory=dict)
+    model_max_budget: Mapping[str, JsonValue] = Field(default_factory=dict)
     object_permission_id: str | None = None
-    teams: list[str] = Field(default_factory=list)
+    teams: Sequence[str] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
 
 def resolve_user_patch_fields(
-    data_json: dict,
+    data_json: Mapping[str, object],
     data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail,
-) -> dict:
+) -> Mapping[str, object]:
     """Merge-patch field resolution: whatever the caller sent is written, nulls included.
 
     The inverse of `_update_internal_user_params`, which drops nulls and so cannot express a clear.
@@ -123,29 +125,36 @@ def resolve_user_patch_fields(
     `object_permission` clear is left for the caller of this resolver, which drops the entitlement
     link rather than writing a column.
     """
-    resolved: Final[dict] = {
-        key: (_CLEARS_TO_EMPTY[key]() if value is None and key in _CLEARS_TO_EMPTY else value)
-        for key, value in data_json.items()
-        if not (key == "object_permission" and value is None)
-    }
-    derived: Final = _budget_reset_fields(resolved["budget_duration"]) if "budget_duration" in resolved else {}
-    return {**resolved, **derived, **_internal_user_role_defaults(data, resolved)}
+    resolved: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            key: (_CLEARS_TO_EMPTY[key]() if value is None and key in _CLEARS_TO_EMPTY else value)
+            for key, value in data_json.items()
+            if not (key == "object_permission" and value is None)
+        }
+    )
+    budget_duration: Final = resolved.get("budget_duration")
+    derived: Final = (
+        _budget_reset_fields(budget_duration if isinstance(budget_duration, str) else None)
+        if "budget_duration" in resolved
+        else _NO_FIELDS
+    )
+    return MappingProxyType({**resolved, **derived, **_internal_user_role_defaults(data, resolved)})
 
 
-def _budget_reset_fields(budget_duration: str | None) -> dict:
+def _budget_reset_fields(budget_duration: str | None) -> Mapping[str, object]:
     """`budget_reset_at` is derived from `budget_duration`, so the two only ever move together."""
     from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
     if budget_duration is None:
-        return {"budget_reset_at": None}
+        return MappingProxyType({"budget_reset_at": None})
     validate_budget_duration(budget_duration)
-    return {"budget_reset_at": get_budget_reset_time(budget_duration=budget_duration)}
+    return MappingProxyType({"budget_reset_at": get_budget_reset_time(budget_duration=budget_duration)})
 
 
 def _internal_user_role_defaults(
     data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail,
-    resolved: dict,
-) -> dict:
+    resolved: Mapping[str, object],
+) -> Mapping[str, object]:
     """Apply the proxy-wide internal-user budget caps, but only to fields the caller left alone.
 
     Mirrors `/user/update`, so promoting someone to internal user still lands them under
@@ -153,19 +162,21 @@ def _internal_user_role_defaults(
     never overwritten by a global default the caller was trying to get out from under.
     """
     if data.user_role != LitellmUserRoles.INTERNAL_USER:
-        return {}
-    budget: Final = (
-        {"max_budget": litellm.max_internal_user_budget}
+        return _NO_FIELDS
+    budget: Final[Mapping[str, object]] = (
+        MappingProxyType({"max_budget": litellm.max_internal_user_budget})
         if "max_budget" not in resolved and litellm.max_internal_user_budget is not None
-        else {}
+        else _NO_FIELDS
     )
     if "budget_duration" in resolved or litellm.internal_user_budget_duration is None:
         return budget
-    return {
-        **budget,
-        "budget_duration": litellm.internal_user_budget_duration,
-        **_budget_reset_fields(litellm.internal_user_budget_duration),
-    }
+    return MappingProxyType(
+        {
+            **budget,
+            "budget_duration": litellm.internal_user_budget_duration,
+            **_budget_reset_fields(litellm.internal_user_budget_duration),
+        }
+    )
 
 
 def _problem(status: int, slug: str, title: str, detail: str) -> ManagementProblem:
@@ -199,7 +210,7 @@ def _problem_from_http_exception(exc: HTTPException) -> ManagementProblem:
 
 @router.patch(
     "/users/{user_id}",
-    tags=["Internal User management"],
+    tags=("Internal User management",),
     dependencies=(Depends(user_api_key_auth),),
     response_model=ItemResponse[UserItem],
     responses=problem_responses(403, 404, 422, 500, 503),
@@ -277,4 +288,4 @@ async def patch_user(
 
 async def _find_user(prisma_client: PrismaClient, user_id: str) -> "prisma_models.LiteLLM_UserTable | None":
     table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = UserRepository(prisma_client).table
-    return await table.find_first(where={"user_id": user_id})
+    return await table.find_first(where={"user_id": user_id})  # mutable-ok: prisma query filters are dict-shaped
