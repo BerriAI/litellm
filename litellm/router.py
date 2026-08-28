@@ -10810,6 +10810,25 @@ class Router:
 
         return returned_models
 
+    def resolved_litellm_models(self, model_name: str, team_id: str | None = None) -> tuple[str, ...]:
+        """The provider model strings `model_name` can actually be served by on this proxy.
+
+        `get_model_list` composes every channel the request path itself uses (exact name,
+        model_group_alias, routing groups, wildcards), so this answers "which models will
+        answer a call to this name" rather than "what did the admin call it": the deployment
+        name is admin-arbitrary, and two names over one provider model are one model.
+
+        Empty when the name resolves to no deployment. That is not the same fact as "the
+        call will fail" - a provider-qualified public name is served by the SDK with no
+        deployment behind it - so the fallback for an empty result is the caller's policy,
+        never this function's.
+        """
+        return tuple(
+            litellm_model
+            for deployment in self.get_model_list(model_name=model_name, team_id=team_id) or ()
+            if isinstance(litellm_model := deployment.get("litellm_params", {}).get("model"), str) and litellm_model
+        )
+
     def _invalidate_model_group_info_cache(self) -> None:
         """Invalidate the cached model group info.
 
@@ -12033,10 +12052,7 @@ class Router:
             resolve_structured_messages,
         )
 
-        deployments: Final = self.get_model_list(model_name=model) or []
-        candidate_models: Final = [
-            d["litellm_params"]["model"] for d in deployments if d.get("litellm_params", {}).get("model")
-        ]
+        candidate_models: Final = list(self.resolved_litellm_models(model))
 
         metadata_key: Final = self._get_metadata_variable_name_from_kwargs(request_kwargs)
         metadata: Final = request_kwargs.setdefault(metadata_key, {})
