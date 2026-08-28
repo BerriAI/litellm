@@ -115,6 +115,34 @@ describe("applyTierSetAction", () => {
     expect(value.tier_model_params).toEqual({ COMPLEX: { "gpt-4": { reasoning_effort: "high" } } });
   });
 
+  it("re-points a rule that followed a renamed built-in back to its tier on restore", () => {
+    const renamed: ComplexityRouterConfigValue = {
+      ...builtIn,
+      custom_tier_set: {
+        tiers: [
+          { id: "SIMPLE", name: "SIMPLE", definition: "", models: ["gpt-3.5-turbo"] },
+          { id: "COMPLEX", name: "DEEP_WORK", definition: "", models: ["gpt-4"] },
+        ],
+        fallback_tier_id: "SIMPLE",
+      },
+    };
+    const rules = [{ id: "r1", keywords: ["proof"], tier: "DEEP_WORK" }];
+    const next = applyTierSetAction(renamed, rules, { kind: "restore" });
+    expect(next.keywordTierRules).toEqual([{ id: "r1", keywords: ["proof"], tier: "COMPLEX" }]);
+  });
+
+  it("leaves a rule on a tier restore removes, so the save gate flags it rather than dropping it", () => {
+    const rules = [{ id: "r1", keywords: ["smalltalk"], tier: "CASUAL" }];
+    const next = applyTierSetAction(custom, rules, { kind: "restore" });
+    expect(next.keywordTierRules).toBe(rules);
+  });
+
+  it("keeps a removed row's rule in the same write, for the save gate to name", () => {
+    const rules = [{ id: "r1", keywords: ["audit"], tier: "SECURITY_REVIEW" }];
+    const next = applyTierSetAction(custom, rules, { kind: "remove", id: "sec" });
+    expect(next.keywordTierRules).toBe(rules);
+  });
+
   it("resets a full set to the four built-ins rather than stacking them on top", () => {
     const six: ComplexityRouterConfigValue = {
       ...custom,

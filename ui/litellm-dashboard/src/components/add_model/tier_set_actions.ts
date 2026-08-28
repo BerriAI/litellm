@@ -5,6 +5,7 @@ import {
   type ActiveTierRow,
   type TierRow,
   TIER_ORDER,
+  activeTierName,
   activeTierRows,
   rowParamsByTier,
   sameTierIdentity,
@@ -19,7 +20,7 @@ export type TierSetAction =
   | { kind: "remove"; id: string }
   | { kind: "restore" };
 
-/** What an action produces: the next config, and the keyword rules a rename had to follow. */
+/** What an action produces: the next config, and the keyword rules that followed their rows. */
 export interface TierSetResult {
   value: ComplexityRouterConfigValue;
   keywordTierRules: readonly KeywordTierRule[];
@@ -48,18 +49,26 @@ const asCustomBase = (base: ComplexityRouterConfigValue): ComplexityRouterConfig
     ? base
     : { ...base, custom_tier_set: { tiers: activeTierRows(base), fallback_tier_id: "MEDIUM" } };
 
-// A rename the set still answers to elsewhere leaves the rules alone; only the last holder of a name
-// carries its keyword rules across.
-const renamedRules = (
-  rows: readonly TierRow[],
+// A rule follows the row holding its name through any action, so neither a rename nor a restore can
+// orphan it. A rule whose name is ambiguous across rows, or whose row the action deleted, stays put
+// for the save gate to name loudly rather than being dropped or rewritten by guess.
+const followedRuleTier = (before: readonly TierRow[], after: readonly TierRow[], tier: string): string | undefined => {
+  const holders = before.filter((row) => sameTierIdentity(row.name, tier));
+  if (holders.length !== 1 || activeTierName(holders[0]) !== tier) return undefined;
+  const target = tierRowById(after, holders[0].id);
+  return target === undefined ? undefined : activeTierName(target);
+};
+
+const rulesFollowingRows = (
+  before: readonly TierRow[],
+  after: readonly TierRow[],
   rules: readonly KeywordTierRule[],
-  id: string,
-  patch: Partial<Omit<TierRow, "id">>,
 ): readonly KeywordTierRule[] => {
-  const renamedFrom = patch.name === undefined ? undefined : tierRowById(rows, id)?.name;
-  if (renamedFrom === undefined) return rules;
-  if (rows.some((row) => row.id !== id && sameTierIdentity(row.name, renamedFrom))) return rules;
-  return rules.map((rule) => (rule.tier === renamedFrom.trim() ? { ...rule, tier: (patch.name ?? "").trim() } : rule));
+  const followed = rules.map((rule) => {
+    const tier = followedRuleTier(before, after, rule.tier);
+    return tier === undefined || tier === rule.tier ? rule : { ...rule, tier };
+  });
+  return followed.every((rule, index) => rule === rules[index]) ? rules : followed;
 };
 
 // Models and params both come from these rows, so the two cannot be keyed differently.
@@ -83,61 +92,57 @@ const exitToBuiltInTiers = (value: ComplexityRouterConfigValue, rows: readonly A
   return commitTierRows(activeTierRows(restored), "", restored);
 };
 
-export const applyTierSetAction = (
+const nextTierSetValue = (
   value: ComplexityRouterConfigValue,
-  keywordTierRules: readonly KeywordTierRule[],
+  rows: ActiveTierRow[],
   action: TierSetAction,
-): TierSetResult => {
-  const rows = activeTierRows(value);
+): ComplexityRouterConfigValue => {
   const fallbackId = value.custom_tier_set?.fallback_tier_id ?? "MEDIUM";
-  const unchanged = { keywordTierRules };
 
   switch (action.kind) {
     case "models":
-      return {
-        ...unchanged,
-        value: commitTierRows(
-          rows.map((row) => (row.id === action.id ? { ...row, models: action.models } : row)),
-          fallbackId,
-          { ...value, tier_model_params: pruneTierModelParams(value.tier_model_params, action.id, action.models) },
-        ),
-      };
+      return commitTierRows(
+        rows.map((row) => (row.id === action.id ? { ...row, models: action.models } : row)),
+        fallbackId,
+        { ...value, tier_model_params: pruneTierModelParams(value.tier_model_params, action.id, action.models) },
+      );
     case "patch":
-      return {
-        keywordTierRules: renamedRules(rows, keywordTierRules, action.id, action.patch),
-        value: commitTierRows(
-          rows.map((row) => (row.id === action.id ? { ...row, ...action.patch } : row)),
-          fallbackId,
-          asCustomBase(value),
-        ),
-      };
+      return commitTierRows(
+        rows.map((row) => (row.id === action.id ? { ...row, ...action.patch } : row)),
+        fallbackId,
+        asCustomBase(value),
+      );
     case "add":
-      return {
-        ...unchanged,
-        value: commitTierRows(
-          [...rows, { id: crypto.randomUUID(), name: "", definition: "", models: [] }],
-          fallbackId,
-          asCustomBase(value),
-        ),
-      };
+      return commitTierRows(
+        [...rows, { id: crypto.randomUUID(), name: "", definition: "", models: [] }],
+        fallbackId,
+        asCustomBase(value),
+      );
     case "remove": {
       const removed = tierRowById(rows, action.id);
       const snapshot =
         removed && (TIER_ORDER as string[]).includes(action.id)
           ? { ...value, tiers: { ...value.tiers, [action.id]: removed.models } }
           : value;
-      return {
-        ...unchanged,
-        value: commitTierRows(
-          rows.filter((row) => row.id !== action.id),
-          fallbackId,
-          asCustomBase(snapshot),
-        ),
-      };
+      return commitTierRows(
+        rows.filter((row) => row.id !== action.id),
+        fallbackId,
+        asCustomBase(snapshot),
+      );
     }
     case "restore":
-      return { ...unchanged, value: exitToBuiltInTiers(value, rows) };
+      return exitToBuiltInTiers(value, rows);
   }
+};
+
+export const applyTierSetAction = (
+  value: ComplexityRouterConfigValue,
+  keywordTierRules: readonly KeywordTierRule[],
+  action: TierSetAction,
+): TierSetResult => {
+  const rows = activeTierRows(value);
+  const next = nextTierSetValue(value, rows, action);
+  return { value: next, keywordTierRules: rulesFollowingRows(rows, activeTierRows(next), keywordTierRules) };
 };
 
 /** The fallback-tier select is the only writer that re-points rather than reconciling. */
