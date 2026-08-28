@@ -1,11 +1,8 @@
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

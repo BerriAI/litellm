@@ -6,7 +6,6 @@ import io
 import json
 import os
 import random
-import sys
 import time
 from litellm._uuid import uuid
 from datetime import datetime, timedelta
@@ -18,8 +17,6 @@ from litellm.types.integrations.slack_alerting import AlertType
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
-import os
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock, patch
 

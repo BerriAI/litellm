@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 import traceback
 from typing import Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.image_generation.http_utils import (

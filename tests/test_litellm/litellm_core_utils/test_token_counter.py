@@ -1,8 +1,6 @@
 #### What this tests ####
 #    This tests litellm.token_counter.token_counter() function
 import importlib
-import os
-import sys
 import time
 import traceback
 from unittest.mock import MagicMock
@@ -10,9 +8,6 @@ from unittest.mock import MagicMock
 import pytest
 import tiktoken
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, patch
 
 import litellm

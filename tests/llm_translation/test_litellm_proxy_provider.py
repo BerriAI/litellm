@@ -1,14 +1,9 @@
 import json
-import os
 import re
-import sys
 from datetime import datetime
 from io import BytesIO
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 import litellm
 from litellm import completion, embedding

@@ -7,9 +7,6 @@ from dotenv import load_dotenv
 load_dotenv()
 import io
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm import embedding

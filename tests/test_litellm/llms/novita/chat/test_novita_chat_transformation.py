@@ -5,16 +5,11 @@ These tests validate the NovitaConfig class which extends OpenAIGPTConfig.
 Novita AI is an OpenAI-compatible provider with a few customizations.
 """
 
-import os
-import sys
 from typing import Dict, List, Optional
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.novita.chat.transformation import NovitaConfig
 

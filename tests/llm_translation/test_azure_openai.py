@@ -1,9 +1,5 @@
-import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../../")
-)  # Adds the parent directory to the system path
 
 import httpx
 import pytest
@@ -103,7 +99,6 @@ from unittest.mock import MagicMock, patch
 from openai import AzureOpenAI
 import litellm
 from litellm import completion
-import os
 
 
 @pytest.mark.parametrize(

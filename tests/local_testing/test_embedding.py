@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import sys
 import traceback
 
 import openai
@@ -10,9 +9,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm

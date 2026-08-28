@@ -8,14 +8,13 @@ should still use the built-in pricing.
 """
 
 import copy
+import logging
 import os
 import re
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import Router
@@ -2007,3 +2006,127 @@ def test_a_falsy_id_is_still_scanned_for_collisions():
                     },
                 ]
             )
+
+
+# --- a reservation declared while the feature is off says so ------------------------
+
+
+def _ptu_warnings(caplog):
+    return tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "LiteLLM Router" and record.levelno == logging.WARNING and "PTU" in record.getMessage()
+    )
+
+
+def test_a_reservation_declared_while_the_feature_is_off_is_warned_about(caplog):
+    """The deployment serves and bills per token, so without this the operator believes they
+    reserved capacity and sees no signal anywhere that nothing accrues."""
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router(ptu_enabled=False)
+
+    warnings = _ptu_warnings(caplog)
+
+    assert len(warnings) == 1
+    assert "gpt-4o-ptu" in warnings[0]
+    assert "LITELLM_ENABLE_PTU_COST_ATTRIBUTION" in warnings[0]
+
+
+def test_a_reservation_is_not_warned_about_while_the_feature_is_on(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router()
+
+    assert _ptu_warnings(caplog) == ()
+
+
+def test_a_deployment_carrying_no_ptu_field_is_not_warned_about(caplog):
+    """Most of every config.yaml, so warning here would fire on proxies that never asked."""
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router(model_info={"team_id": "team-alpha"}, ptu_enabled=False)
+
+    assert _ptu_warnings(caplog) == ()
+
+
+def test_a_half_written_reservation_is_warned_about(caplog):
+    """A count with no rate is not a chargeable reservation, but the operator still meant to
+    declare one, so what they wrote is what decides whether they hear about it."""
+    half_written = {k: v for k, v in _PTU_MODEL_INFO.items() if k != "cost_per_ptu_per_hour"}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router(model_info=half_written, ptu_enabled=False)
+
+    assert len(_ptu_warnings(caplog)) == 1
+
+
+@pytest.mark.parametrize(
+    "typo",
+    [
+        {"ptu_count": 0},
+        {"ptu_count": 0, "cost_per_ptu_per_hour": 0, "ptu_effective_from": None},
+    ],
+    ids=["count out of range", "every value still a zero placeholder"],
+)
+def test_a_reservation_dropped_by_a_typo_is_warned_about(caplog, typo):
+    """An out-of-range value fails ModelInfo before the flag is ever consulted, so the
+    deployment stops serving on a proxy that never enabled PTU. The warning is what tells the
+    operator which feature the entry that vanished belonged to.
+
+    Built the way proxy_server builds it, since dropping rather than raising is what
+    ``ignore_invalid_deployments`` does and config.yaml is loaded with it on.
+    """
+    with patch.dict(os.environ, {"LITELLM_ENABLE_PTU_COST_ATTRIBUTION": ""}, clear=False):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router = Router(
+                ignore_invalid_deployments=True,
+                model_list=[
+                    {
+                        "model_name": "gpt-4o-ptu",
+                        "litellm_params": {"model": "azure/gpt-4o", "api_key": "k", "api_base": "https://e.azure.com"},
+                        "model_info": {**_PTU_MODEL_INFO, **typo},
+                    }
+                ],
+            )
+
+    assert router.model_list == []
+    assert len(_ptu_warnings(caplog)) == 1
+
+
+def test_a_db_backed_reservation_is_not_warned_about(caplog):
+    """/model/new already answered the caller with a 400, so repeating it on every reload
+    would report the operator's own rejected write back to them as a standing problem."""
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router(model_info={**_PTU_MODEL_INFO, "db_model": True}, ptu_enabled=False)
+
+    assert _ptu_warnings(caplog) == ()
+
+
+def test_every_declaring_deployment_is_named(caplog):
+    """One line naming all of them, so a reload does not bury the config in repeats."""
+    with patch.dict(os.environ, {"LITELLM_ENABLE_PTU_COST_ATTRIBUTION": ""}, clear=False):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "azure-ptu-east",
+                        "litellm_params": {"model": "azure/gpt-4o", "api_key": "k", "api_base": "https://e.azure.com"},
+                        "model_info": dict(_PTU_MODEL_INFO),
+                    },
+                    {
+                        "model_name": "azure-ptu-west",
+                        "litellm_params": {"model": "azure/gpt-4o", "api_key": "k", "api_base": "https://w.azure.com"},
+                        "model_info": {**_PTU_MODEL_INFO, "id": "ptu-alpha-westus"},
+                    },
+                    {
+                        "model_name": "plain-gpt-4o",
+                        "litellm_params": {"model": "azure/gpt-4o", "api_key": "k", "api_base": "https://p.azure.com"},
+                        "model_info": {"id": "plain"},
+                    },
+                ]
+            )
+
+    warnings = _ptu_warnings(caplog)
+
+    assert len(warnings) == 1
+    assert "azure-ptu-east" in warnings[0]
+    assert "azure-ptu-west" in warnings[0]
+    assert "plain-gpt-4o" not in warnings[0]

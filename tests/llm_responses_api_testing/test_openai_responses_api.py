@@ -1,5 +1,4 @@
 import os
-import sys
 import pytest
 import asyncio
 from typing import Optional, cast
@@ -10,7 +9,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 import time
 import json
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload

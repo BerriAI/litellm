@@ -6,7 +6,6 @@ an ordered set of top K tools based on semantic similarity.
 """
 
 import asyncio
-import os
 import sys
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -15,7 +14,6 @@ import pytest
 if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
     from exceptiongroup import BaseExceptionGroup
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from mcp.types import Tool as MCPTool
 

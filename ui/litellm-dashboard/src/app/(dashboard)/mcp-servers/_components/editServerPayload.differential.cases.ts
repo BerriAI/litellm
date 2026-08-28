@@ -255,11 +255,26 @@ export const CASES: readonly DifferentialCase[] = [
   },
 
   // --- credentials filtering ---
-  // ADMIN_CONFIG_CREDENTIAL_KEYS is exactly ["upstream_resource"], so only that key
-  // takes the blank-to-explicit-null branch. A blank client_id is dropped instead.
+  // Only a key in ADMIN_CONFIG_CREDENTIAL_KEYS takes the blank-to-explicit-null branch, which is
+  // what makes it clearable: the backend merge preserves an omitted key forever. A blank client_id
+  // is dropped instead.
   {
     label: "blank upstream_resource becomes an explicit null",
     values: { ...ROOT, auth_type: "oauth2", credentials: { upstream_resource: "", client_secret: "keep" } },
+    ui: {},
+  },
+  {
+    label: "blank upstream_token_header becomes an explicit null",
+    values: { ...ROOT, auth_type: "oauth2", credentials: { upstream_token_header: "", client_secret: "keep" } },
+    ui: {},
+  },
+  {
+    label: "a set upstream_token_header rides the credentials blob",
+    values: {
+      ...ROOT,
+      auth_type: "oauth2",
+      credentials: { upstream_token_header: "esb-oauth", client_secret: "keep" },
+    },
     ui: {},
   },
   {

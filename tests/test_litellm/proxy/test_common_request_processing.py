@@ -13,11 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import (
-    AUTO_ROUTED_REQUEST_METADATA_KEY,
-    RETURN_RAW_MODEL_NAME_METADATA_KEY,
-    ROUTER_MODEL_NAME_RESPONSE_FIELD,
-)
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -30,6 +26,7 @@ from litellm.proxy.common_request_processing import (
     _ClientDisconnectedBeforeFirstChunk,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
+    CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
@@ -322,6 +319,62 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_refreshes_proxy_server_request_body_after_guardrails(
+        self, monkeypatch
+    ):
+        """
+        A guardrail (e.g. Presidio PII masking) mutates data["messages"] in place inside
+        pre_call_hook. The proxy_server_request.body snapshot is taken before that hook
+        runs, so it must be refreshed afterward or SpendLogs (when store_prompts_in_spend_logs
+        is enabled) persists the raw pre-guardrail body, bypassing the masking entirely.
+        """
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        raw_messages = [{"role": "user", "content": "my ssn is 123-45-6789"}]
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return {
+                "messages": raw_messages,
+                "proxy_server_request": {
+                    "url": "http://testserver/chat/completions",
+                    "method": "POST",
+                    "body": {"messages": raw_messages},
+                },
+            }
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            data["messages"] = [{"role": "user", "content": "my ssn is <MASKED>"}]
+            return data
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+
+        persisted_body = returned_data["proxy_server_request"]["body"]
+        assert persisted_body["messages"] == returned_data["messages"]
+        assert "123-45-6789" not in json.dumps(persisted_body["messages"])
+        # litellm_logging_obj is stamped onto `data` by function_setup between the
+        # initial snapshot and pre_call_hook; it must never leak into the persisted
+        # audit body, which needs to stay plain-JSON-serializable end to end.
+        assert "litellm_logging_obj" not in persisted_body
+        json.dumps(persisted_body)
 
     def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
         mock_set_active_span_tag = MagicMock(return_value=True)
@@ -1336,11 +1389,25 @@ class TestProxyBaseLLMRequestProcessing:
             route_type=route_type,
         )
 
-        # Verify queue_time_seconds is set and non-negative
+        # Verify queue_time_seconds is set and non-negative. Ends at start_time
+        # (captured before this mock runs, so it can precede the mock's own
+        # time.time() by a handful of microseconds) rather than a freshly
+        # captured time.time(), so a tiny tolerance below 0.5 is expected and
+        # correct -- see LIT-6012.
         metadata = returned_data.get("metadata", {})
         assert "queue_time_seconds" in metadata, "queue_time_seconds should be set in metadata"
-        assert metadata["queue_time_seconds"] >= 0.5, (
-            f"queue_time_seconds should be at least 0.5, got {metadata['queue_time_seconds']}"
+        assert metadata["queue_time_seconds"] >= 0.49, (
+            f"queue_time_seconds should be at least ~0.5, got {metadata['queue_time_seconds']}"
+        )
+
+        # queue_time_seconds must end exactly where logging_obj.start_time begins
+        # (the same start_time litellm_request_total_latency_metric's window
+        # starts from) so the two windows share a boundary, not an overlap.
+        # A mutant that reintroduces a separately-captured processing_start_time
+        # would make this assertion fail.
+        arrival_time = returned_data["proxy_server_request"]["arrival_time"]
+        assert arrival_time + metadata["queue_time_seconds"] == pytest.approx(
+            logging_obj.start_time.timestamp(), abs=1e-6
         )
 
 
@@ -2223,6 +2290,54 @@ class TestOverrideOpenAIResponseModel:
         )
         assert response_obj.model == actual_model_used
         assert response_obj.model != requested_model
+
+    def test_override_model_preserves_model_router_model_for_alias_without_router_in_name(
+        self,
+    ):
+        """
+        The client sends a model group alias, which carries no model_router/ prefix, so the
+        name check alone only fires when the operator happened to put "model-router" in the
+        alias. With the stamp on the response the actual model survives whatever it is named.
+        """
+        from litellm.llms.azure_ai.common_utils import (
+            AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+        )
+
+        requested_model = "smart-pick"
+        actual_model_used = "azure_ai/grok-4-1-fast-reasoning"
+
+        response_obj = MagicMock()
+        response_obj.model = actual_model_used
+        response_obj._hidden_params = {
+            "additional_headers": {},
+            AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: actual_model_used,
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        assert response_obj.model == actual_model_used
+
+    def test_override_model_still_restamps_non_router_alias_without_stamp(self):
+        """
+        Control for the test above: absent the stamp, an ordinary deployment keeps being
+        restamped to the requested model, so the stamp is doing the work rather than the
+        preserve branch having gone unconditional.
+        """
+        requested_model = "smart-pick"
+
+        response_obj = MagicMock()
+        response_obj.model = "azure_ai/grok-4-1-fast-reasoning"
+        response_obj._hidden_params = {"additional_headers": {}}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        assert response_obj.model == requested_model
 
     def test_override_model_uses_winning_model_for_fastest_response(self):
         """
@@ -4904,6 +5019,169 @@ class TestResponseCostHeaderForTypedDictResponses:
         assert fastapi_response.headers["x-litellm-response-cost"] == "0.00123"
 
 
+class TestCostHeadersForCallsPricedAtZero:
+    """
+    Regression for LIT-5602. Pricing responses reads and vector-store management routes at
+    zero dropped the entire x-litellm-response-cost family off those replies: the header
+    build reads a falsy zero as "this response never recorded a cost" and filters it out,
+    and a call that returns before pricing stores no cost breakdown for the component
+    headers to read. A client parsing the cost off a read got a KeyError where it had
+    previously been handed a number. Those calls now advertise the whole family at zero.
+    """
+
+    @staticmethod
+    def _responses_read(*, background=False):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        return ResponsesAPIResponse(
+            id="resp_lit5602",
+            created_at=0,
+            model="gpt-4.1-mini",
+            object="response",
+            output=[],
+            status="completed",
+            background=background,
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+
+    @staticmethod
+    def _logging_obj(*, call_type, recovered_cost=0.0):
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-lit5602"
+        logging_obj.call_type = call_type
+        logging_obj.litellm_params = {}
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = {"response_cost": recovered_cost}
+        logging_obj._response_cost_calculator = MagicMock(return_value=recovered_cost)
+        logging_obj._enqueue_deferred_logging = None
+        logging_obj._on_deferred_stream_complete = None
+        return logging_obj
+
+    async def _drive(self, *, monkeypatch, response, logging_obj, route_type):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return response
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+
+        async def fake_post_call_success_hook(data, user_api_key_dict, response):
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
+
+        fastapi_response = Response()
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=False
+        ):
+            await processing_obj.base_process_llm_request(
+                request=MagicMock(spec=Request, headers={}),
+                fastapi_response=fastapi_response,
+                user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+                route_type=route_type,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                select_data_generator=None,
+                llm_router=None,
+                skip_pre_call_logic=True,
+            )
+        return fastapi_response
+
+    @pytest.mark.asyncio
+    async def test_responses_read_emits_the_cost_header_family_at_zero(self, monkeypatch):
+        fastapi_response = await self._drive(
+            monkeypatch=monkeypatch,
+            response=self._responses_read(),
+            logging_obj=self._logging_obj(call_type="aget_responses"),
+            route_type="aget_responses",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.0"
+        for component in (
+            "original",
+            "discount-amount",
+            "margin-amount",
+            "margin-percent",
+            "input",
+            "output",
+            "tool-usage",
+        ):
+            assert fastapi_response.headers[f"x-litellm-response-cost-{component}"] == "0.0"
+
+    @pytest.mark.asyncio
+    async def test_reading_a_background_response_keeps_its_real_cost(self, monkeypatch):
+        fastapi_response = await self._drive(
+            monkeypatch=monkeypatch,
+            response=self._responses_read(background=True),
+            logging_obj=self._logging_obj(call_type="aget_responses", recovered_cost=0.00042),
+            route_type="aget_responses",
+        )
+
+        assert float(fastapi_response.headers["x-litellm-response-cost"]) == pytest.approx(0.00042)
+
+    @pytest.mark.asyncio
+    async def test_an_inference_call_without_a_recorded_cost_still_omits_the_header(self, monkeypatch):
+        """A chat completion has no zero-priced route, so a falsy cost there means the cost was
+        never recorded and the header stays absent rather than advertising a made-up zero."""
+        fastapi_response = await self._drive(
+            monkeypatch=monkeypatch,
+            response=SimpleNamespace(_hidden_params={}),
+            logging_obj=self._logging_obj(call_type="acompletion"),
+            route_type="acompletion",
+        )
+
+        assert "x-litellm-response-cost" not in fastapi_response.headers
+
+    def test_cost_breakdown_reports_zero_components_for_a_call_priced_at_zero(self):
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="aget_responses")
+        )
+
+        assert breakdown.original_cost == 0.0
+        assert breakdown.input_cost == 0.0
+        assert breakdown.output_cost == 0.0
+        assert breakdown.tool_usage_cost == 0.0
+
+    def test_cost_breakdown_stays_empty_for_an_inference_call(self):
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="acompletion")
+        )
+
+        assert breakdown == CostBreakdownHeaderValues()
+
+    def test_cost_breakdown_never_zeroes_the_split_under_a_real_total(self):
+        """Reading a background response prices normally, so a breakdown that has not landed by the
+        time headers are built is reported as absent rather than as a zero split contradicting the
+        real total alongside it."""
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="aget_responses"),
+            response_cost=1.96e-05,
+        )
+
+        assert breakdown == CostBreakdownHeaderValues()
+
+    def test_cost_breakdown_reports_zero_components_under_a_zero_total(self):
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="aget_responses"),
+            response_cost=0.0,
+        )
+
+        assert breakdown.original_cost == 0.0
+        assert breakdown.input_cost == 0.0
+        assert breakdown.output_cost == 0.0
+
+
 class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
@@ -7105,123 +7383,29 @@ async def test_a_broken_hook_does_not_replace_the_real_error_with_its_own_bug():
     assert "audit backend" not in collected[-2].decode()
 
 
-class TestRouterModelNameOnNonStreamingResponse:
-    """
-    The proxy restamps the response body `model` back to the client-requested
-    alias, so an auto-routed request (auto_router / complexity_router /
-    adaptive_router / quality_router) had no body-level surface naming the model
-    group that actually served it. `router_model_name` is now set on the response
-    whenever the router marked the request as auto-routed.
-    """
+@pytest.mark.parametrize(
+    "exc,expect_traceback",
+    [
+        pytest.param(HTTPException(status_code=400, detail="Invalid model name passed in"), False, id="expected_400"),
+        pytest.param(ValueError("unexpected internal error"), True, id="unexpected_error"),
+    ],
+)
+def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_traceback, caplog):
+    """Regression for LIT-6043: expected 4xx errors log without formatting a
+    traceback; unexpected errors keep logger.exception behavior."""
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.common_request_processing import _log_llm_api_exception
 
-    @staticmethod
-    def _logging_obj(*, metadata_bucket, bucket_name="metadata"):
-        logging_obj = MagicMock()
-        logging_obj.litellm_call_id = "call-auto-routed"
-        logging_obj.cost_breakdown = None
-        logging_obj.model_call_details = {}
-        logging_obj.litellm_params = {bucket_name: metadata_bucket}
-        logging_obj._enqueue_deferred_logging = None
-        logging_obj._on_deferred_stream_complete = None
-        return logging_obj
+    verbose_proxy_logger.propagate = True
+    try:
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            try:
+                raise exc
+            except Exception as raised:
+                _log_llm_api_exception(raised)
+    finally:
+        verbose_proxy_logger.propagate = False
 
-    async def _drive(self, *, monkeypatch, logging_obj):
-        import litellm.proxy.common_request_processing as crp
-        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
-        from litellm.types.utils import ModelResponse
-
-        response = ModelResponse(
-            model="deep-model",
-            choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        )
-
-        async def fake_route_request(**kwargs):
-            async def _llm_call():
-                return response
-
-            return _llm_call()
-
-        monkeypatch.setattr(crp, "route_request", fake_route_request)
-
-        async def fake_post_call_success_hook(data, user_api_key_dict, response):
-            return response
-
-        proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
-        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
-
-        processing_obj = ProxyBaseLLMRequestProcessing(
-            data={"model": "smart-route", "litellm_logging_obj": logging_obj}
-        )
-
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=False):
-            return await processing_obj.base_process_llm_request(
-                request=MagicMock(spec=Request, headers={}),
-                fastapi_response=Response(),
-                user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
-                route_type="acompletion",
-                proxy_logging_obj=proxy_logging_obj,
-                general_settings={},
-                proxy_config=MagicMock(spec=ProxyConfig),
-                select_data_generator=None,
-                llm_router=None,
-                skip_pre_call_logic=True,
-            )
-
-    @pytest.mark.asyncio
-    async def test_auto_routed_request_carries_router_model_name(self, monkeypatch):
-        result = await self._drive(
-            monkeypatch=monkeypatch,
-            logging_obj=self._logging_obj(
-                metadata_bucket={
-                    AUTO_ROUTED_REQUEST_METADATA_KEY: True,
-                    "deployment_model_name": "deep-model",
-                }
-            ),
-        )
-
-        assert result.model == "smart-route"
-        assert result.model_dump(exclude_none=True, exclude_unset=True)[ROUTER_MODEL_NAME_RESPONSE_FIELD] == (
-            "deep-model"
-        )
-
-    @pytest.mark.asyncio
-    async def test_marker_and_model_name_in_different_buckets(self, monkeypatch):
-        logging_obj = self._logging_obj(metadata_bucket={AUTO_ROUTED_REQUEST_METADATA_KEY: True})
-        logging_obj.litellm_params["litellm_metadata"] = {"deployment_model_name": "deep-model"}
-
-        result = await self._drive(monkeypatch=monkeypatch, logging_obj=logging_obj)
-
-        assert result.model_dump(exclude_none=True, exclude_unset=True)[ROUTER_MODEL_NAME_RESPONSE_FIELD] == (
-            "deep-model"
-        )
-
-    @pytest.mark.asyncio
-    async def test_plain_model_group_request_has_no_router_model_name(self, monkeypatch):
-        result = await self._drive(
-            monkeypatch=monkeypatch,
-            logging_obj=self._logging_obj(metadata_bucket={"deployment_model_name": "deep-model"}),
-        )
-
-        assert ROUTER_MODEL_NAME_RESPONSE_FIELD not in result.model_dump(exclude_none=True, exclude_unset=True)
-
-    @pytest.mark.asyncio
-    async def test_typeddict_response_gets_router_model_name(self):
-        from litellm.types.utils import AnthropicMessagesResponse
-
-        response: AnthropicMessagesResponse = {"id": "msg_1", "model": "smart-route", "type": "message"}
-        ProxyBaseLLMRequestProcessing.set_router_selected_model_field(
-            response_obj=response,
-            router_model_name=ProxyBaseLLMRequestProcessing.get_router_selected_model_name(
-                self._logging_obj(
-                    metadata_bucket={
-                        AUTO_ROUTED_REQUEST_METADATA_KEY: True,
-                        "deployment_model_name": "deep-model",
-                    }
-                )
-            ),
-        )
-
-        assert response[ROUTER_MODEL_NAME_RESPONSE_FIELD] == "deep-model"
+    records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert (records[0].exc_info is not None) is expect_traceback
