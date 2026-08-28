@@ -3727,6 +3727,41 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
     assert payload["litellm_call_id"] == call_id
 
 
+def test_get_standard_logging_object_payload_preserves_absent_end_user_as_none(logging_obj):
+    from datetime import datetime
+    from typing import Final
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+    from litellm.types.utils import StandardLoggingPayload
+
+    now: Final = datetime.now()
+    payload: Final[StandardLoggingPayload | None] = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-4o",
+            "messages": [],
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_alias": "test-key-alias",
+                    "user_api_key_user_id": "test-key-user",
+                    "user_api_key_end_user_id": None,
+                },
+                "proxy_server_request": {"body": {}},
+            },
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["user_api_key_alias"] == "test-key-alias"
+    assert payload["metadata"]["user_api_key_user_id"] == "test-key-user"
+    assert payload["metadata"]["user_api_key_end_user_id"] is None
+    assert payload["end_user"] is None
+
+
 # ── Azure Model Router selected-model attribution ────────────────────────────
 
 
