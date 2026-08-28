@@ -3303,9 +3303,6 @@ async def team_member_delete(
             data=data,
         )
 
-        if not removed_team_members:
-            raise HTTPException(status_code=400, detail={"error": "User not found in team"})
-
         existing_team_row.members_with_roles = new_team_members
 
         _db_new_team_members: Final[list[dict]] = [m.model_dump() for m in new_team_members]
@@ -3313,17 +3310,22 @@ async def team_member_delete(
         ## DELETE TEAM ID from USER ROW, IF EXISTS ##
         # get user row
         removed_user_ids: Final = frozenset(m.user_id for m in removed_team_members if m.user_id is not None)
+        addressed_user_ids: Final = removed_user_ids.union((data.user_id,) if data.user_id is not None else ())
         key_val: Final[Mapping[str, object]] = (
-            {"user_id": {"in": sorted(removed_user_ids)}} if removed_user_ids else {"user_email": data.user_email}
+            {"user_id": {"in": sorted(addressed_user_ids)}} if addressed_user_ids else {"user_email": data.user_email}
         )
         member_tx: Final[_MemberDeleteTx] = tx
         existing_user_rows: Final = await member_tx.litellm_usertable.find_many(where=key_val)
 
         # Also clean up any existing team membership rows for this user and team
-        user_ids_to_delete: Final = removed_user_ids.union(
-            (data.user_id,) if data.user_id is not None else (),
-            (user.user_id for user in existing_user_rows if user.user_id),
-        )
+        user_ids_to_delete: Final = addressed_user_ids.union(user.user_id for user in existing_user_rows if user.user_id)
+
+        # A user row can outlive its roster entry, and until the team is off user.teams the user
+        # still sees it and still fails key creation against it, so removal has to clear it too
+        stale_user_rows: Final = tuple(user for user in existing_user_rows if data.team_id in user.teams)
+
+        if not removed_team_members and not stale_user_rows:
+            raise HTTPException(status_code=400, detail={"error": "User not found in team"})
 
         ## DELETE KEYS CREATED BY USER FOR THIS TEAM
         # Fetch keys before deletion so their audit records can be persisted alongside the delete.
@@ -3335,17 +3337,17 @@ async def team_member_delete(
             }
         )
 
-        await _team_tx_db(tx).update(
-            where={"team_id": data.team_id},
-            data={"members_with_roles": json.dumps(_db_new_team_members)},
-        )
+        if removed_team_members:
+            await _team_tx_db(tx).update(
+                where={"team_id": data.team_id},
+                data={"members_with_roles": json.dumps(_db_new_team_members)},
+            )
 
-        for existing_user in existing_user_rows:
-            if data.team_id in existing_user.teams:
-                await tx.litellm_usertable.update(
-                    where={"user_id": existing_user.user_id},
-                    data={"teams": {"set": [team for team in existing_user.teams if team != data.team_id]}},
-                )
+        for existing_user in stale_user_rows:
+            await tx.litellm_usertable.update(
+                where={"user_id": existing_user.user_id},
+                data={"teams": {"set": [team for team in existing_user.teams if team != data.team_id]}},
+            )
 
         for _uid in sorted(user_ids_to_delete):
             await tx.litellm_teammembership.delete_many(where={"team_id": data.team_id, "user_id": _uid})
