@@ -1,7 +1,7 @@
 """
 AUTO ROUTER MANAGEMENT ENDPOINTS
 
-POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
+POST /auto_router/test_routing - Route one request through an unsaved complexity-router config
 POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
 """
 
@@ -32,7 +32,10 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    refresh_proxy_server_request_body_snapshot,
+)
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
@@ -285,19 +288,30 @@ async def preview_auto_router_routing(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> AutoRouterRoutingTestResponse:
     """
-    Route a single prompt through a complexity-router config and report where it landed.
+    Route a single request through a complexity-router config and report where it landed.
 
-    Answers "which model would this prompt get?" for a config that only exists in a form,
-    so an auto router can be checked before it is created. The prompt is classified by the
-    same pre-routing hook a live request runs, then dropped: nothing is sent to the model it
-    routed to, and no auto router is created. A heuristic config therefore spends nothing, while
-    an `llm` classifier or semantic keyword matching bills its classifier/embedding call to the
-    calling key, like Test Connection does.
+    Answers "which model would this request get?" for a config that only exists in a form,
+    so an auto router can be checked before it is created. The request is classified by the
+    same pre-routing hook a live request runs, over the same messages, system prompt and tool
+    definitions, then dropped: nothing is sent to the model it routed to, and no auto router is
+    created. A heuristic config therefore spends nothing, while an `llm` classifier or semantic
+    keyword matching bills its classifier/embedding call to the calling key, like Test Connection
+    does.
+
+    Send `messages` to classify a real turn, with `system` and `tools` beside it when the surface
+    carries them top level, as Anthropic /v1/messages does. `prompt` is the single-ask shorthand and
+    routes as one user turn with nothing around it.
 
     **Example Request:**
     ```json
     {
-        "prompt": "think step by step about how to shard this table",
+        "messages": [
+            {"role": "system", "content": "You are a database migration assistant"},
+            {"role": "user", "content": "the index is not unique"},
+            {"role": "assistant", "content": "Then two workers can both insert. Add a unique index"},
+            {"role": "user", "content": "ok do it"}
+        ],
+        "tools": [{"type": "function", "function": {"name": "Bash", "description": "Run a command"}}],
         "complexity_router_config": {
             "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["o3"]},
             "classifier_type": "heuristic"
@@ -340,18 +354,21 @@ async def preview_auto_router_routing(
     )
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
-        data={"metadata": {}},  # mutable-ok: the request-metadata helper takes and returns request kwargs as a dict
+        data={  # mutable-ok: the request-metadata helper takes and returns request kwargs as a dict
+            **data.wire_body(),
+            "metadata": {},  # mutable-ok: the request-metadata helper writes the auth fields into this dict
+            "proxy_server_request": {"body": None},  # mutable-ok: the snapshot owner fills body in place
+        },
         user_api_key_dict=user_api_key_dict,
         _metadata_variable_name="metadata",
     )
+    refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
         hook_response: Final = await complexity_router.async_pre_routing_hook(
             model=data.router_name,
             request_kwargs=request_kwargs,
-            messages=[  # mutable-ok: the routing hook's signature takes a list of message dicts
-                {"role": "user", "content": data.prompt},  # mutable-ok: a message is dict-shaped
-            ],
+            messages=request_kwargs["messages"],
         )
     except Exception as e:  # noqa: BLE001 -- surfaces any classifier/plugin failure to the caller as a 400 instead of a 500, since the config under test is caller input
         verbose_proxy_logger.exception("Auto router routing test failed. Due to error - %s", e)
