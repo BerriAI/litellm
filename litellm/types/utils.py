@@ -2832,6 +2832,11 @@ RoutingDecisionCause = Literal[
     # keyword rule, or session pin), or the floor was already the top configured tier and the
     # classifier was skipped. The matched sentinel rides in matched_keyword.
     "plan_mode",
+    # A client housekeeping sentinel (a coding agent's conversation-title prompt) was detected on
+    # the newest ask, so the request routed to the cheapest configured tier and the classifier was
+    # never called. The matched sentinel rides in matched_keyword. Distinct from the keyword causes,
+    # which are operator-authored rules; these sentinels ship with the router.
+    "housekeeping",
     "session_affinity_pin",
     "session_affinity_escalation",
     "default_fallback",
