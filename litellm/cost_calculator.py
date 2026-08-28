@@ -2,8 +2,9 @@
 ## File for 'response_cost' calculation in Logging
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
@@ -236,6 +237,259 @@ def _cost_per_token_custom_pricing_helper(
         output_cost = custom_cost_per_second * (response_time_ms or 0.0) / 1000
         return 0, output_cost
 
+    return None
+
+
+def _litellm_params_as_mapping(litellm_params: object | None) -> Mapping[str, object] | None:
+    if litellm_params is None:
+        return None
+    if isinstance(litellm_params, Mapping):
+        return litellm_params
+    dump: Final = getattr(litellm_params, "model_dump", None)
+    if not callable(dump):
+        return None
+    dumped: Final = dump()
+    if not isinstance(dumped, Mapping):
+        return None
+    return dumped
+
+
+def _model_info_from_params(params: Mapping[str, object], metadata_key: str) -> Mapping[str, object] | None:
+    metadata: Final = params.get(metadata_key)
+    if not isinstance(metadata, Mapping):
+        return None
+    return _litellm_params_as_mapping(metadata.get("model_info"))
+
+
+def _as_token_rate(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _custom_rates_from_mapping(source: Mapping[str, object] | None) -> Mapping[str, float] | None:
+    if source is None:
+        return None
+    input_cost: Final = source.get("input_cost_per_token")
+    output_cost: Final = source.get("output_cost_per_token")
+    if input_cost is None and output_cost is None:
+        return None
+    cache_read: Final = source.get("cache_read_input_token_cost")
+    cache_creation: Final = source.get("cache_creation_input_token_cost")
+    pairs: Final = (
+        ("input_cost_per_token", input_cost),
+        ("output_cost_per_token", output_cost),
+        ("cache_read_input_token_cost", cache_read),
+        ("cache_creation_input_token_cost", cache_creation),
+    )
+    return MappingProxyType({key: rate for key, value in pairs if (rate := _as_token_rate(value)) is not None})
+
+
+def extract_custom_cost_per_token(
+    litellm_params: object | None,
+) -> Mapping[str, float] | None:
+    """Return deployment token rates from litellm_params when input and/or output is set.
+
+    Rates may sit on litellm_params itself (UI / model_list) or under
+    metadata.model_info / litellm_metadata.model_info (/v1/messages, /v1/responses).
+    One-sided rates are returned as-is; callers that need a complete CostPerToken
+    fill the missing side from the published price map.
+    Optional cache rates are copied when present so the custom-pricing helper can
+    apply them instead of falling back to the input rate.
+    """
+    params: Final = _litellm_params_as_mapping(litellm_params)
+    if params is None:
+        return None
+    return (
+        _custom_rates_from_mapping(params)
+        or _custom_rates_from_mapping(_model_info_from_params(params, "metadata"))
+        or _custom_rates_from_mapping(_model_info_from_params(params, "litellm_metadata"))
+    )
+
+
+def _published_model_info(
+    model: str | None,
+    custom_llm_provider: str | None,
+) -> Mapping[str, object] | None:
+    if not model:
+        return None
+    try:
+        info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # get_model_info raises Exception for unmapped models
+        return None
+    return MappingProxyType({str(key): value for key, value in info.items()})
+
+
+def _rate_from_model_info(info: Mapping[str, object] | None, field: str) -> float | None:
+    if info is None:
+        return None
+    return _as_token_rate(info.get(field))
+
+
+def _published_token_rate(
+    model: str | None,
+    custom_llm_provider: str | None,
+    field: str,
+) -> float | None:
+    return _rate_from_model_info(_published_model_info(model, custom_llm_provider), field)
+
+
+def _unique_model_names(*names: str | None) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            part
+            for name in names
+            if isinstance(name, str) and name
+            for part in ((name,) if "/" not in name else (name, name.split("/", 1)[1]))
+            if part
+        )
+    )
+
+
+def _cost_map_rate(key: str | None, field: str) -> float | None:
+    if not key:
+        return None
+    raw: Final = litellm.model_cost.get(key)
+    if not isinstance(raw, Mapping):
+        return None
+    return _as_token_rate(raw.get(field))
+
+
+def _declared_token_rate(
+    model: str | None,
+    custom_llm_provider: str | None,
+    field: str,
+) -> float | None:
+    """Return a price-map rate that was actually declared on the entry.
+
+    ``get_model_info`` synthesizes ``input_cost_per_token`` / ``output_cost_per_token``
+    to 0 when they are missing. A custom ``router_model_id`` entry typically has
+    only those two fields; treating the zeros or missing cache keys as published
+    would skip the backend model that does have cache-specific rates.
+    """
+    if not model:
+        return None
+    from_map: Final = _cost_map_rate(model, field)
+    if from_map is not None:
+        return from_map
+    if custom_llm_provider:
+        from_prefixed: Final = _cost_map_rate(f"{custom_llm_provider}/{model}", field)
+        if from_prefixed is not None:
+            return from_prefixed
+    info: Final = _published_model_info(model, custom_llm_provider)
+    if info is None:
+        return None
+    info_key: Final = info.get("key")
+    from_resolved: Final = _cost_map_rate(info_key if isinstance(info_key, str) else None, field)
+    if from_resolved is not None:
+        return from_resolved
+    if field in ("input_cost_per_token", "output_cost_per_token"):
+        return None
+    return _rate_from_model_info(info, field)
+
+
+def _first_declared_token_rate(
+    models: Sequence[str | None],
+    custom_llm_provider: str | None,
+    field: str,
+) -> float | None:
+    for candidate in _unique_model_names(*models):
+        rate = _declared_token_rate(candidate, custom_llm_provider, field)
+        if rate is not None:
+            return rate
+    return None
+
+
+def _complete_custom_cost_per_token(
+    rates: Mapping[str, float] | None,
+    *,
+    model: str | None,
+    custom_llm_provider: str | None,
+    fallback_models: Sequence[str | None] = (),
+) -> CostPerToken | None:
+    """Fill missing sides of a partial custom CostPerToken from declared price-map rates.
+
+    ``model`` is often a custom ``router_model_id`` that only stores input/output.
+    ``fallback_models`` should include the backend model so cache-specific rates
+    come from that published entry instead of the normal input rate.
+    """
+    if rates is None:
+        return None
+    input_cost: Final = rates.get("input_cost_per_token")
+    output_cost: Final = rates.get("output_cost_per_token")
+    if input_cost is None and output_cost is None:
+        return None
+    lookup_models: Final = (model, *fallback_models)
+    resolved_input: Final = (
+        float(input_cost)
+        if input_cost is not None
+        else (_first_declared_token_rate(lookup_models, custom_llm_provider, "input_cost_per_token") or 0.0)
+    )
+    resolved_output: Final = (
+        float(output_cost)
+        if output_cost is not None
+        else (_first_declared_token_rate(lookup_models, custom_llm_provider, "output_cost_per_token") or 0.0)
+    )
+    cache_read: Final = rates.get("cache_read_input_token_cost")
+    cache_creation: Final = rates.get("cache_creation_input_token_cost")
+    published_cache_read: Final = _first_declared_token_rate(
+        lookup_models, custom_llm_provider, "cache_read_input_token_cost"
+    )
+    published_cache_creation: Final = _first_declared_token_rate(
+        lookup_models, custom_llm_provider, "cache_creation_input_token_cost"
+    )
+    completed: Final[CostPerToken] = {
+        "input_cost_per_token": resolved_input,
+        "output_cost_per_token": resolved_output,
+        "cache_read_input_token_cost": (
+            float(cache_read)
+            if cache_read is not None
+            else (published_cache_read if published_cache_read is not None else resolved_input)
+        ),
+        "cache_creation_input_token_cost": (
+            float(cache_creation)
+            if cache_creation is not None
+            else (published_cache_creation if published_cache_creation is not None else resolved_input)
+        ),
+    }
+    return completed
+
+
+def _custom_cost_per_token_from_logging_obj(
+    litellm_logging_obj: LitellmLoggingObject | None,
+) -> Mapping[str, float] | None:
+    if litellm_logging_obj is None:
+        return None
+    from_attr: Final = extract_custom_cost_per_token(getattr(litellm_logging_obj, "litellm_params", None))
+    if from_attr is not None:
+        return from_attr
+    details: Final = getattr(litellm_logging_obj, "model_call_details", None)
+    nested: Final = details.get("litellm_params") if isinstance(details, Mapping) else None
+    return extract_custom_cost_per_token(nested)
+
+
+def _backend_model_from_logging_obj(
+    litellm_logging_obj: LitellmLoggingObject | None,
+) -> str | None:
+    if litellm_logging_obj is None:
+        return None
+    attr_params: Final = _litellm_params_as_mapping(getattr(litellm_logging_obj, "litellm_params", None))
+    if attr_params is not None:
+        attr_model: Final = attr_params.get("model")
+        if isinstance(attr_model, str) and attr_model:
+            return attr_model
+    details: Final = getattr(litellm_logging_obj, "model_call_details", None)
+    nested: Final = details.get("litellm_params") if isinstance(details, Mapping) else None
+    nested_params: Final = _litellm_params_as_mapping(nested)
+    if nested_params is not None:
+        nested_model: Final = nested_params.get("model")
+        if isinstance(nested_model, str) and nested_model:
+            return nested_model
+    logging_model: Final = getattr(litellm_logging_obj, "model", None)
+    if isinstance(logging_model, str) and logging_model:
+        return logging_model
     return None
 
 
@@ -1268,6 +1522,22 @@ def completion_cost(
         if model is not None:
             potential_model_names.append(model)
 
+        resolved_custom_cost_per_token: Final = (
+            custom_cost_per_token
+            if custom_cost_per_token is not None
+            else _complete_custom_cost_per_token(
+                _custom_cost_per_token_from_logging_obj(litellm_logging_obj),
+                model=selected_model,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                fallback_models=(
+                    model if isinstance(model, str) else None,
+                    _get_response_model(completion_response),
+                    base_model,
+                    _backend_model_from_logging_obj(litellm_logging_obj),
+                ),
+            )
+        )
+
         for idx, model in enumerate(potential_model_names):
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
@@ -1616,7 +1886,7 @@ def completion_cost(
                     response_time_ms=total_time,
                     region_name=region_name,
                     custom_cost_per_second=custom_cost_per_second,
-                    custom_cost_per_token=custom_cost_per_token,
+                    custom_cost_per_token=resolved_custom_cost_per_token,
                     prompt_characters=prompt_characters,
                     completion_characters=completion_characters,
                     cache_creation_input_tokens=cache_creation_input_tokens,

@@ -77,7 +77,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    strip_unauthorized_client_pricing,
+)
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -549,6 +552,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         from litellm.types.utils import all_litellm_params
 
         _parsed_body = _parsed_body or {}
+        strip_unauthorized_client_pricing(_parsed_body, user_api_key_dict)
 
         litellm_params_in_body: Final = {}
         for k in all_litellm_params:

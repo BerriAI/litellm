@@ -11,6 +11,7 @@ import httpx
 import pytest
 import litellm
 from typing import AsyncGenerator
+from litellm.cost_calculator import extract_custom_cost_per_token
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -233,6 +234,113 @@ def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict)
     assert metadata["custom_field"] == "custom_value"
     assert metadata["tags"] == ["tag1", "tag2"]
     assert metadata["user_api_key"] == "test-key"
+
+
+def _passthrough_logging_obj():
+    return LiteLLMLoggingObj(
+        model="test-model",
+        messages=[],
+        stream=False,
+        call_type="test-call-type",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+
+def test_init_kwargs_strips_client_token_rates(mock_request, mock_user_api_key_dict):
+    """Client-supplied 0 rates must not land in litellm_params (budget bypass)."""
+    request = mock_request()
+    parsed_body = {
+        "model": "claude-sonnet-4-5-20250929",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    passthrough_payload = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        _parsed_body=parsed_body,
+        litellm_call_id="test-call-id",
+        logging_obj=_passthrough_logging_obj(),
+    )
+
+    assert "input_cost_per_token" not in result["litellm_params"]
+    assert "output_cost_per_token" not in result["litellm_params"]
+    assert extract_custom_cost_per_token(result["litellm_params"]) is None
+
+
+def test_init_kwargs_strips_client_model_info_pricing(
+    mock_request, mock_user_api_key_dict
+):
+    request = mock_request()
+    parsed_body = {
+        "litellm_metadata": {
+            "tags": ["keep-me"],
+            "model_info": {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            },
+        }
+    }
+    passthrough_payload = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        _parsed_body=parsed_body,
+        litellm_call_id="test-call-id",
+        logging_obj=_passthrough_logging_obj(),
+    )
+
+    metadata = result["litellm_params"]["metadata"]
+    assert metadata["tags"] == ["keep-me"]
+    assert "model_info" not in metadata
+
+
+def test_init_kwargs_keeps_client_pricing_when_key_allows_override(mock_request):
+    request = mock_request()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-user",
+        metadata={"allow_client_pricing_override": True},
+    )
+    parsed_body = {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    passthrough_payload = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        _parsed_body=parsed_body,
+        litellm_call_id="test-call-id",
+        logging_obj=_passthrough_logging_obj(),
+    )
+
+    assert result["litellm_params"]["input_cost_per_token"] == 0.0
+    assert result["litellm_params"]["output_cost_per_token"] == 0.0
+    assert extract_custom_cost_per_token(result["litellm_params"]) == {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
 
 
 def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
@@ -574,11 +682,13 @@ def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict
     assert parsed_body["temperature"] == 0.7
     assert parsed_body["max_tokens"] == 100
 
-    # Verify pricing parameters are stored in litellm_params for internal use
+    # Unauthorized keys must not keep client rates in litellm_params; otherwise
+    # extract_custom_cost_per_token would bill from the request body (budget bypass).
+    # Authorized keys are covered by test_init_kwargs_keeps_client_pricing_when_key_allows_override.
     litellm_params = result["litellm_params"]
-    assert litellm_params["input_cost_per_token"] == 0.00002
-    assert litellm_params["output_cost_per_token"] == 0.00002
-    # Note: Other pricing params are also stored but we test the key ones that caused the regression
+    assert "input_cost_per_token" not in litellm_params
+    assert "output_cost_per_token" not in litellm_params
+    assert extract_custom_cost_per_token(litellm_params) is None
 
 
 def test_custom_pricing_used_in_cost_calculation():

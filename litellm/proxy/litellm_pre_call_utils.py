@@ -538,6 +538,15 @@ def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
         )
 
 
+def strip_unauthorized_client_pricing(
+    data: dict[str, Any],  # mutable-ok: in-place strip of the caller request body
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Drop client pricing overrides unless the key or team allows them."""
+    if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
+        _strip_client_pricing_overrides(data)
+
+
 def _get_metadata_variable_name(request: Request) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
