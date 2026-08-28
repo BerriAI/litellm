@@ -8590,6 +8590,29 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
     return TextCompletionResponse(**response)
 
 
+def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
+    usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
+    if isinstance(usage_cost, (int, float)):
+        return float(usage_cost)
+    if logging_obj is not None:
+        return None
+    provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor
+        "custom_llm_provider"
+    )
+    try:
+        return litellm.completion_cost(completion_response=response, custom_llm_provider=provider_hint)
+    except Exception:
+        return None
+
+
+def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
+    response_cost: Final = _stream_builder_response_cost(response, logging_obj)
+    if response_cost is None:
+        return
+    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params["response_cost"] = response_cost
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: list | None = None,
@@ -8690,6 +8713,8 @@ def stream_chunk_builder(
                     "cost",
                     logging_obj._response_cost_calculator(result=response),
                 )
+            _set_stream_builder_response_cost(response, logging_obj)
+
             processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
             return response
 
@@ -8814,18 +8839,24 @@ def stream_chunk_builder(
         ]
 
         if len(provider_specific_chunks) > 0:
-            combined_provider_fields: Final[dict[str, object]] = {}
-            for chunk in provider_specific_chunks:
-                fields = chunk["choices"][0]["delta"]["provider_specific_fields"]
-                if isinstance(fields, dict):
-                    for key, value in fields.items():
-                        if key not in combined_provider_fields:
-                            combined_provider_fields[key] = value
-                        elif isinstance(value, list) and isinstance(combined_provider_fields[key], list):
-                            # For lists like web_search_results, take the last (most complete) one
-                            combined_provider_fields[key] = value
-                        else:
-                            combined_provider_fields[key] = value
+            provider_field_dicts: Final = tuple(
+                fields
+                for chunk in provider_specific_chunks
+                for fields in (chunk["choices"][0]["delta"]["provider_specific_fields"],)
+                if isinstance(fields, dict)
+            )
+            streamed_citations: Final = tuple(
+                fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
+            )
+            citation_fields: Final = (
+                {"citations": [list(streamed_citations)]} if streamed_citations else {}  # mutable-ok: JSON dict field
+            )
+            combined_provider_fields: Final = {  # mutable-ok: Message.provider_specific_fields is a plain dict field
+                key: value
+                for fields in (citation_fields, *provider_field_dicts)
+                for key, value in fields.items()
+                if key != "citation"
+            }
 
             if combined_provider_fields:
                 _choice = cast(Choices, response.choices[0])
@@ -8861,6 +8892,8 @@ def stream_chunk_builder(
         # Add cost to usage object if include_cost_in_streaming_usage is True
         if litellm.include_cost_in_streaming_usage and logging_obj is not None:
             setattr(usage, "cost", logging_obj._response_cost_calculator(result=response))
+
+        _set_stream_builder_response_cost(response, logging_obj)
 
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
         return response
