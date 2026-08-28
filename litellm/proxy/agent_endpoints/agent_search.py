@@ -143,31 +143,56 @@ def router_embedder(router: Router, embedding_model: str, user_api_key_dict: Use
     return embed
 
 
+_NO_VECTORS: Final[Mapping[str, Vector]] = MappingProxyType({})
+
+
+async def _embed_all(embed: Embedder, texts: Sequence[str]) -> tuple[Vector, ...] | AgentSearchEmbeddingFailed:
+    try:
+        vectors: Final = tuple(await embed(texts))
+    except (OpenAIError, ValueError, BudgetExceededError) as exc:
+        return AgentSearchEmbeddingFailed(reason=f"embedding the search query failed: {exc}")
+    if len(vectors) != len(texts):
+        return AgentSearchEmbeddingFailed(
+            reason=f"embedding model returned {len(vectors)} vectors for {len(texts)} inputs"
+        )
+    return vectors
+
+
 class AgentSearchIndex:
-    """Caches one vector per distinct agent text, so repeat searches only embed the query."""
+    """Caches one vector per distinct agent text per embedding model, so repeat searches only embed the query."""
 
     def __init__(self) -> None:
-        self._vectors: Mapping[str, Vector] = MappingProxyType({})
+        self._vectors: Mapping[str, Mapping[str, Vector]] = MappingProxyType({})
 
     async def search(
-        self, query: str, agents: Sequence[AgentResponse], top_k: int, embed: Embedder
+        self, query: str, agents: Sequence[AgentResponse], top_k: int, embed: Embedder, embedding_model: str
     ) -> AgentSearchHits | AgentSearchEmbeddingFailed:
         if not agents:
             return AgentSearchHits(hits=())
         texts: Final = tuple(agent_search_text(agent) for agent in agents)
-        missing: Final = tuple(dict.fromkeys(text for text in texts if text not in self._vectors))
-        try:
-            vectors: Final = await embed((query, *missing))
-        except (OpenAIError, ValueError, BudgetExceededError) as exc:
-            return AgentSearchEmbeddingFailed(reason=f"embedding the search query failed: {exc}")
-        if len(vectors) != len(missing) + 1:
+        cached: Final = self._vectors.get(embedding_model, _NO_VECTORS)
+        missing: Final = tuple(dict.fromkeys(text for text in texts if text not in cached))
+        embedded: Final = await _embed_all(embed, (query, *missing))
+        if isinstance(embedded, AgentSearchEmbeddingFailed):
+            return embedded
+        query_vector: Final = embedded[0]
+        stale: Final = tuple(
+            dict.fromkeys(text for text in texts if text in cached and len(cached[text]) != len(query_vector))
+        )
+        refreshed: Final = await _embed_all(embed, stale) if stale else ()
+        if isinstance(refreshed, AgentSearchEmbeddingFailed):
+            return refreshed
+        vectors: Final = MappingProxyType(
+            dict(chain(cached.items(), zip(missing, embedded[1:], strict=True), zip(stale, refreshed, strict=True)))
+        )
+        if any(len(vectors[text]) != len(query_vector) for text in texts):
             return AgentSearchEmbeddingFailed(
-                reason=f"embedding model returned {len(vectors)} vectors for {len(missing) + 1} inputs"
+                reason=f"embedding model {embedding_model} returned vectors of mixed dimensions"
             )
-        self._vectors = MappingProxyType(dict(chain(self._vectors.items(), zip(missing, vectors[1:], strict=True))))
+        self._vectors = MappingProxyType({**self._vectors, embedding_model: vectors})
         ranked: Final = sorted(
             (
-                AgentSearchHit(agent=agent, score=cosine_similarity(vectors[0], self._vectors[text]))
+                AgentSearchHit(agent=agent, score=cosine_similarity(query_vector, vectors[text]))
                 for agent, text in zip(agents, texts, strict=True)
             ),
             key=lambda hit: hit.score,
@@ -194,4 +219,6 @@ async def search_agents(
         )
     if router is None:
         return AgentSearchNotConfigured(reason="agent search needs a model_list so the embedding model can be called")
-    return await index.search(query, agents, top_k, router_embedder(router, embedding_model, user_api_key_dict))
+    return await index.search(
+        query, agents, top_k, router_embedder(router, embedding_model, user_api_key_dict), embedding_model
+    )
