@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 import pytest
 
+import litellm
+
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     normalize_reasoning_effort_value,
 )
@@ -291,3 +293,91 @@ class TestAdapterAdaptiveThinking:
         )
         assert result is not None
         assert result["effort"] == "medium"
+
+
+class TestDeclaredEffortsAnswerTheDegradationGate:
+    """Without this the chain reads only the per-level booleans, so a kimi-k3 request asking for
+    max silently arrives as high."""
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [("kimi-k3", "moonshot"), ("kimi-k3", "fireworks_ai"), ("kimi-k3-us", "fireworks_ai")],
+    )
+    def test_a_declared_level_survives_instead_of_degrading(self, local_model_cost_map, model, provider):
+        assert normalize_reasoning_effort_value("max", model, provider) == "max"
+
+    def test_a_level_the_entry_does_not_declare_still_degrades(self, local_model_cost_map):
+        """xhigh is not on kimi-k3's declaration, so it must keep degrading rather than be waved
+        past by the mere presence of one."""
+        assert normalize_reasoning_effort_value("xhigh", "kimi-k3", "moonshot") == "high"
+        assert normalize_reasoning_effort_value("minimal", "kimi-k3", "moonshot") == "low"
+
+    def test_the_wider_perplexity_entry_keeps_the_levels_it_declares(self, local_model_cost_map):
+        assert normalize_reasoning_effort_value("xhigh", "perplexity/kimi-k3", "perplexity") == "xhigh"
+        assert normalize_reasoning_effort_value("minimal", "perplexity/kimi-k3", "perplexity") == "minimal"
+
+    @pytest.mark.parametrize(
+        "model, provider, effort, expected",
+        [
+            ("claude-opus-4-7", "anthropic", "max", "max"),
+            ("claude-sonnet-4-6", "anthropic", "minimal", "low"),
+            ("gpt-5-mini", "azure", "max", "high"),
+        ],
+    )
+    def test_an_entry_on_the_per_level_flags_is_untouched(
+        self, local_model_cost_map, model, provider, effort, expected
+    ):
+        """The negative class that bounds this change to entries carrying the key."""
+        assert normalize_reasoning_effort_value(effort, model, provider) == expected
+
+
+class TestDeclarationBeatsThePerLevelFlags:
+    """An entry can carry both shapes. The declaration wins whole, or /model_group/info and this
+    path would disagree about the same deployment. Driven through the public entry point over a
+    seeded map entry rather than a patched get_model_info, so it pins behaviour and not wiring."""
+
+    MODEL = "declared-and-flagged"
+
+    @pytest.fixture
+    def seeded(self, local_model_cost_map, monkeypatch):
+        def _seed(**entry):
+            monkeypatch.setitem(
+                litellm.model_cost,
+                self.MODEL,
+                {"litellm_provider": "openai", "mode": "chat", "supports_reasoning": True, **entry},
+            )
+            litellm.get_model_info.cache_clear()
+
+        return _seed
+
+    @pytest.mark.parametrize("effort, expected", [("max", "max"), ("xhigh", "high"), ("minimal", "low")])
+    def test_a_flag_cannot_re_add_a_level_the_declaration_omits(self, seeded, effort, expected):
+        seeded(
+            reasoning_effort_levels=["low", "high", "max"],
+            supports_xhigh_reasoning_effort=True,
+            supports_minimal_reasoning_effort=True,
+            supports_max_reasoning_effort=False,
+        )
+
+        assert normalize_reasoning_effort_value(effort, self.MODEL, "openai") == expected
+
+    def test_a_flag_cannot_keep_max_when_the_declaration_drops_it(self, seeded):
+        seeded(
+            reasoning_effort_levels=["low", "high"],
+            supports_max_reasoning_effort=True,
+            supports_xhigh_reasoning_effort=True,
+        )
+
+        assert normalize_reasoning_effort_value("max", self.MODEL, "openai") == "high"
+
+    def test_a_false_flag_cannot_remove_a_level_the_declaration_names(self, seeded):
+        seeded(reasoning_effort_levels=["high", "xhigh"], supports_xhigh_reasoning_effort=False)
+
+        assert normalize_reasoning_effort_value("xhigh", self.MODEL, "openai") == "xhigh"
+        assert normalize_reasoning_effort_value("max", self.MODEL, "openai") == "xhigh"
+
+    def test_a_chain_the_declaration_omits_entirely_lands_on_its_terminal(self, seeded):
+        """Documented residual: no strength ordering exists to pick a nearer declared level."""
+        seeded(reasoning_effort_levels=["high", "xhigh"])
+
+        assert normalize_reasoning_effort_value("minimal", self.MODEL, "openai") == "low"

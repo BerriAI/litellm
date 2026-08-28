@@ -1599,6 +1599,14 @@ class TestEnableAnthropicPromptCaching:
         assert supports_prompt_caching(model=model, custom_llm_provider=provider) is True
         assert self._points(model=model, provider=provider) == []
 
+    def test_databricks_claude_not_injected_despite_caching_support(self, monkeypatch, local_model_cost_map):
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        model = "databricks/databricks-claude-sonnet-4-5"
+        assert supports_prompt_caching(model=model, custom_llm_provider="databricks") is True
+        assert self._points(model=model, provider="databricks") == []
+
     def test_model_without_caching_support_not_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         assert self._points(model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []

@@ -2,6 +2,7 @@
 Unit tests for auto router management endpoints
 """
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -22,10 +23,21 @@ from litellm.proxy.management_endpoints.auto_router_endpoints import (
 from litellm.router import Router
 from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.types.management_endpoints.auto_router_endpoints import (
+    AutoRouterBenchmarksResponse,
     AutoRouterRoutingTestRequest,
 )
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
+
+
+def _deployment(model_name: str, model: str, *, db_model: bool) -> dict[str, object]:
+    """One entry as `Router.model_list` holds it, for either origin."""
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": model},
+        "model_info": {"id": f"{model_name}-{int(db_model)}", "db_model": db_model},
+    }
+
 
 TIERS = {
     "SIMPLE": ["cheap-model"],
@@ -35,32 +47,85 @@ TIERS = {
 }
 
 
+ROUTER_MODEL_LIST = [
+    {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"}}
+    for name in ("cheap-model", "mid-model", "strong-model", "reasoning-model")
+]
+
+
 def _router() -> Router:
-    return Router(
-        model_list=[
-            {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"}}
-            for name in ("cheap-model", "mid-model", "strong-model", "reasoning-model")
-        ]
-    )
+    return Router(model_list=ROUTER_MODEL_LIST)
 
 
-def _request(prompt: str, **config_overrides: object) -> AutoRouterRoutingTestRequest:
+class RecordingRouter(Router):
+    """A real router that records the classifier calls the endpoint makes instead of sending them.
+
+    Injected at the same `proxy_server.llm_router` boundary the endpoint reads, so model resolution
+    and the key's model-access checks still run against a genuine Router.
+    """
+
+    def __init__(self, classified_tier: str) -> None:
+        super().__init__(model_list=ROUTER_MODEL_LIST)
+        self.classified_tier = classified_tier
+        self.recorded_calls: list[dict] = []
+
+    async def acompletion(self, model, messages, stream=False, **kwargs):
+        self.recorded_calls.append({"model": model, "messages": messages, **kwargs})
+        return ModelResponse(
+            choices=[Choices(message=Message(content=f'{{"tier": "{self.classified_tier}"}}'))],
+            model=model,
+        )
+
+
+def _request_from(body: Mapping[str, object], **config_overrides: object) -> AutoRouterRoutingTestRequest:
     return AutoRouterRoutingTestRequest.model_validate(
         {
-            "prompt": prompt,
+            **body,
             "complexity_router_config": {"tiers": TIERS, "classifier_type": "heuristic", **config_overrides},
         }
     )
 
 
-async def _route(prompt: str, monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
+def _request(prompt: str, **config_overrides: object) -> AutoRouterRoutingTestRequest:
+    return _request_from({"prompt": prompt}, **config_overrides)
+
+
+async def _route_body(body: Mapping[str, object], monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
     import litellm.proxy.proxy_server as proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
     return await preview_auto_router_routing(
-        data=_request(prompt, **config_overrides),
+        data=_request_from(body, **config_overrides),
         user_api_key_dict=ADMIN,
     )
+
+
+async def _route(prompt: str, monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
+    return await _route_body({"prompt": prompt}, monkeypatch, **config_overrides)
+
+
+AGENTIC_MESSAGES = [
+    {"role": "system", "content": "You are a database migration assistant for a payments ledger"},
+    {"role": "user", "content": "duplicate ledger postings since the celery upgrade, same event_id twice"},
+    {"role": "assistant", "content": "The idempotency index is not unique, so two workers both insert"},
+    {"role": "user", "content": "ok do it"},
+]
+
+PLAN_MODE_TOOLS = [{"type": "function", "function": {"name": "exit_plan_mode", "description": "Leave plan mode"}}]
+
+
+async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pytest.MonkeyPatch) -> str:
+    """The variable half of the classifier call this body produces."""
+    from litellm.proxy import proxy_server
+
+    router = RecordingRouter("SIMPLE")
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    await preview_auto_router_routing(
+        data=_request_from(body, classifier_type="llm", classifier_llm_config={"model": "classifier-model"}),
+        user_api_key_dict=ADMIN,
+    )
+    return router.recorded_calls[0]["messages"][1]["content"]
 
 
 @pytest.mark.asyncio
@@ -146,6 +211,123 @@ async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pyt
     assert len(calls) == 1
     assert calls[0]["metadata"]["user_api_key"] == ADMIN.api_key
     assert calls[0]["metadata"]["user_api_key_user_id"] == ADMIN.user_id
+
+
+@pytest.mark.asyncio
+async def test_a_full_turn_is_classified_on_its_system_prompt_and_prior_turns(monkeypatch: pytest.MonkeyPatch):
+    """A dry run over `messages` must produce the classifier call the serving path produces.
+
+    The `prompt` shorthand for the same final ask is the negative class: it carries neither the
+    caller's system prompt nor the conversation it continues, which is why a real agentic turn
+    reduced to its last sentence classifies as trivial.
+    """
+    full_turn = await _classifier_user_payload({"messages": AGENTIC_MESSAGES}, monkeypatch)
+    last_sentence_only = await _classifier_user_payload({"prompt": "ok do it"}, monkeypatch)
+
+    assert "You are a database migration assistant for a payments ledger" in full_turn
+    assert "duplicate ledger postings since the celery upgrade" in full_turn
+    assert full_turn.endswith("Classify this message:\nok do it")
+
+    assert "database migration assistant" not in last_sentence_only
+    assert "duplicate ledger postings" not in last_sentence_only
+    assert last_sentence_only.endswith("Classify this message:\nok do it")
+
+
+@pytest.mark.asyncio
+async def test_a_top_level_system_prompt_is_not_classified_as_the_ask(monkeypatch: pytest.MonkeyPatch):
+    """An Anthropic body carries `system` beside its messages, and the serving path leaves it
+    there: it reaches the raw-body scan, never the ask the classifier is asked to rate."""
+    payload = await _classifier_user_payload(
+        {"messages": [{"role": "user", "content": "ok do it"}], "system": "You migrate payment ledgers"},
+        monkeypatch,
+    )
+
+    assert payload.endswith("Classify this message:\nok do it")
+    assert "You migrate payment ledgers" not in payload
+
+
+@pytest.mark.parametrize(
+    "body, expected_model",
+    [
+        pytest.param({"prompt": "what is 2+2", "tools": PLAN_MODE_TOOLS}, "strong-model", id="tools-carry-it"),
+        pytest.param(
+            {"prompt": "what is 2+2", "system": 'You are currently running in "Plan" mode.'},
+            "strong-model",
+            id="system-carries-it",
+        ),
+        pytest.param({"prompt": "what is 2+2"}, "cheap-model", id="neither-carries-it"),
+        pytest.param(
+            {"prompt": "what is 2+2", "tools": [{"type": "function", "function": {"name": "Bash"}}]},
+            "cheap-model",
+            id="unrelated-tool",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_the_plan_mode_floor_sees_the_tools_and_system_the_request_carries(
+    monkeypatch: pytest.MonkeyPatch, body: dict, expected_model: str
+):
+    response = await _route_body(body, monkeypatch, plan_mode_min_tier="COMPLEX")
+
+    assert response.routed_model == expected_model
+
+
+def test_the_wire_body_hands_out_the_same_messages_the_hook_classifies():
+    """The routing hook reads messages twice, as its own argument and through the raw-body scan.
+    One value, so the two can never disagree."""
+    request = _request_from({"messages": AGENTIC_MESSAGES})
+
+    assert request.wire_body()["messages"] is request.messages
+
+
+def test_a_prompt_is_carried_as_one_user_turn():
+    assert _request_from({"prompt": "what is 2+2"}).messages == [{"role": "user", "content": "what is 2+2"}]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param({"content": "hi"}, id="no-role"),
+        pytest.param({"role": 123, "content": "hi"}, id="role-not-a-string"),
+        pytest.param({"role": "   ", "content": "hi"}, id="blank-role"),
+        pytest.param({"role": "user", "content": {"weird": 1}}, id="content-neither-text-nor-blocks"),
+    ],
+)
+def test_a_message_no_surface_would_accept_is_rejected(message: dict):
+    """The serving path 400s on each of these, so a routed tier here would be a promise it breaks."""
+    with pytest.raises(ValidationError):
+        _request_from({"messages": [message]})
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param({"role": "user", "content": "ok do it"}, id="text-content"),
+        pytest.param({"role": "user", "content": [{"type": "text", "text": "ok"}]}, id="block-content"),
+        pytest.param(
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function"}]},
+            id="null-content-with-tool-calls",
+        ),
+        pytest.param({"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}, id="unknown-key"),
+    ],
+)
+def test_a_message_a_serving_surface_accepts_is_kept(message: dict):
+    """The serving path returns 200 for each of these, and none of their keys are translated."""
+    assert _request_from({"messages": [message]}).messages == [message]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({}, id="neither"),
+        pytest.param({"prompt": "hi", "messages": [{"role": "user", "content": "hi"}]}, id="both"),
+        pytest.param({"prompt": "   "}, id="blank-prompt"),
+        pytest.param({"messages": []}, id="empty-messages"),
+    ],
+)
+def test_a_request_must_carry_exactly_one_usable_conversation(body: dict):
+    with pytest.raises(ValidationError):
+        _request_from(body)
 
 
 @pytest.mark.parametrize(
@@ -294,6 +476,34 @@ def test_classifier_plugin_is_not_settable_over_http():
 
 class TestAutoRouterBenchmarks:
     from litellm.proxy.management_endpoints.auto_router_endpoints import _SessionAggRow
+
+    @pytest.fixture(autouse=True)
+    def _pin_the_router_global(self, monkeypatch: pytest.MonkeyPatch):
+        """Every test here reads proxy_server.llm_router, so no test may inherit a sibling's."""
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    @staticmethod
+    async def _benchmarks(
+        monkeypatch: pytest.MonkeyPatch,
+        rows: Sequence[Mapping[str, object]],
+        model_list: Sequence[object],
+    ) -> AutoRouterBenchmarksResponse:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        class _DB:
+            async def query_raw(self, sql: str, *params: object):
+                return rows
+
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        monkeypatch.setattr(proxy_server, "llm_router", type("R", (), {"model_list": model_list})())
+        return await get_auto_router_benchmarks(
+            user_api_key_dict=ADMIN,
+            start_date="2026-07-01",
+            end_date="2026-08-01",
+        )
 
     ROW = _SessionAggRow(
         router_name="live-auto",
@@ -470,6 +680,113 @@ class TestAutoRouterBenchmarks:
             end_date="2026-08-01",
         )
         assert response.groups[0].tier_turns == expected
+
+    @pytest.mark.asyncio
+    async def test_the_picker_lists_configured_routers_before_they_have_traffic(self, monkeypatch: pytest.MonkeyPatch):
+        """A router must be selectable the moment it exists, from either origin.
+
+        `live-auto` is the only router the rollup knows about, so before this it was the only
+        thing the dropdown could offer. Both a config.yaml router and a DB-created one now
+        arrive zeroed, and neither moves the totals or duplicates the router that has traffic.
+        """
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[self.ROW.model_dump()],
+            model_list=[
+                _deployment("live-auto", "auto_router/complexity_router", db_model=False),
+                _deployment("idle-from-config", "auto_router/complexity_router", db_model=False),
+                _deployment("idle-from-db", "auto_router/complexity_router", db_model=True),
+            ],
+        )
+
+        by_name = {group.router_name: group for group in response.groups}
+        assert sorted(by_name) == ["idle-from-config", "idle-from-db", "live-auto"]
+        assert len(response.groups) == 3
+        assert response.routers_in_scope == 3
+        assert by_name["live-auto"].spend == 10.0
+        assert response.totals.spend == 10.0
+        assert response.totals.sessions == 4
+        for name in ("idle-from-config", "idle-from-db"):
+            idle = by_name[name]
+            assert idle.router_type == "complexity"
+            assert (idle.sessions, idle.turns, idle.spend, idle.saved_spend, idle.baseline_spend) == (
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+            )
+            assert (idle.saved_pct, idle.saved_per_session, idle.avg_turns_per_session) == (0.0, 0.0, 0.0)
+            assert (idle.cache.hit_rate_pct, idle.cache.coverage_pct) == (0.0, 0.0)
+            assert idle.cache.same_model.turns == idle.cache.return_to_tier.hits == 0
+            assert idle.tier_turns == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model, listed_as",
+        [
+            ("auto_router/complexity_router", "complexity"),
+            ("auto_router/adaptive_router", "adaptive"),
+            ("auto_router/quality_router", "quality"),
+            ("auto_router/my-semantic-router", None),
+            ("openai/gpt-5", None),
+        ],
+    )
+    async def test_only_kinds_whose_routing_the_rollup_records_are_listed(
+        self, model: str, listed_as: str | None, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A semantic auto-router records no routing decision, so it can never own a session
+        row; listing it would show $0 forever even while it serves traffic."""
+        response = await self._benchmarks(
+            monkeypatch, rows=[], model_list=[_deployment("candidate", model, db_model=True)]
+        )
+
+        assert [group.router_type for group in response.groups] == ([listed_as] if listed_as else [])
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_deployment_is_skipped_rather_than_failing_the_dashboard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[self.ROW.model_dump()],
+            model_list=[
+                "not-a-mapping",
+                {},
+                {"model_name": "no-params"},
+                {"model_name": "", "litellm_params": {"model": "auto_router/complexity_router"}},
+                {"model_name": 7, "litellm_params": {"model": "auto_router/complexity_router"}},
+                {"model_name": "no-model", "litellm_params": {}},
+                {"model_name": "unreadable-model", "litellm_params": {"model": None}},
+            ],
+        )
+
+        assert [group.router_name for group in response.groups] == ["live-auto"]
+
+    @pytest.mark.asyncio
+    async def test_two_deployments_of_one_router_are_listed_once(self, monkeypatch: pytest.MonkeyPatch):
+        """Tagged variants share a model_name, and the picker selects by name and type."""
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[],
+            model_list=[
+                _deployment("tagged", "auto_router/complexity_router", db_model=True),
+                _deployment("tagged", "auto_router/complexity_router", db_model=True),
+            ],
+        )
+
+        assert [group.router_name for group in response.groups] == ["tagged"]
+
+    def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
+        """The one reason semantic is excluded, pinned against both declarations: a kind the
+        rollup can record must be listable, and a kind it cannot must not be."""
+        from typing import get_args, get_type_hints
+
+        from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
+        from litellm.types.utils import StandardLoggingRoutingDecision
+
+        recorded = set(get_args(get_type_hints(StandardLoggingRoutingDecision)["router_type"]))
+        assert set(get_args(StrategyRouterKind)) - {"semantic"} == recorded
 
 
 # ---------------------------------------------------------------------------

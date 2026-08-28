@@ -8,6 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
+import contextlib
 import copy
 import enum
 import hashlib
@@ -20,7 +21,7 @@ import time
 import traceback
 import weakref
 from collections import defaultdict
-from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
@@ -44,7 +45,6 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
-    AUTO_ROUTED_REQUEST_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
@@ -80,6 +80,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
+    mask_credentials_in_payload,
     mask_sensitive_structure,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -139,6 +140,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
 )
 from litellm.router_utils.fallback_event_handlers import (
+    AttemptedFallbackTargets,
     _check_non_standard_fallback_format,
     get_fallback_model_group,
     run_async_fallback,
@@ -167,6 +169,11 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
+from litellm.router_utils.reasoning_effort_capability import (
+    deployment_is_catalog_mapped,
+    intersect_supported_reasoning_efforts,
+    resolve_supported_reasoning_efforts,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
@@ -189,6 +196,7 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    FallbackAccessCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
@@ -197,6 +205,7 @@ from litellm.types.router import (
     PreRoutingStrategy,
     RetryPolicy,
     RouterCacheEnum,
+    RouterErrors,
     RouterGeneralSettings,
     RouterModelGroupAliasItem,
     RouterRateLimitError,
@@ -242,6 +251,7 @@ from .router_utils.pattern_match_deployments import PatternMatchRouter
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.exceptions import MidStreamFallbackError
     from litellm.responses.streaming_iterator import (
         BaseResponsesAPIStreamingIterator,
     )
@@ -257,6 +267,9 @@ if TYPE_CHECKING:
     )
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
+    )
+    from litellm.types.llms.anthropic_messages.anthropic_response import (
+        AnthropicMessagesResponse,
     )
     from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
     from litellm.types.llms.openai import (
@@ -355,6 +368,130 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
     return False
 
 
+# Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
+# until real content commits the primary stream; a hostile or slow-starting
+# upstream that never emits content or an error could otherwise grow that
+# buffer without bound, so hitting this cap forces an early commit instead.
+MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS: Final = 200
+
+
+def _anthropic_stream_should_drop_pre_content_ping(chunk: object, has_generated_content: bool) -> bool:
+    """A `ping` keepalive seen before any real content is dropped outright - it recurs indefinitely on a
+    slow-starting connection and carries nothing worth buffering toward a possible fallback."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+
+    if has_generated_content:
+        return False
+    return is_anthropic_ping_chunk(chunk)
+
+
+def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
+    """A `ping` that no lifecycle frame precedes reaches the client live: a fallback's own message_start can still
+    follow it without overlapping lifecycles, and AgenticAnthropicStreamingIterator's hold-back keepalive is exactly
+    such a ping."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+
+    if has_generated_content or buffered_chunk_count:
+        return False
+    return is_anthropic_ping_chunk(chunk)
+
+
+def _is_retriable_anthropic_status(status_code: int) -> bool:
+    return status_code == 429 or status_code >= 500
+
+
+def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
+    """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
+    failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+        is_server_fulfilled_tool_leak_error,
+    )
+
+    return is_server_fulfilled_tool_leak_error(chunk)
+
+
+def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error: "MidStreamFallbackError") -> bool:
+    """
+    A MidStreamFallbackError raised directly by the source iterator (the
+    completion-bridge path's CustomStreamWrapper, e.g. on a transport drop)
+    carries its own pre_first_chunk bookkeeping - gated the same way a
+    detected SSE error event is, so a fallback is never appended after real
+    content already reached the client on either path.
+    """
+    return has_generated_content or not error.is_pre_first_chunk
+
+
+def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
+    """
+    Whether `chunk` should make Router._aanthropic_messages_streaming_iterator
+    commit to the primary Anthropic stream (real content arrived, or the
+    pre-content buffer cap was hit) rather than keep buffering lifecycle
+    frames toward a possible fallback.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        is_anthropic_content_delta_chunk,
+    )
+
+    if has_generated_content:
+        return False
+    return is_anthropic_content_delta_chunk(chunk) or buffered_chunk_count >= MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
+
+
+class FallbackAwareAnthropicMessagesStream:
+    """
+    Bare async generators can't carry the `_hidden_params` attribute the
+    proxy reads response headers off of (see
+    router_utils.add_retry_fallback_headers.get_hidden_params_dict), so this
+    thin wrapper carries it through from the source iterator - mirrors
+    AnthropicMessagesStreamingResponse. Used by
+    Router._aanthropic_messages_streaming_iterator.
+    """
+
+    def __init__(self, async_generator: AsyncGenerator[bytes, None], source_iterator: object) -> None:
+        self._async_generator = async_generator
+        self._source_iterator = source_iterator
+        self._hidden_params = dict(  # mutable-ok: mutated in place by merge_fallback_hidden_params
+            getattr(source_iterator, "_hidden_params", None) or {}
+        )
+
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        return getattr(self._source_iterator, "has_buffered_provider_output", False) is True
+
+    def adopt_fallback_source(self, fallback_response: object) -> None:
+        self._source_iterator = fallback_response
+
+    def __aiter__(self) -> "FallbackAwareAnthropicMessagesStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self._async_generator.__anext__()
+
+    async def aclose(self) -> None:
+        await self._async_generator.aclose()
+
+    def merge_fallback_hidden_params(
+        self,
+        fallback_hidden_params: Mapping[str, object],
+        fallback_headers: Mapping[str, object],
+    ) -> None:
+        """
+        Raw bytes can't carry their own _hidden_params the way a
+        ModelResponseStream/ResponsesAPI event can, so a mid-stream
+        fallback's provider headers (e.g. Bedrock's x-amzn-requestid) are
+        merged onto the wrapper itself instead - mirrors
+        Router._apply_fallback_hidden_params_to_item's merge shape.
+        """
+        existing_headers: Final = cast(  # cast-ok: additional_headers is always a dict[str, object] when present
+            "dict[str, object]", self._hidden_params.get("additional_headers") or {}
+        )
+        self._hidden_params = {  # mutable-ok: matches _hidden_params' existing dict[str, object] shape
+            **self._hidden_params,
+            **fallback_hidden_params,
+            "additional_headers": {**existing_headers, **fallback_headers},  # mutable-ok: same shape
+        }
+
+
 class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
@@ -375,10 +512,17 @@ def _replay_live_router_model_cost() -> None:
 set_live_deployment_replay(_replay_live_router_model_cost)
 
 
-# Kwargs that log_retry must not copy into a retry breadcrumb. The breadcrumbs reach spend
-# logs and logging callbacks, and these carry either the request payload or router-internal
-# walk state rather than anything that identifies the failed attempt.
-RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(("messages", "original_function", "attempted_targets"))
+# Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
+# breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
+# handled separately by mask_credentials_in_payload, which scrubs credential-named values from
+# whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
+RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
+    (
+        "messages",
+        "original_function",
+        "attempted_targets",
+    )
+)
 
 
 class Router:
@@ -459,7 +603,9 @@ class Router:
         enable_health_check_routing: bool = False,
         health_check_staleness_threshold: int | None = None,
         health_check_ignore_transient_errors: bool = False,
+        background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
+        fallback_access_check: FallbackAccessCheck | None = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -496,6 +642,7 @@ class Router:
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+            fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -535,6 +682,7 @@ class Router:
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
+        self.fallback_access_check: Final = fallback_access_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
@@ -668,6 +816,11 @@ class Router:
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
+        self.background_health_check_model_groups: frozenset[str] | None = (
+            frozenset(background_health_check_model_groups)
+            if background_health_check_model_groups is not None
+            else None
+        )
         _staleness: Final = health_check_staleness_threshold or (
             DEFAULT_HEALTH_CHECK_INTERVAL * DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER
         )
@@ -4793,6 +4946,273 @@ class Router:
             )
         return response
 
+    async def _aanthropic_messages_streaming_iterator(
+        self,
+        response: AsyncIterator[bytes],
+        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+    ) -> AsyncIterator[bytes]:
+        """
+        Wrap an anthropic_messages (/v1/messages) streaming response so a
+        mid-stream provider error triggers the Router's fallback chain
+        (parity with _acompletion_streaming_iterator for the
+        chat-completions path). See #24004.
+
+        anthropic_messages goes through _ageneric_api_call_with_fallbacks
+        rather than _acompletion, so the returned byte iterator is never
+        wrapped by the chat-completions fallback handler. Two failure
+        shapes land here:
+          - the completion-bridge path (deployments with no native
+            /v1/messages endpoint, via
+            LiteLLMMessagesToCompletionTransformationHandler) already
+            raises MidStreamFallbackError out of its underlying
+            CustomStreamWrapper; this wrapper only needs to catch it.
+          - a native Anthropic/Bedrock passthrough never raises anything
+            for a provider SSE `event: error` frame (e.g. `overloaded_error`,
+            `internal_server_error`) - it is forwarded to the client as-is -
+            so this wrapper detects it via parse_anthropic_error_event and
+            raises MidStreamFallbackError itself.
+
+        Only an error before any real content (a content_block_delta frame)
+        has reached the caller triggers a fallback attempt, mirroring the
+        restriction _acompletion_streaming_iterator applies: once generated
+        output has already reached the caller, retrying would start a
+        second, overlapping Anthropic message lifecycle on the same SSE
+        stream, so the error is left to propagate instead of being retried
+        invisibly. A non-retriable client error (4xx other than 429) is
+        never worth a fallback attempt either, so it is also left to
+        propagate.
+
+        Lifecycle/bookkeeping frames (message_start, content_block_start,
+        ping, ...) do not by themselves disqualify a fallback attempt -
+        Anthropic routinely sends message_start before an overload error -
+        but they are BUFFERED rather than forwarded immediately, since
+        forwarding one and then appending a fallback attempt's own
+        message_start would produce two overlapping message lifecycles on
+        one SSE stream. Buffered frames are flushed, in order, the moment
+        real content arrives (the primary attempt has committed by then
+        anyway) or once the stream ends without ever producing content or
+        an error.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            aclose_if_supported,
+            parse_anthropic_error_event,
+        )
+
+        source_iterator: Final = response
+
+        async def stream_with_fallbacks() -> AsyncGenerator[bytes, None]:
+            from litellm.exceptions import MidStreamFallbackError
+
+            # Lifecycle/bookkeeping frames (message_start, content_block_start,
+            # ping, ...) are held back rather than forwarded immediately:
+            # Anthropic routinely sends message_start before an overload
+            # error, and once a byte reaches the client a fallback attempt
+            # can only append its OWN message_start, producing two
+            # overlapping message lifecycles on one SSE stream. Buffered
+            # frames are flushed the moment real content (content_block_delta)
+            # arrives - at that point the primary attempt has committed and a
+            # clean retry is no longer possible anyway - or once the primary
+            # stream ends without ever producing content. A `ping` keepalive
+            # that nothing precedes is forwarded live (it is how a hold-back
+            # turn keeps its connection alive); one behind buffered frames is
+            # dropped outright rather than buffered, since it can recur
+            # indefinitely on a slow-starting connection and carries nothing
+            # worth preserving; hitting MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
+            # forces the same early commit as real content arriving, so a
+            # hostile or pathological upstream can't grow the buffer forever.
+            has_generated_content = False  # rebind-ok: set once real content is seen, or the buffer cap is hit
+            buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
+            model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+            try:
+                async for chunk in source_iterator:
+                    if _anthropic_stream_forwards_ping_live(
+                        chunk, has_generated_content, len(buffered_lifecycle_chunks)
+                    ):
+                        yield chunk
+                        continue
+                    if _anthropic_stream_should_drop_pre_content_ping(chunk, has_generated_content):
+                        continue
+                    if _anthropic_stream_commits_now(chunk, has_generated_content, len(buffered_lifecycle_chunks)):
+                        has_generated_content = True  # rebind-ok: real content seen, or the buffer cap was hit
+                    error_event = parse_anthropic_error_event(chunk)
+                    retriable_pending_error = (  # rebind-ok: freshly computed each iteration, never carried over
+                        not has_generated_content
+                        and error_event is not None
+                        and _is_retriable_anthropic_status(error_event[2])
+                        and not _anthropic_stream_error_is_gateway_verdict(chunk)
+                    )
+                    if not has_generated_content and not retriable_pending_error and error_event is None:
+                        buffered_lifecycle_chunks = (*buffered_lifecycle_chunks, chunk)
+                        continue
+                    if retriable_pending_error:
+                        assert error_event is not None  # guard-ok: retriable_pending_error implies this
+                        _error_type, message, status_code = error_event
+                        raise MidStreamFallbackError(
+                            message=message,
+                            model=model,
+                            llm_provider="anthropic",
+                            original_exception=litellm.exceptions.APIError(
+                                status_code=status_code,
+                                message=message,
+                                llm_provider="anthropic",
+                                model=model,
+                            ),
+                            is_pre_first_chunk=True,
+                        )
+                    for buffered_chunk in buffered_lifecycle_chunks:
+                        yield buffered_chunk
+                    buffered_lifecycle_chunks = ()
+                    yield chunk
+                for buffered_chunk in buffered_lifecycle_chunks:
+                    yield buffered_chunk
+            except MidStreamFallbackError as e:
+                if _anthropic_stream_should_decline_fallback(has_generated_content, e):
+                    for buffered_chunk in buffered_lifecycle_chunks:
+                        yield buffered_chunk
+                    if e.original_exception is not None:
+                        raise e.original_exception from e
+                    raise
+                async for item in self._aanthropic_messages_fallback_attempt(e, initial_kwargs, wrapper):
+                    yield item
+            finally:
+                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                    await aclose_if_supported(source_iterator)
+
+        # Referenced by stream_with_fallbacks via closure - assigned here, before
+        # the generator body ever runs, so the reference resolves fine despite
+        # being defined textually after the function that captures it.
+        wrapper: Final = FallbackAwareAnthropicMessagesStream(stream_with_fallbacks(), source_iterator)
+        return wrapper
+
+    async def _aanthropic_messages_fallback_attempt(
+        self,
+        e: "MidStreamFallbackError",
+        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        wrapper: "FallbackAwareAnthropicMessagesStream",
+    ) -> AsyncGenerator[bytes, None]:
+        """
+        Re-enters the Router's fallback chain for a mid-stream
+        anthropic_messages error and yields whatever the fallback attempt
+        produces. Split out of _aanthropic_messages_streaming_iterator to
+        keep each function's cyclomatic complexity within the repo's C901
+        budget.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            aclose_if_supported,
+            anthropic_messages_response_as_sse_events,
+        )
+
+        fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
+        try:
+            model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: model group
+            fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the common_utils list|None param
+                "fallbacks", self.fallbacks
+            )
+            context_window_fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the param below
+                "context_window_fallbacks", self.context_window_fallbacks
+            )
+            content_policy_fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the param below
+                "content_policy_fallbacks", self.content_policy_fallbacks
+            )
+            initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
+            self._update_kwargs_before_fallbacks(
+                model=model_group,
+                kwargs=initial_kwargs,
+                metadata_variable_name="litellm_metadata",
+            )
+            fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
+                e=e,
+                disable_fallbacks=False,
+                fallbacks=fallbacks,
+                context_window_fallbacks=context_window_fallbacks,
+                content_policy_fallbacks=content_policy_fallbacks,
+                model_group=model_group,
+                args=(),
+                kwargs=initial_kwargs,
+                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+            )
+            fallback_hidden_params, fallback_headers = Router._prepare_fallback_hidden_params(fallback_response)
+            wrapper.merge_fallback_hidden_params(fallback_hidden_params, fallback_headers)
+            wrapper.adopt_fallback_source(fallback_response)
+            if hasattr(fallback_response, "__aiter__"):
+                async for fallback_item in fallback_response:
+                    yield fallback_item
+            else:
+                # A fallback can resolve to a complete AnthropicMessagesResponse
+                # dict even for a streaming request (e.g. an agentic tool-use
+                # interception loop) - yielding it as-is would put a raw dict
+                # into a byte stream, so it's synthesized into the SSE
+                # lifecycle a real stream would have sent instead.
+                for event in anthropic_messages_response_as_sse_events(
+                    cast("AnthropicMessagesResponse", fallback_response)  # cast-ok: non-streaming shape by elimination
+                ):
+                    yield event
+        except Exception as fallback_error:
+            verbose_router_logger.error("Anthropic messages streaming fallback also failed: %s", fallback_error)
+            if isinstance(fallback_error, MidStreamFallbackError) and fallback_error.original_exception is not None:
+                raise fallback_error.original_exception from fallback_error
+            raise
+        finally:
+            if fallback_response is not None:
+                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                    await aclose_if_supported(fallback_response)
+
+    async def _aanthropic_messages_with_streaming_fallbacks(
+        self,
+        original_function: Callable,
+        **kwargs: object,  # kwargs-ok: forwarded verbatim to original_function, shape varies per call site
+    ) -> Union["AnthropicMessagesResponse", AsyncIterator[bytes]]:
+        """
+        _ageneric_api_call_with_fallbacks for anthropic_messages, with the
+        addition of mid-stream fallback handling (see
+        _aanthropic_messages_streaming_iterator). Parity with
+        _aresponses_with_streaming_fallbacks for the Responses API.
+        """
+        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+        # Snapshot the request kwargs before the primary attempt mutates them
+        # in place: _update_kwargs_with_deployment writes deployment-specific
+        # fields (deployment, model_info, api_base, tags, ...) into the
+        # SAME litellm_metadata/metadata dicts a shallow .copy() would still
+        # share, leaking primary-deployment metadata into the mid-stream
+        # fallback request. safe_deep_copy avoids deep-copying the full
+        # kwargs (which can hold non-deepcopyable logging handles/clients).
+        fallback_kwargs: Final[dict[str, object]] = kwargs.copy()  # mutable-ok: mutated below before re-entry
+        if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
+            fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
+        if isinstance(fallback_kwargs.get("metadata"), dict):
+            fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
+        fallback_kwargs["original_generic_function"] = original_function
+
+        response: Final = await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
+
+        if kwargs.get("stream") and hasattr(response, "__aiter__"):
+            return await self._aanthropic_messages_streaming_iterator(
+                response=cast("AsyncIterator[bytes]", response),  # cast-ok: stream=True always returns a byte iterator
+                initial_kwargs=fallback_kwargs,
+            )
+        return response
+
+    async def _dispatch_generic_call_type(
+        self,
+        call_type: str,
+        original_function: Callable,
+        **kwargs: object,  # kwargs-ok: forwarded verbatim to the per-call-type helper, shape varies per call site
+    ):
+        """
+        factory_function's shared dispatch for call types with no
+        call-specific handling, except anthropic_messages: kept out of
+        factory_function's own async_wrapper (already at the repo's C901
+        complexity ceiling) so routing its mid-stream fallback handling
+        (#24004) doesn't add another branch there.
+        """
+        if call_type == "anthropic_messages":
+            return await self._aanthropic_messages_with_streaming_fallbacks(
+                original_function=original_function, **kwargs
+            )
+        return await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
+
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
         Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
@@ -5979,7 +6399,8 @@ class Router:
                 "aget_skill",
                 "adelete_skill",
             ):
-                return await self._ageneric_api_call_with_fallbacks(
+                return await self._dispatch_generic_call_type(
+                    call_type=call_type,
                     original_function=original_function,
                     **kwargs,
                 )
@@ -6558,6 +6979,24 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         model_group: Final[str | None] = kwargs.get("model")
+        if not isinstance(kwargs.get("attempted_targets"), AttemptedFallbackTargets):
+            _fallback_metadata_key: Final = _get_router_metadata_variable_name(
+                function_name=getattr(kwargs.get("original_function"), "__name__", None)
+            )
+            _sibling_metadata_key: Final = (
+                "metadata" if _fallback_metadata_key == "litellm_metadata" else "litellm_metadata"
+            )
+            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict) and (
+                "attempted_fallbacks" in _sibling_metadata or "original_model_group" in _sibling_metadata
+            ):
+                _scrubbed_sibling_metadata: Final = _sibling_metadata.copy()
+                _scrubbed_sibling_metadata.pop("attempted_fallbacks", None)
+                _scrubbed_sibling_metadata.pop("original_model_group", None)
+                kwargs[_sibling_metadata_key] = _scrubbed_sibling_metadata
+            if isinstance(_fallback_metadata := kwargs.get(_fallback_metadata_key), dict):
+                _fallback_metadata["attempted_fallbacks"] = 0
+                if model_group is not None:
+                    _fallback_metadata["original_model_group"] = model_group
         include_fallback_errors: Final = kwargs.get("include_fallback_errors", False) is True
         disable_fallbacks: Final[bool | None] = kwargs.pop("disable_fallbacks", False)
         fallbacks: Final[list | None] = kwargs.get("fallbacks", self.fallbacks)
@@ -6919,7 +7358,7 @@ class Router:
             ):
                 raise error  # then raise the error
 
-        if isinstance(error, openai.AuthenticationError):
+        if isinstance(error, (openai.AuthenticationError, openai.PermissionDeniedError)):
             """
             - if other deployments available -> retry
             - else -> raise error
@@ -7347,7 +7786,8 @@ class Router:
             if len(self.previous_models) > 3:
                 self.previous_models.pop(0)
 
-            self.previous_models.append(previous_model)
+            scrubbed_previous_model: Final = mask_credentials_in_payload(previous_model)
+            self.previous_models.append(scrubbed_previous_model)
             kwargs[_metadata_var]["previous_models"] = self.previous_models
             return kwargs
         except Exception as e:
@@ -8332,6 +8772,7 @@ class Router:
             ) = litellm.get_llm_provider(
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
+                api_base=deployment.litellm_params.api_base,
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
@@ -8783,7 +9224,11 @@ class Router:
             }
 
         if model_id is not None:
-            litellm.register_model(model_cost={model_id: model_info}, persist_across_reloads=False)
+            litellm.register_model(
+                model_cost={model_id: model_info},
+                persist_across_reloads=False,
+                warning_display_name=model,
+            )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
         backend_keys: Final = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
@@ -9439,6 +9884,8 @@ class Router:
             except Exception:
                 model_info = None
 
+            deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
+
             # get llm provider
             litellm_model, llm_provider = "", ""
             try:
@@ -9481,6 +9928,7 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         **model_info,
+                        "supported_reasoning_efforts": None,
                     }
                 )
             else:
@@ -9557,6 +10005,11 @@ class Router:
                     _deployment_tpm = model_info.get("tpm")
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
+
+            model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
+                model_group_info.supported_reasoning_efforts,
+                resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=deployment_is_mapped),
+            )
 
             if _deployment_tpm is not None:
                 if total_tpm is None:
@@ -10262,10 +10715,9 @@ class Router:
                 _router_model_name: str = model_value
             elif isinstance(model_value, dict):
                 _model_value = RouterModelGroupAliasItem(**model_value)
-                if _model_value["hidden"] is True:
+                if _model_value["hidden"] is True and model_name is None:
                     continue
-                else:
-                    _router_model_name = _model_value["model"]
+                _router_model_name = _model_value["model"]
             else:
                 continue
 
@@ -11086,10 +11538,8 @@ class Router:
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
-                message: Final = f"You passed in model={model}. There are no healthy deployments for this model"
-
                 raise litellm.BadRequestError(
-                    message=message,
+                    message=f"You passed in model={model}. {RouterErrors.no_healthy_deployments.value}",
                     model=model,
                     llm_provider="",
                 )
@@ -11100,11 +11550,18 @@ class Router:
             ]  # update the model to the actual value if an alias has been passed in
 
         marker_flags: Final = tuple(self._is_strategy_marker_deployment(d) for d in healthy_deployments)
-        if all(marker_flags) or not any(marker_flags):
+        if not any(marker_flags):
             return model, healthy_deployments
-        return model, [  # mutable-ok: matches this function's list contract expected by downstream filters
+        selectable: Final = [  # mutable-ok: matches this function's list contract expected by downstream filters
             d for d, is_marker in zip(healthy_deployments, marker_flags, strict=True) if not is_marker
         ]
+        if not selectable:
+            raise litellm.BadRequestError(
+                message=f"You passed in model={model}. {RouterErrors.only_strategy_marker_deployments.value}",
+                model=model,
+                llm_provider="",
+            )
+        return model, selectable
 
     def _filter_deployments_by_model_access_groups(
         self,
@@ -11693,7 +12150,15 @@ class Router:
         This hook is called before the routing decision is made.
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
+
+        `model` is whatever the caller asked for, which may be a `model_group_alias` key, while the
+        strategy registries and the marker deployment are keyed by the marker's own `model_name`, so
+        every lookup below resolves the alias first. Only the lookups: the caller-facing name stays
+        the alias, since spend metadata is stamped before routing and the response carries the tier
+        group the strategy picked.
         """
+        registered_model_name: Final = self._get_model_from_alias(model=model) or model
+
         #########################################################
         # Run the routing-plugin pipeline, if any plugins are configured.
         # Plugins narrow the candidate deployment pool (consumed later by
@@ -11701,9 +12166,13 @@ class Router:
         # downstream strategies (auto-router, complexity-router, ...) to read.
         #########################################################
         if self.routing_plugins:
-            await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
+            await self._run_routing_plugins(
+                model=registered_model_name, request_kwargs=request_kwargs, messages=messages
+            )
 
-        selected_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
+        selected_strategy: Final = self._select_pre_routing_strategy(
+            model=registered_model_name, request_kwargs=request_kwargs
+        )
         if selected_strategy is None:
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(
@@ -11712,13 +12181,10 @@ class Router:
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
             )
-            self._stamp_or_clear_metadata_key(
-                request_kwargs=request_kwargs, key=AUTO_ROUTED_REQUEST_METADATA_KEY, value=None
-            )
             return None
 
         pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
-            model=model,
+            model=registered_model_name,
             request_kwargs=request_kwargs,
             messages=messages,
             input=input,
@@ -11742,13 +12208,6 @@ class Router:
                 request_tags=_get_tags_from_request_kwargs(request_kwargs),
             ),
         )
-        # Gates the proxy's `router_model_name` response field; the body `model` is
-        # always restamped back to the alias the client sent.
-        self._stamp_or_clear_metadata_key(
-            request_kwargs=request_kwargs,
-            key=AUTO_ROUTED_REQUEST_METADATA_KEY,
-            value=(True if pre_routing_hook_response is not None else None),
-        )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
         # called - apply the router marker's own litellm_params to the request,
@@ -11770,7 +12229,7 @@ class Router:
         # Per-tier `litellm_params` on the hook response are deliberate overrides
         # the caller applies on top, so those keys are never forwarded here.
         marker_params: Final = (
-            self._forwardable_alias_marker_params(model=model, strategy_tags=selected_strategy.tags)
+            self._forwardable_alias_marker_params(model=registered_model_name, strategy_tags=selected_strategy.tags)
             if pre_routing_hook_response is not None
             else ()
         )
@@ -12278,6 +12737,10 @@ class Router:
         """
         Filter out deployments marked unhealthy by background health checks.
         No-op when enable_health_check_routing is False.
+        When background_health_check_model_groups is set, only deployments in the
+        listed model groups are filtered; every other group keeps its configured
+        routing strategy untouched, and a router-level allowed_fails_policy no
+        longer disables the filter for the listed groups.
         Returns all deployments if health state is unavailable, stale, or would
         exclude every candidate (safety net).
         """
@@ -12286,8 +12749,10 @@ class Router:
 
         # When allowed_fails_policy is set, cooldown is the sole routing exclusion
         # mechanism -- skip the binary health check filter so the policy threshold
-        # is respected before any deployment is excluded.
-        if self.allowed_fails_policy is not None:
+        # is respected before any deployment is excluded. With a model-group
+        # allowlist the filter is already scoped, so listed groups keep it.
+        scoped_groups: Final = self.background_health_check_model_groups
+        if self.allowed_fails_policy is not None and scoped_groups is None:
             return healthy_deployments
 
         unhealthy_ids: Final = await self.health_state_cache.async_get_unhealthy_deployment_ids(
@@ -12296,7 +12761,12 @@ class Router:
         if not unhealthy_ids:
             return healthy_deployments
 
-        filtered: Final = [d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids]
+        filtered: Final = [
+            d
+            for d in healthy_deployments
+            if d["model_info"]["id"] not in unhealthy_ids
+            or (scoped_groups is not None and d["model_name"] not in scoped_groups)
+        ]
 
         if not filtered:
             verbose_router_logger.warning("All deployments marked unhealthy by health checks, bypassing health filter")
@@ -12313,14 +12783,20 @@ class Router:
         if not self.enable_health_check_routing:
             return healthy_deployments
 
-        if self.allowed_fails_policy is not None:
+        scoped_groups: Final = self.background_health_check_model_groups
+        if self.allowed_fails_policy is not None and scoped_groups is None:
             return healthy_deployments
 
         unhealthy_ids: Final = self.health_state_cache.get_unhealthy_deployment_ids(parent_otel_span=parent_otel_span)
         if not unhealthy_ids:
             return healthy_deployments
 
-        filtered: Final = [d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids]
+        filtered: Final = [
+            d
+            for d in healthy_deployments
+            if d["model_info"]["id"] not in unhealthy_ids
+            or (scoped_groups is not None and d["model_name"] not in scoped_groups)
+        ]
 
         if not filtered:
             verbose_router_logger.warning("All deployments marked unhealthy by health checks, bypassing health filter")

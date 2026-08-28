@@ -18,6 +18,14 @@ already does when one of its pooled connections errors), leaving every other nod
 connections untouched. Every other branch (MOVED, ASK, CLUSTERDOWN, slot-not-covered,
 retry-exhaustion) is unchanged from upstream, since those already carry real evidence the
 topology changed.
+
+redis-py 8.x fixed this upstream with gentler machinery than this override's
+``node.disconnect()`` (which also kills connections other coroutines are mid-operation
+on, so one timeout cascades into a reconnect storm and, with TLS, a fresh handshake per
+killed connection): it marks in-use connections for reconnect only after their current
+operation completes, disconnects only the idle pooled ones, and defers reinitialization
+to the outer retry loop. When the installed ``ClusterNode`` has that per-connection
+recovery API, the factory returns the base ``RedisCluster`` unmodified.
 """
 
 import asyncio
@@ -72,8 +80,16 @@ class _ClusterAttrs(Protocol):
 _VERIFIED_REDIS_VERSIONS: Final = frozenset({"5.3.1"})
 
 
-def get_litellm_async_redis_cluster_class() -> type["_AsyncRedisClusterType"]:
-    """Builds the ``RedisCluster`` subclass with the per-node isolation fix.
+def get_litellm_async_redis_cluster_class(
+    cluster_node_class: type | None = None,
+) -> type["_AsyncRedisClusterType"]:
+    """Returns the base ``RedisCluster`` when the installed redis-py already recovers a
+    node-level connection error per-connection (8.x+), else builds the ``RedisCluster``
+    subclass with the per-node isolation fix for older versions whose upstream branch
+    tears down the whole cluster client.
+
+    ``cluster_node_class`` exists for dependency injection in tests; production callers
+    leave it unset and the installed ``ClusterNode`` is used.
 
     Imported lazily because this module is reachable from a base ``import litellm`` while
     redis is not a base dependency. Cheap to call repeatedly: the underlying redis
@@ -81,7 +97,10 @@ def get_litellm_async_redis_cluster_class() -> type["_AsyncRedisClusterType"]:
     """
     import redis
     from redis.asyncio.cluster import (
-        RedisCluster as _BaseAsyncRedisCluster,  # pyright: ignore[reportUnknownVariableType]  # redis-py ships no resolvable stub for this class under the repo's current (stale) types-redis pin
+        ClusterNode as _AsyncClusterNode,  # pyright: ignore[reportUnknownVariableType]  # redis-py ships no resolvable stub for this class under the repo's current (stale) types-redis pin
+    )
+    from redis.asyncio.cluster import (
+        RedisCluster as _BaseAsyncRedisCluster,  # pyright: ignore[reportUnknownVariableType]  # same stale-stub gap as the import above
     )
     from redis.cluster import get_node_name
     from redis.commands import READ_COMMANDS
@@ -97,6 +116,15 @@ def get_litellm_async_redis_cluster_class() -> type["_AsyncRedisClusterType"]:
     )
     from redis.exceptions import ConnectionError as _RedisConnectionError
     from redis.exceptions import TimeoutError as _RedisTimeoutError
+
+    node_class: Final = cluster_node_class if cluster_node_class is not None else _AsyncClusterNode
+    if hasattr(node_class, "update_active_connections_for_reconnect"):
+        verbose_logger.debug(
+            "redis-py %s recovers a node-level connection error per-connection upstream; "
+            "using the base RedisCluster without litellm's node-isolation override.",
+            redis.__version__,
+        )
+        return _BaseAsyncRedisCluster
 
     if redis.__version__ not in _VERIFIED_REDIS_VERSIONS:
         verbose_logger.warning(

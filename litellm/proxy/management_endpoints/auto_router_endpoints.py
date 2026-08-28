@@ -1,7 +1,7 @@
 """
 AUTO ROUTER MANAGEMENT ENDPOINTS
 
-POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
+POST /auto_router/test_routing - Route one request through an unsaved complexity-router config
 POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
 """
 
@@ -32,10 +32,14 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    refresh_proxy_server_request_body_snapshot,
+)
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterBenchmarkGroup,
@@ -194,7 +198,7 @@ def _models_this_test_can_call(config: RequestComplexityRouterConfig) -> tuple[s
         model
         for model in (
             config.classifier_llm_config.model
-            if config.classifier_type == "llm" and config.classifier_llm_config is not None
+            if config.uses_llm_classifier and config.classifier_llm_config is not None
             else None,
             config.embedding_model if config.semantic_keyword_matching else None,
         )
@@ -284,19 +288,30 @@ async def preview_auto_router_routing(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> AutoRouterRoutingTestResponse:
     """
-    Route a single prompt through a complexity-router config and report where it landed.
+    Route a single request through a complexity-router config and report where it landed.
 
-    Answers "which model would this prompt get?" for a config that only exists in a form,
-    so an auto router can be checked before it is created. The prompt is classified by the
-    same pre-routing hook a live request runs, then dropped: nothing is sent to the model it
-    routed to, and no auto router is created. A heuristic config therefore spends nothing, while
-    an `llm` classifier or semantic keyword matching bills its classifier/embedding call to the
-    calling key, like Test Connection does.
+    Answers "which model would this request get?" for a config that only exists in a form,
+    so an auto router can be checked before it is created. The request is classified by the
+    same pre-routing hook a live request runs, over the same messages, system prompt and tool
+    definitions, then dropped: nothing is sent to the model it routed to, and no auto router is
+    created. A heuristic config therefore spends nothing, while an `llm` classifier or semantic
+    keyword matching bills its classifier/embedding call to the calling key, like Test Connection
+    does.
+
+    Send `messages` to classify a real turn, with `system` and `tools` beside it when the surface
+    carries them top level, as Anthropic /v1/messages does. `prompt` is the single-ask shorthand and
+    routes as one user turn with nothing around it.
 
     **Example Request:**
     ```json
     {
-        "prompt": "think step by step about how to shard this table",
+        "messages": [
+            {"role": "system", "content": "You are a database migration assistant"},
+            {"role": "user", "content": "the index is not unique"},
+            {"role": "assistant", "content": "Then two workers can both insert. Add a unique index"},
+            {"role": "user", "content": "ok do it"}
+        ],
+        "tools": [{"type": "function", "function": {"name": "Bash", "description": "Run a command"}}],
         "complexity_router_config": {
             "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["o3"]},
             "classifier_type": "heuristic"
@@ -339,18 +354,21 @@ async def preview_auto_router_routing(
     )
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
-        data={"metadata": {}},  # mutable-ok: the request-metadata helper takes and returns request kwargs as a dict
+        data={  # mutable-ok: the request-metadata helper takes and returns request kwargs as a dict
+            **data.wire_body(),
+            "metadata": {},  # mutable-ok: the request-metadata helper writes the auth fields into this dict
+            "proxy_server_request": {"body": None},  # mutable-ok: the snapshot owner fills body in place
+        },
         user_api_key_dict=user_api_key_dict,
         _metadata_variable_name="metadata",
     )
+    refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
         hook_response: Final = await complexity_router.async_pre_routing_hook(
             model=data.router_name,
             request_kwargs=request_kwargs,
-            messages=[  # mutable-ok: the routing hook's signature takes a list of message dicts
-                {"role": "user", "content": data.prompt},  # mutable-ok: a message is dict-shaped
-            ],
+            messages=request_kwargs["messages"],
         )
     except Exception as e:  # noqa: BLE001 -- surfaces any classifier/plugin failure to the caller as a 400 instead of a 500, since the config under test is caller input
         verbose_proxy_logger.exception("Auto router routing test failed. Due to error - %s", e)
@@ -510,6 +528,53 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
     )
 
 
+def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
+    """``(model_name, kind)`` for a deployment whose routing the session rollup records.
+
+    Kinds come from ``classify_strategy_router_model``, the same rule the Router registers a
+    deployment by, so this arm cannot disagree with the arm that stamped ``router_type`` onto
+    the session rows. Semantic auto-routers return None: they record no routing decision, so
+    they can never own a session row, and ``AutoRouterBenchmarkGroup.router_type`` has no
+    value for them. A permanent zero would read as "no traffic" rather than "not instrumented".
+    """
+    if not isinstance(deployment, Mapping):
+        return None
+    litellm_params: Final = deployment.get("litellm_params")
+    router_name: Final = deployment.get("model_name")
+    if not (isinstance(litellm_params, Mapping) and isinstance(router_name, str) and router_name):
+        return None
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str):
+        return None
+    kind: Final = classify_strategy_router_model(model)
+    return None if kind is None or kind == "semantic" else (router_name, kind)
+
+
+def _idle_router_groups(
+    llm_router: "Router | None", covered: frozenset[tuple[str, str]]
+) -> tuple[AutoRouterBenchmarkGroup, ...]:
+    """Zeroed groups for configured strategy routers the window's traffic did not cover.
+
+    The dashboard's router picker has to list a router the moment it is created rather than
+    once it has spent something, so the registry drives the list and the rollup only supplies
+    the measures. ``_summed_agg_row`` over no sessions is already the zero element of the
+    fold, so a group with every measure at zero costs one relabel rather than a literal that
+    would go stale the next time the response grows a field.
+    """
+    if llm_router is None:
+        return ()
+    zero: Final = _summed_agg_row(())
+    idle: Final = frozenset(
+        key
+        for key in (_strategy_router_key(deployment) for deployment in llm_router.model_list or ())
+        if key is not None and key not in covered
+    )
+    return tuple(
+        _benchmark_group(zero.model_copy(update=MappingProxyType({"router_name": name, "router_type": kind})))
+        for name, kind in sorted(idle)
+    )
+
+
 @router.get(
     "/auto_router/benchmarks",
     tags=("auto router",),
@@ -532,8 +597,13 @@ async def get_auto_router_benchmarks(
     overlaps it: its last turn is on or after start_date and its first turn is on or before
     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
     over that bucket's turns.
+
+    The rollup supplies the measures, never the list. Which routers appear comes from the
+    model registry, so one shows up as soon as it is configured and reads zero until it
+    serves traffic, and `routers_in_scope` counts those too rather than only the routers the
+    window recorded.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     _require_admin_viewer(user_api_key_dict, "view auto-router benchmarks across the deployment")
     if prisma_client is None:
@@ -555,11 +625,14 @@ async def get_auto_router_benchmarks(
         (end_day + timedelta(days=1)).isoformat(),
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
-    groups: Final = tuple(_benchmark_group(row) for row in rows)
+    groups: Final = (
+        *(_benchmark_group(row) for row in rows),
+        *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
+    )
     return AutoRouterBenchmarksResponse(
         start_date=start_day.strftime("%Y-%m-%d"),
         end_date=end_day.strftime("%Y-%m-%d"),
-        routers_in_scope=len(rows),
+        routers_in_scope=len(groups),
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
     )
