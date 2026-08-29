@@ -195,7 +195,7 @@ async def test_tool_call_only_stream_skips_ghost_message_done():
         _chunk(
             tool_calls=[
                 {
-                    "id": "call_1",
+                    "id": "call_deferred_message",
                     "type": "function",
                     "function": {"name": "do_thing", "arguments": '{"x":1}'},
                     "index": 0,
@@ -241,7 +241,7 @@ async def test_reasoning_after_tool_call_still_gets_item_declaration():
         _chunk(
             tool_calls=[
                 {
-                    "id": "call_1",
+                    "id": "call_late_reasoning",
                     "type": "function",
                     "function": {"name": "do_thing", "arguments": "{}"},
                     "index": 0,
