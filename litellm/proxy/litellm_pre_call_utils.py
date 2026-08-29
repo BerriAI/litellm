@@ -1948,6 +1948,13 @@ async def add_litellm_data_to_request(
         for key, value in data["litellm_metadata"].items():
             if key not in data[_metadata_variable_name]:
                 data[_metadata_variable_name][key] = value
+        if _metadata_variable_name == "metadata":
+            data["metadata"]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # pyright: ignore[reportPrivateUsage]  # same-module helper, budget blocks the unsuppressed idiom sibling call sites use
+                request_tags=data["metadata"].get("tags"),
+                tags_to_add=data["litellm_metadata"].get("tags"),
+            )
+    if _metadata_variable_name == "metadata":
+        data.pop("litellm_metadata", None)
 
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
