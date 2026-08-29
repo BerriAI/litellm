@@ -4,6 +4,7 @@ use std::time::Duration;
 use reqwest::Client;
 
 use crate::auth::circuit_breaker::CircuitBreakerRegistry;
+use crate::hardening::GlobalRateLimiter;
 use crate::io::realtime_pool::RealtimePool;
 use crate::metrics::GatewayMetrics;
 use litellm_core::auth::KeyCache;
@@ -81,6 +82,8 @@ pub struct AppState {
     pub metrics: Arc<GatewayMetrics>,
     /// Cached configuration from environment variables.
     pub config: GatewayConfig,
+    /// Global rate limiter (in addition to per-key limits).
+    pub global_rate_limiter: Arc<GlobalRateLimiter>,
 }
 
 impl AppState {
