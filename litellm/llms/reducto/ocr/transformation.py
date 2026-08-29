@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -150,8 +150,8 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
 
 
 class ReductoParseV3Config(_BaseReductoOCRConfig):
-    def get_supported_ocr_params(self, model: str) -> list:
-        return ["formatting", "retrieval", "settings"]
+    def get_supported_ocr_params(self, model: str) -> list[str]:
+        return ["enhance", "retrieval", "formatting", "spreadsheet", "settings"]
 
     def transform_ocr_request(
         self,
@@ -187,15 +187,11 @@ class ReductoParseV3Config(_BaseReductoOCRConfig):
 
 
 class ReductoParseLegacyConfig(_BaseReductoOCRConfig):
-    def get_supported_ocr_params(self, model: str) -> list:
-        return ["enhance"]
+    def get_supported_ocr_params(self, model: str) -> list[str]:
+        return ["options", "advanced_options", "experimental_options", "priority"]
 
-    def _build_legacy_body(self, file_id: str, optional_params: dict) -> dict[str, Any]:
-        body: Final[dict[str, Any]] = {"document_url": file_id}
-        enhance: Final = optional_params.get("enhance")
-        if enhance is not None:
-            body["options"] = {"enhance": enhance}
-        return body
+    def _build_legacy_body(self, file_id: str, optional_params: dict[str, object]) -> dict[str, object]:
+        return {"document_url": file_id, **optional_params}
 
     def transform_ocr_request(
         self,

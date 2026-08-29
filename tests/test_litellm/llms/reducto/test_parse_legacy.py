@@ -1,7 +1,8 @@
 import json
 
-import litellm
 import pytest
+
+import litellm
 
 
 @pytest.fixture()
@@ -17,9 +18,7 @@ def disable_aiohttp_transport():
 
 
 @pytest.mark.asyncio
-async def test_parse_legacy_wraps_enhance_under_options(
-    disable_aiohttp_transport, respx_mock
-):
+async def test_parse_legacy_forwards_legacy_option_groups(disable_aiohttp_transport, respx_mock):
     upload_route = respx_mock.post("https://platform.reducto.ai/upload").respond(
         json={"file_id": "reducto://legacy.pdf"}
     )
@@ -46,7 +45,10 @@ async def test_parse_legacy_wraps_enhance_under_options(
         },
         api_key="legacy-key",
         api_base="https://platform.reducto.ai",
-        enhance={"agentic": [{"type": "table"}]},
+        options={"ocr_mode": "agentic", "chunking": {"chunk_mode": "section"}},
+        advanced_options={"table_output_format": "html", "ocr_system": "highres"},
+        experimental_options={"enable_checkboxes": True},
+        priority=False,
     )
 
     assert upload_route.called
@@ -54,6 +56,9 @@ async def test_parse_legacy_wraps_enhance_under_options(
     request_body = json.loads(parse_route.calls[0].request.read())
     assert request_body == {
         "document_url": "reducto://legacy.pdf",
-        "options": {"enhance": {"agentic": [{"type": "table"}]}},
+        "options": {"ocr_mode": "agentic", "chunking": {"chunk_mode": "section"}},
+        "advanced_options": {"table_output_format": "html", "ocr_system": "highres"},
+        "experimental_options": {"enable_checkboxes": True},
+        "priority": False,
     }
     assert response.pages[0].markdown == "Legacy parse"

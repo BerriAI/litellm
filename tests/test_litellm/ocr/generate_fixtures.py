@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-import argparse
 import base64
-import json
 import logging
 import os
-import queue
-import threading
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
-from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final, cast
 from urllib.parse import quote
@@ -19,178 +12,341 @@ import httpx
 from dotenv import load_dotenv
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from hypothesis.strategies import SearchStrategy
 from pydantic import TypeAdapter
 
 import litellm
-from tests.test_litellm._json_fs_cache import JsonFileCache
-from tests.test_litellm.ocr.fixture_models import (
-    OcrFixture,
-    OcrFixtureRequest,
-    OcrFixtureResponse,
-    ProviderWireRequest,
+from litellm.llms.reducto.common import (
+    REDUCTO_API_BASE,
+    extract_file_id_or_bytes,
+    upload_bytes_sync,
+)
+from tests.test_litellm._fixture_recorder import (
+    ProviderSpec,
+    RecorderResult,
+    fill_missing_responses,
+    fixture_directory,
+    parse_generator_args,
+    record_case,
 )
 
 FIXTURE_DIR_ENV: Final = "LITELLM_OCR_FIXTURE_DIR"
 JSON_OBJECT: Final = TypeAdapter(dict[str, object])
-PROVIDER_NAMES: Final = ("mistral", "azure_ai", "vertex_ai")
+PROVIDER_NAMES: Final = ("mistral", "reducto")
 LOGGER: Final = logging.getLogger(__name__)
 _TEXT: Final = st.from_regex(r"[A-Za-z0-9 ]{1,24}", fullmatch=True)
-_OPTIONS: Final = st.fixed_dictionaries(
-    {
-        "pages": st.just([0]),
-        "include_image_base64": st.booleans(),
-        "image_limit": st.integers(min_value=1, max_value=4),
-        "image_min_size": st.integers(min_value=0, max_value=64),
-        "extract_header": st.booleans(),
-        "extract_footer": st.booleans(),
-        "table_format": st.sampled_from(("markdown", "html")),
-        "confidence_scores_granularity": st.sampled_from(("word", "page")),
-        "include_blocks": st.booleans(),
-        "id": _TEXT,
-    }
+_VALUE_TEXT: Final = st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789 -_", min_size=1, max_size=32)
+_NULLABLE_TEXT: Final = st.one_of(st.none(), _VALUE_TEXT)
+_POSITIVE_INTEGER: Final = st.integers(min_value=1, max_value=10_000)
+_NON_NEGATIVE_INTEGER: Final = st.integers(min_value=0, max_value=10_000)
+_SMALL_NUMBER: Final = st.floats(min_value=0.01, max_value=30.0, allow_nan=False, allow_infinity=False)
+_REQUEST_ONLY_IMAGE: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+_BLOCK_TYPES: Final = (
+    "Header",
+    "Footer",
+    "Title",
+    "Section Header",
+    "Page Number",
+    "List Item",
+    "Figure",
+    "Table",
+    "Key Value",
+    "Text",
+    "Comment",
+    "Signature",
 )
 
 
-@dataclass(frozen=True, slots=True)
-class ProviderSpec:
-    name: str
-    model: str
-    upstream_base: str
-    api_key: str | None
-    upstream_model: str | None = None
-    vertex_project: str | None = None
-    vertex_location: str | None = None
+def _optional_object(optional: dict[str, SearchStrategy[object]]) -> SearchStrategy[dict[str, object]]:
+    return st.fixed_dictionaries({}, optional=optional)
 
 
-@dataclass(frozen=True, slots=True)
-class RecorderResult:
-    fixture: OcrFixture
-    cache_hit: bool
+def _merge_objects(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
+    return {**left, **right}
 
 
-@dataclass(frozen=True, slots=True)
-class GeneratorArgs:
-    providers: tuple[str, ...]
-    examples: int
-    fixture_dir: Path | None
+def _page_range(start: int, length: int) -> dict[str, object]:
+    return {"start": start, "end": start + length}
 
 
-class _RecordingProvider(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def __init__(
-        self,
-        spec: ProviderSpec,
-        sdk_kwargs: dict[str, object],
-        cache: JsonFileCache,
-    ) -> None:
-        super().__init__(("127.0.0.1", 0), _RecordingHandler)
-        self.spec: Final = spec
-        self.sdk_kwargs: Final = sdk_kwargs
-        self.cache: Final = cache
-        self.results: queue.Queue[RecorderResult] = queue.Queue()
-
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.server_address[1]}"
-
-    def take_result(self) -> RecorderResult:
-        try:
-            return self.results.get(timeout=5)
-        except queue.Empty as error:
-            raise RuntimeError("successful OCR call did not produce a recorder result") from error
+def _annotation_format(name: str, strict: bool) -> dict[str, object]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "strict": strict,
+        },
+    }
 
 
-class _RecordingHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
+def _annotation_format_only(value: dict[str, object]) -> dict[str, object]:
+    return {"document_annotation_format": value}
 
-    def do_POST(self) -> None:
-        provider: Final = self.server
-        assert isinstance(provider, _RecordingProvider)
-        length: Final = int(self.headers.get("content-length") or "0")
-        body: Final = JSON_OBJECT.validate_json(self.rfile.read(length))
-        fixture_request: Final = OcrFixtureRequest(
-            provider=provider.spec.name,
-            sdk_kwargs=provider.sdk_kwargs,
-            provider_request=ProviderWireRequest(method=self.command, path=self.path, body=body),
-        )
-        cache_key: Final = _fixture_cache_key(provider.spec.name, fixture_request.provider_request)
-        cached_value: Final = provider.cache.get(cache_key)
-        if cached_value is not None:
-            cached_fixture: Final = OcrFixture.model_validate(cached_value)
-            provider.results.put(RecorderResult(fixture=cached_fixture, cache_hit=True))
-            self._send_fixture_response(cached_fixture.response)
-            return
 
-        upstream_url: Final = f"{provider.spec.upstream_base.rstrip('/')}{self.path}"
-        forwarded_headers: Final = {
-            name: value
-            for name, value in self.headers.items()
-            if name.lower() not in {"host", "content-length", "accept-encoding", "x-parity-case"}
+def _null_annotation_format() -> dict[str, object]:
+    return {"document_annotation_format": None}
+
+
+def _annotation_format_and_prompt(value: dict[str, object], prompt: str | None) -> dict[str, object]:
+    return {"document_annotation_format": value, "document_annotation_prompt": prompt}
+
+
+def _table_agentic(prompt: str | None, mode: str) -> dict[str, object]:
+    return {"scope": "table", "prompt": prompt, "mode": mode}
+
+
+def _figure_agentic(prompt: str | None, advanced: bool, overlays: bool) -> dict[str, object]:
+    return {
+        "scope": "figure",
+        "prompt": prompt,
+        "advanced_chart_agent": advanced,
+        "return_overlays": overlays,
+    }
+
+
+def _text_agentic(prompt: str | None) -> dict[str, object]:
+    return {"scope": "text", "prompt": prompt}
+
+
+def _agentic_scope(value: dict[str, object]) -> object:
+    return value["scope"]
+
+
+_PAGE_RANGE: Final = st.builds(
+    _page_range, st.integers(min_value=1, max_value=1000), st.integers(min_value=0, max_value=50)
+)
+_PAGE_RANGE_VALUE: Final = st.one_of(
+    _PAGE_RANGE,
+    st.lists(_PAGE_RANGE, min_size=1, max_size=3),
+    st.lists(st.integers(min_value=1, max_value=1000), min_size=1, max_size=5, unique=True),
+    st.lists(_VALUE_TEXT, min_size=1, max_size=3, unique=True),
+)
+_ANNOTATION_FORMAT: Final[SearchStrategy[dict[str, object]]] = st.builds(_annotation_format, _VALUE_TEXT, st.booleans())
+_DOCUMENT_ANNOTATION: Final[SearchStrategy[dict[str, object]]] = st.one_of(
+    st.just(dict[str, object]()),
+    st.just(_null_annotation_format()),
+    st.builds(_annotation_format_only, _ANNOTATION_FORMAT),
+    st.builds(_annotation_format_and_prompt, _ANNOTATION_FORMAT, _NULLABLE_TEXT),
+)
+
+
+def _mistral_options(model: str) -> SearchStrategy[dict[str, object]]:
+    model_name: Final = model.rsplit("/", 1)[-1]
+    confidence_values: Final = ("word", "page") if model_name == "mistral-ocr-4-0" else ("word", "page", "block")
+    confidence_option: Final[dict[str, SearchStrategy[object]]] = (
+        {}
+        if model_name == "mistral-ocr-2512"
+        else {"confidence_scores_granularity": st.one_of(st.none(), st.sampled_from(confidence_values))}
+    )
+    independent: Final = _optional_object(
+        {
+            "pages": st.one_of(
+                st.none(),
+                st.lists(_NON_NEGATIVE_INTEGER, min_size=1, max_size=5, unique=True),
+                st.sampled_from(("0", "0,1,2", "0-5", "0,2-4")),
+            ),
+            "include_image_base64": st.one_of(st.none(), st.booleans()),
+            "image_limit": st.one_of(st.none(), _POSITIVE_INTEGER),
+            "image_min_size": st.one_of(st.none(), _NON_NEGATIVE_INTEGER),
+            "bbox_annotation_format": st.one_of(st.none(), _ANNOTATION_FORMAT),
+            "extract_header": st.booleans(),
+            "extract_footer": st.booleans(),
+            "table_format": st.one_of(st.none(), st.sampled_from(("markdown", "html"))),
+            "include_blocks": st.booleans(),
+            **confidence_option,
         }
-        upstream_body: Final = (
-            {**body, "model": provider.spec.upstream_model} if provider.spec.upstream_model is not None else body
-        )
-        try:
-            upstream_response: Final = httpx.post(
-                upstream_url,
-                headers=forwarded_headers,
-                content=json.dumps(upstream_body, separators=(",", ":")),
-                timeout=120,
-            )
-        except httpx.HTTPError as error:
-            error_body: Final = json.dumps({"error": str(error)}).encode()
-            self._send_response(502, {"content-type": "application/json"}, error_body)
-            return
-
-        raw_content_type: Final = cast(object, upstream_response.headers.get("content-type", "application/json"))
-        content_type: Final = raw_content_type if isinstance(raw_content_type, str) else "application/json"
-        response_headers: Final = {"content-type": content_type.split(";", 1)[0]}
-        if not upstream_response.is_success:
-            self._send_response(upstream_response.status_code, response_headers, upstream_response.content)
-            return
-
-        upstream_response_body: Final = JSON_OBJECT.validate_json(upstream_response.content)
-        fixture_response: Final = OcrFixtureResponse(
-            status_code=upstream_response.status_code,
-            headers=response_headers,
-            body=upstream_response_body,
-        )
-        recorded_fixture: Final = OcrFixture(request=fixture_request, response=fixture_response)
-        provider.results.put(RecorderResult(fixture=recorded_fixture, cache_hit=False))
-        self._send_fixture_response(fixture_response)
-
-    def _send_fixture_response(self, response: OcrFixtureResponse) -> None:
-        response_body: Final = json.dumps(response.body, separators=(",", ":")).encode()
-        self._send_response(response.status_code, response.headers, response_body)
-
-    def _send_response(self, status_code: int, headers: dict[str, str], body: bytes) -> None:
-        self.send_response(status_code)
-        for name, value in headers.items():
-            self.send_header(name, value)
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format: str, *args: object) -> None:
-        return
+    )
+    return st.builds(_merge_objects, independent, _DOCUMENT_ANNOTATION)
 
 
-@contextmanager
-def _recording_provider(
-    spec: ProviderSpec,
-    sdk_kwargs: dict[str, object],
-    cache: JsonFileCache,
-) -> Generator[_RecordingProvider]:
-    server: Final = _RecordingProvider(spec=spec, sdk_kwargs=sdk_kwargs, cache=cache)
-    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+_AGENTIC_TABLE: Final[SearchStrategy[dict[str, object]]] = st.builds(
+    _table_agentic,
+    _NULLABLE_TEXT,
+    st.sampled_from(("default", "auto", "max")),
+)
+_AGENTIC_FIGURE: Final[SearchStrategy[dict[str, object]]] = st.builds(
+    _figure_agentic,
+    _NULLABLE_TEXT,
+    st.booleans(),
+    st.booleans(),
+)
+_AGENTIC_TEXT: Final[SearchStrategy[dict[str, object]]] = st.builds(_text_agentic, _NULLABLE_TEXT)
+_REDUCTO_ENHANCE: Final = _optional_object(
+    {
+        "agentic": st.lists(
+            st.one_of(_AGENTIC_TABLE, _AGENTIC_FIGURE, _AGENTIC_TEXT),
+            max_size=3,
+            unique_by=_agentic_scope,
+        ),
+        "summarize_figures": st.booleans(),
+        "intelligent_ordering": st.booleans(),
+    }
+)
+_CHUNKING: Final = _optional_object(
+    {
+        "chunk_mode": st.sampled_from(("variable", "section", "page", "disabled", "block", "page_sections")),
+        "chunk_size": st.one_of(st.none(), _POSITIVE_INTEGER),
+        "chunk_overlap": _NON_NEGATIVE_INTEGER,
+    }
+)
+_LEGACY_CHUNKING: Final = _optional_object(
+    {
+        "chunk_mode": st.sampled_from(("variable", "section", "page", "disabled", "block", "page_sections")),
+        "chunk_size": _POSITIVE_INTEGER,
+        "chunk_overlap": _NON_NEGATIVE_INTEGER,
+    }
+)
+_REDUCTO_RETRIEVAL: Final = _optional_object(
+    {
+        "chunking": _CHUNKING,
+        "filter_blocks": st.lists(st.sampled_from(_BLOCK_TYPES), max_size=len(_BLOCK_TYPES), unique=True),
+        "embedding_optimized": st.booleans(),
+    }
+)
+_REDUCTO_FORMATTING: Final = _optional_object(
+    {
+        "add_page_markers": st.booleans(),
+        "table_output_format": st.sampled_from(("html", "json", "md", "jsonbbox", "dynamic", "csv")),
+        "merge_tables": st.booleans(),
+        "include": st.lists(
+            st.sampled_from(
+                ("change_tracking", "highlight", "comments", "hyperlinks", "signatures", "ignore_watermarks")
+            ),
+            max_size=6,
+            unique=True,
+        ),
+    }
+)
+_SPLIT_TABLE_SIZE: Final = st.one_of(
+    _POSITIVE_INTEGER,
+    _optional_object(
+        {"row": st.one_of(st.none(), _POSITIVE_INTEGER), "column": st.one_of(st.none(), _POSITIVE_INTEGER)}
+    ),
+)
+_REDUCTO_SPREADSHEET: Final = _optional_object(
+    {
+        "split_large_tables": _optional_object({"enabled": st.booleans(), "size": _SPLIT_TABLE_SIZE}),
+        "include": st.lists(st.sampled_from(("cell_colors", "formula", "dropdowns")), max_size=3, unique=True),
+        "clustering": st.sampled_from(("accurate", "fast", "disabled")),
+        "exclude": st.lists(
+            st.sampled_from(("hidden_sheets", "hidden_rows", "hidden_cols", "styling", "spreadsheet_images")),
+            max_size=5,
+            unique=True,
+        ),
+        "max_cell_count": st.one_of(st.none(), _POSITIVE_INTEGER),
+    }
+)
+_TENANT_THROTTLING: Final = st.fixed_dictionaries(
+    {"tenant_id": st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789-_", min_size=1, max_size=256)},
+    optional={"max_share": st.floats(min_value=0.01, max_value=1.0, allow_nan=False, allow_infinity=False)},
+)
+_REDUCTO_SETTINGS: Final = _optional_object(
+    {
+        "ocr_system": st.sampled_from(("standard", "legacy")),
+        "extraction_mode": st.sampled_from(("ocr", "hybrid")),
+        "force_url_result": st.booleans(),
+        "force_file_extension": _NULLABLE_TEXT,
+        "return_ocr_data": st.booleans(),
+        "return_images": st.lists(st.sampled_from(("figure", "table", "page")), max_size=3, unique=True),
+        "embed_pdf_metadata": st.booleans(),
+        "embed_pdf_metadata_dpi": st.integers(min_value=50, max_value=250),
+        "persist_results": st.booleans(),
+        "tenant_throttling": st.one_of(st.none(), _TENANT_THROTTLING),
+        "timeout": st.one_of(st.none(), _SMALL_NUMBER),
+        "page_range": st.one_of(st.none(), _PAGE_RANGE_VALUE),
+        "document_password": _NULLABLE_TEXT,
+        "hybrid_vpc": _optional_object({"environment": _NULLABLE_TEXT}),
+    }
+)
+_REDUCTO_V3_OPTIONS: Final = _optional_object(
+    {
+        "enhance": _REDUCTO_ENHANCE,
+        "retrieval": _REDUCTO_RETRIEVAL,
+        "formatting": _REDUCTO_FORMATTING,
+        "spreadsheet": _REDUCTO_SPREADSHEET,
+        "settings": _REDUCTO_SETTINGS,
+    }
+)
+_LEGACY_SUMMARY: Final = _optional_object(
+    {"enabled": st.booleans(), "prompt": _VALUE_TEXT, "override": st.booleans(), "advanced_chart_agent": st.booleans()}
+)
+_REDUCTO_LEGACY_OPTIONS: Final = _optional_object(
+    {
+        "ocr_mode": st.sampled_from(("standard", "agentic")),
+        "extraction_mode": st.sampled_from(("ocr", "metadata", "hybrid")),
+        "chunking": _LEGACY_CHUNKING,
+        "table_summary": _optional_object({"enabled": st.booleans(), "prompt": _VALUE_TEXT}),
+        "figure_summary": _LEGACY_SUMMARY,
+        "filter_blocks": st.lists(st.sampled_from(_BLOCK_TYPES), max_size=len(_BLOCK_TYPES), unique=True),
+        "force_url_result": st.booleans(),
+    }
+)
+_REDUCTO_LEGACY_ADVANCED: Final = _optional_object(
+    {
+        "ocr_system": st.sampled_from(("highres", "multilingual", "combined", "reducto", "legacy")),
+        "table_output_format": st.sampled_from(("html", "json", "md", "jsonbbox", "dynamic", "ai_json", "csv")),
+        "merge_tables": st.booleans(),
+        "include_formula_information": st.booleans(),
+        "include_color_information": st.booleans(),
+        "include_dropdown_information": st.booleans(),
+        "continue_hierarchy": st.booleans(),
+        "keep_line_breaks": st.booleans(),
+        "page_range": _PAGE_RANGE_VALUE,
+        "force_file_extension": _VALUE_TEXT,
+        "large_table_chunking": _optional_object({"enabled": st.booleans(), "size": _POSITIVE_INTEGER}),
+        "spreadsheet_table_clustering": st.sampled_from(("default", "disabled", "intelligent")),
+        "max_cell_count": st.one_of(st.none(), _POSITIVE_INTEGER),
+        "add_page_markers": st.booleans(),
+        "remove_text_formatting": st.booleans(),
+        "return_ocr_data": st.booleans(),
+        "document_password": _VALUE_TEXT,
+        "filter_line_numbers": st.booleans(),
+        "read_comments": st.booleans(),
+        "persist_results": st.booleans(),
+        "exclude_hidden_sheets": st.booleans(),
+        "exclude_hidden_rows_cols": st.booleans(),
+        "enable_change_tracking": st.booleans(),
+        "enable_highlight_detection": st.booleans(),
+        "ignore_watermarks": st.booleans(),
+    }
+)
+_REDUCTO_LEGACY_EXPERIMENTAL: Final = _optional_object(
+    {
+        "enrich": _optional_object(
+            {
+                "enabled": st.booleans(),
+                "mode": st.sampled_from(("standard", "page", "table", "table_auto")),
+                "prompt": _VALUE_TEXT,
+            }
+        ),
+        "layout_enrichment": st.booleans(),
+        "enable_checkboxes": st.booleans(),
+        "enable_equations": st.booleans(),
+        "rotate_pages": st.booleans(),
+        "rotate_figures": st.booleans(),
+        "enable_scripts": st.booleans(),
+        "return_figure_images": st.booleans(),
+        "return_table_images": st.booleans(),
+        "return_page_images": st.booleans(),
+        "layout_model": st.sampled_from(("default", "beta")),
+        "embed_text_metadata_pdf": st.booleans(),
+        "embed_pdf_metadata_dpi": st.integers(min_value=50, max_value=250),
+        "detect_signatures": st.booleans(),
+        "danger_filter_wide_boxes": st.booleans(),
+        "user_specified_timeout_seconds": st.one_of(st.none(), _SMALL_NUMBER),
+    }
+)
+_REDUCTO_LEGACY_ROOT: Final = _optional_object(
+    {
+        "options": _REDUCTO_LEGACY_OPTIONS,
+        "advanced_options": _REDUCTO_LEGACY_ADVANCED,
+        "experimental_options": _REDUCTO_LEGACY_EXPERIMENTAL,
+        "priority": st.booleans(),
+    }
+)
 
 
 def _mistral_upstream_base() -> str:
@@ -198,56 +354,60 @@ def _mistral_upstream_base() -> str:
     return configured.removesuffix("/v1")
 
 
-def _fixture_cache_key(provider: str, request: ProviderWireRequest) -> dict[str, object]:
-    return {"provider": provider, "request": request.model_dump(mode="json")}
-
-
-def _provider_specs(selected: tuple[str, ...]) -> tuple[ProviderSpec, ...]:
-    specs: Final[dict[str, ProviderSpec | None]] = {
-        "mistral": (
+def _provider_specs(
+    selected: tuple[str, ...],
+    requests_only: bool = False,
+    all_models: bool = False,
+) -> tuple[ProviderSpec, ...]:
+    mistral_key: Final = os.environ.get("MISTRAL_API_KEY") or os.environ.get("LITELLM_API_KEY")
+    reducto_key: Final = os.environ.get("REDUCTO_API_KEY")
+    mistral_model: Final = os.environ.get("MISTRAL_OCR_MODEL")
+    reducto_model: Final = os.environ.get("REDUCTO_OCR_MODEL")
+    mistral_models: Final = (
+        (mistral_model,)
+        if mistral_model is not None
+        else (
+            ("mistral/mistral-ocr-2512", "mistral/mistral-ocr-4-0", "mistral/mistral-ocr-4-1")
+            if requests_only or all_models
+            else ("mistral/mistral-ocr-latest",)
+        )
+    )
+    reducto_models: Final = (
+        (reducto_model,) if reducto_model is not None else ("reducto/parse-v3", "reducto/parse-legacy")
+    )
+    mistral_specs: Final = (
+        tuple(
             ProviderSpec(
                 name="mistral",
-                model=os.environ.get("MISTRAL_OCR_MODEL", "mistral/mistral-ocr-latest"),
+                model=model,
                 upstream_base=_mistral_upstream_base(),
-                api_key=os.environ.get("MISTRAL_API_KEY") or os.environ.get("LITELLM_API_KEY"),
+                api_key=mistral_key or "request-only-key",
                 upstream_model=os.environ.get("MISTRAL_OCR_UPSTREAM_MODEL"),
             )
-            if os.environ.get("MISTRAL_API_KEY") or os.environ.get("LITELLM_API_KEY")
-            else None
-        ),
-        "azure_ai": (
+            for model in mistral_models
+        )
+        if "mistral" in selected and (mistral_key is not None or requests_only)
+        else ()
+    )
+    reducto_specs: Final = (
+        tuple(
             ProviderSpec(
-                name="azure_ai",
-                model=os.environ.get("AZURE_AI_OCR_MODEL", "azure_ai/mistral-document-ai-2512"),
-                upstream_base=os.environ["AZURE_AI_API_BASE"],
-                api_key=os.environ["AZURE_AI_API_KEY"],
+                name="reducto",
+                model=model,
+                upstream_base=os.environ.get("REDUCTO_API_BASE", REDUCTO_API_BASE),
+                api_key=reducto_key or "request-only-key",
             )
-            if os.environ.get("AZURE_AI_API_BASE") and os.environ.get("AZURE_AI_API_KEY")
-            else None
-        ),
-        "vertex_ai": _vertex_spec(),
-    }
-    missing: Final = tuple(name for name in selected if specs[name] is None)
+            for model in reducto_models
+        )
+        if "reducto" in selected and (reducto_key is not None or requests_only)
+        else ()
+    )
+    specs: Final = (*mistral_specs, *reducto_specs)
+    present: Final = frozenset(spec.name for spec in specs)
+    missing: Final = tuple(name for name in selected if name not in present)
     if missing:
         LOGGER.warning("Skipping providers without credentials: %s", ", ".join(missing))
-    return tuple(spec for name in selected if (spec := specs[name]) is not None)
-
-
-def _vertex_spec() -> ProviderSpec | None:
-    project: Final = os.environ.get("VERTEXAI_PROJECT")
-    credentials_available: Final = bool(os.environ.get("VERTEX_AI_API_KEY") or os.environ.get("VERTEXAI_CREDENTIALS"))
-    if project is None or not credentials_available:
-        return None
-    location: Final = os.environ.get("VERTEXAI_LOCATION", os.environ.get("VERTEX_LOCATION", "us-central1"))
-    upstream_base: Final = os.environ.get("VERTEX_AI_API_BASE", f"https://{location}-aiplatform.googleapis.com")
-    return ProviderSpec(
-        name="vertex_ai",
-        model=os.environ.get("VERTEX_AI_OCR_MODEL", "vertex_ai/mistral-ocr-2505"),
-        upstream_base=upstream_base,
-        api_key=os.environ.get("VERTEX_AI_API_KEY"),
-        vertex_project=project,
-        vertex_location=location,
-    )
+    return specs
 
 
 def _image_data_uri(text: str, font_size: int) -> str:
@@ -266,43 +426,36 @@ def _sdk_kwargs(
     image_data_uri: str,
     options: dict[str, object],
 ) -> dict[str, object]:
-    provider_kwargs: Final = (
-        {"vertex_project": spec.vertex_project, "vertex_location": spec.vertex_location}
-        if spec.name == "vertex_ai"
-        else {}
-    )
     return {
         "model": spec.model,
         "document": {"type": "image_url", "image_url": image_data_uri},
         **options,
-        **provider_kwargs,
     }
 
 
-def _record_case(spec: ProviderSpec, root: Path, sdk_kwargs: dict[str, object]) -> RecorderResult:
-    cache: Final = JsonFileCache(root / spec.name)
-    with _recording_provider(spec=spec, sdk_kwargs=sdk_kwargs, cache=cache) as recorder:
-        ocr_call: Final = cast(Callable[..., object], litellm.ocr)
-        ocr_call(api_base=recorder.url, api_key=spec.api_key, **sdk_kwargs)
-        result: Final = recorder.take_result()
-
-    if not result.cache_hit:
-        cache.put(
-            _fixture_cache_key(spec.name, result.fixture.request.provider_request),
-            result.fixture.model_dump(mode="json"),
-        )
-    return result
-
-
-def _generate(specs: tuple[ProviderSpec, ...], root: Path, examples: int) -> None:
-    @settings(max_examples=examples, deadline=None, derandomize=True)
-    @given(text=_TEXT, font_size=st.integers(min_value=12, max_value=36), options=_OPTIONS)
-    def generate_case(text: str, font_size: int, options: dict[str, object]) -> None:
-        image_data_uri: Final = _image_data_uri(text, font_size)
-        for spec in specs:
-            _generate_provider_case(spec, root, image_data_uri, options)
-
-    generate_case()
+def _upload_reducto_document(
+    spec: ProviderSpec,
+    sdk_kwargs: dict[str, object],
+    requests_only: bool,
+) -> dict[str, object]:
+    if spec.name != "reducto":
+        return sdk_kwargs
+    if requests_only:
+        return {**sdk_kwargs, "document": {"type": "image_url", "image_url": "reducto://fixture"}}
+    if spec.api_key is None:
+        raise ValueError("Reducto response fixture generation requires REDUCTO_API_KEY")
+    document: Final = JSON_OBJECT.validate_python(sdk_kwargs["document"])
+    image_data_uri: Final = document.get("image_url")
+    if not isinstance(image_data_uri, str):
+        raise ValueError("Reducto fixture generation requires an image_url data URI")
+    _, raw_bytes, mime = extract_file_id_or_bytes(image_data_uri, model=spec.model)
+    file_id: Final = upload_bytes_sync(
+        raw_bytes=raw_bytes or b"",
+        mime=mime,
+        api_key=spec.api_key,
+        api_base=spec.upstream_base,
+    )
+    return {**sdk_kwargs, "document": {"type": "image_url", "image_url": file_id}}
 
 
 def _generate_provider_case(
@@ -310,38 +463,85 @@ def _generate_provider_case(
     root: Path,
     image_data_uri: str,
     options: dict[str, object],
+    requests_only: bool,
+    sdk_call: Callable[..., object],
 ) -> None:
-    sdk_kwargs: Final = _sdk_kwargs(spec, image_data_uri, options)
-    result: Final = _record_case(spec, root, sdk_kwargs)
-    state: Final = "cached" if result.cache_hit else "recorded"
-    LOGGER.info("%s %s %s", state, spec.name, result.fixture.request.provider_request.path)
+    sdk_kwargs: Final = _upload_reducto_document(spec, _sdk_kwargs(spec, image_data_uri, options), requests_only)
+    result: Final = record_case(spec, root, sdk_kwargs, requests_only, sdk_call)
+    state: Final = "cached" if result.cache_hit else "recorded request" if requests_only else "recorded"
+    LOGGER.info("%s %s %s", state, spec.name, result.request.provider_request.path)
 
 
-def _parse_args() -> GeneratorArgs:
-    parser: Final = argparse.ArgumentParser()
-    parser.add_argument("--provider", action="append", choices=PROVIDER_NAMES)
-    parser.add_argument("--examples", type=int, default=4)
-    parser.add_argument("--fixture-dir", type=Path)
-    namespace: Final = parser.parse_args()
-    providers: Final = cast(list[str] | None, namespace.provider)
-    return GeneratorArgs(
-        providers=tuple(providers) if providers else PROVIDER_NAMES,
-        examples=cast(int, namespace.examples),
-        fixture_dir=cast(Path | None, namespace.fixture_dir),
+def _generate_provider_examples(
+    spec: ProviderSpec,
+    root: Path,
+    examples: int,
+    requests_only: bool,
+    sdk_call: Callable[..., object],
+) -> None:
+    options_strategy: Final = _options_strategy(spec)
+    image_strategy: Final = (
+        st.just(_REQUEST_ONLY_IMAGE)
+        if requests_only
+        else st.builds(_image_data_uri, _TEXT, st.integers(min_value=12, max_value=36))
     )
+
+    @settings(max_examples=examples, deadline=None, derandomize=True)
+    @given(image_data_uri=image_strategy, options=options_strategy)
+    def generate_case(image_data_uri: str, options: dict[str, object]) -> None:
+        _generate_provider_case(spec, root, image_data_uri, options, requests_only, sdk_call)
+
+    generate_case()
+
+
+def _options_strategy(spec: ProviderSpec) -> SearchStrategy[dict[str, object]]:
+    model: Final = spec.model.rsplit("/", 1)[-1]
+    if spec.name == "mistral":
+        return _mistral_options(spec.model)
+    if model == "parse-v3":
+        return _REDUCTO_V3_OPTIONS
+    if model == "parse-legacy":
+        return _REDUCTO_LEGACY_ROOT
+    raise ValueError(f"Unsupported Reducto OCR fixture model: {spec.model}")
+
+
+def _generate(
+    specs: tuple[ProviderSpec, ...],
+    root: Path,
+    examples: int,
+    requests_only: bool,
+    sdk_call: Callable[..., object],
+) -> None:
+    for spec in specs:
+        _generate_provider_examples(spec, root, examples, requests_only, sdk_call)
+
+
+def _log_filled_responses(results: tuple[RecorderResult, ...]) -> None:
+    for result in results:
+        LOGGER.info("filled response %s %s", result.request.provider, result.request.provider_request.path)
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     load_dotenv()
-    args: Final = _parse_args()
-    root: Final = (
-        args.fixture_dir or Path(os.environ.get(FIXTURE_DIR_ENV, Path(__file__).with_name(".fixtures"))).expanduser()
+    args: Final = parse_generator_args(PROVIDER_NAMES)
+    root: Final = fixture_directory(
+        args.fixture_dir,
+        os.environ.get(FIXTURE_DIR_ENV),
+        Path(__file__).with_name(".fixtures"),
     )
-    specs: Final = _provider_specs(args.providers)
+    specs: Final = _provider_specs(
+        args.providers,
+        requests_only=args.requests_only,
+        all_models=args.responses_only,
+    )
     if not specs:
         raise SystemExit("No selected provider has the required credentials")
-    _generate(specs, root, args.examples)
+    ocr_call: Final = cast(Callable[..., object], litellm.ocr)
+    if args.responses_only:
+        _log_filled_responses(fill_missing_responses(specs, root, ocr_call))
+        return
+    _generate(specs, root, args.examples, args.requests_only, ocr_call)
 
 
 if __name__ == "__main__":
