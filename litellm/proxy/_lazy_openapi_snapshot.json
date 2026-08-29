@@ -461,6 +461,145 @@
   "access_groups": {
     "components": {
       "schemas": {
+        "AccessGroupBudget": {
+          "properties": {
+            "budget_duration": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Duration"
+            },
+            "budget_id": {
+              "title": "Budget Id",
+              "type": "string"
+            },
+            "budget_reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Reset At"
+            },
+            "max_budget": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Budget"
+            },
+            "soft_budget": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Soft Budget"
+            }
+          },
+          "required": [
+            "budget_id"
+          ],
+          "title": "AccessGroupBudget",
+          "type": "object"
+        },
+        "AccessGroupBudgetRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_duration": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Duration"
+            },
+            "budget_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Id"
+            },
+            "max_budget": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Budget"
+            },
+            "soft_budget": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Soft Budget"
+            }
+          },
+          "title": "AccessGroupBudgetRequest",
+          "type": "object"
+        },
+        "AccessGroupBudgetResponse": {
+          "properties": {
+            "access_group": {
+              "title": "Access Group",
+              "type": "string"
+            },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AccessGroupBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "access_group",
+            "spend"
+          ],
+          "title": "AccessGroupBudgetResponse",
+          "type": "object"
+        },
         "AccessGroupCreateRequest": {
           "properties": {
             "access_agent_ids": {
@@ -561,6 +700,16 @@
               "title": "Access Group",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AccessGroupBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "deployment_count": {
               "title": "Deployment Count",
               "type": "integer"
@@ -571,6 +720,17 @@
               },
               "title": "Model Names",
               "type": "array"
+            },
+            "spend": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spend"
             }
           },
           "required": [
@@ -780,6 +940,29 @@
             }
           },
           "title": "AccessGroupUpdateRequest",
+          "type": "object"
+        },
+        "DeleteAccessGroupBudgetResponse": {
+          "properties": {
+            "access_group": {
+              "title": "Access Group",
+              "type": "string"
+            },
+            "budget_deleted": {
+              "title": "Budget Deleted",
+              "type": "boolean"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "access_group",
+            "budget_deleted",
+            "message"
+          ],
+          "title": "DeleteAccessGroupBudgetResponse",
           "type": "object"
         },
         "DeleteModelGroupResponse": {
@@ -1072,6 +1255,156 @@
           ]
         }
       },
+      "/access_group/{access_group}/budget": {
+        "delete": {
+          "description": "Clear the shared budget of an access group, leaving the group itself in place.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear\n\nRaises:\n- HTTPException 404: If access group not found",
+          "operationId": "delete_access_group_budget_access_group__access_group__budget_delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group",
+              "required": true,
+              "schema": {
+                "title": "Access Group",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DeleteAccessGroupBudgetResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Access Group Budget",
+          "tags": [
+            "access_groups"
+          ]
+        },
+        "get": {
+          "description": "Get the shared budget of an access group, and the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupBudgetResponse; budget is null when the group has no budget set\n\nRaises:\n- HTTPException 404: If access group not found",
+          "operationId": "get_access_group_budget_access_group__access_group__budget_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group",
+              "required": true,
+              "schema": {
+                "title": "Access Group",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AccessGroupBudgetResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Access Group Budget",
+          "tags": [
+            "access_groups"
+          ]
+        },
+        "put": {
+          "description": "Set or replace the shared budget of an access group. Idempotent.\n\nEvery key that can reach a model in the group draws from this one budget.\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"max_budget\": 100.0,\n    \"budget_duration\": \"30d\"\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this\n- soft_budget: Optional[float] - Fires an alert when reached; requests still succeed\n- budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')\n- budget_id: Optional[str] - Link an existing budget instead of creating one\n\nReturns:\n- AccessGroupBudgetResponse with the stored budget and current spend\n\nRaises:\n- HTTPException 400: If no budget field is given, or budget_duration cannot be parsed\n- HTTPException 404: If access group not found",
+          "operationId": "set_access_group_budget_access_group__access_group__budget_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group",
+              "required": true,
+              "schema": {
+                "title": "Access Group",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGroupBudgetRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AccessGroupBudgetResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Set Access Group Budget",
+          "tags": [
+            "access_groups"
+          ]
+        }
+      },
       "/access_group/{access_group}/delete": {
         "delete": {
           "description": "Delete an access group.\n\nRemoves the access group from all deployments that have it.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteModelGroupResponse with deletion details\n\nRaises:\n- HTTPException 404: If access group not found",
@@ -1122,7 +1455,7 @@
       },
       "/access_group/{access_group}/info": {
         "get": {
-          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details, its shared budget and its spend\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "get_access_group_info_access_group__access_group__info_get",
           "parameters": [
             {
