@@ -71,13 +71,22 @@ class TestConvertMcpServersMapping:
         assert result.request.credentials == {"auth_value": "header-token"}
         assert result.request.static_headers == {"X-Env": "prod"}
 
-    def test_authorization_header_without_bearer_prefix(self):
+    def test_authorization_header_without_bearer_prefix_is_sent_verbatim(self):
         result = _single(
             {"mcpServers": {"srv": {"url": "https://x.example/mcp", "headers": {"authorization": "raw-token"}}}}
         )
         assert isinstance(result, ConvertedConnector)
-        assert result.request.auth_type == MCPAuth.bearer_token
+        assert result.request.auth_type == MCPAuth.authorization
         assert result.request.credentials == {"auth_value": "raw-token"}
+        assert result.request.static_headers is None
+
+    def test_basic_authorization_header_is_sent_verbatim(self):
+        result = _single(
+            {"mcpServers": {"srv": {"url": "https://x.example/mcp", "headers": {"Authorization": "Basic dXNlcjpwdw=="}}}}
+        )
+        assert isinstance(result, ConvertedConnector)
+        assert result.request.auth_type == MCPAuth.authorization
+        assert result.request.credentials == {"auth_value": "Basic dXNlcjpwdw=="}
         assert result.request.static_headers is None
 
     def test_authorization_token_wins_over_authorization_header(self):
@@ -93,8 +102,9 @@ class TestConvertMcpServersMapping:
             }
         )
         assert isinstance(result, ConvertedConnector)
+        assert result.request.auth_type == MCPAuth.bearer_token
         assert result.request.credentials == {"auth_value": "explicit-token"}
-        assert result.request.static_headers == {"Authorization": "Bearer header-token"}
+        assert result.request.static_headers is None
 
     def test_camel_case_authorization_token_alias(self):
         result = _single(

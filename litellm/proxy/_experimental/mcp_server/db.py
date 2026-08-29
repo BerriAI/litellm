@@ -600,23 +600,19 @@ async def get_all_mcp_servers(
     NULL approval_status predates the approval workflow, so those rows are kept explicitly rather
     than dropped by a bare inequality, which SQL evaluates as NULL and would silently hide them.
     """
-    try:
-        where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = (
-            {"approval_status": approval_status}
-            if approval_status is not None
-            # mutable-ok: prisma where-inputs must be plain dicts, and both `NOT` and `not` drop
-            # NULL rows (measured), so the OR is the only NULL-preserving way to exclude drafts
-            else {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]}
-        )
-        mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client, where)
+    where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = (
+        {"approval_status": approval_status}
+        if approval_status is not None
+        # mutable-ok: prisma where-inputs must be plain dicts, and both `NOT` and `not` drop
+        # NULL rows (measured), so the OR is the only NULL-preserving way to exclude drafts
+        else {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]}
+    )
+    mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client, where)
 
-        tables: Final = [LiteLLM_MCPServerTable.model_validate(mcp_server.model_dump()) for mcp_server in mcp_servers]
-        for table in tables:
-            decrypt_global_env_var_values(table.env_vars)
-        return tables
-    except Exception as e:
-        verbose_proxy_logger.debug("litellm.proxy._experimental.mcp_server.db.py::get_all_mcp_servers - %s", e)
-        return []
+    tables: Final = [LiteLLM_MCPServerTable.model_validate(mcp_server.model_dump()) for mcp_server in mcp_servers]
+    for table in tables:
+        decrypt_global_env_var_values(table.env_vars)
+    return tables
 
 
 async def get_mcp_server(prisma_client: PrismaClient, server_id: str) -> LiteLLM_MCPServerTable | None:
