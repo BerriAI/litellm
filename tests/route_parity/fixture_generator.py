@@ -10,8 +10,8 @@ from typing import Final, Generic, TypeVar, cast
 from hypothesis.strategies import SearchStrategy
 from pydantic import BaseModel
 
-from tests.test_litellm._fixture_models import SdkInputBase
-from tests.test_litellm._fixture_recorder import ProviderSpec, generate_case_inputs, record_cases
+from tests.route_parity.fixture_models import SdkInputBase
+from tests.route_parity.fixture_recorder import ProviderSpec, generate_case_inputs, record_cases
 
 LOGGER: Final = logging.getLogger(__name__)
 InputT = TypeVar("InputT", bound=SdkInputBase)
@@ -57,7 +57,9 @@ def generate_target_fixtures(
         )
 
 
-def require_targets(targets: tuple[FixtureTarget[InputT], ...], error_message: str) -> tuple[FixtureTarget[InputT], ...]:
+def require_targets(
+    targets: tuple[FixtureTarget[InputT], ...], error_message: str
+) -> tuple[FixtureTarget[InputT], ...]:
     if targets:
         return targets
     raise SystemExit(error_message)

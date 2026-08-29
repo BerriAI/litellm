@@ -9,8 +9,8 @@ from typing import Final
 
 from pydantic import JsonValue, TypeAdapter
 
-from tests.test_litellm._recorded_http import RecordedHttpResponse, RecordedHttpStreamResponse, RecordedResponse
-from tests.test_litellm.parity.models import CapturedRequest
+from tests.route_parity.models import CapturedRequest
+from tests.route_parity.recorded_http import RecordedHttpResponse, RecordedHttpStreamResponse, RecordedResponse
 
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 EXCLUDED_REQUEST_HEADERS: Final = frozenset(

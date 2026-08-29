@@ -14,15 +14,15 @@ from typing import Final, TextIO, cast
 
 from pydantic import TypeAdapter, ValidationError
 
-from tests.test_litellm._recorded_http import RecordedResponse
-from tests.test_litellm.parity.models import (
+from tests.route_parity.models import (
     Execution,
     SDKCommand,
     WorkerFailure,
     WorkerResult,
     WorkerSuccess,
 )
-from tests.test_litellm.parity.replay import ReplayServer, replay_server
+from tests.route_parity.recorded_http import RecordedResponse
+from tests.route_parity.replay import ReplayServer, replay_server
 
 WORKER_RESULT_PREFIX: Final = "LITELLM_PARITY_RESULT "
 WORKER_RESULT_ADAPTER: Final[TypeAdapter[WorkerResult]] = TypeAdapter(WorkerResult)
@@ -181,9 +181,7 @@ def parity_worker_main(
     event_loop: Final = asyncio.new_event_loop()
     try:
         for line in sys.stdin:
-            sys.stdout.write(
-                f"{WORKER_RESULT_PREFIX}{execute_command(line, mock_url, event_loop).model_dump_json()}\n"
-            )
+            sys.stdout.write(f"{WORKER_RESULT_PREFIX}{execute_command(line, mock_url, event_loop).model_dump_json()}\n")
             sys.stdout.flush()
     finally:
         event_loop.close()

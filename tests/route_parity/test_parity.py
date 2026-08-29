@@ -5,8 +5,8 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
-from tests.test_litellm.parity.compare import assert_parity
-from tests.test_litellm.parity.models import CapturedRequest, Execution, SDKReport
+from tests.route_parity.compare import assert_parity
+from tests.route_parity.models import CapturedRequest, Execution, SDKReport
 
 SENTINEL: Final = "python-parity-fallback"
 
@@ -20,9 +20,7 @@ def _execution(*, body: JsonValue = None, markdown: str = "same", user_agent: st
             body={"model": "test-model"} if body is None else body,
             user_agent=user_agent,
         ),
-        report=SDKReport(
-            response={"items": [{"text": markdown}], "model": "test-model"}
-        ),
+        report=SDKReport(response={"items": [{"text": markdown}], "model": "test-model"}),
     )
 
 

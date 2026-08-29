@@ -12,7 +12,7 @@ import pytest
 from hypothesis import strategies as st
 from pydantic import BaseModel, ConfigDict
 
-from tests.test_litellm._fixture_recorder import (
+from tests.route_parity.fixture_recorder import (
     FIXTURE_SCHEMA_VERSION,
     ProviderSpec,
     fixture_cache_key,
@@ -21,14 +21,14 @@ from tests.test_litellm._fixture_recorder import (
     record_cases,
     recorded_fixtures,
 )
-from tests.test_litellm._json_fs_cache import JsonFileCache
-from tests.test_litellm._recorded_http import (
+from tests.route_parity.json_file_cache import JsonFileCache
+from tests.route_parity.recorded_http import (
     HttpHeader,
     RecordedHttpStreamResponse,
     RecordedResponse,
     RecordedStreamChunk,
 )
-from tests.test_litellm.parity.replay import replay_server
+from tests.route_parity.replay import replay_server
 
 _SSE_CHUNKS: Final = (
     b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',

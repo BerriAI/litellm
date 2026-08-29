@@ -11,16 +11,16 @@ from typing import Final, cast
 import pytest
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from tests.test_litellm.ocr.fixture_models import MistralOcrSdkInput, OcrParityCase
-from tests.test_litellm.parity.compare import assert_parity
-from tests.test_litellm.parity.models import SDKCommand, SDKReport, WorkerFailure, WorkerResult, WorkerSuccess
-from tests.test_litellm.parity.runner import (
+from tests.route_parity.compare import assert_parity
+from tests.route_parity.models import SDKCommand, SDKReport, WorkerFailure, WorkerResult, WorkerSuccess
+from tests.route_parity.runner import (
     PythonScriptRunner,
     PythonScriptWorker,
     execution_worker_pair,
     parity_worker_main,
     run_execution,
 )
+from tests.test_litellm.ocr.fixture_models import MistralOcrSdkInput, OcrParityCase
 
 API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"
