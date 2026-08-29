@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
@@ -132,10 +131,8 @@ describe("ComplexityRouterConfig", () => {
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
 
     expect(screen.getByText("Classifier Model")).toBeInTheDocument();
-    expect(screen.getByText("Timeout (ms)")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("750")).toBeInTheDocument();
-    expect(screen.getByText("Context Window Size")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("5")).toBeInTheDocument();
+    expect(screen.getByLabelText("Timeout (ms)")).toHaveValue("750");
+    expect(screen.getByLabelText("Context Window Size")).toHaveValue("5");
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
 
@@ -149,11 +146,8 @@ describe("ComplexityRouterConfig", () => {
 
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
 
-    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
-    expect(within(windowSizeSection).getByDisplayValue("3")).toBeInTheDocument();
-
-    const budgetSection = screen.getByText("Context Character Budget").closest("div") as HTMLElement;
-    expect(within(budgetSection).getByDisplayValue("8000")).toBeInTheDocument();
+    expect(screen.getByLabelText("Context Window Size")).toHaveValue("3");
+    expect(screen.getByLabelText("Context Character Budget")).toHaveValue("8000");
   });
 
   it("should warn when the budget is too small to quote any turn that does not already fit", () => {
@@ -248,7 +242,11 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
 
-  it("should call onChange with the updated classifier_context_window_size when edited", () => {
+  it.each([
+    ["Timeout (ms)", "7", { classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 7 } }],
+    ["Context Window Size", "0", { classifier_context_window_size: 0 }],
+    ["Context Character Budget", "7", { classifier_context_budget_chars: 7 }],
+  ])("keeps %s empty while it is being edited, then commits %s", (label, replacement, expected) => {
     const onChange = vi.fn();
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
@@ -258,54 +256,31 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
 
-    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
-    const input = within(windowSizeSection).getByRole("spinbutton");
-    fireEvent.change(input, { target: { value: "7" } });
-
-    expect(onChange).toHaveBeenCalledWith({
-      ...llmValue,
-      classifier_context_window_size: 7,
-    });
-  });
-
-  it("should let the context window size field be cleared instead of refilling the default", () => {
-    const StatefulConfig = () => {
-      const [value, setValue] = useState<ComplexityRouterConfigValue>({
-        ...defaultValue,
-        classifier_type: "llm",
-        classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
-      });
-      return <ComplexityRouterConfig modelInfo={mockModelInfo} value={value} onChange={setValue} />;
-    };
-    renderWithProviders(<StatefulConfig />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-
-    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
-    const input = within(windowSizeSection).getByRole("spinbutton");
+    const input = screen.getByLabelText(label);
     fireEvent.change(input, { target: { value: "" } });
 
-    expect(input).toHaveValue(null);
+    expect(input).toHaveValue("");
+    expect(onChange).not.toHaveBeenCalled();
 
-    fireEvent.change(input, { target: { value: "9" } });
+    fireEvent.change(input, { target: { value: replacement } });
 
-    expect(input).toHaveValue(9);
+    expect(onChange).toHaveBeenLastCalledWith({ ...llmValue, ...expected });
   });
 
-  it("should not save a value for a context window size field left empty", () => {
-    const onChange = vi.fn();
+  it("restores the committed context window size after an empty field loses focus", () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
-      classifier_context_window_size: 8,
     };
-    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
 
-    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
-    fireEvent.change(within(windowSizeSection).getByRole("spinbutton"), { target: { value: "" } });
+    const input = screen.getByLabelText("Context Window Size");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
 
-    expect(onChange).not.toHaveBeenCalled();
+    expect(input).toHaveValue("3");
   });
 
   it("should render the custom technical keywords field", () => {

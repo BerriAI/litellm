@@ -4,7 +4,7 @@ import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
-import { NumberInput } from "@/components/shared/NumberInput";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
@@ -39,6 +39,10 @@ import {
 const DEFAULT_SCORING_EXPLANATION =
   "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
   "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
+
+const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
+const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
+const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -204,6 +208,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   showValidationErrors = false,
   defaultModel,
 }) => {
+  const [draft, setDraft] = React.useState<{ id: string; raw: string } | null>(null);
   const hasDefaultModel = Boolean(defaultModel);
   const classifierType = effectiveClassifierType(value);
   const classifierModelMissing =
@@ -301,11 +306,29 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   };
 
   const handleClassifierContextWindowSizeChange = (windowSize: number) => {
-    onChange({ ...value, classifier_context_window_size: windowSize });
+    onChange({
+      ...value,
+      classifier_context_window_size: windowSize,
+    });
   };
 
   const handleClassifierContextBudgetCharsChange = (budgetChars: number) => {
-    onChange({ ...value, classifier_context_budget_chars: budgetChars });
+    onChange({
+      ...value,
+      classifier_context_budget_chars: budgetChars,
+    });
+  };
+
+  const handleClassifierIntegerChange = (
+    id: string,
+    raw: string,
+    minimum: number,
+    onCommit: (value: number) => void,
+  ) => {
+    setDraft({ id, raw });
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed)) return;
+    onCommit(Math.max(minimum, Math.round(parsed)));
   };
 
   const handleClassifierContextIncludeAssistantTurnsChange = (includeAssistantTurns: boolean) => {
@@ -360,11 +383,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             {classifierModelMissing && <span className="text-xs text-destructive">A classifier model is required</span>}
           </div>
           <div>
-            <strong className="block mb-1 font-semibold">Timeout (ms)</strong>
-            <NumberInput
-              value={value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS}
-              onValueChange={handleClassifierTimeoutChange}
-              min={1}
+            <Label htmlFor={CLASSIFIER_TIMEOUT_ID} className="block mb-1 font-semibold">
+              Timeout (ms)
+            </Label>
+            <Input
+              id={CLASSIFIER_TIMEOUT_ID}
+              type="text"
+              inputMode="numeric"
+              value={
+                draft?.id === CLASSIFIER_TIMEOUT_ID
+                  ? draft.raw
+                  : String(value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS)
+              }
+              onChange={(event) =>
+                handleClassifierIntegerChange(
+                  CLASSIFIER_TIMEOUT_ID,
+                  event.target.value,
+                  1,
+                  handleClassifierTimeoutChange,
+                )
+              }
+              onBlur={() => setDraft(null)}
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
@@ -471,11 +510,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             </span>
           </RestrictedSection>
           <div>
-            <strong className="block mb-1 font-semibold">Context Window Size</strong>
-            <NumberInput
-              value={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
-              onValueChange={handleClassifierContextWindowSizeChange}
-              min={0}
+            <Label htmlFor={CLASSIFIER_CONTEXT_WINDOW_SIZE_ID} className="block mb-1 font-semibold">
+              Context Window Size
+            </Label>
+            <Input
+              id={CLASSIFIER_CONTEXT_WINDOW_SIZE_ID}
+              type="text"
+              inputMode="numeric"
+              value={
+                draft?.id === CLASSIFIER_CONTEXT_WINDOW_SIZE_ID
+                  ? draft.raw
+                  : String(value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
+              }
+              onChange={(event) =>
+                handleClassifierIntegerChange(
+                  CLASSIFIER_CONTEXT_WINDOW_SIZE_ID,
+                  event.target.value,
+                  0,
+                  handleClassifierContextWindowSizeChange,
+                )
+              }
+              onBlur={() => setDraft(null)}
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
@@ -485,11 +540,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             </span>
           </div>
           <div>
-            <strong className="block mb-1 font-semibold">Context Character Budget</strong>
-            <NumberInput
-              value={value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS}
-              onValueChange={handleClassifierContextBudgetCharsChange}
-              min={0}
+            <Label htmlFor={CLASSIFIER_CONTEXT_BUDGET_CHARS_ID} className="block mb-1 font-semibold">
+              Context Character Budget
+            </Label>
+            <Input
+              id={CLASSIFIER_CONTEXT_BUDGET_CHARS_ID}
+              type="text"
+              inputMode="numeric"
+              value={
+                draft?.id === CLASSIFIER_CONTEXT_BUDGET_CHARS_ID
+                  ? draft.raw
+                  : String(value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS)
+              }
+              onChange={(event) =>
+                handleClassifierIntegerChange(
+                  CLASSIFIER_CONTEXT_BUDGET_CHARS_ID,
+                  event.target.value,
+                  0,
+                  handleClassifierContextBudgetCharsChange,
+                )
+              }
+              onBlur={() => setDraft(null)}
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
