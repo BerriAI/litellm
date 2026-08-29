@@ -1605,17 +1605,24 @@ async def test_refresh_answers_503_without_burning_the_token_while_redis_is_down
     )
 
     redis_down = await _refresh_native(
-        payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(side_effect=ConnectionError("redis down")))
+        payload["refresh_token"],
+        client_id,
+        _Minter(),
+        _redis_that(AsyncMock(side_effect=ConnectionError("redis down"))),
     )
     assert redis_down.status_code == 503
     assert json.loads(redis_down.body)["error"] == "temporarily_unavailable"
     assert "refresh_token" not in json.loads(redis_down.body)
 
-    redis_back = await _refresh_native(payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1)))
+    redis_back = await _refresh_native(
+        payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1))
+    )
     assert redis_back.status_code == 200
     assert json.loads(redis_back.body)["refresh_token"] != payload["refresh_token"]
 
-    replayed = await _refresh_native(payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=2)))
+    replayed = await _refresh_native(
+        payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=2))
+    )
     assert replayed.status_code == 400
     assert json.loads(replayed.body)["error"] == "invalid_grant"
 
@@ -1744,6 +1751,40 @@ async def test_introspect_refresh_token_goes_inactive_once_rotated():
     )
     assert revoked.status_code == 200
     status, body = await _introspect(minted.token.get_secret_value(), cache=cache)
+    assert (status, body) == (200, {"active": False})
+
+
+@pytest.mark.asyncio
+async def test_introspect_accepts_rs256_signed_tokens_under_configured_signing(monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from pydantic import SecretStr
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import AsymmetricSessionKeys
+
+    private_pem = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        .decode()
+    )
+    monkeypatch.setitem(
+        proxy_server.general_settings,
+        "mcp_session_token_signing",
+        {"algorithm": "RS256", "kid": "k1", "private_key": private_pem},
+    )
+    _, now, principal = _introspection_fixtures()
+    rs_keys = AsymmetricSessionKeys(private_key_pem=SecretStr(private_pem), kid="k1")
+    minted = mint_session_token(principal, rs_keys, now)
+    status, body = await _introspect(minted.token.get_secret_value())
+    assert (status, body["active"], body["kind"]) == (200, True, "session")
+
+    hs_signed = mint_session_token(principal, session_keys_from_master_key(MASTER_KEY), now)
+    status, body = await _introspect(hs_signed.token.get_secret_value())
     assert (status, body) == (200, {"active": False})
 
 
