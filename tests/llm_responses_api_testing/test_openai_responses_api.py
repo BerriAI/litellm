@@ -1816,9 +1816,8 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         await litellm.aresponses(
             model="gpt-5.5",
             input="Test",
-            temperature=0.7,
+            temperature=1,
             max_output_tokens=20,
-            reasoning={"effort": "none"},
             extra_body={
                 "custom_field": "custom_value",
             },
