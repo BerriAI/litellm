@@ -658,7 +658,7 @@ async def update_cyberark_config(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-):
+) -> dict[str, str]:
     """
     Update CyberArk Conjur secret manager configuration.
     Sets environment variables, encrypts sensitive fields, and stores in DB.
@@ -769,7 +769,7 @@ async def update_cyberark_config(
 )
 async def get_cyberark_config(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
-):
+) -> ConfigOverrideSettingsResponse:
     """
     Get current CyberArk Conjur configuration.
     Returns decrypted values from DB, or falls back to current env vars.
@@ -830,7 +830,7 @@ async def delete_cyberark_config(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-):
+) -> dict[str, str]:
     """Delete CyberArk Conjur configuration. Idempotent."""
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
@@ -890,7 +890,7 @@ async def delete_cyberark_config(
 )
 async def test_cyberark_connection(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
-):
+) -> dict[str, str]:
     """
     Test the connection to the currently configured CyberArk Conjur server.
     Uses the already-initialized secret manager client. Does not modify any state.

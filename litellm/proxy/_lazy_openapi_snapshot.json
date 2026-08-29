@@ -6785,7 +6785,13 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Delete Cyberark Config Config Overrides Cyberark Delete",
+                    "type": "object"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -6873,7 +6879,13 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Update Cyberark Config Config Overrides Cyberark Post",
+                    "type": "object"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -6908,7 +6920,13 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Test Cyberark Connection Config Overrides Cyberark Test Connection Post",
+                    "type": "object"
+                  }
                 }
               },
               "description": "Successful Response"
