@@ -221,6 +221,34 @@ describe("RequestLogsPanel", () => {
       });
     });
 
+    it("drops the cursor and returns to the first page when Custom Range is toggled", async () => {
+      const user = userEvent.setup();
+      const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
+      vi.mocked(uiSpendLogsCall).mockResolvedValue({
+        data: firstPage,
+        total: 80,
+        page: 1,
+        page_size: 50,
+        total_pages: 2,
+        next_session_cursor: "2026-07-07 09:50:13|sess-1",
+        has_more: true,
+      });
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      fireEvent.click(screen.getByTestId("pagination-next"));
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+
+      await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
+      await user.click(await screen.findByRole("button", { name: "Custom Range" }));
+
+      await waitFor(() => {
+        const call = lastCall();
+        expect(call?.page).toBe(1);
+        expect(call?.params?.session_cursor).toBeUndefined();
+      });
+    });
+
     it("leaves single-call rows untouched", async () => {
       respondWith([
         logEntry({ request_id: "req-solo-a", session_id: "sess-a", session_total_count: 1 }),

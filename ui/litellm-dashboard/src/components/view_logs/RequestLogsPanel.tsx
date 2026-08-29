@@ -268,14 +268,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     [resetToFirstPage],
   );
 
-  const handleLiveTailChange = useCallback(
-    (value: boolean) => {
-      setIsLiveTail(value);
-      resetToFirstPage();
-    },
-    [resetToFirstPage],
-  );
-
   const handleResetFilters = useCallback(() => {
     setColumnFilters([]);
     setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
@@ -369,7 +361,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
             selectedTimeInterval={selectedTimeInterval}
             onSelectedTimeIntervalChange={setSelectedTimeInterval}
             isLiveTail={isLiveTail}
-            onIsLiveTailChange={handleLiveTailChange}
+            onIsLiveTailChange={setIsLiveTail}
             excludeInternalHealthChecks={excludeInternalHealthChecks}
             onExcludeInternalHealthChecksChange={handleExcludeInternalHealthChecksChange}
             onResetToFirstPage={resetToFirstPage}
