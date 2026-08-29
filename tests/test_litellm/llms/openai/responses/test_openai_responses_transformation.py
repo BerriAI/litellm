@@ -1626,3 +1626,138 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=True,
         )
         assert ("temperature" in mapped) is temperature_survives
+
+
+class TestFlattenToolSchemaCombinatorsWiring:
+    """Regression tests for MCP tools with a top-level anyOf schema (Codex Desktop).
+
+    OpenAI's /v1/responses rejects function tool parameters carrying
+    'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level, while the
+    ChatGPT backend Codex uses natively accepts them, so those tools 400'd
+    through the proxy with "Invalid schema for function ...".
+    """
+
+    def _anyof_parameters(self):
+        return {
+            "type": "object",
+            "anyOf": [
+                {
+                    "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
+                    "required": ["id", "enabled"],
+                },
+                {
+                    "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
+                    "required": ["id", "schedule"],
+                },
+            ],
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        }
+
+    def _flat_function_tool(self):
+        return {
+            "type": "function",
+            "name": "mcp__codex_app__automation_update",
+            "description": "Update an automation",
+            "parameters": self._anyof_parameters(),
+            "strict": False,
+        }
+
+    def _codex_namespace_tool(self):
+        return {
+            "type": "namespace",
+            "name": "mcp__codex_app",
+            "tools": [
+                {
+                    "name": "automation_update",
+                    "description": "Update an automation",
+                    "parameters": self._anyof_parameters(),
+                    "strict": False,
+                }
+            ],
+        }
+
+    def test_openai_flattens_top_level_anyof_on_flat_function_tool(self):
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-4o",
+            input="hi",
+            response_api_optional_request_params={"tools": [self._flat_function_tool()]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        parameters = result["tools"][0]["parameters"]
+        assert "anyOf" not in parameters
+        assert parameters["type"] == "object"
+        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+        assert parameters["required"] == ["id"]
+        assert json.loads(json.dumps(result["tools"])) == result["tools"]
+
+    def test_openai_flattens_anyof_inside_codex_namespace_tools(self):
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-4o",
+            input="hi",
+            response_api_optional_request_params={"tools": [self._codex_namespace_tool()]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        nested_parameters = result["tools"][0]["tools"][0]["parameters"]
+        assert "anyOf" not in nested_parameters
+        assert set(nested_parameters["properties"]) == {"id", "enabled", "schedule"}
+        assert json.loads(json.dumps(result["tools"])) == result["tools"]
+
+    def test_openai_compact_request_flattens_top_level_anyof(self):
+        _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
+            model="gpt-4o",
+            input="hi",
+            response_api_optional_request_params={"tools": [self._flat_function_tool()]},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "anyOf" not in data["tools"][0]["parameters"]
+
+    def test_openai_leaves_tools_without_rejected_keys_alone(self):
+        clean_tool = {
+            "type": "function",
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        }
+
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-4o",
+            input="hi",
+            response_api_optional_request_params={"tools": [clean_tool]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == {"type": "object", "properties": {"city": {"type": "string"}}}
+
+    def test_openai_does_not_mutate_caller_tool_dicts(self):
+        tool = self._flat_function_tool()
+
+        OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-4o",
+            input="hi",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "anyOf" in tool["parameters"]
+
+    def test_non_openai_subclass_does_not_flatten(self):
+        from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+
+        result = HostedVLLMResponsesAPIConfig().transform_responses_api_request(
+            model="hosted_vllm/qwen",
+            input="hi",
+            response_api_optional_request_params={"tools": [self._flat_function_tool()]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "anyOf" in result["tools"][0]["parameters"]

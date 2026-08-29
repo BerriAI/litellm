@@ -1094,3 +1094,140 @@ def test_drop_tool_reference_parts_leaves_non_tool_messages_alone():
 
     assert result[0] == user_message
     assert result[2]["content"] == ""
+
+
+class TestFlattenTopLevelSchemaCombinators:
+    def _customer_anyof_schema(self):
+        return {
+            "type": "object",
+            "anyOf": [
+                {
+                    "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
+                    "required": ["id", "enabled"],
+                },
+                {
+                    "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
+                    "required": ["id", "schedule"],
+                },
+            ],
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        }
+
+    def test_merges_anyof_branches_into_object_schema(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        result = flatten_top_level_schema_combinators(self._customer_anyof_schema())
+
+        assert "anyOf" not in result
+        assert result["type"] == "object"
+        assert set(result["properties"]) == {"id", "enabled", "schedule"}
+        assert result["properties"]["enabled"] == {"type": "boolean"}
+        assert result["required"] == ["id"]
+
+    def test_typeless_anyof_of_object_branches_gets_intersected_required(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "anyOf": [
+                {"properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}}, "required": ["id", "enabled"]},
+                {"properties": {"id": {"type": "string"}, "schedule": {"type": "string"}}, "required": ["id", "schedule"]},
+            ]
+        }
+
+        result = flatten_top_level_schema_combinators(schema)
+
+        assert result["type"] == "object"
+        assert "anyOf" not in result
+        assert result["required"] == ["id"]
+
+    def test_allof_required_is_the_union_of_branches(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "type": "object",
+            "allOf": [
+                {"properties": {"id": {"type": "string"}}, "required": ["id"]},
+                {"properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]},
+            ],
+        }
+
+        result = flatten_top_level_schema_combinators(schema)
+
+        assert "allOf" not in result
+        assert result["required"] == ["enabled", "id"]
+        assert set(result["properties"]) == {"id", "enabled"}
+
+    def test_top_level_schema_wins_property_collisions(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "type": "object",
+            "anyOf": [
+                {"properties": {"id": {"type": "integer"}}},
+                {"properties": {"id": {"type": "number"}}},
+            ],
+            "properties": {"id": {"type": "string"}},
+        }
+
+        result = flatten_top_level_schema_combinators(schema)
+
+        assert result["properties"]["id"] == {"type": "string"}
+
+    def test_drops_openai_rejected_scalar_keys_on_object_schema(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {"id": {"type": "string"}},
+            "enum": [{"id": "a"}],
+            "const": {"id": "a"},
+            "not": {"required": ["other"]},
+        }
+
+        result = flatten_top_level_schema_combinators(schema)
+
+        assert "enum" not in result
+        assert "const" not in result
+        assert "not" not in result
+        assert result["properties"] == {"id": {"type": "string"}}
+
+    def test_non_object_union_passes_through_unchanged(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {"anyOf": [{"type": "string"}, {"type": "number"}]}
+
+        assert flatten_top_level_schema_combinators(schema) is schema
+
+    def test_schema_without_rejected_keys_is_returned_as_is(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {"type": "object", "properties": {"nested": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}
+
+        assert flatten_top_level_schema_combinators(schema) is schema
+
+    def test_input_schema_is_never_mutated(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = self._customer_anyof_schema()
+        snapshot = json.loads(json.dumps(schema))
+
+        flatten_top_level_schema_combinators(schema)
+
+        assert schema == snapshot
