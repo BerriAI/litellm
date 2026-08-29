@@ -2241,6 +2241,58 @@ async def test_streaming_responses_resolves_ccr_retrieval_end_to_end(
     assert not any(key.startswith("_headroom_interception") for key in followup_body)
 
 
+def test_sync_streaming_responses_resolves_ccr_retrieval_end_to_end(
+    guardrail: HeadroomGuardrail,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The synchronous responses() path converts the stream the same way, so it
+    must hand back a stream iterator with the resolved answer rather than the
+    completed response object."""
+    original_content = "the full uncompressed document"
+    final_answer = "the document says hello"
+    guardrail._issued_hashes_by_call_id["ccr-call-id"] = (
+        frozenset({CCR_HASH}),
+        time.monotonic() + 999,
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    upstream = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_responses_retrieve_call_payload()),
+            httpx.Response(200, json=_openai_responses_text_payload(final_answer)),
+        ]
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response(original_content),
+    ) as mock_get:
+        response = litellm.responses(
+            model="openai/gpt-4o",
+            input=[{"role": "user", "content": f"summarize hash={CCR_HASH}"}],
+            tools=[_responses_retrieve_tool_definition()],
+            stream=True,
+            litellm_call_id="ccr-call-id",
+        )
+        events = list(response)
+
+    streamed_text = "".join(
+        getattr(event, "delta", "") for event in events if getattr(event, "type", None) == "response.output_text.delta"
+    )
+    assert streamed_text == final_answer
+    assert not any(
+        getattr(getattr(event, "item", None), "type", None) == "function_call" for event in events
+    )
+    mock_get.assert_called_once()
+    assert len(upstream.calls) == 2
+    assert not json.loads(upstream.calls[1].request.content).get("stream")
+
+
 # ---------------------------------------------------------------------------
 # LIT-5018: the turn the model is being asked to act on is never compressed.
 #

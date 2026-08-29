@@ -2744,6 +2744,7 @@ class BaseLLMHTTPHandler:
         )
 
         if self._has_agentic_completion_hook(logging_obj):
+            agentic_kwargs: Final = dict(litellm_params)
             final_response: Final = run_async_function(
                 self._call_agentic_completion_hooks,
                 response=initial_response,
@@ -2754,10 +2755,19 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 stream=False,
                 custom_llm_provider=custom_llm_provider,
-                kwargs=dict(litellm_params),
+                kwargs=agentic_kwargs,
                 api_surface="responses",
             )
-            return final_response if final_response is not None else initial_response
+            result: Final = final_response if final_response is not None else initial_response
+            if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
+                return self._wrap_responses_response_as_fake_stream(
+                    result=result,
+                    model=model,
+                    responses_api_provider_config=responses_api_provider_config,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            return result
 
         return initial_response
 
