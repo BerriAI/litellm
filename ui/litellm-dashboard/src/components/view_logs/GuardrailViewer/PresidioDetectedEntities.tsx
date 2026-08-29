@@ -19,8 +19,8 @@ interface PresidioDetectedEntitiesProps {
 }
 
 const getScoreColor = (score: number): string => {
-  if (score >= 0.8) return "text-green-600";
-  return "text-yellow-600";
+  if (score >= 0.8) return "text-success";
+  return "text-warning";
 };
 
 const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) => {
@@ -58,7 +58,7 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
             return (
               <div key={index} className="border rounded-lg overflow-hidden">
                 <div
-                  className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+                  className="flex items-center justify-between p-3 bg-muted cursor-pointer hover:bg-accent"
                   onClick={() => toggleEntity(index)}
                 >
                   <div className="flex items-center">
@@ -73,13 +73,13 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
                     <span className="font-medium mr-2">{entity.entity_type}</span>
                     <span className={`font-mono ${getScoreColor(entity.score)}`}>Score: {entity.score.toFixed(2)}</span>
                   </div>
-                  <span className="text-xs text-gray-500">
+                  <span className="text-xs text-muted-foreground">
                     Position: {entity.start}-{entity.end}
                   </span>
                 </div>
 
                 {isExpanded && (
-                  <div className="p-3 border-t bg-white">
+                  <div className="p-3 border-t bg-card">
                     <div className="grid grid-cols-2 gap-4 mb-2">
                       <div className="space-y-2">
                         <div className="flex">

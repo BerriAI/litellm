@@ -156,7 +156,7 @@ class GenerateContentHelper:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 request_body={},  # Will be handled by adapter
-                generate_content_provider_config=None,  # type: ignore
+                generate_content_provider_config=None,
                 generate_content_config_dict=dict(config or {}),
                 native_request_fields={},
                 litellm_params=litellm_params,
@@ -350,7 +350,7 @@ def generate_content(
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
-                contents=contents,  # type: ignore
+                contents=contents,
                 config=setup_result.generate_content_config_dict,
                 tools=tools,
                 _is_async=_is_async,
@@ -444,7 +444,7 @@ async def agenerate_content_stream(
             # Use the adapter to convert to completion format
             return await GenerateContentToCompletionHandler.async_generate_content_handler(
                 model=model,
-                contents=contents,  # type: ignore
+                contents=contents,
                 config=setup_result.generate_content_config_dict,
                 litellm_params=setup_result.litellm_params,
                 tools=tools,
@@ -534,7 +534,7 @@ def generate_content_stream(
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
-                contents=contents,  # type: ignore
+                contents=contents,
                 config=setup_result.generate_content_config_dict,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,

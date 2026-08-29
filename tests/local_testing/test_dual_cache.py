@@ -1,5 +1,4 @@
 import os
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -7,11 +6,7 @@ from litellm._uuid import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import hashlib
 import random

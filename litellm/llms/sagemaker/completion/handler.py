@@ -1,13 +1,15 @@
 import json
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -56,6 +58,7 @@ class SagemakerLLM(BaseAWSLLM):
         optional_params.pop("aws_bedrock_runtime_endpoint", None)  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
+        aws_external_id: Final = optional_params.pop("aws_external_id", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -82,6 +85,7 @@ class SagemakerLLM(BaseAWSLLM):
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
         )
         return credentials, aws_region_name
 
@@ -103,10 +107,11 @@ class SagemakerLLM(BaseAWSLLM):
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         sigv4: Final = SigV4Auth(credentials, "sagemaker", aws_region_name)
+        dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
         if optional_params.get("stream") is True:
-            api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations-response-stream"
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations-response-stream"
         else:
-            api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations"
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations"
 
         sagemaker_base_url: Final = optional_params.get("sagemaker_base_url", None)
         if sagemaker_base_url is not None:
@@ -138,7 +143,7 @@ class SagemakerLLM(BaseAWSLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
         timeout: float | httpx.Timeout | None = None,
@@ -203,7 +208,7 @@ class SagemakerLLM(BaseAWSLLM):
                     prepared_request.headers.update({"X-Amzn-SageMaker-Inference-Component": model_id})
                 completion_stream: Final = self.make_sync_call(
                     api_base=prepared_request.url,
-                    headers=prepared_request.headers,  # type: ignore
+                    headers=prepared_request.headers,
                     data=cast(str, prepared_request.body),  # cast-ok: signed body is a JSON str, mirrors async path
                     logging_obj=logging_obj,
                 )
@@ -285,7 +290,7 @@ class SagemakerLLM(BaseAWSLLM):
             try:
                 sync_response: Final = sync_handler.post(
                     url=prepared_request.url,
-                    headers=prepared_request.headers,  # type: ignore
+                    headers=prepared_request.headers,
                     data=prepared_request.body,
                     timeout=timeout,
                 )
@@ -403,7 +408,7 @@ class SagemakerLLM(BaseAWSLLM):
         encoding,
         model_response: ModelResponse,
         model_id: str | None,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         headers: dict,
     ):
@@ -431,17 +436,18 @@ class SagemakerLLM(BaseAWSLLM):
         if not prepared_request.body:
             raise ValueError("Prepared request body is empty")
 
+        stream_logging_obj: Final[LiteLLMLoggingObj] = logging_obj
         completion_stream: Final = await self.make_async_call(
             api_base=prepared_request.url,
-            headers=prepared_request.headers,  # type: ignore
+            headers=prepared_request.headers,
             data=cast(str, prepared_request.body),
-            logging_obj=logging_obj,
+            logging_obj=stream_logging_obj,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider="sagemaker",
-            logging_obj=logging_obj,
+            logging_obj=stream_logging_obj,
         )
 
         # LOGGING
@@ -465,7 +471,7 @@ class SagemakerLLM(BaseAWSLLM):
         encoding,
         model_response: ModelResponse,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         model_id: str | None,
         headers: dict,
         litellm_params: dict,
@@ -512,7 +518,7 @@ class SagemakerLLM(BaseAWSLLM):
             try:
                 response: Final = await async_handler.post(
                     url=prepared_request.url,
-                    headers=prepared_request.headers,  # type: ignore
+                    headers=prepared_request.headers,
                     data=prepared_request.body,
                     timeout=timeout,
                 )
@@ -601,7 +607,7 @@ class SagemakerLLM(BaseAWSLLM):
             ContentType="application/json",
             Body=f"{data!r}",  # Use !r for safe representation
             CustomAttributes="accept_eula=true",
-        )"""  # type: ignore
+        )"""
         logging_obj.pre_call(
             input=input,
             api_key="",

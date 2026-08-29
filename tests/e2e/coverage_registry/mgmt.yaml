@@ -57,6 +57,7 @@
 - {id: mgmt.access_group.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "model_access_group_management_endpoints.py:600", rationale: "Access group membership query"}
 - {id: mgmt.mcp_server.register.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "mcp_management_endpoints.py:880", rationale: "MCP server registration"}
 - {id: mgmt.mcp_server.approve.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "mcp_management_endpoints.py:1200", rationale: "Admin approval persists"}
+- {id: mgmt.budget.update.accepts_model_max_budget, module: mgmt, tier: P1, surface: api, assertions: [accepts_model_max_budget], source: "budget_management_endpoints.py:173", fail_before_fix: proven, rationale: "Per-model caps must be settable on an existing budget; model ids routinely carry dots and hyphens and the route must accept both"}
 - {id: mgmt.budget.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "budget_management_endpoints.py:155", rationale: "Limit changes apply"}
 - {id: mgmt.budget.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "budget_management_endpoints.py:280", rationale: "Clears limits"}
 - {id: mgmt.budget.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "budget_management_endpoints.py:215", rationale: "Budget enumeration"}
@@ -74,3 +75,4 @@
 - {id: mgmt.workflow.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "workflow_management_endpoints.py", rationale: "Workflow tracking (smoke)"}
 - {id: mgmt.credential_migration.check.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "key_management_endpoints.py:4252", rationale: "Encryption migration (smoke)"}
 - {id: mgmt.credential.new.serves_request, module: mgmt, tier: P1, surface: api, assertions: [serves_request], source: "credential_endpoints/endpoints.py:42", rationale: "Stored credential resolves into a deployment and serves a live /messages request"}
+- {id: mgmt.model.test_connection.happy_path, module: mgmt, tier: P0, surface: api, assertions: [happy_path], source: "_health_endpoints.py:1785", rationale: "Test Connection for a responses-mode Bedrock Mantle deployment reaches the live provider and reports success; this exact shape 500ed on an acompletion partial before v1.91.0", fail_before_fix: proven}

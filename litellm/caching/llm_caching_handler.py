@@ -29,7 +29,7 @@ class LLMClientCache(InMemoryCache):
         default_ttl: int | None = 600,
         max_size_per_item: int | None = 1024,
         evicted_client_closer: EvictedClientCloser | None = None,
-    ):
+    ) -> None:
         super().__init__(
             max_size_in_memory=max_size_in_memory,
             default_ttl=default_ttl,

@@ -22,7 +22,7 @@ from litellm.types.utils import CallTypes
 try:
     from fastapi.exceptions import HTTPException
 except ImportError:
-    HTTPException = None  # type: ignore
+    HTTPException = None
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter

@@ -173,7 +173,7 @@ class SearchToolRegistry:
             for search_tool in search_tools_from_db:
                 # Convert Prisma result to dict with ISO formatted datetimes
                 search_tool_dict = SearchToolRegistry._convert_prisma_to_dict(search_tool)
-                search_tools.append(SearchTool(**search_tool_dict))  # type: ignore
+                search_tools.append(SearchTool(**search_tool_dict))
 
             return search_tools
         except Exception as e:
@@ -203,7 +203,7 @@ class SearchToolRegistry:
 
             # Convert Prisma result to dict with ISO formatted datetimes
             search_tool_dict: Final = self._convert_prisma_to_dict(search_tool)
-            return SearchTool(**search_tool_dict)  # type: ignore
+            return SearchTool(**search_tool_dict)
         except Exception as e:
             verbose_proxy_logger.exception("Error getting search tool from DB: %s", e)
             raise Exception(f"Error getting search tool from DB: {e}")
@@ -231,7 +231,7 @@ class SearchToolRegistry:
 
             # Convert Prisma result to dict with ISO formatted datetimes
             search_tool_dict: Final = self._convert_prisma_to_dict(search_tool)
-            return SearchTool(**search_tool_dict)  # type: ignore
+            return SearchTool(**search_tool_dict)
         except Exception as e:
             verbose_proxy_logger.exception("Error getting search tool from DB: %s", e)
             raise Exception(f"Error getting search tool from DB: {e}")

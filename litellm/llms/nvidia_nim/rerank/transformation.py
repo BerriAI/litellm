@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 
 import httpx
@@ -21,8 +22,9 @@ class NvidiaNimQueryObject(TypedDict):
     text: Required[str]
 
 
-class NvidiaNimPassageObject(TypedDict):
-    text: Required[str]
+class NvidiaNimPassageObject(TypedDict, total=False):
+    text: str
+    image: str
 
 
 class NvidiaNimRerankRequest(TypedDict, total=False):
@@ -52,6 +54,10 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
     """
 
     DEFAULT_NIM_RERANK_API_BASE = "https://ai.api.nvidia.com"
+
+    # The legacy retrieval rerank route accepts text passages only. The native
+    # ranking subclass expands this tuple for VL models that accept images.
+    SUPPORTED_PASSAGE_FIELDS: tuple[str, ...] = ("text",)
 
     def __init__(self) -> None:
         pass
@@ -147,6 +153,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         """
         Validate that the Nvidia NIM API key is present.
@@ -206,11 +213,17 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             if isinstance(doc, str):
                 passages.append({"text": doc})
             elif isinstance(doc, dict):
-                # If document is already a dict, check if it has 'text' field
-                if "text" in doc:
-                    passages.append({"text": doc["text"]})
+                # Preserve only the structured passage fields supported by the
+                # selected rerank route.
+                supported_fields: NvidiaNimPassageObject = {}  # mutable-ok: assembling a request TypedDict
+                if "text" in self.SUPPORTED_PASSAGE_FIELDS and "text" in doc:
+                    supported_fields["text"] = doc["text"]
+                if "image" in self.SUPPORTED_PASSAGE_FIELDS and "image" in doc:
+                    supported_fields["image"] = doc["image"]
+                if supported_fields:
+                    passages.append(supported_fields)
                 else:
-                    # Otherwise, stringify the dict
+                    # No supported fields - stringify the dict
                     import json
 
                     passages.append({"text": json.dumps(doc)})
@@ -232,15 +245,15 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         }
 
         # Add optional top_k parameter if provided (already mapped from top_n in map_cohere_rerank_params)
-        if "top_k" in optional_rerank_params and optional_rerank_params.get("top_k") is not None:  # type: ignore
-            request_data["top_k"] = optional_rerank_params.get("top_k")  # type: ignore
+        if "top_k" in optional_rerank_params and optional_rerank_params.get("top_k") is not None:
+            request_data["top_k"] = optional_rerank_params.get("top_k")
 
         # Add Nvidia-specific truncate parameter if provided
         # This is passed through from non_default_params, not in base OptionalRerankParams
-        if "truncate" in optional_rerank_params and optional_rerank_params.get("truncate") is not None:  # type: ignore
-            truncate_value: Final = optional_rerank_params.get("truncate")  # type: ignore
+        if "truncate" in optional_rerank_params and optional_rerank_params.get("truncate") is not None:
+            truncate_value: Final = optional_rerank_params.get("truncate")
             if truncate_value in ["NONE", "END"]:
-                request_data["truncate"] = truncate_value  # type: ignore
+                request_data["truncate"] = truncate_value
 
         return dict(request_data)
 
@@ -304,10 +317,11 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
                 "relevance_score": ranking["logit"],
             }
 
-            # Include document if it was in the original request
+            # Include document if it was in the original request.
+            # Image-only passages carry no 'text' field, so guard the lookup.
             index: int = ranking["index"]
-            if index < len(original_passages):
-                result_item["document"] = {"text": original_passages[index]["text"]}  # type: ignore
+            if index < len(original_passages) and "text" in original_passages[index]:
+                result_item["document"] = {"text": original_passages[index]["text"]}
 
             results.append(result_item)
 

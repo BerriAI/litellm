@@ -12,7 +12,7 @@ else:
     try:
         from mcp.types import Tool as MCPToolSDKTool
     except ImportError:
-        MCPToolSDKTool = None  # type: ignore
+        MCPToolSDKTool = None
 
 
 class MCPToolRegistry:

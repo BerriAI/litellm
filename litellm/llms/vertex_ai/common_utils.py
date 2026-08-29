@@ -763,10 +763,7 @@ def filter_schema_fields(schema_dict: dict[str, Any], valid_fields: set[str], pr
         elif key == "items" and isinstance(value, dict):
             result[key] = filter_schema_fields(value, valid_fields, processed)
         elif key == "anyOf" and isinstance(value, list):
-            result[key] = [
-                filter_schema_fields(item, valid_fields, processed)
-                for item in value  # type: ignore
-            ]
+            result[key] = [filter_schema_fields(item, valid_fields, processed) for item in value]
         else:
             result[key] = value
 
@@ -1167,21 +1164,31 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
-            # Use standard Vertex AI (Gemini) token counter
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
+            from litellm.llms.vertex_ai.gemini.transformation import (
+                _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
+            )
+
+            resolved_contents: Final = (
+                contents
+                if contents is not None
+                else _gemini_convert_messages_with_history(
+                    messages=messages or []  # mutable-ok: fallback for None messages; helper signature requires list
+                )
+            )
 
             count_tokens_params: Final = {
                 "model": model_to_use,
-                "contents": contents,
+                "contents": resolved_contents,
             }
             count_tokens_params_request.update(count_tokens_params)
             result = await VertexAITokenCounter().acount_tokens(
                 **count_tokens_params_request,
             )
 
-            if result is not None:
+            if result is not None and "totalTokens" in result:
                 return TokenCountResponse(
-                    total_tokens=result.get("totalTokens", 0),
+                    total_tokens=result["totalTokens"],
                     request_model=request_model,
                     model_used=model_to_use,
                     tokenizer_type=result.get("tokenizer_used", ""),

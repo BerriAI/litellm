@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Perplexity's `/v1/chat/completions`
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -14,6 +14,9 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAnnotation, ChatCompletionAnnotationURLCitation
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
+if TYPE_CHECKING:
+    import tiktoken
+
 
 class PerplexityChatConfig(OpenAIGPTConfig):
     @property
@@ -23,7 +26,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
+        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
         dynamic_api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return api_base, dynamic_api_key
 
@@ -72,7 +75,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -108,11 +111,9 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         """
         if not hasattr(model_response, "usage") or model_response.usage is None:
             # Create a usage object if it doesn't exist (when usage was None)
-            model_response.usage = Usage(  # type: ignore[attr-defined]
-                prompt_tokens=0, completion_tokens=0, total_tokens=0
-            )
+            model_response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
-        usage: Final = model_response.usage  # type: ignore[attr-defined]
+        usage: Final = model_response.usage
 
         # Extract citation tokens count
         citations: Final = raw_response_json.get("citations", [])

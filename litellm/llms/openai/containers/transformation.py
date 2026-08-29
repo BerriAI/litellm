@@ -114,7 +114,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         response_data: Final = raw_response.json()
 
         # Transform the response data
-        container_obj: Final = ContainerObject(**response_data)  # type: ignore[arg-type]
+        container_obj: Final = ContainerObject(**response_data)
 
         # Add cost for container creation (OpenAI containers are code interpreter sessions)
         # https://platform.openai.com/docs/pricing
@@ -174,7 +174,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         response_data: Final = raw_response.json()
 
         # Transform the response data
-        container_list: Final = ContainerListResponse(**response_data)  # type: ignore[arg-type]
+        container_list: Final = ContainerListResponse(**response_data)
 
         return container_list
 
@@ -203,7 +203,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         """Transform the OpenAI container retrieve response."""
         response_data: Final = raw_response.json()
         # Transform the response data
-        container_obj: Final = ContainerObject(**response_data)  # type: ignore[arg-type]
+        container_obj: Final = ContainerObject(**response_data)
 
         return container_obj
 
@@ -237,7 +237,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         response_data: Final = raw_response.json()
 
         # Transform the response data
-        delete_result: Final = DeleteContainerResult(**response_data)  # type: ignore[arg-type]
+        delete_result: Final = DeleteContainerResult(**response_data)
 
         return delete_result
 
@@ -285,7 +285,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         response_data: Final = raw_response.json()
 
         # Transform the response data
-        file_list: Final = ContainerFileListResponse(**response_data)  # type: ignore[arg-type]
+        file_list: Final = ContainerFileListResponse(**response_data)
 
         return file_list
 

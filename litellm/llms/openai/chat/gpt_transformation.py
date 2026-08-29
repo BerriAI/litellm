@@ -17,7 +17,11 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import get_tool_call_names
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_tool_reference_parts_from_tool_messages,
+    get_tool_call_names,
+    hoist_images_from_tool_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
@@ -50,6 +54,8 @@ from litellm.utils import convert_to_model_response_object
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.base_utils import BaseTokenCounter
     from litellm.types.llms.openai import ChatCompletionToolParam
@@ -258,9 +264,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 }
             elif isinstance(content_item["image_url"], dict):
                 new_image_url_obj: Final = ChatCompletionImageUrlObject(
-                    **{  # type: ignore
-                        k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params
-                    }
+                    **{k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params}
                 )
                 content_item["image_url"] = new_image_url_obj
         elif content_item.get("type") == "file":
@@ -273,9 +277,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     llm_provider="openai",
                 )
             new_file_obj: Final = ChatCompletionFileObjectFile(
-                **{  # type: ignore
-                    k: v for k, v in file_obj.items() if k not in litellm_specific_params
-                }
+                **{k: v for k, v in file_obj.items() if k not in litellm_specific_params}
             )
             content_item["file"] = new_file_obj
 
@@ -337,9 +339,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
     ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        hoisted_messages: Final = hoist_images_from_tool_messages(stripped_messages)
 
         async def _async_transform():
-            for message in messages:
+            for message in hoisted_messages:
                 message_content = message.get("content")
                 message_role = message.get("role")
 
@@ -349,12 +353,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         message_content_types[i] = await self._async_transform_content_item(
                             cast(OpenAIMessageContentListBlock, content_item),
                         )
-            return messages
+            return hoisted_messages
 
         if is_async:
             return _async_transform()
         else:
-            for message in messages:
+            for message in hoisted_messages:
                 message_content = message.get("content")
                 message_role = message.get("role")
                 if message_role == "user" and message_content and isinstance(message_content, list):
@@ -363,7 +367,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         message_content_types[i] = self._transform_content_item(
                             cast(OpenAIMessageContentListBlock, content_item)
                         )
-            return messages
+            return hoisted_messages
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
@@ -379,13 +383,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for i, message in enumerate(messages):
             messages[i] = cast(
                 AllMessageValues,
-                filter_value_from_dict(message, "cache_control"),  # type: ignore
+                filter_value_from_dict(message, "cache_control"),
             )
         if tools is not None:
             for i, tool in enumerate(tools):
                 tools[i] = cast(
                     ChatCompletionToolParam,
-                    filter_value_from_dict(tool, "cache_control"),  # type: ignore
+                    filter_value_from_dict(tool, "cache_control"),
                 )
         return messages, tools
 
@@ -593,7 +597,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

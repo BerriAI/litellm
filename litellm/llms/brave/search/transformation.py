@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Final, Literal, TypedDict
 
 import httpx
-from dateutil import parser  # type: ignore[import-untyped]
+from dateutil import parser
 
 _ISO_YMD: Final = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")
 _UNIX_TIMESTAMP: Final = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")

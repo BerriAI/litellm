@@ -24,7 +24,7 @@ def set_global_prompt_directory(directory: str) -> None:
     """
     import litellm
 
-    litellm.global_prompt_directory = directory  # type: ignore
+    litellm.global_prompt_directory = directory
 
 
 def _get_prompt_data_from_dotprompt_content(dotprompt_content: str) -> dict:
@@ -62,12 +62,16 @@ def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "Prom
     if dotprompt_content and not prompt_data and not prompt_file:
         prompt_data = _get_prompt_data_from_dotprompt_content(dotprompt_content)
 
+    from .prompt_manager import strip_version_suffix
+
+    registration_prompt_id: Final = prompt_id or strip_version_suffix(prompt_spec.prompt_id) or prompt_spec.prompt_id
+
     try:
         dot_prompt_manager: Final = DotpromptManager(
             prompt_directory=prompt_directory,
             prompt_data=prompt_data,
             prompt_file=prompt_file,
-            prompt_id=prompt_id,
+            prompt_id=registration_prompt_id,
         )
 
         return dot_prompt_manager

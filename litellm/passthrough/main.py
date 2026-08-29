@@ -199,7 +199,7 @@ def llm_passthrough_route(
         api_key=api_key,
     )
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(api_key=api_key, api_base=api_base, **kwargs)
 
     if client is None:
         from litellm.llms.custom_httpx.http_handler import (
@@ -333,7 +333,7 @@ def llm_passthrough_route(
             )
         else:
             # Sync path - client.client.send returns Response directly
-            response: httpx.Response = client.client.send(request=request, stream=is_streaming_request)  # type: ignore
+            response: httpx.Response = client.client.send(request=request, stream=is_streaming_request)
             response.raise_for_status()
 
             if (
@@ -395,7 +395,7 @@ def _sync_streaming(
     raw_bytes: Final[list[bytes]] = []
     flush_scheduled = False
     try:
-        for chunk in response.iter_bytes():  # type: ignore
+        for chunk in response.iter_bytes():
             raw_bytes.append(chunk)
             yield chunk
     finally:
@@ -435,7 +435,7 @@ async def _async_streaming(
     raw_bytes: Final[list[bytes]] = []
     flush_scheduled = False
     try:
-        async for chunk in iter_response.aiter_bytes():  # type: ignore
+        async for chunk in iter_response.aiter_bytes():
             raw_bytes.append(chunk)
             yield chunk
     except Exception:
