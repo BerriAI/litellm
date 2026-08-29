@@ -12,13 +12,15 @@ from __future__ import annotations
 import io
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from litellm.proxy import proxy_server
 
 
 @pytest.fixture
-def patched_speech(monkeypatch):
+def patched_speech(monkeypatch, request):
+    upstream_content_type = getattr(request, "param", "audio/mpeg")
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
     monkeypatch.setattr(
         proxy_server,
@@ -37,6 +39,11 @@ def patched_speech(monkeypatch):
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
 
     class _FakeBinaryResp:
+        response = httpx.Response(
+            status_code=200,
+            headers={} if upstream_content_type is None else {"content-type": upstream_content_type},
+        )
+
         async def aiter_bytes(self, chunk_size: int = 8192):
             async def _gen():
                 yield b"\x00\x01\x02"
@@ -150,6 +157,35 @@ def test_audio_speech_happy_path(client, auth_as, patched_speech, path):
         "content_type": "audio/mpeg",
         "body_bytes": b"\x00\x01\x02",
     }
+
+
+@pytest.mark.parametrize(
+    ("patched_speech", "response_format", "expected_content_type"),
+    [
+        ("audio/wav", "wav", "audio/wav"),
+        ("audio/flac", "flac", "audio/flac"),
+        ("audio/pcm", "pcm", "audio/pcm"),
+        ("audio/wav", "mp3", "audio/wav"),
+        ("application/json", "flac", "audio/flac"),
+        (None, "wav", "audio/wav"),
+        (None, None, "audio/mpeg"),
+    ],
+    indirect=["patched_speech"],
+)
+def test_audio_speech_content_type_matches_audio_format(
+    client, auth_as, patched_speech, response_format, expected_content_type
+):
+    """Regression for LIT-6482: /v1/audio/speech mislabeled wav/flac/pcm as audio/mpeg."""
+    payload = {
+        "model": "tts-1",
+        "input": "Hi",
+        "voice": "alloy",
+        **({} if response_format is None else {"response_format": response_format}),
+    }
+    with auth_as():
+        response = client.post("/v1/audio/speech", json=payload)
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").split(";")[0] == expected_content_type
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
