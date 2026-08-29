@@ -217,3 +217,17 @@ bedrock/us-east-1/zai.glm-5
 bedrock/us-west-2/zai.glm-5
 bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0
 bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0
+bedrock/us-gov-east-1/anthropic.claude-opus-4-8
+bedrock/us-gov-east-1/anthropic.claude-sonnet-5
+bedrock/us-gov-east-1/nvidia.nemotron-nano-3-30b
+bedrock/us-gov-east-1/nvidia.nemotron-nano-12b-v2
+bedrock/us-gov-east-1/nvidia.nemotron-super-3-120b
+bedrock/us-gov-east-1/openai.gpt-oss-20b-1:0
+bedrock/us-gov-east-1/openai.gpt-oss-120b-1:0
+bedrock/us-gov-west-1/anthropic.claude-opus-4-8
+bedrock/us-gov-west-1/anthropic.claude-sonnet-5
+bedrock/us-gov-west-1/nvidia.nemotron-nano-3-30b
+bedrock/us-gov-west-1/nvidia.nemotron-nano-12b-v2
+bedrock/us-gov-west-1/nvidia.nemotron-super-3-120b
+bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0
+bedrock/us-gov-west-1/openai.gpt-oss-120b-1:0
