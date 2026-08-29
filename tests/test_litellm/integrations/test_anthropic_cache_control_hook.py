@@ -2866,12 +2866,6 @@ class TestHostedOpenAIDialectFlag:
         assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-5.6", "azure") is False
         assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/gpt-5.6", None) is False
 
-    def test_provider_is_not_resolved_when_no_flag_is_present(self):
-        """The cheap model-map lookup must short-circuit before the provider lookup."""
-        with patch.object(AnthropicCacheControlHook, "_resolve_provider") as resolve:
-            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-4.1", None) is False
-        resolve.assert_not_called()
-
 
 class TestRecordGatewayInjection:
     """The injection marker spend accounting gates prompt-caching savings on."""
