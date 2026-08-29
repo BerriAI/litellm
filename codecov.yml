@@ -1,3 +1,11 @@
+coverage:
+  status:
+    patch:
+      default:
+        # only count freshly uploaded coverage, not sessions carried forward
+        # from older commits whose line numbers no longer match the head
+        flag_coverage_not_uploaded_behavior: exclude
+
 flags:
   circleci:
     # carried-forward CircleCI sessions come from older commits, so their line
