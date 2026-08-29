@@ -45,7 +45,7 @@ class SpeechToCompletionBridgeTransformationHandler:
         return response_format if isinstance(response_format, str) else None
 
     def _chat_audio_param(
-        self, model: str, voice: str | dict | None, optional_params: Mapping[str, object]
+        self, model: str, voice: str | Mapping[str, object] | None, optional_params: Mapping[str, object]
     ) -> ChatAudioParam | None:
         if not isinstance(voice, str):
             return None
