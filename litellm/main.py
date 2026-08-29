@@ -8367,6 +8367,34 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "mistral":
+        from litellm.llms.mistral.audio_speech.transformation import (
+            MistralTextToSpeechConfig,
+        )
+
+        mistral_tts_config: Final = text_to_speech_provider_config or MistralTextToSpeechConfig()
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        mistral_voice: Final[str | None] = voice if isinstance(voice, str) else None
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=mistral_voice,
+            text_to_speech_provider_config=mistral_tts_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "aws_polly":
         from litellm.llms.aws_polly.text_to_speech.transformation import (
             AWSPollyTextToSpeechConfig,

@@ -11530,3 +11530,29 @@ class TestTierParamsTheTargetAccepts:
         accepted = router._tier_params_the_target_accepts("no-such-group", {"reasoning_effort": "max"}, {})
 
         assert accepted == {"reasoning_effort": "max"}
+
+
+@pytest.mark.asyncio
+async def test_router_aspeech_without_voice_dispatches_ref_audio_cloning(respx_mock, monkeypatch):
+    import base64
+
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    audio_bytes = b"RIFFfake-wav-bytes"
+    respx_mock.post("https://api.mistral.ai/v1/audio/speech").respond(
+        json={"audio_data": base64.b64encode(audio_bytes).decode()}
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "voxtral-tts",
+                "litellm_params": {"model": "mistral/voxtral-mini-tts-2603"},
+            }
+        ]
+    )
+
+    response = await router.aspeech(model="voxtral-tts", input="clone me", ref_audio="ZmFrZQ==")
+
+    request_body = json.loads(respx_mock.calls.last.request.content)
+    assert request_body == {"model": "voxtral-mini-tts-2603", "input": "clone me", "ref_audio": "ZmFrZQ=="}
+    assert response.content == audio_bytes

@@ -31126,9 +31126,9 @@
         "supports_audio_input": true
     },
     "mistral/voxtral-mini-tts-latest": {
+        "input_cost_per_character": 1.6e-05,
         "litellm_provider": "mistral",
         "mode": "audio_speech",
-        "output_cost_per_character": 1.6e-05,
         "source": "https://docs.mistral.ai/models/model-cards/voxtral-tts-26-03",
         "supported_endpoints": [
             "/v1/audio/speech"
@@ -51677,9 +51677,9 @@
         "supports_audio_input": true
     },
     "mistral/voxtral-mini-tts-2603": {
+        "input_cost_per_character": 1.6e-05,
         "litellm_provider": "mistral",
         "mode": "audio_speech",
-        "output_cost_per_character": 1.6e-05,
         "source": "https://docs.mistral.ai/models/model-cards/voxtral-tts-26-03",
         "supported_endpoints": [
             "/v1/audio/speech"

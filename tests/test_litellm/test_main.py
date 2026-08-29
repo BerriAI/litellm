@@ -3181,3 +3181,31 @@ def test_stream_chunk_builder_defers_cost_to_logging_obj_when_usage_cost_absent(
 
     assert response is not None
     assert response._hidden_params.get("response_cost") is None
+
+
+def test_speech_mistral_dispatches_and_decodes_audio(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    audio_bytes: Final = b"ID3-fake-mp3-bytes"
+    mock_route: Final = respx_mock.post("https://api.mistral.ai/v1/audio/speech").mock(
+        return_value=httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+    )
+
+    response: Final = litellm.speech(
+        model="mistral/voxtral-mini-tts-2603",
+        input="hello from litellm",
+        voice="en_paul_neutral",
+        response_format="wav",
+        speed=2,
+        instructions="sound cheerful",
+    )
+
+    assert mock_route.called
+    request_body: Final = json.loads(mock_route.calls.last.request.content)
+    assert request_body == {
+        "model": "voxtral-mini-tts-2603",
+        "input": "hello from litellm",
+        "voice_id": "en_paul_neutral",
+        "response_format": "wav",
+    }
+    assert mock_route.calls.last.request.headers["authorization"] == "Bearer sk-mistral-test"
+    assert response.content == audio_bytes
