@@ -753,7 +753,29 @@ def _seed_budget(prisma, access_group, spend=0.0, budget_id="budget-seed", **bud
 
 @contextmanager
 def _proxy(prisma):
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+    with patch(  # test-quality-ok: the endpoints import proxy_server.prisma_client themselves; no parameter to inject
+        "litellm.proxy.proxy_server.prisma_client", prisma
+    ):
+        yield
+
+
+@contextmanager
+def _proxy_with_stubbed_reload(prisma):
+    """delete_access_group finishes by reloading the router and judging what it serves afterwards.
+    Both collaborators it reaches for there are module globals it imports itself, so a fake can only
+    get in by patching them; auth_cache and prisma are the ones with a real seam."""
+    never_served_router = MagicMock()
+    never_served_router.get_model_ids.return_value = []
+    with (
+        _proxy(prisma),
+        patch(  # test-quality-ok: live_model_ids_snapshot() reads the llm_router global; the endpoint takes no router
+            "litellm.proxy.proxy_server.llm_router", never_served_router
+        ),
+        patch(  # test-quality-ok: the endpoint calls its module-level clear_cache import; there is no parameter for it
+            "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
+            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+        ),
+    ):
         yield
 
 
@@ -1073,16 +1095,7 @@ async def test_deleting_the_access_group_strips_deployments_before_dropping_the_
     _seed_budget(prisma, "prod-models", spend=3.0, max_budget=100.0)
     cache = _FakeAuthCache()
 
-    never_served_router = MagicMock()
-    never_served_router.get_model_ids.return_value = []
-    with (
-        _proxy(prisma),
-        patch("litellm.proxy.proxy_server.llm_router", never_served_router),
-        patch(
-            "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
-            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
-        ),
-    ):
+    with _proxy_with_stubbed_reload(prisma):
         response = await delete_access_group(
             access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache
         )
@@ -1171,16 +1184,7 @@ async def test_deleting_the_access_group_evicts_both_auth_cache_keys():
     _seed_budget(prisma, "prod-models", spend=3.0, max_budget=100.0)
     cache = _FakeAuthCache(journal)
 
-    never_served_router = MagicMock()
-    never_served_router.get_model_ids.return_value = []
-    with (
-        _proxy(prisma),
-        patch("litellm.proxy.proxy_server.llm_router", never_served_router),
-        patch(
-            "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
-            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
-        ),
-    ):
+    with _proxy_with_stubbed_reload(prisma):
         await delete_access_group(access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache)
 
     _assert_evicted_after_write(journal, "prod-models", "access_group_budget.delete:prod-models")
@@ -1198,16 +1202,7 @@ async def test_deleting_an_access_group_that_never_had_a_budget_still_evicts():
     prisma = _FakePrismaClient(journal, deployments=[_deployment()])
     cache = _FakeAuthCache(journal)
 
-    never_served_router = MagicMock()
-    never_served_router.get_model_ids.return_value = []
-    with (
-        _proxy(prisma),
-        patch("litellm.proxy.proxy_server.llm_router", never_served_router),
-        patch(
-            "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
-            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
-        ),
-    ):
+    with _proxy_with_stubbed_reload(prisma):
         response = await delete_access_group(
             access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache
         )

@@ -1879,85 +1879,6 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
         )
 
 
-@pytest.mark.asyncio
-async def test_track_cost_callback_charges_the_model_access_groups_auth_stamped():
-    """Auth stamps the matched groups onto request metadata; the callback has to carry them through.
-
-    Without this hop nothing writes ``spend:model_access_group:*`` on the normal path, so with
-    reservations disabled the budget check reads a counter no one maintains.
-    """
-    logger = _ProxyDBLogger()
-    kwargs = {
-        "model": "gpt-4",
-        "call_type": "acompletion",
-        "litellm_params": {
-            "metadata": {
-                "user_api_key": "hashed-key",
-                "user_api_key_user_id": "user-1",
-                MODEL_ACCESS_GROUP_METADATA_KEY: ["premium", "starter"],
-            },
-        },
-        "standard_logging_object": {"response_cost": 0.25, "request_tags": None},
-        "stream": False,
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
-        patch(
-            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
-        ) as mock_increment_spend_counters,
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
-    ):
-        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
-        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
-        await logger._PROXY_track_cost_callback(
-            kwargs=kwargs,
-            completion_response=None,
-            start_time=datetime.now(),
-            end_time=datetime.now(),
-        )
-
-    mock_increment_spend_counters.assert_awaited_once()
-    assert mock_increment_spend_counters.await_args.kwargs["model_access_groups"] == (
-        "premium",
-        "starter",
-    )
-
-
-@pytest.mark.asyncio
-async def test_track_cost_callback_charges_no_model_access_group_when_none_were_stamped():
-    """A request no budgeted group authorized must not debit anything."""
-    logger = _ProxyDBLogger()
-    kwargs = {
-        "model": "gpt-4",
-        "call_type": "acompletion",
-        "litellm_params": {
-            "metadata": {"user_api_key": "hashed-key", "user_api_key_user_id": "user-1"},
-        },
-        "standard_logging_object": {"response_cost": 0.25, "request_tags": None},
-        "stream": False,
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
-        patch(
-            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
-        ) as mock_increment_spend_counters,
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
-    ):
-        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
-        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
-        await logger._PROXY_track_cost_callback(
-            kwargs=kwargs,
-            completion_response=None,
-            start_time=datetime.now(),
-            end_time=datetime.now(),
-        )
-
-    mock_increment_spend_counters.assert_awaited_once()
-    assert mock_increment_spend_counters.await_args.kwargs["model_access_groups"] == ()
-
-
 class _FakeDeploymentLookup:
     """Deployment lookup returning the access groups each deployment declares."""
 
@@ -1970,32 +1891,38 @@ class _FakeDeploymentLookup:
         return {"model_name": "premium-haiku", "model_info": {"id": id, "access_groups": list(self._deployments[id])}}
 
 
-def _model_access_group_kwargs(granted, served_model_id):
+def _model_access_group_kwargs(granted, served_model_id=None):
+    metadata = {"user_api_key": "hashed-key", "user_api_key_user_id": "user-1"}
+    if granted is not None:
+        metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = list(granted)
     return {
         "call_type": "acompletion",
         "model": "premium-haiku",
         "litellm_call_id": "test-call-id",
-        "litellm_params": {
-            "metadata": {
-                "user_api_key": "hashed-key",
-                "user_api_key_user_id": "u-1",
-                MODEL_ACCESS_GROUP_METADATA_KEY: list(granted),
-            }
-        },
+        "litellm_params": {"metadata": metadata},
         "stream": False,
-        "standard_logging_object": {"response_cost": 0.25, "model_id": served_model_id},
+        "standard_logging_object": {"response_cost": 0.25, "request_tags": None, "model_id": served_model_id},
     }
 
 
-async def _run_callback_capturing_groups(kwargs, deployments):
+async def _groups_charged_by_the_callback(kwargs, deployments=None):
+    """The groups the callback hands the spend counters for one request.
+
+    The callback resolves ``proxy_logging_obj`` and the router by importing them off
+    ``proxy_server`` inside its own body, so there is no seam to inject either through.
+    """
     logger = _ProxyDBLogger()
     with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
-        patch(
+        patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: the arguments to this call are the boundary under test
             "litellm.proxy.hooks.proxy_track_cost_callback._update_database_and_spend_counters",
             new=AsyncMock(),
         ) as mock_update,
-        patch("litellm.proxy.proxy_server.llm_router", new=_FakeDeploymentLookup(deployments)),
+        patch(  # test-quality-ok: llm_router is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.llm_router", new=_FakeDeploymentLookup(deployments or {})
+        ),
     ):
         mock_proxy_logging.failed_tracking_alert = AsyncMock()
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
@@ -2013,26 +1940,50 @@ async def _run_callback_capturing_groups(kwargs, deployments):
 
 
 @pytest.mark.asyncio
+async def test_track_cost_callback_charges_the_model_access_groups_auth_stamped():
+    """Auth stamps the matched groups onto request metadata; the callback has to carry them through.
+
+    Without this hop nothing writes ``spend:model_access_group:*`` on the normal path, so with
+    reservations disabled the budget check reads a counter no one maintains.
+    """
+    charged = await _groups_charged_by_the_callback(
+        kwargs=_model_access_group_kwargs(granted=["premium", "starter"]),
+    )
+
+    assert charged == ("premium", "starter")
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_charges_no_model_access_group_when_none_were_stamped():
+    """A request no budgeted group authorized must not debit anything."""
+    charged = await _groups_charged_by_the_callback(
+        kwargs=_model_access_group_kwargs(granted=None),
+    )
+
+    assert charged == ()
+
+
+@pytest.mark.asyncio
 async def test_spend_counters_only_debit_the_group_the_served_deployment_belongs_to():
     """A caller granted two pools that both cover the model group only draws down the pool that served.
 
     The database writer already narrows by served deployment, so passing the unnarrowed set to the
     live counters let one request block a pool the persisted spend never debited.
     """
-    debited = await _run_callback_capturing_groups(
+    charged = await _groups_charged_by_the_callback(
         kwargs=_model_access_group_kwargs(granted=["premium", "tier0"], served_model_id="deployment-premium"),
         deployments={"deployment-premium": ["premium"], "deployment-tier0": ["tier0"]},
     )
 
-    assert debited == ("premium",)
+    assert charged == ("premium",)
 
 
 @pytest.mark.asyncio
 async def test_spend_counters_keep_every_granted_group_when_the_deployment_is_unknown():
     """An unidentifiable deployment leaves the auth-time set standing, so nothing silently stops billing."""
-    debited = await _run_callback_capturing_groups(
+    charged = await _groups_charged_by_the_callback(
         kwargs=_model_access_group_kwargs(granted=["premium", "tier0"], served_model_id="deployment-gone"),
         deployments={"deployment-premium": ["premium"]},
     )
 
-    assert debited == ("premium", "tier0")
+    assert charged == ("premium", "tier0")
