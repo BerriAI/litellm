@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -446,12 +446,14 @@ def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "Guardrail
     )
 
 
-def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[str]:
-    managed: Final = _policy_state_metadata(data).get("_pipeline_managed_guardrails")
-    return (
-        frozenset(cast("Collection[str]", managed))  # cast-ok: the policy engine wrote these guardrail names
-        if managed
-        else frozenset()
+def _pipeline_managed_guardrail_names(
+    data: Mapping[str, object], mode: Literal["pre_call", "post_call"]
+) -> frozenset[str]:
+    return frozenset(
+        step.guardrail
+        for _policy_name, pipeline in _policy_pipelines(data)
+        if pipeline.mode == mode
+        for step in pipeline.steps
     )
 
 
@@ -1837,7 +1839,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
+            pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "pre_call")
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -2825,7 +2827,7 @@ class ProxyLogging:
         if pipeline_response is not None:
             response = pipeline_response  # rebind-ok: adopt the pipeline's replacement response, same contract as the callback loops below
 
-        pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
+        pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "post_call")
         guardrail_callbacks: Final[list[CustomGuardrail]] = []
         other_callbacks: Final[list[CustomLogger]] = []
         try:
