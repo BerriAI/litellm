@@ -1128,7 +1128,11 @@ export interface paths {
          */
         get: operations["get_auto_router_classifier_default_prompt_auto_router_classifier_default_prompt_get"];
         put?: never;
-        post?: never;
+        /**
+         * Preview Auto Router Classifier Prompt
+         * @description Get the system prompt an auto-router's LLM classifier sends for an edited tier set
+         */
+        post: operations["preview_auto_router_classifier_prompt_auto_router_classifier_default_prompt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -22896,6 +22900,22 @@ export interface components {
             system_prompt: string;
         };
         /**
+         * AutoRouterClassifierPromptPreviewRequest
+         * @description A POST rather than query params: classification_prompt is the operator's own text, which must
+         *     not reach access logs through a URL.
+         */
+        AutoRouterClassifierPromptPreviewRequest: {
+            /** Classification Prompt */
+            classification_prompt?: string | null;
+            /**
+             * Context Window Size
+             * @default 3
+             */
+            context_window_size: number;
+            /** Tier Definitions */
+            tier_definitions: components["schemas"]["TierDefinition"][];
+        };
+        /**
          * AutoRouterRoutingTestRequest
          * @description A single request to classify against a complexity-router config that need not be saved yet.
          *
@@ -23140,6 +23160,11 @@ export interface components {
              * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
+            /**
+             * Scan Raw Request
+             * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
+             */
+            scan_raw_request?: boolean | null;
             /**
              * Sensitive Data Route To Model
              * @description Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.
@@ -29464,6 +29489,11 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Advisory System Message
+             * @description Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.
+             */
+            advisory_system_message?: string | null;
+            /**
              * Akto Account Id
              * @description Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.
              */
@@ -29910,10 +29940,10 @@ export interface components {
             on_disallowed_action: "block" | "rewrite";
             /**
              * On Flagged
-             * @description Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)
+             * @description Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)
              * @default block
              */
-            on_flagged: ("block" | "monitor") | null;
+            on_flagged: ("block" | "monitor" | "inject_system_message") | null;
             /**
              * On Flagged Action
              * @description Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)
@@ -30107,6 +30137,11 @@ export interface components {
              * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
+            /**
+             * Scan Raw Request
+             * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
+             */
+            scan_raw_request?: boolean | null;
             /**
              * Send User Api Key Alias
              * @description Whether to send user_API_key_alias in headers
@@ -34857,10 +34892,42 @@ export interface components {
             by_key: components["schemas"]["ShadowEvalSlice"][];
             /** By Tier */
             by_tier: components["schemas"]["ShadowEvalSlice"][];
+            /**
+             * Not Sampled Count
+             * @description Eligible requests the sampling dice skipped, summed over legs: the judged rows stand for judged + this many requests. None for jobs from before the funnel existed
+             */
+            not_sampled_count?: number | null;
             /** Overall Shadow Win Rate Pct */
             overall_shadow_win_rate_pct: number;
             /** Overall Tie Rate Pct */
             overall_tie_rate_pct: number;
+            /**
+             * Sampled Real Spend
+             * @description USD the real arm billed across all judged turns, cache-served turns excluded
+             * @default 0
+             */
+            sampled_real_spend: number;
+            /**
+             * Sampled Shadow Spend
+             * @description USD the shadow arm billed across the same turns, judge excluded, like for like
+             * @default 0
+             */
+            sampled_shadow_spend: number;
+            /**
+             * Shed Count
+             * @description Sampled requests dropped by the per-pod concurrency cap, so quiet periods are overweighted
+             */
+            shed_count?: number | null;
+            /**
+             * Unjudgeable Count
+             * @description Sampled requests whose shape could not be judged (tool-final turn, empty text)
+             */
+            unjudgeable_count?: number | null;
+            /**
+             * Withheld Count
+             * @description Sampled requests the pipeline declined to spend on: no database to record into, an over-budget key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job crosses max_budget lands here rather than vanishing from coverage)
+             */
+            withheld_count?: number | null;
         };
         /**
          * ShadowEvalSlice
@@ -34870,13 +34937,31 @@ export interface components {
         ShadowEvalSlice: {
             /** Avg Judge Confidence */
             avg_judge_confidence: number;
+            /**
+             * Cache Hit Turns
+             * @description Judged turns litellm's response cache served, excluded from both spends: an adopted router would be served by the same cache, so those turns cost the same either way
+             * @default 0
+             */
+            cache_hit_turns: number;
             /** Group */
             group: string;
+            /**
+             * Real Spend
+             * @description USD the real arm billed on this slice's judged turns, completion plus its own routing classifier when it routed, excluding turns litellm's response cache served for free
+             * @default 0
+             */
+            real_spend: number;
             /**
              * Real Win Rate Pct
              * @description Share of judged turns the real arm won, meaning the response the caller actually received: the key's own model in forward mode, the router's pick in reverse
              */
             real_win_rate_pct: number;
+            /**
+             * Shadow Spend
+             * @description USD the shadow arm billed on the same turns, completion plus its own routing classifier, excluding the judge and the same cache-served turns, so the two spends compare like for like
+             * @default 0
+             */
+            shadow_spend: number;
             /**
              * Shadow Win Rate Pct
              * @description Share of judged turns the shadow arm won, meaning the duplicated response nobody was served: the router's pick in forward mode, baseline_model in reverse
@@ -39926,6 +40011,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_auto_router_classifier_prompt_auto_router_classifier_default_prompt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRouterClassifierPromptPreviewRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

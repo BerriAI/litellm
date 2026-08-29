@@ -3409,6 +3409,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -3456,6 +3457,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -3589,6 +3591,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
@@ -3630,6 +3633,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
@@ -3671,6 +3675,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
@@ -3712,6 +3717,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
@@ -3937,7 +3943,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none"
     },
     "azure/eu/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.4e-07,
@@ -3972,7 +3979,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none"
     },
     "azure/eu/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
@@ -4247,7 +4255,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none"
     },
     "azure/global/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -4282,7 +4291,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none"
     },
     "azure/global/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
@@ -5367,6 +5377,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_minimal_reasoning_effort": true
     },
     "azure/gpt-5.1-chat-2025-11-13": {
@@ -5404,7 +5415,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": false,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none"
     },
     "azure/gpt-5.1-codex-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -5833,7 +5845,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none"
     },
     "azure/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -5868,7 +5881,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none"
     },
     "azure/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
@@ -6315,6 +6329,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -6354,6 +6369,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -6393,6 +6409,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -6438,6 +6455,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -6477,6 +6495,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -6516,6 +6535,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -7663,6 +7683,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-5.4-mini-2026-03-17": {
@@ -7704,6 +7725,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-5.4-nano": {
@@ -7745,6 +7767,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-5.4-nano-2026-03-17": {
@@ -7786,6 +7809,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-image-1": {
@@ -8856,7 +8880,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none"
     },
     "azure/us/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.4e-07,
@@ -8891,7 +8916,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none"
     },
     "azure/us/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
@@ -26364,6 +26390,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": false,
         "supports_minimal_reasoning_effort": true
     },
@@ -26408,6 +26435,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": false,
         "supports_minimal_reasoning_effort": true
     },
@@ -26453,6 +26481,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": false,
         "supports_minimal_reasoning_effort": true
     },
@@ -26498,6 +26527,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -26543,6 +26573,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -27367,6 +27398,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -27415,6 +27447,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -27564,6 +27597,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
@@ -27615,6 +27649,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
@@ -27663,6 +27698,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
@@ -27711,6 +27747,7 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false
     },
@@ -38731,7 +38768,7 @@
     "together_ai/openai/gpt-oss-20b": {
         "input_cost_per_token": 5e-08,
         "litellm_provider": "together_ai",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
         "source": "https://www.together.ai/models/gpt-oss-20b",
@@ -38953,14 +38990,14 @@
         "source": "https://docs.together.ai/docs/serverless-models"
     },
     "together_ai/Qwen/Qwen3.8-2.4T-A95B": {
-        "cache_read_input_token_cost": 5e-07,
-        "input_cost_per_token": 2.5e-06,
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 2e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1010000,
         "max_output_tokens": 1010000,
         "max_tokens": 1010000,
         "mode": "chat",
-        "output_cost_per_token": 6.25e-06,
+        "output_cost_per_token": 6e-06,
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_prompt_caching": true
     },

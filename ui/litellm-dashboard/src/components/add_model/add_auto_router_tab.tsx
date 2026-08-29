@@ -340,6 +340,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     customTierSet: complexityRouterConfig.custom_tier_set,
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
+    classificationPrompt: complexityRouterConfig.classification_prompt,
     heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
@@ -580,6 +581,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
                       keywordTierRules={keywordTierRules}
                       onKeywordTierRulesChange={setKeywordTierRules}
+                      keywordRulesError={getKeywordTierRulesError(
+                        keywordTierRules,
+                        activeTierRows(complexityRouterConfig),
+                      )}
                       semanticMatchingEnabled={semanticMatchingEnabled}
                       onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
                       embeddingModel={embeddingModel}
