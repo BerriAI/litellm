@@ -448,6 +448,35 @@ describe("AddProviderPanel", () => {
     expect(credentialUpdateCall).not.toHaveBeenCalled();
   });
 
+  it("drops the previous provider's credential values when the provider changes", async () => {
+    discoverProviderModelsCall.mockResolvedValue({ models: ["gpt-4o"] });
+    const { user } = await setup();
+
+    await chooseProvider(user, "Anthropic");
+    await user.type(screen.getByLabelText("Credential name"), "switching");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await user.type(await screen.findByLabelText("API Key"), "sk-ant-secret");
+    await user.click(screen.getByRole("button", { name: /Back/ }));
+
+    await chooseProvider(user, "OpenAI");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    const apiKeyField = await screen.findByLabelText("API Key");
+    expect(apiKeyField).toHaveValue("");
+    await user.type(apiKeyField, "sk-openai-test");
+    await user.click(screen.getByRole("button", { name: /Save credential/ }));
+
+    await waitFor(() =>
+      expect(credentialCreateCall).toHaveBeenCalledWith(
+        "test-access-token",
+        expect.objectContaining({
+          credential_values: expect.objectContaining({ api_key: "sk-openai-test" }),
+          credential_info: { custom_llm_provider: "openai" },
+        }),
+      ),
+    );
+  });
+
   it("blocks creation while any model name is blank", async () => {
     discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus"] });
     const { user } = await setup();

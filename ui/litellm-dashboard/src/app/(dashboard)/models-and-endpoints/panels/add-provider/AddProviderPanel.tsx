@@ -302,7 +302,10 @@ export default function AddProviderPanel() {
         <ProviderStep
           providerOptions={providerOptions}
           selectedProvider={selectedProvider}
-          onSelectProvider={setSelectedProvider}
+          onSelectProvider={(provider) => {
+            if (provider !== selectedProvider) form.reset();
+            setSelectedProvider(provider);
+          }}
           credentialName={credentialName}
           onCredentialNameChange={setCredentialName}
           nameCollision={Boolean(nameCollision)}
