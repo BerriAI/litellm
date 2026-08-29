@@ -533,6 +533,21 @@ def _serialize_http_exception_detail(
     return str(detail), None
 
 
+def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
+    raw_detail: Final = _getattr_object(exc, "detail", str(exc))
+    message, structured_fields = _serialize_http_exception_detail(raw_detail)
+    existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
+    merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
+    return ProxyException(
+        message=message,
+        type=getattr(exc, "type", "None"),
+        param=getattr(exc, "param", "None"),
+        code=getattr(exc, "status_code", status.HTTP_400_BAD_REQUEST),
+        provider_specific_fields=merged_fields,
+        headers=headers,
+    )
+
+
 def _collect_response_file_search_vector_store_ids(data: Mapping[str, object]) -> set[str]:
     vector_store_ids: Final[set[str]] = set()
     tools: Final = data.get("tools")
@@ -3244,21 +3259,7 @@ class ProxyBaseLLMRequestProcessing:
             raise e
 
         if isinstance(e, HTTPException):
-            raw_detail: Final = _getattr_object(e, "detail", str(e))
-            message, structured_fields = _serialize_http_exception_detail(raw_detail)
-            existing_fields: Final = getattr(e, "provider_specific_fields", None) or {}
-            if structured_fields:
-                merged_fields: dict | None = {**existing_fields, **structured_fields}
-            else:
-                merged_fields = existing_fields or None
-            raise ProxyException(
-                message=message,
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                provider_specific_fields=merged_fields,
-                headers=safe_headers,
-            )
+            raise proxy_exception_from_http_exception(e, safe_headers)
         elif isinstance(e, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
             # This matches the original behavior before the refactor in commit 511d435f6f
