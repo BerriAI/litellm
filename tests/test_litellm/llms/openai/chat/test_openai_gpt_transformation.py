@@ -981,10 +981,7 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
     """
     Regression tests for LIT-6488: OpenAI's chat completions validator rejects
     tool parameters carrying a top-level anyOf/oneOf/allOf for every model
-    family (GPT-5 included, unlike the Responses API), so requests bound for
-    api.openai.com get those combinators flattened into one object schema,
-    while OpenAI-compatible backends on a custom api_base and other providers
-    keep the caller's schema untouched.
+    family, GPT-5 included, unlike the Responses API.
     """
 
     def setup_method(self):

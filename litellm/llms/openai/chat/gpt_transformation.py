@@ -416,11 +416,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         custom_llm_provider: str | None,
         api_base: str | None,
     ) -> bool:
-        """
-        True only for the generic `openai` provider actually pointed at
-        api.openai.com (no custom api_base, or an openai.com host): the one
-        backend enforcing OpenAI-only request strictness.
-        """
         if custom_llm_provider != "openai":
             return False
         resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
@@ -454,10 +449,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         OpenAI's chat completions validator rejects tool `parameters` carrying
         'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level for every
-        model family (unlike the Responses API, where GPT-5+ accepts them), so
-        tool schemas bound for api.openai.com get their top-level combinators
-        flattened; OpenAI-compatible backends on a custom api_base accept the
-        caller's schema as-is and keep it.
+        model family, unlike the Responses API, where GPT-5+ accepts them.
         """
         tools: Final = optional_params.get("tools")
         if not isinstance(tools, list):
