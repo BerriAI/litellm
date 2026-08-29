@@ -1681,7 +1681,8 @@ DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
 # Ceilings on the cached auth registries; larger tables fall back to per-row lookups
 # instead of holding an unbounded id set in every worker.
 TAG_REGISTRY_MAX_SIZE: Final = 5000
-ACCESS_GROUP_REGISTRY_MAX_SIZE: Final = 5000
+DEFAULT_MODEL_ACCESS_GROUP_CACHE_TTL: Final = int(os.getenv("DEFAULT_MODEL_ACCESS_GROUP_CACHE_TTL", 600))
+MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE: Final = 5000
 END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
 # How long a failed registry load is remembered as "unusable", so a degraded Postgres
 # is not re-scanned on every request on top of the per-id lookups it falls back to.

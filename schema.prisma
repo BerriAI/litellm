@@ -586,6 +586,9 @@ model LiteLLM_EndUserTable {
   blocked Boolean @default(false)
 }
 
+// Budget and shared spend for a model access group. The groups themselves are not rows anywhere:
+// they are free-text strings in LiteLLM_ProxyModelTable.model_info.access_groups, so a row here
+// exists only once someone gives that group a budget.
 model LiteLLM_ModelAccessGroupBudgetTable {
   access_group_name String @id
   spend Float @default(0.0)

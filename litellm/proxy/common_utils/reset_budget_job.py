@@ -33,7 +33,11 @@ from litellm.proxy.common_utils.timezone_utils import (
     compute_budget_reset_at,
     get_budget_reset_settings,
 )
-from litellm.proxy.common_utils.user_api_key_cache import tag_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import (
+    model_access_group_cache_key,
+    model_access_group_spend_counter_key,
+    tag_cache_key,
+)
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -41,6 +45,7 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import SpendLinkedTable
 from litellm.repositories.table_repositories import (
     EndUserRepository,
+    ModelAccessGroupBudgetRepository,
     TagRepository,
     TeamMembershipRepository,
 )
@@ -90,6 +95,11 @@ class _OrgRow(_BudgetLinkedRow, Protocol):
 class _TagRow(_BudgetLinkedRow, Protocol):
     @property
     def tag_name(self) -> str: ...
+
+
+class _ModelAccessGroupRow(_BudgetLinkedRow, Protocol):
+    @property
+    def access_group_name(self) -> str: ...
 
 
 class _EndUserRow(_BudgetLinkedRow, Protocol):
@@ -152,6 +162,14 @@ def _tag_counter_key(row: _TagRow) -> str:
 
 def _tag_cache_keys(row: _TagRow) -> tuple[str, ...]:
     return (tag_cache_key(row.tag_name),)
+
+
+def _model_access_group_counter_key(row: _ModelAccessGroupRow) -> str:
+    return model_access_group_spend_counter_key(row.access_group_name)
+
+
+def _model_access_group_cache_keys(row: _ModelAccessGroupRow) -> tuple[str, ...]:
+    return (model_access_group_cache_key(row.access_group_name),)
 
 
 def _budget_link_where(
@@ -610,6 +628,11 @@ class ResetBudgetJob:
             where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
             log_subject="tags",
         )
+        model_access_groups: Final[tuple[_ModelAccessGroupRow, ...]] = await self._fetch_linked_rows(
+            table=ModelAccessGroupBudgetRepository(self.prisma_client).table,
+            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            log_subject="model access groups",
+        )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
             {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
                 b.budget_id: cap
@@ -639,6 +662,10 @@ class ResetBudgetJob:
                 *((_key_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in keys),
                 *((_org_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in orgs),
                 *((_tag_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in tags),
+                *(
+                    (_model_access_group_counter_key(row), _row_carried_spend(row, rollover_caps))
+                    for row in model_access_groups
+                ),
             ),
             rollover_caps=rollover_caps,
             cache_keys=(
@@ -646,6 +673,7 @@ class ResetBudgetJob:
                 *(key for row in keys for key in _key_cache_keys(row)),
                 *(key for row in orgs for key in _org_cache_keys(row)),
                 *(key for row in tags for key in _tag_cache_keys(row)),
+                *(key for row in model_access_groups for key in _model_access_group_cache_keys(row)),
             ),
         )
 
@@ -671,6 +699,7 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
+            _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_enduser_resets(uow.endusers, cascade)
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
@@ -714,7 +743,8 @@ class ResetBudgetJob:
     async def reset_budget_for_litellm_budget_table(self) -> None:
         """
         Resets the spend a budget tier gates (end users, team members, keys,
-        orgs, tags) and advances the tier's budget_reset_at, atomically.
+        orgs, tags, model access groups) and advances the tier's
+        budget_reset_at, atomically.
 
         Caches are invalidated only after the transaction commits, so a failed
         run cannot leave a zeroed counter in front of an un-reset DB row.
@@ -745,8 +775,9 @@ class ResetBudgetJob:
                 return _ChunkOutcome(fetched=len(cascade.budgets), advanced=advanced)
             case _BudgetCascadeFailed(cascade=cascade, error=error):
                 verbose_proxy_logger.exception(
-                    "Failed to reset the budget table cascade (team member, enduser, org and tag spend, plus "
-                    "budget_reset_at); nothing was committed and the budgets stay due for the next run: %s",
+                    "Failed to reset the budget table cascade (team member, enduser, org, tag and model access "
+                    "group spend, plus budget_reset_at); nothing was committed and the budgets stay due for the "
+                    "next run: %s",
                     error,
                     exc_info=error,
                 )

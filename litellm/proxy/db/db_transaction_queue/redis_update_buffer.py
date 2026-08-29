@@ -65,6 +65,7 @@ _SpendTransactionField: TypeAlias = Literal[
     "org_list_transactions",
     "tag_list_transactions",
     "agent_list_transactions",
+    "model_access_group_list_transactions",
 ]
 
 _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
@@ -76,6 +77,7 @@ _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
     "org_list_transactions",
     "tag_list_transactions",
     "agent_list_transactions",
+    "model_access_group_list_transactions",
 )
 
 _ValueT = TypeVar("_ValueT")
@@ -396,6 +398,10 @@ class RedisUpdateBuffer:
                 (
                     Litellm_EntityType.AGENT,
                     db_spend_update_transactions.get("agent_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.MODEL_ACCESS_GROUP,
+                    db_spend_update_transactions.get("model_access_group_list_transactions"),
                 ),
             ]
             for entity_type, entities in entity_entries:
@@ -826,6 +832,9 @@ class RedisUpdateBuffer:
             org_list_transactions=_merged_entity_transactions(list_of_transactions, "org_list_transactions"),
             tag_list_transactions=_merged_entity_transactions(list_of_transactions, "tag_list_transactions"),
             agent_list_transactions=_merged_entity_transactions(list_of_transactions, "agent_list_transactions"),
+            model_access_group_list_transactions=_merged_entity_transactions(
+                list_of_transactions, "model_access_group_list_transactions"
+            ),
         )
 
     async def _emit_new_item_added_to_redis_buffer_event(

@@ -40,7 +40,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import ReadOnly, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -3258,6 +3258,7 @@ class StandardLoggingPayload(TypedDict):
     cache_key: str | None
     saved_cache_cost: float
     request_tags: list
+    request_model_access_groups: NotRequired[ReadOnly[Sequence[str]]]
     end_user: str | None
     requester_ip_address: str | None
     user_agent: str | None
