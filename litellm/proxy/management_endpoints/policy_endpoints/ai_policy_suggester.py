@@ -61,7 +61,11 @@ class AiPolicySuggester:
         system_prompt: Final = self._build_system_prompt(templates)
         user_prompt: Final = self._build_user_prompt(attack_examples, description)
         model = model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
-        supported_params: Final = litellm.get_supported_openai_params(model=model)
+        custom_llm_provider: Final = model.split("/", 1)[0] if "/" in model else None
+        supported_params: Final = litellm.get_supported_openai_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
         if supported_params is not None and "tools" not in supported_params:
             raise ProxyException(
                 message=(f"AI policy suggestion requires tool calling; model '{model}' does not support it"),

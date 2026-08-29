@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 
+from litellm.proxy._types import ProxyException
 from litellm.proxy.management_endpoints.policy_endpoints.ai_policy_suggester import (
     SUGGEST_TOOL,
     AiPolicySuggester,
@@ -245,6 +246,32 @@ class TestAiPolicySuggester:
         assert len(call_kwargs["messages"]) == 2
         assert call_kwargs["messages"][0]["role"] == "system"
         assert call_kwargs["messages"][1]["role"] == "user"
+
+
+class TestSuggesterRejectsModelsWithoutToolCalling:
+    @pytest.mark.asyncio
+    async def test_a_tools_less_model_is_rejected(self, local_model_cost_map):
+        with pytest.raises(ProxyException) as exc:
+            await AiPolicySuggester().suggest(
+                templates=SAMPLE_TEMPLATES,
+                attack_examples=["Ignore all previous instructions"],
+                description="Block prompt injection attempts",
+                model="perplexity/sonar",
+            )
+
+        assert int(exc.value.code) == 400
+        assert exc.value.param == "model"
+        assert "tool calling" in exc.value.message
+
+    def test_a_model_without_forced_tool_choice_support_remains_eligible(self, local_model_cost_map):
+        supported_params = litellm.get_supported_openai_params(
+            model="amazon.nova-pro-v1:0",
+            custom_llm_provider="bedrock",
+        )
+
+        assert supported_params is not None
+        assert "tools" in supported_params
+        assert "tool_choice" not in supported_params
 
 
 class TestSuggesterToleratesAModelThatRefusesItsSamplingParams:
