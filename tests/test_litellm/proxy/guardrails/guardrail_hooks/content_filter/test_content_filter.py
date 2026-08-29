@@ -3068,3 +3068,59 @@ class TestContentFilterToolCallArguments:
                 request_data={},
                 input_type="response",
             )
+
+
+class TestRewritesStreamedOutput:
+    def test_block_only_rules_do_not_rewrite(self):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            patterns=[ContentFilterPattern(pattern_type="prebuilt", pattern_name="us_ssn", action=ContentFilterAction.BLOCK)],
+            blocked_words=[BlockedWord(keyword="kumquat", action=ContentFilterAction.BLOCK)],
+        )
+
+        assert guardrail.rewrites_streamed_output() is False
+
+    def test_mask_blocked_word_rewrites(self):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            blocked_words=[BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK)],
+        )
+
+        assert guardrail.rewrites_streamed_output() is True
+
+    def test_mask_pattern_rewrites(self):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            patterns=[ContentFilterPattern(pattern_type="prebuilt", pattern_name="us_ssn", action=ContentFilterAction.MASK)],
+        )
+
+        assert guardrail.rewrites_streamed_output() is True
+
+    def test_mask_response_content_rewrites(self):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            blocked_words=[BlockedWord(keyword="kumquat", action=ContentFilterAction.BLOCK)],
+            mask_response_content=True,
+        )
+
+        assert guardrail.rewrites_streamed_output() is True
+
+    @pytest.mark.parametrize("action, expected", [("MASK", True), ("BLOCK", False)])
+    def test_category_keywords_follow_the_category_action(self, action, expected):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            categories=[{"category": "bias_gender", "enabled": True, "action": action}],
+        )
+
+        assert guardrail.category_keywords and not guardrail.always_block_category_keywords
+        assert guardrail.rewrites_streamed_output() is expected
+
+    @pytest.mark.parametrize("action, expected", [("MASK", True), ("BLOCK", False)])
+    def test_always_block_category_keywords_follow_the_category_action(self, action, expected):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            categories=[{"category": "age_discrimination", "enabled": True, "action": action}],
+        )
+
+        assert guardrail.always_block_category_keywords and not guardrail.category_keywords
+        assert guardrail.rewrites_streamed_output() is expected
