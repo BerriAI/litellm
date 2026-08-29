@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 from unittest.mock import MagicMock, patch
@@ -1280,6 +1281,84 @@ class TestFlattenTopLevelSchemaCombinators:
         }
 
         assert flatten_top_level_schema_combinators(schema) is schema
+
+    @pytest.mark.parametrize("boolean_branch", [True, False])
+    def test_boolean_branch_leaves_schema_untouched(self, boolean_branch):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "type": "object",
+            "anyOf": [boolean_branch, {"properties": {"id": {"type": "string"}}, "required": ["id"]}],
+        }
+
+        assert flatten_top_level_schema_combinators(schema) is schema
+
+    def test_root_required_is_combined_with_branch_required(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        allof_schema = {
+            "type": "object",
+            "required": ["id"],
+            "properties": {"id": {"type": "string"}},
+            "allOf": [{"properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]}],
+        }
+        anyof_schema = {
+            "type": "object",
+            "required": ["id"],
+            "properties": {"id": {"type": "string"}},
+            "anyOf": [
+                {"properties": {"name": {"type": "string"}, "a": {"type": "string"}}, "required": ["name", "a"]},
+                {"properties": {"name": {"type": "string"}, "b": {"type": "string"}}, "required": ["name", "b"]},
+            ],
+        }
+
+        assert flatten_top_level_schema_combinators(allof_schema)["required"] == ["enabled", "id"]
+        assert flatten_top_level_schema_combinators(anyof_schema)["required"] == ["id", "name"]
+
+    def test_repeated_refs_are_expanded_once(self):
+        import time
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        fan_out, chain_length = 8, 8
+        schema = {
+            "type": "object",
+            "anyOf": [{"$ref": "#/$defs/Level0"}],
+            "$defs": {
+                **{
+                    f"Level{level}": {"anyOf": [{"$ref": f"#/$defs/Level{level + 1}"}] * fan_out}
+                    for level in range(chain_length)
+                },
+                f"Level{chain_length}": {"type": "object", "properties": {"id": {"type": "string"}}},
+            },
+        }
+
+        started = time.perf_counter()
+        result = flatten_top_level_schema_combinators(schema)
+
+        assert time.perf_counter() - started < 5
+        assert "anyOf" not in result
+        assert result["properties"] == {"id": {"type": "string"}}
+
+    def test_nesting_past_the_depth_cap_leaves_schema_untouched(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        def nested(levels):
+            leaf = {"type": "object", "properties": {"id": {"type": "string"}}}
+            return functools.reduce(lambda inner, _: {"type": "object", "anyOf": [inner]}, range(levels), leaf)
+
+        shallow, deep = nested(20), nested(40)
+
+        assert "anyOf" not in flatten_top_level_schema_combinators(shallow)
+        assert flatten_top_level_schema_combinators(deep) is deep
 
     def test_non_object_union_passes_through_unchanged(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
