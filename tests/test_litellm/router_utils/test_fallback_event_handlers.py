@@ -300,6 +300,46 @@ async def test_run_async_fallback_still_crosses_model_groups_without_an_uploaded
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resource_key", ["batch_id", "file_id", "fine_tuning_job_id"])
+async def test_run_async_fallback_keeps_provider_scoped_ids_in_their_model_group(resource_key: str):
+    """A batch, file, or fine-tuning job id only exists under the credentials of the group
+    that issued it, so a cross-group fallback asks a provider about an id it never saw."""
+    router = AttemptRecordingRouter()
+
+    with pytest.raises(RuntimeError, match="openai connection error"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["azure-group"],
+            original_model_group="openai-group",
+            original_exception=RuntimeError("openai connection error"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="openai-group",
+            **{resource_key: "owned-by-openai"},
+        )
+
+    assert router.attempted_model_groups == []
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_allows_same_model_group_retry_for_batch_cancel():
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[{"model": "openai-group", "_target_order": 2}],
+        original_model_group="openai-group",
+        original_exception=RuntimeError("first deployment failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="openai-group",
+        batch_id="owned-by-openai",
+    )
+
+    assert router.attempted_model_groups == ["openai-group"]
+
+
+@pytest.mark.asyncio
 async def test_run_async_fallback_handles_explicitly_none_metadata():
     """/v1/batches always sets `metadata`, and sets it to None when the caller sent
     none, so setdefault() on it hands back None instead of a dict."""
