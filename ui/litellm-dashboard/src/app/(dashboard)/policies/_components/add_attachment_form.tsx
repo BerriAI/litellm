@@ -1,15 +1,23 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Form, Select, Radio, Divider, Typography } from "antd";
-import { Button } from "@tremor/react";
+import { CircleHelp } from "lucide-react";
+import { z } from "zod/v4";
 import { Policy } from "@/components/policies/types";
 import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { buildAttachmentData } from "./build_attachment_data";
 import { getInvalidTeamEntries } from "./scope_validation";
 import ImpactPreviewAlert from "./impact_preview_alert";
-
-const { Text } = Typography;
+import { TokenSelect } from "./TokenSelect";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddAttachmentFormProps {
   visible: boolean;
@@ -20,6 +28,60 @@ interface AddAttachmentFormProps {
   createAttachment: (accessToken: string, attachmentData: any) => Promise<any>;
 }
 
+type ScopeType = "global" | "specific";
+
+interface AttachmentFormValues {
+  policy_names: string[];
+  teams: string[];
+  keys: string[];
+  models: string[];
+  tags: string[];
+}
+
+const EMPTY_VALUES: AttachmentFormValues = {
+  policy_names: [],
+  teams: [],
+  keys: [],
+  models: [],
+  tags: [],
+};
+
+const attachmentShape = {
+  policy_names: z.array(z.string()).min(1, "Please select at least one policy"),
+  teams: z.array(z.string()),
+  keys: z.array(z.string()),
+  models: z.array(z.string()),
+  tags: z.array(z.string()),
+};
+
+const buildAttachmentSchema = (scopeType: ScopeType, teamsLoaded: boolean, availableTeams: string[]) =>
+  z.object(attachmentShape).superRefine((values, ctx) => {
+    if (scopeType !== "specific" || !teamsLoaded) {
+      return;
+    }
+    const invalid = getInvalidTeamEntries(values.teams, availableTeams);
+    if (invalid.length === 0) {
+      return;
+    }
+    ctx.addIssue({
+      code: "custom",
+      path: ["teams"],
+      message:
+        `These teams don't exist: ${invalid.join(", ")}. ` +
+        `Choose an existing team, or use a wildcard like "team-*" to match by prefix.`,
+    });
+  });
+
+const labelWithHint = (label: string, hint: string): React.ReactNode => (
+  <>
+    {label}
+    <Tooltip>
+      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  </>
+);
+
 const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   visible,
   onClose,
@@ -28,9 +90,8 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   policies,
   createAttachment,
 }) => {
-  const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [scopeType, setScopeType] = useState<"global" | "specific">("global");
+  const [scopeType, setScopeType] = useState<ScopeType>("global");
   const [availableTeams, setAvailableTeams] = useState<string[]>([]);
   const [teamsLoaded, setTeamsLoaded] = useState(false);
   const [availableKeys, setAvailableKeys] = useState<string[]>([]);
@@ -41,6 +102,9 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const [isEstimating, setIsEstimating] = useState(false);
   const [impactResult, setImpactResult] = useState<any>(null);
   const { userId, userRole } = useAuthorized();
+  const form = useZodForm(buildAttachmentSchema(scopeType, teamsLoaded, availableTeams), {
+    defaultValues: EMPTY_VALUES,
+  });
 
   useEffect(() => {
     if (visible && accessToken) {
@@ -95,30 +159,22 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   };
 
   const resetForm = () => {
-    form.resetFields();
+    form.reset(EMPTY_VALUES);
     setScopeType("global");
     setImpactResult(null);
   };
 
   const handlePreviewImpact = async () => {
     if (!accessToken) return;
-    try {
-      await form.validateFields(["policy_names"]);
-    } catch {
+    if (!(await form.trigger("policy_names"))) {
       return;
     }
     setIsEstimating(true);
     try {
-      const { policy_names = [] } = form.getFieldsValue(true);
-      const firstPolicy = policy_names?.[0];
+      const values = form.getValues();
+      const firstPolicy = values.policy_names[0];
       if (!firstPolicy) return;
-      const data = buildAttachmentData(
-        {
-          ...form.getFieldsValue(true),
-          policy_name: firstPolicy,
-        },
-        scopeType,
-      );
+      const data = buildAttachmentData({ ...values, policy_name: firstPolicy }, scopeType);
       const result = await estimateAttachmentImpactCall(accessToken, data);
       setImpactResult(result);
     } catch (error) {
@@ -133,27 +189,17 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     onClose();
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (values: AttachmentFormValues) => {
     try {
       setIsSubmitting(true);
-      await form.validateFields();
 
       if (!accessToken) {
         throw new Error("No access token available");
       }
 
-      const values = form.getFieldsValue(true);
-      const selectedPolicyNames: string[] = values.policy_names || [];
-
       const results = await Promise.allSettled(
-        selectedPolicyNames.map((policyName) => {
-          const data = buildAttachmentData(
-            {
-              ...values,
-              policy_name: policyName,
-            },
-            scopeType,
-          );
+        values.policy_names.map((policyName) => {
+          const data = buildAttachmentData({ ...values, policy_name: policyName }, scopeType);
           return createAttachment(accessToken, data);
         }),
       );
@@ -162,11 +208,11 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
       const failed = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
 
       if (successCount > 0 && failed.length === 0) {
-        NotificationsManager.success(
+        toast.success(
           successCount === 1 ? "Attachment created successfully" : `${successCount} attachments created successfully`,
         );
       } else if (successCount > 0 && failed.length > 0) {
-        NotificationsManager.fromBackend(`${successCount} attachments created, ${failed.length} failed`);
+        toast.fromError(`${successCount} attachments created, ${failed.length} failed`);
       } else {
         throw new Error(failed[0]?.reason instanceof Error ? failed[0].reason.message : "Failed to create attachments");
       }
@@ -176,174 +222,237 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
       onClose();
     } catch (error) {
       console.error("Failed to create attachment:", error);
-      NotificationsManager.fromBackend(
-        "Failed to create attachment: " + (error instanceof Error ? error.message : String(error)),
-      );
+      toast.fromError("Failed to create attachment: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const policyOptions = policies.map((p) => ({
-    label: p.policy_name,
-    value: p.policy_name,
-  }));
+  const policyOptions = policies.map((p) => p.policy_name);
 
   return (
-    <Modal title="Create Policy Attachment" open={visible} onCancel={handleClose} footer={null} width={600}>
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          scope_type: "global",
-        }}
-      >
-        <Form.Item
-          name="policy_names"
-          label="Policies"
-          rules={[{ required: true, message: "Please select at least one policy" }]}
-        >
-          <Select
-            mode="multiple"
-            placeholder="Select policies to attach"
-            options={policyOptions}
-            showSearch
-            filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>Create Policy Attachment</DialogTitle>
+        </DialogHeader>
+        <TooltipProvider>
+          <form onSubmit={(event) => event.preventDefault()} noValidate>
+            <FieldGroup>
+              <FormField control={form.control} name="policy_names" label="Policies">
+                {({
+                  id,
+                  value,
+                  onChange,
+                  onBlur,
+                  "aria-invalid": ariaInvalid,
+                  "aria-describedby": ariaDescribedBy,
+                }) => (
+                  <TokenSelect
+                    id={id}
+                    value={value}
+                    onValueChange={onChange}
+                    onBlur={onBlur}
+                    placeholder="Select policies to attach"
+                    options={policyOptions}
+                    emptyText="No matching policies"
+                    ariaInvalid={ariaInvalid}
+                    ariaDescribedBy={ariaDescribedBy}
+                  />
+                )}
+              </FormField>
 
-        <Divider orientation="left">
-          <Text strong>Scope</Text>
-        </Divider>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold">Scope</span>
+                <Separator className="flex-1" />
+              </div>
 
-        <Form.Item label="Scope Type">
-          <Radio.Group value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
-            <Radio value="specific">Specific (teams, keys, models, or tags)</Radio>
-            <Radio value="global">Global (applies to all requests)</Radio>
-          </Radio.Group>
-        </Form.Item>
+              <div>
+                <FieldTitle className="mb-2">Scope Type</FieldTitle>
+                <RadioGroup value={scopeType} onValueChange={(value: unknown) => setScopeType(value as ScopeType)}>
+                  <FieldLabel className="font-normal">
+                    <RadioGroupItem value="specific" />
+                    Specific (teams, keys, models, or tags)
+                  </FieldLabel>
+                  <FieldLabel className="font-normal">
+                    <RadioGroupItem value="global" />
+                    Global (applies to all requests)
+                  </FieldLabel>
+                </RadioGroup>
+              </div>
 
-        {scopeType === "specific" && (
-          <>
-            <Form.Item
-              name="teams"
-              label="Teams"
-              tooltip="Select team aliases or enter custom patterns. Supports wildcards (e.g., healthcare-*)"
-              rules={[
-                {
-                  validator: async (_rule, value?: string[]) => {
-                    if (!teamsLoaded) return;
-                    const invalid = getInvalidTeamEntries(value ?? [], availableTeams);
-                    if (invalid.length > 0) {
-                      throw new Error(
-                        `These teams don't exist: ${invalid.join(", ")}. ` +
-                          `Choose an existing team, or use a wildcard like "team-*" to match by prefix.`,
-                      );
+              {scopeType === "specific" && (
+                <>
+                  <FormField
+                    control={form.control}
+                    name="teams"
+                    label={labelWithHint(
+                      "Teams",
+                      "Select team aliases or enter custom patterns. Supports wildcards (e.g., healthcare-*)",
+                    )}
+                  >
+                    {({
+                      id,
+                      value,
+                      onChange,
+                      onBlur,
+                      "aria-invalid": ariaInvalid,
+                      "aria-describedby": ariaDescribedBy,
+                    }) => (
+                      <TokenSelect
+                        id={id}
+                        value={value}
+                        onValueChange={onChange}
+                        onBlur={onBlur}
+                        placeholder={isLoadingTeams ? "Loading teams..." : "Select or enter team aliases"}
+                        options={availableTeams}
+                        allowCustomValues
+                        tokenSeparators={[","]}
+                        emptyText="No matching teams"
+                        ariaInvalid={ariaInvalid}
+                        ariaDescribedBy={ariaDescribedBy}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="keys"
+                    label={labelWithHint(
+                      "Keys",
+                      "Select key aliases or enter custom patterns. Supports wildcards (e.g., dev-*)",
+                    )}
+                  >
+                    {({
+                      id,
+                      value,
+                      onChange,
+                      onBlur,
+                      "aria-invalid": ariaInvalid,
+                      "aria-describedby": ariaDescribedBy,
+                    }) => (
+                      <TokenSelect
+                        id={id}
+                        value={value}
+                        onValueChange={onChange}
+                        onBlur={onBlur}
+                        placeholder={isLoadingKeys ? "Loading keys..." : "Select or enter key aliases"}
+                        options={availableKeys}
+                        allowCustomValues
+                        tokenSeparators={[","]}
+                        emptyText="No matching keys"
+                        ariaInvalid={ariaInvalid}
+                        ariaDescribedBy={ariaDescribedBy}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="models"
+                    label={labelWithHint(
+                      "Models",
+                      "Model names this attachment applies to. Supports wildcards (e.g., gpt-4*). Leave empty to apply to all models.",
+                    )}
+                  >
+                    {({
+                      id,
+                      value,
+                      onChange,
+                      onBlur,
+                      "aria-invalid": ariaInvalid,
+                      "aria-describedby": ariaDescribedBy,
+                    }) => (
+                      <TokenSelect
+                        id={id}
+                        value={value}
+                        onValueChange={onChange}
+                        onBlur={onBlur}
+                        placeholder={
+                          isLoadingModels ? "Loading models..." : "Select or enter model names (e.g., gpt-4, bedrock/*)"
+                        }
+                        options={availableModels}
+                        allowCustomValues
+                        tokenSeparators={[","]}
+                        emptyText="No matching models"
+                        ariaInvalid={ariaInvalid}
+                        ariaDescribedBy={ariaDescribedBy}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="tags"
+                    label={labelWithHint(
+                      "Tags",
+                      "Match against tags set in key or team metadata. Use exact values (e.g., healthcare) or wildcard patterns (e.g., health-*) where * matches any suffix.",
+                    )}
+                    description={
+                      <span className="text-xs">
+                        Matches tags from key/team <code>metadata.tags</code> or tags passed dynamically in the request
+                        body. Use <code>*</code> as a suffix wildcard (e.g., <code>prod-*</code> matches{" "}
+                        <code>prod-us</code>, <code>prod-eu</code>).
+                      </span>
                     }
-                  },
-                },
-              ]}
-            >
-              <Select
-                mode="tags"
-                placeholder={isLoadingTeams ? "Loading teams..." : "Select or enter team aliases"}
-                loading={isLoadingTeams}
-                options={availableTeams.map((team) => ({
-                  label: team,
-                  value: team,
-                }))}
-                tokenSeparators={[","]}
-                showSearch
-                filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
+                  >
+                    {({
+                      id,
+                      value,
+                      onChange,
+                      onBlur,
+                      "aria-invalid": ariaInvalid,
+                      "aria-describedby": ariaDescribedBy,
+                    }) => (
+                      <TokenSelect
+                        id={id}
+                        value={value}
+                        onValueChange={onChange}
+                        onBlur={onBlur}
+                        placeholder="Type a tag and press Enter (e.g. healthcare, prod-*)"
+                        allowCustomValues
+                        tokenSeparators={[",", " "]}
+                        ariaInvalid={ariaInvalid}
+                        ariaDescribedBy={ariaDescribedBy}
+                      />
+                    )}
+                  </FormField>
+                </>
+              )}
+            </FieldGroup>
 
-            <Form.Item
-              name="keys"
-              label="Keys"
-              tooltip="Select key aliases or enter custom patterns. Supports wildcards (e.g., dev-*)"
-            >
-              <Select
-                mode="tags"
-                placeholder={isLoadingKeys ? "Loading keys..." : "Select or enter key aliases"}
-                loading={isLoadingKeys}
-                options={availableKeys.map((key) => ({
-                  label: key,
-                  value: key,
-                }))}
-                tokenSeparators={[","]}
-                showSearch
-                filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
+            {impactResult && <ImpactPreviewAlert impactResult={impactResult} />}
 
-            <Form.Item
-              name="models"
-              label="Models"
-              tooltip="Model names this attachment applies to. Supports wildcards (e.g., gpt-4*). Leave empty to apply to all models."
-            >
-              <Select
-                mode="tags"
-                placeholder={
-                  isLoadingModels ? "Loading models..." : "Select or enter model names (e.g., gpt-4, bedrock/*)"
-                }
-                loading={isLoadingModels}
-                options={availableModels.map((model) => ({
-                  label: model,
-                  value: model,
-                }))}
-                tokenSeparators={[","]}
-                showSearch
-                filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
-
-            <Form.Item
-              name="tags"
-              label="Tags"
-              tooltip="Match against tags set in key or team metadata. Use exact values (e.g., healthcare) or wildcard patterns (e.g., health-*) where * matches any suffix."
-              extra={
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  Matches tags from key/team <code>metadata.tags</code> or tags passed dynamically in the request body.
-                  Use <code>*</code> as a suffix wildcard (e.g., <code>prod-*</code> matches <code>prod-us</code>,{" "}
-                  <code>prod-eu</code>).
-                </Text>
-              }
-            >
-              <Select
-                mode="tags"
-                placeholder="Type a tag and press Enter (e.g. healthcare, prod-*)"
-                tokenSeparators={[",", " "]}
-                notFoundContent={null}
-                suffixIcon={null}
-                open={false}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
-          </>
-        )}
-
-        {impactResult && <ImpactPreviewAlert impactResult={impactResult} />}
-
-        <div className="flex justify-end space-x-2 mt-4">
-          <Button variant="secondary" onClick={handleClose}>
-            Cancel
-          </Button>
-          {scopeType === "specific" && (
-            <Button variant="secondary" onClick={handlePreviewImpact} loading={isEstimating}>
-              Estimate Impact
-            </Button>
-          )}
-          <Button onClick={handleSubmit} loading={isSubmitting}>
-            Create Attachment
-          </Button>
-        </div>
-      </Form>
-    </Modal>
+            <div className="flex justify-end space-x-2 mt-4">
+              <Button type="button" variant="secondary" onClick={handleClose}>
+                Cancel
+              </Button>
+              {scopeType === "specific" && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handlePreviewImpact}
+                  disabled={isEstimating}
+                  aria-busy={isEstimating}
+                >
+                  {isEstimating && <UiLoadingSpinner className="size-4" />}
+                  Estimate Impact
+                </Button>
+              )}
+              <Button
+                type="button"
+                onClick={form.handleSubmit(handleSubmit)}
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
+              >
+                {isSubmitting && <UiLoadingSpinner className="size-4" />}
+                Create Attachment
+              </Button>
+            </div>
+          </form>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

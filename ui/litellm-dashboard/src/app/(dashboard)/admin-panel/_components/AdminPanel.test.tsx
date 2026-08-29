@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdminPanel from "./AdminPanel";
@@ -321,5 +321,75 @@ describe("AdminPanel", () => {
         ).toBeInTheDocument();
       });
     });
+  });
+});
+
+describe("AdminPanel add allowed IP form", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({
+      premiumUser: true,
+      accessToken: "test-token",
+      userId: "user-1",
+    });
+    mockGetSSOSettings.mockResolvedValue({ values: {} });
+    mockGetAllowedIPs.mockResolvedValue(["10.0.0.1"]);
+    mockAddAllowedIP.mockResolvedValue({});
+
+    const user = userEvent.setup();
+    render(<AdminPanel />);
+    await user.click(screen.getByRole("tab", { name: /security settings/i }));
+    await user.click(screen.getByRole("button", { name: /allowed ips/i }));
+    const manageDialog = await screen.findByRole("dialog", { name: /manage allowed ip addresses/i });
+    await user.click(within(manageDialog).getByRole("button", { name: /add ip address/i }));
+    await screen.findByPlaceholderText("Enter IP address");
+  });
+
+  const ipField = () => screen.getByPlaceholderText("Enter IP address") as HTMLInputElement;
+
+  const submitAddIP = async (user: ReturnType<typeof userEvent.setup>) => {
+    const addIpForm = ipField().form as HTMLFormElement;
+    await user.click(within(addIpForm).getByText("Add IP Address"));
+  };
+
+  it("sends the access token and the typed IP address", async () => {
+    const user = userEvent.setup();
+
+    fireEvent.change(ipField(), { target: { value: "192.168.1.50" } });
+    await submitAddIP(user);
+
+    await waitFor(() => {
+      expect(mockAddAllowedIP).toHaveBeenCalledWith("test-token", "192.168.1.50");
+    });
+    expect(mockAddAllowedIP).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks the submit and shows the required message when no IP is typed", async () => {
+    const user = userEvent.setup();
+
+    await submitAddIP(user);
+
+    expect(await screen.findByText("Please enter an IP address")).toBeInTheDocument();
+    expect(mockAddAllowedIP).not.toHaveBeenCalled();
+  });
+
+  it("submits on Enter from the IP field", async () => {
+    const user = userEvent.setup();
+
+    await user.type(ipField(), "172.16.0.9{Enter}");
+
+    await waitFor(() => {
+      expect(mockAddAllowedIP).toHaveBeenCalledWith("test-token", "172.16.0.9");
+    });
+  });
+
+  it("refreshes the allowed IP list after a successful add", async () => {
+    const user = userEvent.setup();
+    mockGetAllowedIPs.mockResolvedValue(["10.0.0.1", "192.168.1.50"]);
+
+    fireEvent.change(ipField(), { target: { value: "192.168.1.50" } });
+    await submitAddIP(user);
+
+    expect(await screen.findByText("192.168.1.50")).toBeInTheDocument();
   });
 });

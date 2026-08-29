@@ -110,7 +110,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         # Add self to litellm callbacks if it's a list
         if isinstance(litellm.callbacks, list):
-            litellm.logging_callback_manager.add_litellm_callback(self)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(self)
 
     async def async_filter_deployments(
         self,
@@ -118,7 +118,7 @@ class RouterBudgetLimiting(CustomLogger):
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
-        parent_otel_span: Span | None = None,  # type: ignore
+        parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
         Filter out deployments that have exceeded their provider budget limit.

@@ -53,7 +53,7 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
         elif isinstance(msg, dict):
             role = msg.get("role", "user")
         else:
-            role = dict(msg).get("role", "user")  # type: ignore
+            role = dict(msg).get("role", "user")
 
         if content_text:
             conversation_parts.append(f"{role}: {content_text}")

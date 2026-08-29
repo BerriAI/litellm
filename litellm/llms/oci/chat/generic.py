@@ -325,7 +325,7 @@ def handle_generic_response(
         )
 
     response_choice: Final = completion_response.chatResponse.choices[0]
-    message: Final = model_response.choices[0].message  # type: ignore
+    message: Final = model_response.choices[0].message
     response_message: Final = response_choice.message
     if response_message is not None:
         if response_message.content:
@@ -341,15 +341,13 @@ def handle_generic_response(
         if response_message.toolCalls:
             message.tool_calls = adapt_tools_to_openai_standard(response_message.toolCalls)
 
-    model_response.choices[0].finish_reason = _normalize_oci_finish_reason(  # type: ignore[union-attr,assignment]
-        response_choice.finishReason
-    )
+    model_response.choices[0].finish_reason = _normalize_oci_finish_reason(response_choice.finishReason)
 
     oci_usage: Final = completion_response.chatResponse.usage
     reasoning_tokens: int | None = None
     if oci_usage.completionTokensDetails and oci_usage.completionTokensDetails.reasoningTokens is not None:
         reasoning_tokens = oci_usage.completionTokensDetails.reasoningTokens
-    model_response.usage = Usage(  # type: ignore[attr-defined]
+    model_response.usage = Usage(
         prompt_tokens=oci_usage.promptTokens,
         completion_tokens=oci_usage.completionTokens or 0,
         total_tokens=oci_usage.totalTokens,

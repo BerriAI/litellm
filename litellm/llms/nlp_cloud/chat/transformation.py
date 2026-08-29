@@ -14,6 +14,8 @@ from litellm.utils import ModelResponse, Usage
 from ..common_utils import NLPCloudError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
@@ -173,7 +175,7 @@ class NLPCloudConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -198,9 +200,7 @@ class NLPCloudConfig(BaseConfig):
         else:
             try:
                 if len(completion_response["generated_text"]) > 0:
-                    model_response.choices[0].message.content = (  # type: ignore
-                        completion_response["generated_text"]
-                    )
+                    model_response.choices[0].message.content = completion_response["generated_text"]
             except Exception:
                 raise NLPCloudError(
                     message=json.dumps(completion_response),

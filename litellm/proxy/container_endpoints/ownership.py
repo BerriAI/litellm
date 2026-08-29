@@ -1,5 +1,7 @@
 import json
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
+from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException
 
@@ -14,6 +16,12 @@ from litellm.proxy.common_utils.resource_ownership import (
 )
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
+    from litellm.proxy.utils import PrismaClient
+
 
 CONTAINER_OBJECT_PURPOSE: Final = "container"
 
@@ -39,7 +47,7 @@ _CONTAINER_STORED_ID_CACHE: Final = InMemoryCache(max_size_in_memory=10000, defa
 _ALLOWED_CONTAINER_IDS_CACHE: Final = InMemoryCache(max_size_in_memory=2048, default_ttl=60)
 
 
-def _allowed_container_ids_cache_key(owner_scopes: list[str]) -> str:
+def _allowed_container_ids_cache_key(owner_scopes: Sequence[str]) -> str:
     """JSON-encode the sorted scope list — using a separator like ``|``
     would collide for any tenant whose user_id / team_id / org_id /
     api_key happens to contain the separator. JSON quoting escapes
@@ -86,7 +94,7 @@ async def get_container_forwarding_params(
     return params
 
 
-def _get_response_id(response: Any) -> str | None:
+def _get_response_id(response: object) -> str | None:
     if response is None:
         return None
     if isinstance(response, dict):
@@ -96,7 +104,7 @@ def _get_response_id(response: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _dump_response(response: Any) -> dict[str, Any]:
+def _dump_response(response: Any) -> dict[str, object]:
     if isinstance(response, dict):
         return dict(response)
     if hasattr(response, "model_dump"):
@@ -106,17 +114,17 @@ def _dump_response(response: Any) -> dict[str, Any]:
     return {"id": _get_response_id(response)}
 
 
-async def _get_prisma_client():
+async def _get_prisma_client() -> "PrismaClient | None":
     from litellm.proxy.proxy_server import prisma_client
 
     return prisma_client
 
 
 def _custom_llm_provider_from_responses_response(
-    response: Any,
+    response: object,
     default: str = "openai",
 ) -> str:
-    hidden_params: dict[str, Any] = {}
+    hidden_params: Mapping[str, object] = {}
     if isinstance(response, dict):
         hidden_params = response.get("_hidden_params") or {}
     else:
@@ -129,7 +137,7 @@ def _custom_llm_provider_from_responses_response(
 
 
 async def record_container_owners_from_responses_response(
-    response: Any,
+    response: object,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str | None = None,
 ) -> None:
@@ -160,10 +168,10 @@ async def record_container_owners_from_responses_response(
 
 
 async def record_container_owner(
-    response: Any,
+    response: object,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str,
-) -> Any:
+) -> object:
     container_id: Final = _get_response_id(response)
     if container_id is None:
         verbose_proxy_logger.warning("Skipping container ownership tracking because provider response has no id")
@@ -247,15 +255,16 @@ async def _get_container_owner(original_container_id: str, custom_llm_provider: 
     if prisma_client is None:
         return None
 
-    row: Final = await ManagedObjectRepository(prisma_client).table.find_first(
+    table: Final = ManagedObjectRepository(prisma_client).table
+    row: Final[prisma_models.LiteLLM_ManagedObjectTable | None] = await table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
         }
     )
-    owner: Final = getattr(row, "created_by", None) if row is not None else None
+    owner: Final[str | None] = getattr(row, "created_by", None) if row is not None else None
     _CONTAINER_OWNER_CACHE.set_cache(model_object_id, owner if owner is not None else _NEGATIVE_OWNER_SENTINEL)
-    stored_id: Final = getattr(row, "unified_object_id", None) if row is not None else None
+    stored_id: Final[str | None] = getattr(row, "unified_object_id", None) if row is not None else None
     _CONTAINER_STORED_ID_CACHE.set_cache(
         model_object_id,
         (stored_id if isinstance(stored_id, str) and stored_id else _NEGATIVE_STORED_ID_SENTINEL),
@@ -283,13 +292,14 @@ async def _get_stored_container_id(original_container_id: str, custom_llm_provid
     if prisma_client is None:
         return None
 
-    row: Final = await ManagedObjectRepository(prisma_client).table.find_first(
+    table: Final = ManagedObjectRepository(prisma_client).table
+    row: Final[prisma_models.LiteLLM_ManagedObjectTable | None] = await table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
         }
     )
-    stored_id: Final = getattr(row, "unified_object_id", None) if row is not None else None
+    stored_id: Final[str | None] = getattr(row, "unified_object_id", None) if row is not None else None
     _CONTAINER_STORED_ID_CACHE.set_cache(
         model_object_id,
         (stored_id if isinstance(stored_id, str) and stored_id else _NEGATIVE_STORED_ID_SENTINEL),
@@ -317,7 +327,7 @@ async def assert_user_can_access_container(
     return original_container_id, resolved_provider
 
 
-def _get_container_list_data(response: Any) -> list[Any] | None:
+def _get_container_list_data(response: object) -> Sequence[object] | None:
     if response is None:
         return None
     if isinstance(response, dict):
@@ -327,7 +337,7 @@ def _get_container_list_data(response: Any) -> list[Any] | None:
     return data if isinstance(data, list) else None
 
 
-def _set_container_list_data(response: Any, data: list[Any], removed_filtered_items: bool = False) -> Any:
+def _set_container_list_data(response: Any, data: list[object], removed_filtered_items: bool = False) -> object:
     if isinstance(response, dict):
         response["data"] = data
         if data:
@@ -353,7 +363,7 @@ def _set_container_list_data(response: Any, data: list[Any], removed_filtered_it
 
 async def _get_allowed_container_ids(
     user_api_key_dict: UserAPIKeyAuth,
-) -> set[str]:
+) -> AbstractSet[str]:
     owner_scopes: Final = get_resource_owner_scopes(user_api_key_dict)
     if not owner_scopes:
         return set()
@@ -367,7 +377,8 @@ async def _get_allowed_container_ids(
     if prisma_client is None:
         return set()
 
-    rows: Final = await ManagedObjectRepository(prisma_client).table.find_many(
+    table: Final = ManagedObjectRepository(prisma_client).table
+    rows: Final[Sequence[prisma_models.LiteLLM_ManagedObjectTable]] = await table.find_many(
         where={
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
             "created_by": {"in": owner_scopes},
@@ -382,10 +393,10 @@ async def _get_allowed_container_ids(
 
 
 async def filter_container_list_response(
-    response: Any,
+    response: object,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str,
-) -> Any:
+) -> object:
     if is_proxy_admin(user_api_key_dict):
         return response
 
@@ -394,7 +405,7 @@ async def filter_container_list_response(
         return response
 
     allowed_container_ids: Final = await _get_allowed_container_ids(user_api_key_dict)
-    filtered: Final[list[Any]] = []
+    filtered: Final[list[object]] = []
     for item in data:
         container_id = _get_response_id(item)
         if container_id is None:

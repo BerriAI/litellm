@@ -1,15 +1,10 @@
 import asyncio
 import json
-import sys
-import os
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 import httpx
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.google_genai import agenerate_content, agenerate_content_stream

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Final, List, Optional
+from typing import Any, Final
 
 from pydantic import BaseModel, Field
 
@@ -23,12 +23,27 @@ def is_interception_internal_key(
     return any(key.startswith(prefix) for prefix in prefixes)
 
 
+class AgenticLoopSafetyError(ValueError):
+    """
+    Raised when an agentic-loop safety rail refuses a rerun.
+
+    Covers both rails: the bounded-loop cap (``max_agentic_loops``) and the
+    repeated tool-call fingerprint cycle break. Subclasses ``ValueError`` so
+    callers that already catch the broader type keep working.
+
+    Only the anthropic messages loop raises this today. The chat completions
+    loop in ``litellm_core_utils/chat_completion_agentic_loop.py`` still raises
+    a plain ``ValueError`` from its own copy of the same rails, so catching
+    this type alone will not cover that surface until it is moved over.
+    """
+
+
 class StandardCustomLoggerInitParams(BaseModel):
     """
     Params for initializing a CustomLogger.
     """
 
-    turn_off_message_logging: Optional[bool] = False
+    turn_off_message_logging: bool | None = False
 
 
 class AgenticLoopRequestPatch(BaseModel):
@@ -36,12 +51,12 @@ class AgenticLoopRequestPatch(BaseModel):
     Patch returned by callbacks to request a follow-up LLM call.
     """
 
-    model: Optional[str] = None
-    messages: Optional[List[Dict[str, Any]]] = None
-    tools: Optional[List[Dict[str, Any]]] = None
-    max_tokens: Optional[int] = None
-    optional_params: Dict[str, Any] = Field(default_factory=dict)
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    model: str | None = None
+    messages: list[dict[str, Any]] | None = None
+    tools: list[dict[str, Any]] | None = None
+    max_tokens: int | None = None
+    optional_params: dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgenticLoopPlan(BaseModel):
@@ -50,8 +65,8 @@ class AgenticLoopPlan(BaseModel):
     """
 
     run_agentic_loop: bool = False
-    request_patch: Optional[AgenticLoopRequestPatch] = None
-    response_override: Optional[Any] = None
+    request_patch: AgenticLoopRequestPatch | None = None
+    response_override: Any | None = None
     terminate: bool = False
-    stop_reason: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    stop_reason: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)

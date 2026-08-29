@@ -15,6 +15,8 @@ def infer_credential_type_from_environment() -> AzureCredentialType:
         and os.environ.get("AZURE_TENANT_ID")
     ):
         return AzureCredentialType.ClientSecretCredential
+    elif os.environ.get("AZURE_FEDERATED_TOKEN_FILE"):
+        return AzureCredentialType.DefaultAzureCredential
     elif os.environ.get("AZURE_CLIENT_ID"):
         return AzureCredentialType.ManagedIdentityCredential
     elif (

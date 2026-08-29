@@ -45,7 +45,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         elif text_embedding_responses is not None:
             model_response.data = text_embedding_responses
 
-        response: Final = AzureAICohereConfig()._transform_response(response=model_response)  # type: ignore
+        response: Final = AzureAICohereConfig()._transform_response(response=model_response)
 
         return response
 
@@ -71,13 +71,13 @@ class AzureAIEmbedding(OpenAIChatCompletion):
 
         response: Final = await client.post(
             url=url,
-            json=data,  # type: ignore
+            json=data,
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
         embedding_response: Final = response.json()
         embedding_headers: Final = dict(response.headers)
-        returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(  # type: ignore
+        returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(
             response_object=embedding_response,
             model_response_object=model_response,
             response_type="embedding",
@@ -114,13 +114,13 @@ class AzureAIEmbedding(OpenAIChatCompletion):
 
         response: Final = client.post(
             url=url,
-            json=data,  # type: ignore
+            json=data,
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
         embedding_response: Final = response.json()
         embedding_headers: Final = dict(response.headers)
-        returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(  # type: ignore
+        returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(
             response_object=embedding_response,
             model_response_object=model_response,
             response_type="embedding",
@@ -168,7 +168,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 raise Exception("/image/embeddings route returned None Embeddings.")
 
         if v1_embeddings_request["input"]:
-            response: Final[EmbeddingResponse] = await super().embedding(  # type: ignore
+            response: Final[EmbeddingResponse] = await super().embedding(
                 model=model,
                 input=input,
                 timeout=timeout,
@@ -215,7 +215,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         assemble result in-order, and return
         """
         if aembedding is True:
-            return self.async_embedding(  # type: ignore
+            return self.async_embedding(
                 model,
                 input,
                 timeout,
@@ -254,7 +254,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 raise Exception("/image/embeddings route returned None Embeddings.")
 
         if v1_embeddings_request["input"]:
-            response: Final[EmbeddingResponse] = super().embedding(  # type: ignore
+            response: Final[EmbeddingResponse] = super().embedding(
                 model,
                 input,
                 timeout,

@@ -153,7 +153,7 @@ class AnthropicExceptionMapping:
             # Optionally add request_id if provided and not present
             if request_id and "request_id" not in parsed:
                 parsed["request_id"] = request_id
-            return parsed  # type: ignore
+            return parsed
 
         # Extract message - use parsed dict if available, otherwise raw string
         if parsed is not None:

@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -16,6 +16,9 @@ from litellm.llms.reducto.common import (
     upload_bytes_async,
     upload_bytes_sync,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class _BaseReductoOCRConfig(BaseOCRConfig):
@@ -127,7 +130,7 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         **kwargs,
     ) -> OCRResponse:
         response_json: Final = raw_response.json()
