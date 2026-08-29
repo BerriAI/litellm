@@ -1,0 +1,95 @@
+{
+  "litellm_input": {
+    "document": {
+      "image_url": "https://dummyjson.com/image/800x300/ffffff/000000?text=N&fontSize=33",
+      "type": "image_url"
+    },
+    "extract_footer": true,
+    "extract_header": false,
+    "id": "-0mq4q9pmig_rn9x2-vn",
+    "image_limit": 66,
+    "image_min_size": 1320,
+    "include_blocks": true,
+    "include_image_base64": false,
+    "model": "mistral/mistral-ocr-latest",
+    "table_format": "html"
+  },
+  "provider_response": {
+    "body_b64": "eyJwYWdlcyI6W3siaW5kZXgiOjAsIm1hcmtkb3duIjoiTiIsImltYWdlcyI6W10sInRhYmxlcyI6W10sImh5cGVybGlua3MiOltdLCJoZWFkZXIiOm51bGwsImZvb3RlciI6bnVsbCwiZGltZW5zaW9ucyI6eyJkcGkiOjIwMCwiaGVpZ2h0IjozMDAsIndpZHRoIjo4MDB9LCJjb25maWRlbmNlX3Njb3JlcyI6bnVsbCwiYmxvY2tzIjpbeyJ0b3BfbGVmdF94IjozODYsInRvcF9sZWZ0X3kiOjEzNSwiYm90dG9tX3JpZ2h0X3giOjQxMiwiYm90dG9tX3JpZ2h0X3kiOjE2MiwiY29udGVudCI6Ik4iLCJjb25maWRlbmNlX3Njb3JlcyI6bnVsbCwidHlwZSI6InRleHQifV19XSwibW9kZWwiOiJtaXN0cmFsLW9jci1sYXRlc3QiLCJkb2N1bWVudF9hbm5vdGF0aW9uIjpudWxsLCJ1c2FnZV9pbmZvIjp7InBhZ2VzX3Byb2Nlc3NlZCI6MSwiZG9jX3NpemVfYnl0ZXMiOjIyOTh9fQ==",
+    "headers": [
+      {
+        "name": "Date",
+        "value": "Sat, 29 Aug 2026 21:29:07 GMT"
+      },
+      {
+        "name": "Content-Type",
+        "value": "application/json"
+      },
+      {
+        "name": "set-cookie",
+        "value": "__cf_bm=vwrWUQPvG4As7fL9Gl1e.lxaZ4I1lG_9uVgrmykYadg-1788038947.3819609-1.0.1.1-4ibtTa5G29xCi1ADh.G_kJ.3l0T2gPlt.1mPNdaJOJNjekO4DR4yYlCCXhucA3Lq45RPrVMxxkPH2YFZ887YrReeGS9x0E05ZO58vqbcJhwfTGLh.3xJSmr.0471Xw4Q; HttpOnly; SameSite=None; Secure; Path=/; Domain=mistral.ai; Expires=Sat, 29 Aug 2026 21:59:07 GMT"
+      },
+      {
+        "name": "mistral-correlation-id",
+        "value": "01a04f6d-228b-7cdc-9a1a-b99123c027c3"
+      },
+      {
+        "name": "x-kong-request-id",
+        "value": "01a04f6d-228b-7cdc-9a1a-b99123c027c3"
+      },
+      {
+        "name": "x-ratelimit-limit-ocr-pages-minute",
+        "value": "60"
+      },
+      {
+        "name": "x-ratelimit-remaining-ocr-pages-minute",
+        "value": "56"
+      },
+      {
+        "name": "x-ratelimit-ocr-pages-query-cost",
+        "value": "1"
+      },
+      {
+        "name": "x-envoy-upstream-service-time",
+        "value": "395"
+      },
+      {
+        "name": "Server",
+        "value": "cloudflare"
+      },
+      {
+        "name": "access-control-allow-origin",
+        "value": "*"
+      },
+      {
+        "name": "x-kong-upstream-latency",
+        "value": "396"
+      },
+      {
+        "name": "x-kong-proxy-latency",
+        "value": "17"
+      },
+      {
+        "name": "X-Content-Type-Options",
+        "value": "nosniff"
+      },
+      {
+        "name": "cf-cache-status",
+        "value": "DYNAMIC"
+      },
+      {
+        "name": "Strict-Transport-Security",
+        "value": "max-age=15552000; includeSubDomains; preload"
+      },
+      {
+        "name": "CF-RAY",
+        "value": "a32ea63d2ad30065-SJC"
+      },
+      {
+        "name": "alt-svc",
+        "value": "h3=\":443\"; ma=86400"
+      }
+    ],
+    "status_code": 200
+  }
+}
