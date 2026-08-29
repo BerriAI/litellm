@@ -36816,29 +36816,44 @@ export interface components {
         UpdateRouterConfig: {
             /** Allowed Fails */
             allowed_fails?: number | null;
+            /** Content Policy Fallbacks */
+            content_policy_fallbacks?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Context Window Fallbacks */
             context_window_fallbacks?: {
                 [key: string]: unknown;
             }[] | null;
             /** Cooldown Time */
             cooldown_time?: number | null;
+            /** Default Litellm Params */
+            default_litellm_params?: {
+                [key: string]: unknown;
+            } | null;
+            /** Default Max Parallel Requests */
+            default_max_parallel_requests?: number | null;
+            /** Disable Cooldowns */
+            disable_cooldowns?: boolean | null;
+            /** Enable Pre Call Checks */
+            enable_pre_call_checks?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Enable Weighted Failover */
+            enable_weighted_failover?: boolean | null;
             /** Fallbacks */
             fallbacks?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Max Fallbacks */
+            max_fallbacks?: number | null;
             /** Max Retries */
             max_retries?: number | null;
             /** Model Group Affinity Config */
             model_group_affinity_config?: {
                 [key: string]: string[];
             } | null;
-            /**
-             * Model Group Alias
-             * @default {}
-             */
-            model_group_alias: {
+            /** Model Group Alias */
+            model_group_alias?: {
                 [key: string]: string | {
                     [key: string]: unknown;
                 };
@@ -36860,6 +36875,12 @@ export interface components {
             routing_strategy_args?: {
                 [key: string]: unknown;
             } | null;
+            /** Set Verbose */
+            set_verbose?: boolean | null;
+            /** Stream Timeout */
+            stream_timeout?: number | null;
+            /** Tag Filtering Match Any */
+            tag_filtering_match_any?: boolean | null;
             /** Tag Routing Prefix */
             tag_routing_prefix?: string | null;
             /** Timeout */

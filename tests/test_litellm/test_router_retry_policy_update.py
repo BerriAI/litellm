@@ -393,3 +393,40 @@ async def test_config_update_leaves_unsent_router_settings_alone(monkeypatch):
 
     assert persisted["model_group_alias"] == {"gpt-4": "gpt-4o"}
     assert router.model_group_alias == {"gpt-4": "gpt-4o"}
+
+
+def test_update_settings_restores_the_logger_when_verbosity_is_turned_off():
+    """set_verbose raises the router logger's level, so turning it back off has
+    to lower it again. Applying only the True side leaves a proxy emitting
+    verbose router logs for the rest of its life."""
+    import logging
+
+    from litellm._logging import verbose_router_logger
+
+    router = _build_router()
+    baseline = verbose_router_logger.level
+
+    try:
+        router.update_settings(set_verbose=True)
+        assert verbose_router_logger.level in (logging.INFO, logging.DEBUG)
+
+        router.update_settings(set_verbose=False)
+        assert router.set_verbose is False
+        assert verbose_router_logger.level == logging.NOTSET
+    finally:
+        verbose_router_logger.setLevel(baseline)
+
+
+def test_update_settings_rebuilds_max_parallel_request_clients():
+    """The concurrency limiter is a semaphore cached per deployment on first
+    use, so storing a new default_max_parallel_requests is not enough: without
+    dropping the cached ones, every deployment already serving traffic keeps
+    the old limit until the process restarts."""
+    router = _build_router()
+    deployment = router.model_list[0]
+
+    router.update_settings(default_max_parallel_requests=2)
+    assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")._value == 2
+
+    router.update_settings(default_max_parallel_requests=5)
+    assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")._value == 5
