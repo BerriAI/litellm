@@ -121,7 +121,7 @@ class QualifireGuardrail(CustomGuardrail):
         the live instance untouched instead of raising after it's already been
         corrupted. Mirrors LakeraAIGuardrail's own override of this same method.
         """
-        prospective_on_flagged: Final = getattr(litellm_params, "on_flagged", None) or self.on_flagged
+        prospective_on_flagged: Final = litellm_params.on_flagged or self.on_flagged
         self._validate_on_flagged(prospective_on_flagged)
         super().update_in_memory_litellm_params(litellm_params=litellm_params)
 
