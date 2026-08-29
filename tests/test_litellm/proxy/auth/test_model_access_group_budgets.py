@@ -364,17 +364,49 @@ async def test_group_under_its_max_budget_passes():
 
 
 @pytest.mark.asyncio
-async def test_group_exactly_at_its_max_budget_passes():
-    """The ceiling is inclusive, matching the tag check it mirrors; only spend strictly above it blocks.
+async def test_group_exactly_at_its_max_budget_blocks_the_request():
+    """A pool whose spend has reached the ceiling has nothing left, so the next request is refused.
 
-    Asserting the counter was read is what keeps this honest: a group that got skipped entirely,
-    because its row never arrived or carried no budget, would also not raise.
+    This is where the check departs from the tag one it otherwise mirrors, and it matches where
+    keys and organizations already draw the line.
     """
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await _enforce(
+            ("tier-a",),
+            _MagBudgetRow("tier-a", max_budget=10.0),
+            spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 10.0},
+        )
+
+    assert exc_info.value.entity_id == "tier-a"
+    assert exc_info.value.current_cost == 10.0
+
+
+@pytest.mark.asyncio
+async def test_group_just_under_its_max_budget_passes():
+    """Asserting the counter was read is what keeps this honest: a group that got skipped entirely,
+    because its row never arrived or carried no budget, would also not raise."""
     assert await _enforce(
         ("tier-a",),
         _MagBudgetRow("tier-a", max_budget=10.0),
-        spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 10.0},
+        spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 9.99},
     ) == [MODEL_ACCESS_GROUP_COUNTER_KEY]
+
+
+@pytest.mark.asyncio
+async def test_a_non_positive_budget_means_no_budget():
+    """The reservation path treats max_budget <= 0 as unbudgeted, so the read-time check must agree.
+
+    Without this the exclusive ceiling would turn a zero into a total freeze on one path and a
+    no-op on the other.
+    """
+    assert (
+        await _enforce(
+            ("tier-a",),
+            _MagBudgetRow("tier-a", max_budget=0.0),
+            spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 5.0},
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio

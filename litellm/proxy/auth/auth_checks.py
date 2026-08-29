@@ -5620,6 +5620,11 @@ async def _model_access_group_max_budget_check(
     overshoot the ceiling slightly. The reservation counters are the precise path; this one covers
     the ``disable_budget_reservation`` case.
 
+    The ceiling is exclusive, unlike the tag check it otherwise mirrors: a pool whose recorded
+    spend has reached ``max_budget`` has nothing left to give, so the next request is refused.
+    Keys and organizations already draw the line there. A non-positive budget means no budget,
+    matching what the reservation path treats as unbudgeted.
+
     Raises:
         BudgetExceededError if a matched group is over its max budget.
     """
@@ -5636,7 +5641,7 @@ async def _model_access_group_max_budget_check(
 
     for group in matched_model_access_groups:
         budget = budgets.get(group)
-        if budget is None or budget.max_budget is None:
+        if budget is None or budget.max_budget is None or budget.max_budget <= 0:
             continue
 
         group_spend = await get_current_spend(
@@ -5645,7 +5650,7 @@ async def _model_access_group_max_budget_check(
             max_budget=budget.max_budget,
             fallback_authoritative=True,
         )
-        if group_spend <= budget.max_budget:
+        if group_spend < budget.max_budget:
             continue
         raise litellm.BudgetExceededError(
             current_cost=group_spend,
