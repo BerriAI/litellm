@@ -22064,6 +22064,49 @@
         },
         "web_search_billing_unit": "per_query"
     },
+    "gemini/nano-banana-pro-preview": {
+        "input_cost_per_image": 0.0011,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_batches": 1e-06,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "image_generation",
+        "output_cost_per_image": 0.134,
+        "output_cost_per_image_token": 0.00012,
+        "output_cost_per_token": 1.2e-05,
+        "rpm": 1000,
+        "tpm": 4000000,
+        "output_cost_per_token_batches": 6e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_function_calling": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": false,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "web_search_billing_unit": "per_query"
+    },
     "gemini/gemini-3.1-flash-image": {
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
@@ -23607,6 +23650,28 @@
         "supports_system_messages": false,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "gemini/gemma-4-26b-a4b-it": {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "supports_reasoning": true,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing"
+    },
+    "gemini/gemma-4-31b-it": {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "supports_reasoning": true,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing"
     },
     "gemini/imagen-3.0-fast-generate-001": {
         "litellm_provider": "gemini",
@@ -39006,14 +39071,14 @@
         "source": "https://docs.together.ai/docs/serverless-models"
     },
     "together_ai/Qwen/Qwen3.8-2.4T-A95B": {
-        "cache_read_input_token_cost": 2.5e-07,
-        "input_cost_per_token": 2e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1010000,
         "max_output_tokens": 1010000,
         "max_tokens": 1010000,
         "mode": "chat",
-        "output_cost_per_token": 6e-06,
+        "output_cost_per_token": 6.25e-06,
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_prompt_caching": true
     },
@@ -39240,6 +39305,23 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048575,
         "max_output_tokens": 1048575,
+        "max_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.together.ai/docs/serverless-models",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "together_ai/zai-org/GLM-5.3": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1048575,
+        "max_output_tokens": 128000,
         "max_tokens": 1048575,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
@@ -54576,6 +54658,35 @@
             "image"
         ]
     },
+    "xai/grok-imagine-video": {
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://docs.x.ai/developers/models/grok-imagine-video",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5": {
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_1080p": 0.25,
+        "source": "https://docs.x.ai/developers/models/grok-imagine-video-1.5",
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "low/1024-x-1024/grok-imagine-image-2.0": {
         "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
@@ -54691,5 +54802,234 @@
         "source": "https://console.groq.com/docs/model/qwen/qwen3.8-27b",
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "mistral/mistral-medium-3.5": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-vibe-cli-latest": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-vibe-cli-with-tools": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-vibe-cli-fast": {
+        "cache_read_input_token_cost": 1.5e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-code-latest": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "source": "https://docs.mistral.ai/models/model-cards/codestral-25-08",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "mistral/mistral-code-fim-latest": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "source": "https://docs.mistral.ai/models/model-cards/codestral-25-08",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "mistral/mistral-code-agent-latest": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://mistral.ai/news/devstral-2-vibe-cli",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "mistral/mistral-ocr-3": {
+        "litellm_provider": "mistral",
+        "ocr_cost_per_page": 0.002,
+        "annotation_cost_per_page": 0.003,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://mistral.ai/pricing#api-pricing"
+    },
+    "mistral/mistral-ocr-3-0": {
+        "litellm_provider": "mistral",
+        "ocr_cost_per_page": 0.002,
+        "annotation_cost_per_page": 0.003,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://mistral.ai/pricing#api-pricing"
+    },
+    "mistral/mistral-ocr-4": {
+        "annotation_cost_per_page": 0.005,
+        "litellm_provider": "mistral",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.004,
+        "source": "https://docs.mistral.ai/models/model-cards/ocr-4-1",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
+    "mistral/voxtral-mini-latest": {
+        "input_cost_per_second": 5e-05,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/model-cards/voxtral-mini-transcribe-26-02",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-mini-realtime-2602": {
+        "input_cost_per_second": 0.0001,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/model-cards/voxtral-mini-transcribe-realtime-26-02",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-mini-realtime-latest": {
+        "input_cost_per_second": 0.0001,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/model-cards/voxtral-mini-transcribe-realtime-26-02",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/labs-leanstral-1-5-1": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.mistral.ai/models/model-cards/leanstral-1-5",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "fireworks_ai/accounts/fireworks/models/glm-5p3": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.fireworks.ai/serverless/pricing",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "fireworks_ai/accounts/fireworks/models/qwen3-embedding-8b": {
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 40960,
+        "max_output_tokens": 40960,
+        "max_tokens": 40960,
+        "mode": "embedding",
+        "source": "https://docs.fireworks.ai/serverless/pricing"
     }
 }
