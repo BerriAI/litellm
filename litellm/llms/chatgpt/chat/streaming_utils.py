@@ -4,7 +4,27 @@ Streaming utilities for ChatGPT provider.
 Normalizes non-spec-compliant tool_call chunks from the ChatGPT backend API.
 """
 
-from typing import Any, Final
+from collections.abc import Awaitable
+from typing import Final, Protocol
+
+from litellm.types.utils import (
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionDeltaToolCall,
+    Delta,
+    ModelResponseStream,
+)
+
+
+class ChatGPTChunkStream(Protocol):
+    """A ChatGPT chunk source driven either synchronously or asynchronously."""
+
+    def __next__(self) -> ModelResponseStream: ...
+
+    def __anext__(self) -> Awaitable[ModelResponseStream]: ...
+
+
+def _first_choice_delta(chunk: ModelResponseStream) -> Delta | None:
+    return chunk.choices[0].delta
 
 
 class ChatGPTToolCallNormalizer:
@@ -20,13 +40,13 @@ class ChatGPTToolCallNormalizer:
     chunks to the consumer.
     """
 
-    def __init__(self, stream: Any):
-        self._stream = stream
+    def __init__(self, stream: ChatGPTChunkStream):
+        self._stream: Final = stream
         self._seen_ids: dict[str, int] = {}  # tool_call_id -> assigned_index
         self._next_index: int = 0
         self._last_id: str | None = None  # tracks which tool call the next delta belongs to
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         return getattr(self._stream, name)
 
     def __iter__(self):
@@ -35,30 +55,30 @@ class ChatGPTToolCallNormalizer:
     def __aiter__(self):
         return self
 
-    def __next__(self):
+    def __next__(self) -> ModelResponseStream:
         while True:
             chunk = next(self._stream)
             result = self._normalize(chunk)
             if result is not None:
                 return result
 
-    async def __anext__(self):
+    async def __anext__(self) -> ModelResponseStream:
         while True:
             chunk = await self._stream.__anext__()
             result = self._normalize(chunk)
             if result is not None:
                 return result
 
-    def _normalize(self, chunk: Any) -> Any:
+    def _normalize(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
         """Fix tool_calls in the chunk. Returns None to skip duplicate chunks."""
         if not chunk.choices:
             return chunk
 
-        delta: Final = chunk.choices[0].delta
+        delta: Final = _first_choice_delta(chunk)
         if delta is None or not delta.tool_calls:
             return chunk
 
-        normalized: Final = []
+        normalized: Final[list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall]] = []
         for tc in delta.tool_calls:
             if tc.id and tc.id not in self._seen_ids:
                 # New tool call — assign correct index

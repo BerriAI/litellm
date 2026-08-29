@@ -1,8 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { StatusBadge, type StatusTone } from "./status_badge";
+
+const push = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 describe("StatusBadge", () => {
   const toneClasses: Record<StatusTone, string[]> = {
@@ -38,5 +41,20 @@ describe("StatusBadge", () => {
     render(<StatusBadge tone="error" label="Blocked" tooltip="This key was blocked by SCIM" />);
     await user.hover(screen.getByText("Blocked"));
     expect(await screen.findByText("This key was blocked by SCIM")).toBeInTheDocument();
+  });
+
+  it("renders a tinted anchor that navigates client-side when href is given", async () => {
+    const user = userEvent.setup();
+    render(<StatusBadge tone="info" label="gpt-4.1" href="/models-and-endpoints?model_group=gpt-4.1" />);
+    const link = screen.getByRole("link", { name: "gpt-4.1" });
+    expect(link).toHaveAttribute("href", "/models-and-endpoints?model_group=gpt-4.1");
+    expect(link).toHaveClass("text-info");
+    await user.click(link);
+    expect(push).toHaveBeenCalledWith("/models-and-endpoints?model_group=gpt-4.1");
+  });
+
+  it("renders no anchor without an href", () => {
+    render(<StatusBadge tone="info" label="gpt-4.1" />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });

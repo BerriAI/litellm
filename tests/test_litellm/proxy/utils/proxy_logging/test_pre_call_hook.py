@@ -9,9 +9,14 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.exceptions import RejectedRequestError
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypesLiteral
 
 
 def _load(module: str, name: str):
@@ -454,3 +459,419 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
         "Decide whether each judges the payload (mark it) or counts the request (leave it)."
     )
     assert CustomLogger.enforces_request_content is False
+
+
+# ---------------------------------------------------------------------------
+# scan_raw_request: a guardrail's block decision must not depend on YAML order
+# ---------------------------------------------------------------------------
+
+
+class _RedactingGuardrail(CustomGuardrail):
+    """Mirrors a real masking guardrail (e.g. Lakera's advisory mode): mutates
+    ``data`` in place and returns None, same as CustomGuardrail's documented
+    contract for in-place mutation."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("default_on", True)
+        kwargs.setdefault("event_hook", GuardrailEventHooks.pre_call)
+        super().__init__(guardrail_name="redactor", **kwargs)
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> dict | None:
+        for msg in data.get("messages", []):
+            if "SECRET" in msg.get("content", ""):
+                msg["content"] = msg["content"].replace("SECRET", "[REDACTED]")
+        return None
+
+
+class _BlockOnSecretGuardrail(CustomGuardrail):
+    """Blocks the request if any message contains the literal string SECRET."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("default_on", True)
+        kwargs.setdefault("event_hook", GuardrailEventHooks.pre_call)
+        super().__init__(guardrail_name="blocker", **kwargs)
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> dict | None:
+        if any("SECRET" in msg.get("content", "") for msg in data.get("messages", [])):
+            raise HTTPException(status_code=400, detail="blocked: SECRET detected")
+        return None
+
+
+def _secret_request() -> Dict[str, Any]:
+    return {"messages": [{"role": "user", "content": "here is my SECRET"}], "model": "m"}
+
+
+@pytest.mark.asyncio
+async def test_yaml_order_changes_enforcement_without_scan_raw_request(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """Baseline (the bug): declaring the redactor before the blocker lets a
+    request through that would have been blocked in the opposite order,
+    because the blocker only ever sees the already-redacted content."""
+    monkeypatch.setattr(litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail()])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=_secret_request(),
+        call_type="completion",
+    )
+    assert "[REDACTED]" in out["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_reversed_yaml_order_blocks_the_same_request(proxy_logging, make_user_api_key_auth, monkeypatch):
+    """Same two guardrails, opposite declaration order: the blocker now runs
+    first against the still-raw content and correctly rejects the request.
+    Confirms the baseline test above is a real order-dependence, not a fluke."""
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(), _RedactingGuardrail()])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=_secret_request(),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_makes_blocking_order_independent(proxy_logging, make_user_api_key_auth, monkeypatch):
+    """Maintainer finding on BerriAI/litellm#34940: with scan_raw_request=True
+    on the blocker, declaring the redactor first no longer lets the request
+    through -- the blocker evaluates the pre-loop snapshot regardless of its
+    position in the guardrails list."""
+    monkeypatch.setattr(
+        litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail(scan_raw_request=True)]
+    )
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=_secret_request(),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_guardrail_does_not_undo_later_masking(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """A scan_raw_request guardrail that passes (its own snapshot has no
+    violation) must not affect what a later guardrail in the sequence does to
+    the live request -- its own discarded view of the data must not corrupt
+    or reset the shared ``data`` object for the rest of the loop. Uses a
+    request with no SECRET at all, so the blocker passes cleanly, and a
+    separate marker (PII_TOKEN) that only the redactor reacts to."""
+
+    class _PiiRedactor(_RedactingGuardrail):
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict,
+            call_type: CallTypesLiteral,
+        ) -> dict | None:
+            for msg in data.get("messages", []):
+                if "PII_TOKEN" in msg.get("content", ""):
+                    msg["content"] = msg["content"].replace("PII_TOKEN", "[REDACTED]")
+            return None
+
+    monkeypatch.setattr(
+        litellm, "callbacks", [_BlockOnSecretGuardrail(scan_raw_request=True), _PiiRedactor()]
+    )
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"role": "user", "content": "my PII_TOKEN is here"}], "model": "m"},
+        call_type="completion",
+    )
+    assert "[REDACTED]" in out["messages"][0]["content"]
+
+
+class _Unpicklable:
+    """Mirrors a real otel span: deepcopy always raises, matching what
+    safe_deep_copy exists to handle (see litellm_core_utils/core_helpers.py)."""
+
+    def __deepcopy__(self, memo):
+        raise TypeError("cannot deepcopy this object")
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_snapshot_survives_unpicklable_metadata(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Bugbot finding on BerriAI/litellm#34940: the scan_raw_request snapshot
+    used a bare copy.deepcopy, which raises on request payloads carrying
+    unpicklable objects (e.g. metadata["litellm_parent_otel_span"] when
+    tracing is enabled) -- failing every guarded request, not just ones
+    that actually use scan_raw_request. Must use safe_deep_copy instead.
+    """
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(scan_raw_request=True)])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    data = {
+        "messages": [{"role": "user", "content": "hello, nothing flagged here"}],
+        "model": "m",
+        "metadata": {"litellm_parent_otel_span": _Unpicklable()},
+    }
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=data,
+        call_type="completion",
+    )
+    assert out is not None
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_isolation_survives_unpicklable_top_level_field(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Bugbot finding on BerriAI/litellm#34940: real proxy requests carry
+    data["litellm_logging_obj"] (a Logging instance nesting a live OTel span
+    with a real lock) by the time pre_call_hook runs -- a top-level field, not
+    inside metadata, so the otel-span placeholder substitution never touches
+    it. A whole-dict copy.deepcopy over the entire payload (the previous
+    _independent_snapshot) fails on that field on every real request and
+    silently falls back to the live, unisolated data with no warning,
+    defeating the entire feature in production even though every test above
+    passes (none of them set litellm_logging_obj). The isolation guarantee
+    (blocking order-independence) must hold even when such a field is
+    present.
+    """
+    monkeypatch.setattr(
+        litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail(scan_raw_request=True)]
+    )
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    data = _secret_request()
+    data["litellm_logging_obj"] = _Unpicklable()
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=data,
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_snapshot_taken_before_pipelines(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    veria-ai finding on BerriAI/litellm#34940: the raw snapshot was taken
+    after _maybe_execute_pipelines ran, so a pipeline that masks content
+    ahead of a non-pipelined scan_raw_request guardrail could still hide
+    the violation from it. Simulates a pipeline-style rewrite by having
+    _maybe_execute_pipelines itself return redacted data, and confirms the
+    scan_raw_request blocker still sees the pre-pipeline raw content.
+    """
+
+    async def fake_pipelines(self, data, user_api_key_dict, call_type, event_hook, raw_request_snapshot=None):
+        for msg in data.get("messages", []):
+            if "SECRET" in msg.get("content", ""):
+                msg["content"] = msg["content"].replace("SECRET", "[REDACTED]")
+        return data
+
+    monkeypatch.setattr(ProxyLogging, "_maybe_execute_pipelines", fake_pipelines)
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(scan_raw_request=True)])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=_secret_request(),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_warns_when_guardrail_mutation_discarded(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    veria-ai finding on BerriAI/litellm#34940: scan_raw_request is accepted
+    even for a guardrail that mutates the request (e.g. a masking
+    integration), silently discarding its redaction and forwarding raw
+    content. Config-time rejection isn't generically possible (no marker
+    exists for "this guardrail mutates"), so a loud runtime warning is the
+    mitigation: confirm it fires when a scan_raw_request guardrail returns
+    a modified payload.
+    """
+
+    class _MutatingScanner(_RedactingGuardrail):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.scan_raw_request = True
+
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict,
+            call_type: CallTypesLiteral,
+        ) -> dict | None:
+            for msg in data.get("messages", []):
+                msg["content"] = msg["content"].replace("SECRET", "[REDACTED]")
+            return data
+
+    from litellm.proxy import utils as proxy_utils_module
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(proxy_utils_module, "verbose_proxy_logger", mock_logger)
+    monkeypatch.setattr(litellm, "callbacks", [_MutatingScanner()])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=_secret_request(),
+        call_type="completion",
+    )
+    mock_logger.warning.assert_called_once()
+    assert "scan_raw_request" in str(mock_logger.warning.call_args)
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_baseline_does_not_leak_marker_under_safe_memory_mode(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    veria-ai finding on BerriAI/litellm#34940: safe_deep_copy returns the
+    original object unchanged when litellm.safe_memory_mode is True, so
+    calling the mutating mark_pre_call_hook_ran on the "expected baseline"
+    copy actually mutates the shared raw_request_snapshot -- writing this
+    guardrail's execution marker into metadata even when should_run_guardrail
+    says the guardrail should be skipped for this event. A deployment-level
+    guardrail sharing the same guardrail_name would then see the marker via
+    _pre_call_hook_already_ran and skip real inspection, a security bypass.
+    """
+    monkeypatch.setattr(litellm, "safe_memory_mode", True)
+
+    class _SkippedScanner(_BlockOnSecretGuardrail):
+        def __init__(self, **kwargs):
+            kwargs["default_on"] = False
+            super().__init__(scan_raw_request=True, **kwargs)
+
+    callback = _SkippedScanner()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=_secret_request(),
+        call_type="completion",
+    )
+    assert callback._pre_call_hook_already_ran(out) is False
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_stamps_live_request_when_guardrail_actually_ran(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Bugbot finding on BerriAI/litellm#34940: a scan_raw_request guardrail only
+    stamped mark_pre_call_hook_ran on its own throwaway snapshot copies, never
+    on the live request returned to the caller. A later
+    async_pre_call_deployment_hook (router-level guardrail re-check) reads
+    that marker via _pre_call_hook_already_ran on the live kwargs to decide
+    whether to skip re-running the same guardrail -- since it was never
+    stamped there, the guardrail runs a second time on live data, doubling
+    the external call and re-applying whatever scan_raw_request's contract
+    says should be discarded. The live output must carry the marker whenever
+    the guardrail actually ran (not skipped).
+    """
+    callback = _BlockOnSecretGuardrail(scan_raw_request=True)
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"role": "user", "content": "nothing flagged here"}], "model": "m"},
+        call_type="completion",
+    )
+    assert callback._pre_call_hook_already_ran(out) is True
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_stamps_live_request_in_parallel_path(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Same Bugbot finding, parallel branch: a guardrail with both
+    run_in_parallel=True and scan_raw_request=True is dispatched through
+    _run_parallel_pre_call_guardrails, which only stamped the throwaway
+    snapshot _input_for built, never the live, shared data object.
+    """
+    callback = _BlockOnSecretGuardrail(scan_raw_request=True, run_in_parallel=True)
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"role": "user", "content": "nothing flagged here"}], "model": "m"},
+        call_type="completion",
+    )
+    assert callback._pre_call_hook_already_ran(out) is True
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_does_not_warn_when_guardrail_only_blocks(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Bugbot finding on BerriAI/litellm#34940: _process_guardrail_callback always
+    returns a dict once a guardrail actually runs (it only returns None when
+    should_run_guardrail is False), so checking `result is not None` is true on
+    every single request -- a correctly configured, non-mutating scan_raw_request
+    blocker (like _BlockOnSecretGuardrail here) would warn on every call, not just
+    when it actually mutates something.
+    """
+    from litellm.proxy import utils as proxy_utils_module
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(proxy_utils_module, "verbose_proxy_logger", mock_logger)
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(scan_raw_request=True)])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"role": "user", "content": "nothing flagged here"}], "model": "m"},
+        call_type="completion",
+    )
+    mock_logger.warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_warns_on_in_place_mutation_returning_none(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    _RedactingGuardrail mirrors the common in-place-mutate-and-return-None
+    guardrail contract (e.g. real masking integrations). Detecting this case
+    correctly requires comparing dict *content*, not object identity: the
+    mutated dict is still the exact same object reference the guardrail was
+    given, so an identity check (`result is input_data`) would wrongly say
+    nothing changed.
+    """
+    from litellm.proxy import utils as proxy_utils_module
+
+    class _ScanningRedactor(_RedactingGuardrail):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.scan_raw_request = True
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(proxy_utils_module, "verbose_proxy_logger", mock_logger)
+    monkeypatch.setattr(litellm, "callbacks", [_ScanningRedactor()])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=_secret_request(),
+        call_type="completion",
+    )
+    mock_logger.warning.assert_called_once()
+    assert "scan_raw_request" in str(mock_logger.warning.call_args)

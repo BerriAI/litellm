@@ -1,5 +1,5 @@
 import json
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from openai.types.image import Image
@@ -13,6 +13,9 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import ImageResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class VertexImageGeneration(VertexLLM):
@@ -74,7 +77,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: str | None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         model_response: ImageResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Any | None = None,
         optional_params: dict | None = None,
@@ -173,7 +176,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: str | None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         model_response: ImageResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: AsyncHTTPHandler | None = None,
         optional_params: dict | None = None,

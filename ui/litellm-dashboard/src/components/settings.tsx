@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmailSettings from "./email_settings";
+import MSTeamsSettings from "./MSTeamsSettings";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 
@@ -490,6 +491,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <TabsTrigger value="alerting-types">Alerting Types</TabsTrigger>
             <TabsTrigger value="alerting-settings">Alerting Settings</TabsTrigger>
             <TabsTrigger value="email-alerts">Email Alerts</TabsTrigger>
+            <TabsTrigger value="ms-teams-alerts">MS Teams Alerts</TabsTrigger>
           </TabsList>
           <TabsContent value="logging-callbacks" keepMounted>
             <LoggingCallbacksTable
@@ -606,6 +608,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           </TabsContent>
           <TabsContent value="email-alerts" keepMounted>
             <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
+          </TabsContent>
+          <TabsContent value="ms-teams-alerts" keepMounted>
+            <MSTeamsSettings accessToken={accessToken} userID={userID} userRole={userRole} alerts={alerts} />
           </TabsContent>
         </Tabs>
       </div>

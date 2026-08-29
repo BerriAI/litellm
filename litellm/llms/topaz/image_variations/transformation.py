@@ -2,7 +2,7 @@ import base64
 import time
 from collections.abc import Mapping
 from io import BytesIO
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 from aiohttp import ClientResponse
 from httpx import Headers, Response
@@ -21,6 +21,9 @@ from litellm.types.utils import (
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ..common_utils import TopazException, TopazModelInfo
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
@@ -136,7 +139,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
     ) -> ImageResponse:
         image_content: Final = await raw_response.read()
@@ -155,7 +158,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
     ) -> ImageResponse:
         image_content: Final = raw_response.content
