@@ -575,8 +575,6 @@ ROUTER_UPDATABLE_SETTINGS: Final[frozenset[str]] = frozenset(
         "disable_cooldowns",
         "stream_timeout",
         "default_max_parallel_requests",
-        "default_litellm_params",
-        "set_verbose",
     }
 )
 
@@ -758,7 +756,10 @@ class Router:
         self.service_logger_obj: ServiceLogging = ServiceLogging()
         litellm.suppress_debug_info = True  # prevents 'Give Feedback/Get help' message from being emitted on Router - Relevant Issue: https://github.com/BerriAI/litellm/issues/5942
         if self.set_verbose is True:
-            verbose_router_logger.setLevel(self._verbose_logger_level())
+            if debug_level == "INFO":
+                verbose_router_logger.setLevel(logging.INFO)
+            elif debug_level == "DEBUG":
+                verbose_router_logger.setLevel(logging.DEBUG)
         self.router_general_settings: RouterGeneralSettings = router_general_settings or RouterGeneralSettings()
 
         self.assistants_config = assistants_config
@@ -11157,14 +11158,10 @@ class Router:
     def max_parallel_requests_cache_key(model_id: str) -> str:
         return f"{model_id}_max_parallel_requests_client"
 
-    def _verbose_logger_level(self) -> int:
-        if not self.set_verbose:
-            return logging.NOTSET
-        return logging.DEBUG if self.debug_level == "DEBUG" else logging.INFO
-
     def _clear_max_parallel_requests_clients(self) -> None:
-        for deployment in self.model_list or []:
-            model_id = (deployment.get("model_info") or {}).get("id")
+        for deployment in self.model_list or ():
+            model_info = deployment.get("model_info")
+            model_id = model_info.get("id") if model_info else None
             if model_id is not None:
                 self.cache.delete_cache(self.max_parallel_requests_cache_key(model_id))
 
@@ -11187,18 +11184,11 @@ class Router:
         for var in kwargs:
             if var in ROUTER_UPDATABLE_SETTINGS:
                 if var in _int_settings:
-                    _casted_value = None if kwargs[var] is None else int(kwargs[var])
-                    setattr(self, var, _casted_value)
-                elif var == "default_litellm_params":
-                    params = kwargs[var] or {}
-                    self.default_litellm_params = params
-                    self.chat = litellm.Chat(params=params, router_obj=self)
+                    if kwargs[var] is not None:
+                        setattr(self, var, int(kwargs[var]))
                 elif var == "default_max_parallel_requests":
                     self.default_max_parallel_requests = None if kwargs[var] is None else int(kwargs[var])
                     self._clear_max_parallel_requests_clients()
-                elif var == "set_verbose":
-                    self.set_verbose = bool(kwargs[var])
-                    verbose_router_logger.setLevel(self._verbose_logger_level())
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True

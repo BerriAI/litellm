@@ -127,7 +127,7 @@ class UpdateRouterConfig(BaseModel):
     context_window_fallbacks: list[dict] | None = None
     content_policy_fallbacks: list[dict] | None = None
     max_fallbacks: int | None = None
-    model_group_alias: dict[str, str | dict] | None = None
+    model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
     tag_filtering_match_any: bool | None = None
     tag_routing_prefix: str | None = None
@@ -136,8 +136,6 @@ class UpdateRouterConfig(BaseModel):
     disable_cooldowns: bool | None = None
     stream_timeout: float | None = None
     default_max_parallel_requests: int | None = None
-    default_litellm_params: dict | None = None
-    set_verbose: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 

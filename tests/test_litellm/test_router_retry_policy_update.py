@@ -45,21 +45,39 @@ from litellm.types.router import RetryPolicy, UpdateRouterConfig
 # ---------------------------------------------------------------------------
 
 
+CONSTRUCTOR_COUPLED_UI_SETTINGS = frozenset({"default_litellm_params", "set_verbose"})
+
+
+def _writable_ui_settings() -> set[str]:
+    return {field.field_name for field in ROUTER_SETTINGS_FIELDS} - CONSTRUCTOR_COUPLED_UI_SETTINGS
+
+
 def test_every_admin_ui_router_setting_is_writable():
     """``POST /config/update`` parses ``router_settings`` through
     ``UpdateRouterConfig``, which ignores undeclared keys. A setting the Admin
     UI renders but the schema omits is accepted with a 200 and silently
     discarded, so the save appears to work and nothing changes."""
-    ui_settings = {field.field_name for field in ROUTER_SETTINGS_FIELDS}
-    assert ui_settings <= set(UpdateRouterConfig.model_fields)
+    assert _writable_ui_settings() <= set(UpdateRouterConfig.model_fields)
 
 
 def test_every_admin_ui_router_setting_is_applied_at_runtime():
     """Clearing the schema is only half the trip: ``update_settings`` drops
     anything outside ``ROUTER_UPDATABLE_SETTINGS``, which leaves the value in
     the config row while the live Router keeps serving the old one."""
-    ui_settings = {field.field_name for field in ROUTER_SETTINGS_FIELDS}
-    assert ui_settings <= ROUTER_UPDATABLE_SETTINGS
+    assert _writable_ui_settings() <= ROUTER_UPDATABLE_SETTINGS
+
+
+def test_constructor_coupled_settings_stay_out_of_the_writable_surface():
+    """Router.__init__ does more than a plain attribute write for these two:
+    default_litellm_params gets timeout / max_retries / caching_groups layered on
+    (and caching_groups is never retained on the Router to replay), and set_verbose
+    drives the process-global router logger, so turning it off would undo
+    --detailed_debug. Until update_settings reproduces that, both gates have to
+    keep rejecting them, and the UI has to keep rendering them so the gap stays
+    visible."""
+    assert not CONSTRUCTOR_COUPLED_UI_SETTINGS & set(UpdateRouterConfig.model_fields)
+    assert not CONSTRUCTOR_COUPLED_UI_SETTINGS & ROUTER_UPDATABLE_SETTINGS
+    assert CONSTRUCTOR_COUPLED_UI_SETTINGS <= {field.field_name for field in ROUTER_SETTINGS_FIELDS}
 
 
 def test_every_runtime_applicable_router_setting_is_writable():
@@ -69,10 +87,14 @@ def test_every_runtime_applicable_router_setting_is_writable():
 
 
 def test_unset_router_settings_are_absent_from_dumps():
-    """The handler merges ``dict(exclude_none=True)`` over the stored row, so a
-    field defaulting to anything but ``None`` is written on every save and
-    overwrites what the caller never sent."""
-    assert UpdateRouterConfig().model_dump(exclude_none=True) == {}
+    """The handler merges the request over the stored row, so it has to dump
+    only what the caller actually sent. ``exclude_none`` alone is not enough:
+    any field with a non-None default rides along on every save and overwrites
+    a value the caller never mentioned."""
+    sent = UpdateRouterConfig(num_retries=4)
+
+    assert sent.model_dump(exclude_unset=True, exclude_none=True) == {"num_retries": 4}
+    assert UpdateRouterConfig().model_dump(exclude_unset=True, exclude_none=True) == {}
 
 
 def test_update_router_config_exposes_retry_policy_field():
@@ -395,28 +417,6 @@ async def test_config_update_leaves_unsent_router_settings_alone(monkeypatch):
     assert router.model_group_alias == {"gpt-4": "gpt-4o"}
 
 
-def test_update_settings_restores_the_logger_when_verbosity_is_turned_off():
-    """set_verbose raises the router logger's level, so turning it back off has
-    to lower it again. Applying only the True side leaves a proxy emitting
-    verbose router logs for the rest of its life."""
-    import logging
-
-    from litellm._logging import verbose_router_logger
-
-    router = _build_router()
-    baseline = verbose_router_logger.level
-
-    try:
-        router.update_settings(set_verbose=True)
-        assert verbose_router_logger.level in (logging.INFO, logging.DEBUG)
-
-        router.update_settings(set_verbose=False)
-        assert router.set_verbose is False
-        assert verbose_router_logger.level == logging.NOTSET
-    finally:
-        verbose_router_logger.setLevel(baseline)
-
-
 def test_update_settings_rebuilds_max_parallel_request_clients():
     """The concurrency limiter is a semaphore cached per deployment on first
     use, so storing a new default_max_parallel_requests is not enough: without
@@ -449,20 +449,16 @@ def test_max_parallel_requests_cache_key_addresses_the_cached_semaphore():
     assert router.cache.get_cache(key=key, local_only=True) is None
 
 
-def test_verbose_logger_level_maps_verbosity_to_a_level():
-    """Both the constructor and update_settings drive the router logger from
-    this one mapping, so an off value has to resolve to NOTSET rather than to
-    a level that keeps the logger louder than it started."""
-    import logging
-
+@pytest.mark.parametrize("setting", ["timeout", "retry_after", "num_retries", "max_fallbacks"])
+def test_update_settings_ignores_a_null_numeric_setting(setting):
+    """A ``router_settings: {timeout: null}`` in config.yaml reaches
+    update_settings as a real None. Storing it replaces an int the request path
+    does arithmetic on, which surfaces much later as a TypeError inside an
+    unrelated call. The stored value has to survive instead."""
     router = _build_router()
+    before = getattr(router, setting)
+    assert before is not None
 
-    router.set_verbose = False
-    assert router._verbose_logger_level() == logging.NOTSET
+    router.update_settings(**{setting: None})
 
-    router.set_verbose = True
-    router.debug_level = "INFO"
-    assert router._verbose_logger_level() == logging.INFO
-
-    router.debug_level = "DEBUG"
-    assert router._verbose_logger_level() == logging.DEBUG
+    assert getattr(router, setting) == before
