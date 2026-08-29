@@ -1134,8 +1134,14 @@ class TestFlattenTopLevelSchemaCombinators:
 
         schema = {
             "anyOf": [
-                {"properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}}, "required": ["id", "enabled"]},
-                {"properties": {"id": {"type": "string"}, "schedule": {"type": "string"}}, "required": ["id", "schedule"]},
+                {
+                    "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
+                    "required": ["id", "enabled"],
+                },
+                {
+                    "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
+                    "required": ["id", "schedule"],
+                },
             ]
         }
 
@@ -1201,6 +1207,79 @@ class TestFlattenTopLevelSchemaCombinators:
         assert "const" not in result
         assert "not" not in result
         assert result["properties"] == {"id": {"type": "string"}}
+
+    def test_resolves_local_ref_branches_from_defs(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "anyOf": [{"$ref": "#/$defs/Enable"}, {"$ref": "#/$defs/Schedule"}],
+            "$defs": {
+                "Enable": {
+                    "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
+                    "required": ["id", "enabled"],
+                },
+                "Schedule": {
+                    "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
+                    "required": ["id", "schedule"],
+                },
+            },
+        }
+
+        result = flatten_top_level_schema_combinators(schema)
+
+        assert "anyOf" not in result
+        assert result["type"] == "object"
+        assert set(result["properties"]) == {"id", "enabled", "schedule"}
+        assert result["required"] == ["id"]
+        assert "$defs" in result
+
+    def test_flattens_nested_combinator_branch_from_definitions(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "type": "object",
+            "oneOf": [
+                {"$ref": "#/definitions/Toggle"},
+                {"allOf": [{"properties": {"schedule": {"type": "string"}}, "required": ["schedule"]}]},
+            ],
+            "definitions": {"Toggle": {"properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]}},
+        }
+
+        result = flatten_top_level_schema_combinators(schema)
+
+        assert "oneOf" not in result
+        assert set(result["properties"]) == {"enabled", "schedule"}
+        assert "required" not in result
+
+    def test_unresolvable_ref_branch_leaves_schema_untouched(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "type": "object",
+            "anyOf": [{"$ref": "https://example.com/schemas/automation.json"}],
+            "properties": {"id": {"type": "string"}},
+        }
+
+        assert flatten_top_level_schema_combinators(schema) is schema
+
+    def test_self_referencing_ref_branch_leaves_schema_untouched(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "type": "object",
+            "anyOf": [{"$ref": "#/$defs/Node"}],
+            "$defs": {"Node": {"type": "object", "anyOf": [{"$ref": "#/$defs/Node"}]}},
+        }
+
+        assert flatten_top_level_schema_combinators(schema) is schema
 
     def test_non_object_union_passes_through_unchanged(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
