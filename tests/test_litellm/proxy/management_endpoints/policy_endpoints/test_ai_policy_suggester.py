@@ -236,6 +236,7 @@ class TestAiPolicySuggester:
         call_kwargs = mock_acompletion.call_args.kwargs
         assert call_kwargs["model"] == "gpt-4o-mini"
         assert call_kwargs["temperature"] == 0.2
+        assert call_kwargs["drop_params"] is True
         assert len(call_kwargs["tools"]) == 1
         assert call_kwargs["tools"][0]["function"]["name"] == "select_policy_templates"
         assert (
@@ -276,6 +277,18 @@ class TestSuggesterToleratesAModelThatRefusesItsSamplingParams:
         exactly what the model rejects, and drop_params is what removes it."""
         from litellm.utils import get_optional_params
 
-        assert "temperature" not in get_optional_params(
-            model="gpt-5.6-terra", custom_llm_provider="openai", temperature=0.2, drop_params=True
+        optional_params = get_optional_params(
+            model="gpt-5.6-terra",
+            custom_llm_provider="openai",
+            temperature=0.2,
+            tools=[SUGGEST_TOOL],
+            tool_choice={"type": "function", "function": {"name": "select_policy_templates"}},
+            drop_params=True,
         )
+
+        assert "temperature" not in optional_params
+        assert optional_params["tools"] == [SUGGEST_TOOL]
+        assert optional_params["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "select_policy_templates"},
+        }
