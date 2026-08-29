@@ -2627,7 +2627,9 @@ class Router:
         # Native path: completed_response is set only if RESPONSE_COMPLETED
         # arrived before the error (uncommon mid-stream but worth checking).
         # Already ResponseAPIUsage-shaped — return as-is.
-        completed: Final = source_iterator.completed_response
+        # Use getattr because a bridge iterator whose __init__ never ran
+        # may not have the attribute at all (#38511).
+        completed: Final = getattr(source_iterator, "completed_response", None)
         if isinstance(
             completed,
             (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
