@@ -121,13 +121,27 @@ def _encoded_header_string(headers: Mapping[str, str]) -> str:
 class TenantRoute:
     """The tracer to create a span on, plus whether it must root its own trace.
 
-    ``detached`` is True when project routing engaged. Phoenix assigns a whole
+    ``detached`` is True when the routed span exports to a DIFFERENT backend
+    than the request's root span, which always exports through the default
+    tracer. A detached span roots a fresh trace with a link back to the request
+    trace for correlation, so the destination account is not left holding a
+    child whose parent it never received. It is driven by whether routing
+    headers were actually applied to an owned exporter, not merely requested:
+    a credential or project route whose callback owns no exporter those headers
+    can reach exports through the default backend unchanged, so it stays
+    parented like an unrouted span.
+
+    Credential routing (a team/key's own vendor account) is one detaching case:
+    the root, auth, and db spans stay on the operator's default backend while
+    the LLM-call span exports to the tenant's account, so parenting it into the
+    request trace makes the tenant account show a fragmented span with a missing
+    parent. Project routing (Phoenix) is the other: Phoenix assigns a whole
     trace to one project by whichever of its spans arrives first, so a
     project-routed span parented into the request trace gets dragged into the
     project of the default-exported request spans and the header does nothing.
-    The span must therefore start a fresh trace (with a link back to the
-    request trace for correlation) — which is also how the v1 Phoenix logger
-    behaved, exporting each request under its own Phoenix-local parent span.
+    Both mirror the v1 loggers, which exported each request under its own
+    backend-local root. Service-name routing does NOT detach: it relabels
+    ``service.name`` on the SAME operator backend, where the parent is present.
     """
 
     tracer: Tracer
@@ -165,7 +179,14 @@ class TenantTracerCache:
             spec.owner == callback_name and spec.kind.lower() not in (*_NON_OTLP_KINDS, *_GRPC_KINDS)
             for spec in config.exporters
         )
+        # Credentials ride gRPC metadata too (Arize's default exporter is gRPC),
+        # so unlike project headers they only need an owned OTLP exporter of any
+        # transport, not specifically HTTP.
+        self._credential_routable = any(
+            spec.owner == callback_name and spec.kind.lower() not in _NON_OTLP_KINDS for spec in config.exporters
+        )
         self._warned_project_unroutable = False
+        self._warned_credential_unroutable = False
 
     def release(self, provider: TracerProvider | None) -> None:
         """Drop one open-span count; shut a retired provider down once drained.
@@ -207,7 +228,7 @@ class TenantTracerCache:
         concurrent overflow eviction can't shut it down between selection and
         the caller's span start. The caller must ``release`` it exactly once.
         """
-        credential_headers: Final = dynamic_otlp_headers(self._callback_name, dynamic_params) or _NO_HEADERS
+        credential_headers: Final = self._credential_headers(dynamic_params)
         project_headers: Final = self._project_headers(auth_metadata)
         service_name: Final = tenant_service_name(auth_metadata)
         if not credential_headers and not project_headers and service_name is None:
@@ -231,7 +252,7 @@ class TenantTracerCache:
             _shutdown_provider(evicted)
         return TenantRoute(
             tracer=get_tracer(provider, self._tracer_name),
-            detached=bool(project_headers),
+            detached=bool(project_headers) or bool(credential_headers),
             provider=provider,
         )
 
@@ -274,6 +295,26 @@ class TenantTracerCache:
         overflowed, _ = self._retired.popitem(last=False)
         self._open_span_counts.pop(overflowed, None)
         return overflowed
+
+    def _credential_headers(self, dynamic_params: StandardCallbackDynamicParams | None) -> Mapping[str, str]:
+        """The per-request dynamic OTLP credentials, if this cache can apply them.
+
+        A callback owning only a console/in_memory exporter has nowhere to stamp
+        them, so the span would export to the operator's default backend
+        unchanged; routing there and detaching would orphan it on the very
+        backend that holds its parent. Warn once and keep the default tracer.
+        """
+        requested: Final = dynamic_otlp_headers(self._callback_name, dynamic_params) or _NO_HEADERS
+        if not requested or self._credential_routable:
+            return requested
+        if not self._warned_credential_unroutable:
+            self._warned_credential_unroutable = True
+            verbose_logger.warning(
+                "OTel V2: %s request carries dynamic credentials, but the callback owns no "
+                "OTLP exporter to stamp them onto; spans export to the default backend.",
+                self._callback_name,
+            )
+        return _NO_HEADERS
 
     def _project_headers(self, auth_metadata: Mapping[str, str] | None) -> Mapping[str, str]:
         """The per-request project-routing headers, if this cache can apply them.
