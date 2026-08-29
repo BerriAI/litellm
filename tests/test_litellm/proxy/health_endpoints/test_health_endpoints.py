@@ -2308,8 +2308,10 @@ async def test_health_readiness_returns_200_when_db_down_and_allow_requests_on_d
 
     response = Response()
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch.dict(
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
             "litellm.proxy.proxy_server.general_settings",
             {"allow_requests_on_db_unavailable": True},
         ),
@@ -2344,8 +2346,10 @@ async def test_health_readiness_details_returns_200_when_db_down_and_allow_reque
 
     response = Response()
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch.dict(
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
             "litellm.proxy.proxy_server.general_settings",
             {"allow_requests_on_db_unavailable": True},
         ),
@@ -2379,12 +2383,14 @@ async def test_db_health_readiness_check_bounds_hung_health_check():
         "last_updated": datetime.now() - timedelta(seconds=60),
     }
 
-    with patch(
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
         "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_CHECK_TIMEOUT_SECONDS",
         0.05,
     ):
         start = time.monotonic()
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
             result = await _db_health_readiness_check()
         elapsed = time.monotonic() - start
 
@@ -2415,12 +2421,14 @@ async def test_db_health_readiness_check_overall_deadline_bounds_hung_reconnect(
         "last_updated": datetime.now() - timedelta(seconds=60),
     }
 
-    with patch(
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
         "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_PROBE_DEADLINE_SECONDS",
         0.05,
     ):
         start = time.monotonic()
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
             result = await _db_health_readiness_check()
         elapsed = time.monotonic() - start
 
@@ -2902,9 +2910,9 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
     client = TestClient(app)
 
     with (
-        patch(
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
             "litellm.proxy.proxy_server.prisma_client", MagicMock()
-        ),  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+        ),
         respx.mock(assert_all_called=True) as respx_mock,
     ):
         respx_mock.post(host="api.openai.com", path="/v1/images/edits").respond(
