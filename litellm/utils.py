@@ -1474,6 +1474,7 @@ def client(original_function):
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time: Final = datetime.datetime.now()
         result = None
+        _update_response_metadata: Final = getattr(sys.modules[__name__], "update_response_metadata")
         logging_obj: LiteLLMLoggingObject | None = kwargs.get("litellm_logging_obj", None)
 
         # only set litellm_call_id if its not in kwargs
@@ -1601,8 +1602,7 @@ def client(original_function):
                     return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else:
                     # RETURN RESULT
-                    update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
-                    update_response_metadata(
+                    _update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
                         model=model,
@@ -1642,6 +1642,17 @@ def client(original_function):
                 kwargs=kwargs,
             )
 
+            returns_raw_dict: Final = isinstance(result, dict)
+            if returns_raw_dict:
+                _update_response_metadata(
+                    result=result,
+                    logging_obj=logging_obj,
+                    model=model,
+                    kwargs=kwargs,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
             # Copy the current context to propagate it to the background thread
@@ -1655,16 +1666,15 @@ def client(original_function):
                 start_time,
                 end_time,
             )
-            # RETURN RESULT
-            update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
-            update_response_metadata(
-                result=result,
-                logging_obj=logging_obj,
-                model=model,
-                kwargs=kwargs,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            if not returns_raw_dict:
+                _update_response_metadata(
+                    result=result,
+                    logging_obj=logging_obj,
+                    model=model,
+                    kwargs=kwargs,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -1921,6 +1931,17 @@ def client(original_function):
                 args=args,
             )
 
+            returns_raw_dict: Final = isinstance(result, dict)
+            if returns_raw_dict:
+                _update_response_metadata(
+                    result=result,
+                    logging_obj=logging_obj,
+                    model=model,
+                    kwargs=kwargs,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+
             # LOG SUCCESS - handle streaming success logging in the _next_ object
             # Internal sub-calls (e.g. emulated file-search steps) share the
             # parent's logging obj; skip async logging here so only the outer call bills once.
@@ -1970,15 +1991,15 @@ def client(original_function):
                     end_time=end_time,
                 )
 
-            _update_response_metadata(
-                result=result,
-                logging_obj=logging_obj,
-                model=model,
-                kwargs=kwargs,
-                start_time=start_time,
-                end_time=end_time,
-            )
-
+            if not returns_raw_dict:
+                _update_response_metadata(
+                    result=result,
+                    logging_obj=logging_obj,
+                    model=model,
+                    kwargs=kwargs,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
             return result
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()

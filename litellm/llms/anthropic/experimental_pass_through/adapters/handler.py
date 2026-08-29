@@ -11,6 +11,9 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    prefetch_proxy_stream_for_timing,
+)
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -613,6 +616,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        if stream is True:
+            await prefetch_proxy_stream_for_timing(completion_response)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(

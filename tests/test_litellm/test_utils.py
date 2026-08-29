@@ -5691,6 +5691,89 @@ async def test_wrapper_async_failure_hook_exception_snapshot_preserves_traceback
     assert received[0].__traceback__ is not None
 
 
+def test_client_records_dict_timing_before_sync_success_handler() -> None:
+    events: list[str] = []
+    response = {"id": "msg_123"}
+    logging_obj = MagicMock()
+    logging_obj.stream = False
+    logging_obj.success_handler.side_effect = lambda *args: events.append("success")
+    immediate_executor = MagicMock()
+    immediate_executor.submit.side_effect = lambda context_run, callback, *args: context_run(callback, *args)
+
+    def capture_timing(**kwargs: object) -> None:
+        assert kwargs["result"] is response
+        events.append("metadata")
+
+    @client
+    def messages(model: str, **kwargs: object) -> dict[str, str]:
+        return response
+
+    with (
+        patch("litellm.utils.executor", immediate_executor),  # test-quality-ok: controls async success-handler scheduling
+        patch("litellm.utils.update_response_metadata", side_effect=capture_timing),  # test-quality-ok: observes metadata-before-logging ordering
+    ):
+        result = messages(model="anthropic/claude-haiku-4-5-20251001", litellm_logging_obj=logging_obj)
+
+    assert result is response
+    assert events == ["metadata", "success"]
+
+
+@pytest.mark.asyncio
+async def test_client_records_dict_timing_before_async_logging() -> None:
+    events: list[str] = []
+    response = {"id": "msg_123"}
+    logging_obj = MagicMock()
+    logging_obj.stream = False
+    logging_obj._defer_async_logging = False
+
+    async def capture_async_logging(**kwargs: object) -> None:
+        events.append("success")
+
+    def capture_timing(**kwargs: object) -> None:
+        assert kwargs["result"] is response
+        events.append("metadata")
+
+    @client
+    async def amessages(model: str, **kwargs: object) -> dict[str, str]:
+        return response
+
+    with (
+        patch("litellm.utils.update_response_metadata", side_effect=capture_timing),  # test-quality-ok: observes metadata-before-logging ordering
+        patch("litellm.utils._client_async_logging_helper", side_effect=capture_async_logging),  # test-quality-ok: observes async logging dispatch
+    ):
+        result = await amessages(model="anthropic/claude-haiku-4-5-20251001", litellm_logging_obj=logging_obj)
+        await asyncio.sleep(0)
+
+    assert result is response
+    assert events == ["metadata", "success"]
+
+
+@pytest.mark.asyncio
+async def test_client_preserves_outer_timing_for_internal_dict_call() -> None:
+    response = {"id": "msg_123"}
+    outer_timing_metrics = {"_response_ms": 2500.0, "litellm_overhead_time_ms": 200.0}
+    logging_obj = MagicMock()
+    logging_obj.stream = False
+    logging_obj._defer_async_logging = False
+    logging_obj.model_call_details = {"llm_api_duration_ms": 900.0}
+    logging_obj.caching_details = None
+    logging_obj.response_timing_metrics = outer_timing_metrics
+
+    @client
+    async def amessages(model: str, **kwargs: object) -> dict[str, str]:
+        return response
+
+    token = is_internal_call.set(True)
+    try:
+        result = await amessages(model="anthropic/claude-haiku-4-5-20251001", litellm_logging_obj=logging_obj)
+    finally:
+        is_internal_call.reset(token)
+
+    assert result is response
+    logging_obj.set_response_timing_metrics.assert_not_called()
+    assert logging_obj.response_timing_metrics is outer_timing_metrics
+
+
 def test_snapshot_exception_for_hook_preserves_suppress_context_flag() -> None:
     """Regression: setting __cause__ has a documented CPython side effect of implicitly
     forcing __suppress_context__ to True, even when the real exception's own

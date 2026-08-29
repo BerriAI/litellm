@@ -985,6 +985,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self.finished = True
             raise e
 
+    async def aclose(self) -> None:
+        self.finished = True
+        await self.litellm_custom_stream_wrapper.aclose()
+
     def __iter__(self):
         return self
 

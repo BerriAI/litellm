@@ -18,11 +18,13 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
 import litellm
+from litellm._internal_context import is_proxy_stream_header_prefetch
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    EMPTY_MAPPING,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
@@ -1481,8 +1483,31 @@ class ProxyBaseLLMRequestProcessing:
         **kwargs,
     ) -> dict:
         exclude_values: Final = {"", None, "None"}
-        hidden_params = hidden_params or {}
-
+        response_hidden_params: Final = hidden_params or EMPTY_MAPPING
+        request_timing_metrics: Final[Mapping[str, float]] = (
+            getattr(litellm_logging_obj, "response_timing_metrics", EMPTY_MAPPING)
+            if litellm_logging_obj is not None
+            else EMPTY_MAPPING
+        )
+        response_duration_ms: Final = next(
+            (
+                value
+                for value in (response_hidden_params.get("_response_ms"), request_timing_metrics.get("_response_ms"))
+                if value is not None
+            ),
+            None,
+        )
+        overhead_duration_ms: Final = next(
+            (
+                value
+                for value in (
+                    response_hidden_params.get("litellm_overhead_time_ms"),
+                    request_timing_metrics.get("litellm_overhead_time_ms"),
+                )
+                if value is not None
+            ),
+            None,
+        )
         cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
         )
@@ -1549,15 +1574,19 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
             "x-litellm-key-spend": str(updated_spend),
-            "x-litellm-response-duration-ms": str(hidden_params.get("_response_ms", None)),
-            "x-litellm-overhead-duration-ms": str(hidden_params.get("litellm_overhead_time_ms", None)),
-            "x-litellm-callback-duration-ms": str(hidden_params.get("callback_duration_ms", None)),
+            "x-litellm-response-duration-ms": str(response_duration_ms),
+            "x-litellm-overhead-duration-ms": str(overhead_duration_ms),
+            "x-litellm-callback-duration-ms": str(response_hidden_params.get("callback_duration_ms")),
             **(
                 {
-                    "x-litellm-timing-pre-processing-ms": str(hidden_params.get("timing_pre_processing_ms", None)),
-                    "x-litellm-timing-llm-api-ms": str(hidden_params.get("timing_llm_api_ms", None)),
-                    "x-litellm-timing-post-processing-ms": str(hidden_params.get("timing_post_processing_ms", None)),
-                    "x-litellm-timing-message-copy-ms": str(hidden_params.get("timing_message_copy_ms", None)),
+                    "x-litellm-timing-pre-processing-ms": str(
+                        response_hidden_params.get("timing_pre_processing_ms", None)
+                    ),
+                    "x-litellm-timing-llm-api-ms": str(response_hidden_params.get("timing_llm_api_ms", None)),
+                    "x-litellm-timing-post-processing-ms": str(
+                        response_hidden_params.get("timing_post_processing_ms", None)
+                    ),
+                    "x-litellm-timing-message-copy-ms": str(response_hidden_params.get("timing_message_copy_ms", None)),
                 }
                 if LITELLM_DETAILED_TIMING
                 else {}
@@ -2266,7 +2295,18 @@ class ProxyBaseLLMRequestProcessing:
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        llm_call_task: Final = asyncio.create_task(llm_call)
+        should_prefetch_stream_headers: Final = route_type in {
+            "anthropic_messages",
+            "aresponses",
+        } and self._is_streaming_request(
+            data=self.data,
+            is_streaming_request=is_streaming_request,
+        )
+        prefetch_token: Final = is_proxy_stream_header_prefetch.set(should_prefetch_stream_headers)
+        try:
+            llm_call_task: Final = asyncio.create_task(llm_call)
+        finally:
+            is_proxy_stream_header_prefetch.reset(prefetch_token)
         tasks.append(llm_call_task)
 
         llm_responses: Final = asyncio.gather(*tasks)  # run the moderation check in parallel to the actual llm api call
@@ -2280,6 +2320,8 @@ class ProxyBaseLLMRequestProcessing:
             await _cancel_pending_gather_tasks(tasks)
 
         response = responses[1]
+        response_ownership_transferred = False
+        response_requires_cleanup = False
 
         _exception_raised = False
         try:
@@ -2308,6 +2350,7 @@ class ProxyBaseLLMRequestProcessing:
             if self._is_streaming_request(
                 data=self.data, is_streaming_request=is_streaming_request
             ) or self._is_streaming_response(response):  # use generate_responses to stream responses
+                response_requires_cleanup = self._is_streaming_response(response)
                 custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
                     user_api_key_dict=user_api_key_dict,
                     call_id=logging_obj.litellm_call_id,
@@ -2391,6 +2434,7 @@ class ProxyBaseLLMRequestProcessing:
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
                     if self._is_streaming_response(response):
+                        response_ownership_transferred = True
                         if asyncio.iscoroutine(response):
                             generator = await response
                         else:
@@ -2452,7 +2496,7 @@ class ProxyBaseLLMRequestProcessing:
                             proxy_logging_obj=proxy_logging_obj,
                             request=request,
                         )
-                        return await create_response(
+                        anthropic_stream_response: Final = await create_response(
                             generator=wrap_sse_stream_with_keepalive_pings(
                                 stream=selected_data_generator,
                                 ping_interval_seconds=litellm.anthropic_sse_ping_interval_seconds,
@@ -2461,6 +2505,8 @@ class ProxyBaseLLMRequestProcessing:
                             headers=custom_headers,
                             request=request,
                         )
+                        response_ownership_transferred = True
+                        return anthropic_stream_response
                     # Non-streaming response - fall through to normal response handling
                 elif select_data_generator:
                     selected_data_generator = select_data_generator(
@@ -2486,12 +2532,14 @@ class ProxyBaseLLMRequestProcessing:
                                 user_api_key_dict=user_api_key_dict,
                             )
                         )
-                    return await create_response(
+                    responses_stream_response: Final = await create_response(
                         generator=selected_data_generator,
                         media_type="text/event-stream",
                         headers=custom_headers,
                         request=request,
                     )
+                    response_ownership_transferred = True
+                    return responses_stream_response
 
             ### CALL HOOKS ### - modify outgoing data
             # If we reach here with a streaming closure still set, it means
@@ -2536,6 +2584,14 @@ class ProxyBaseLLMRequestProcessing:
             _exception_raised = True
             raise
         finally:
+            if response_requires_cleanup and not response_ownership_transferred:
+                aclose = getattr(response, "aclose", None)
+                if aclose is not None:
+                    with anyio.CancelScope(shield=True):
+                        try:
+                            await aclose()
+                        except Exception as exc:  # noqa: BLE001
+                            verbose_proxy_logger.debug("Error closing unowned response stream: %s", exc)
             ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
                 logging_obj=logging_obj,
                 exception_raised=_exception_raised,

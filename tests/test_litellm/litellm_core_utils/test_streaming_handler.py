@@ -763,6 +763,31 @@ async def test_streaming_completion_start_time(logging_obj: Logging):
 
 
 @pytest.mark.asyncio
+async def test_vertex_fetch_stream_preserves_bad_request(logging_obj: Logging):
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    expected_error = VertexAIError(
+        status_code=400, message="invalid maxOutputTokens", headers=None
+    )
+
+    async def _raise_bad_request(**kwargs):
+        raise expected_error
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-pro-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_bad_request,
+    )
+
+    with pytest.raises(VertexAIError) as excinfo:
+        await response.fetch_stream()
+
+    assert excinfo.value is expected_error
+
+
+@pytest.mark.asyncio
 async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     """Ensure Vertex bad request errors surface as 400, not mid-stream fallbacks."""
     from litellm.llms.vertex_ai.common_utils import VertexAIError
@@ -785,6 +810,31 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
 
     assert getattr(excinfo.value, "status_code", None) == 400
     assert "invalid maxOutputTokens" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_vertex_fetch_stream_preserves_rate_limit(logging_obj: Logging):
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    expected_error = VertexAIError(
+        status_code=429, message="Resource exhausted.", headers=None
+    )
+
+    async def _raise_rate_limit(**kwargs):
+        raise expected_error
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(VertexAIError) as excinfo:
+        await response.fetch_stream()
+
+    assert excinfo.value is expected_error
 
 
 @pytest.mark.asyncio

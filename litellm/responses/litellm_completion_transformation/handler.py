@@ -6,6 +6,9 @@ from collections.abc import Coroutine, Mapping
 from typing import Final
 
 import litellm
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    prefetch_proxy_stream_for_timing,
+)
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -110,6 +113,7 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
             **acompletion_args,
         )
+        await prefetch_proxy_stream_for_timing(litellm_completion_response)
 
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (

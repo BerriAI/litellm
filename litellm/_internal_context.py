@@ -12,3 +12,5 @@ from typing import Final
 # When True, suppresses async logging and billing for internal sub-calls
 # (e.g., emulated file-search steps that make nested LLM calls).
 is_internal_call: Final[ContextVar[bool]] = ContextVar("is_internal_call", default=False)
+
+is_proxy_stream_header_prefetch: Final[ContextVar[bool]] = ContextVar("is_proxy_stream_header_prefetch", default=False)

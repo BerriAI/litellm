@@ -25,11 +25,15 @@ Tests cover (consolidating PRs #23706 and #22727):
    the fallback inference path from being exercised).
 """
 
+import datetime
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+import litellm
+from litellm._internal_context import is_proxy_stream_header_prefetch
 
 # Anchor sys.path to this file's location — not the working-directory-relative
 # pattern Greptile flagged on PR #23706. Resolves correctly regardless of
@@ -44,6 +48,33 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
 )
 
 MESSAGES = [{"role": "user", "content": "hello"}]
+
+
+class _EmptyAsyncStream:
+    def __init__(self):
+        self.aclosed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+    async def aclose(self):
+        self.aclosed = True
+
+
+def _deferred_stream(provider: str = "vertex_ai_beta") -> litellm.CustomStreamWrapper:
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"litellm_params": {}, "llm_api_duration_ms": 40.0}
+    logging_obj.start_time = datetime.datetime.now()
+    return litellm.CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider=provider,
+        make_call=AsyncMock(return_value=_EmptyAsyncStream()),
+    )
 
 
 def _call_prepare(extra_kwargs, model="gpt-4o", output_format=None, **overrides):
@@ -74,6 +105,133 @@ def _call_prepare(extra_kwargs, model="gpt-4o", output_format=None, **overrides)
         output_format=output_format,
         extra_kwargs=extra_kwargs,
     )
+
+
+@pytest.mark.asyncio
+async def test_async_messages_bridge_keeps_sdk_deferred_gemini_stream_lazy():
+    deferred_stream = _deferred_stream()
+
+    with patch("litellm.acompletion", new=AsyncMock(return_value=deferred_stream)):  # test-quality-ok: handler directly owns this module-level provider-call seam
+        result = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+            max_tokens=32,
+            messages=MESSAGES,
+            model="gemini-3.5-flash",
+            stream=True,
+        )
+
+    assert deferred_stream.make_call.await_count == 0
+    first_sse_event = await anext(result)
+    assert b"event: message_start" in first_sse_event
+    assert deferred_stream.make_call.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_async_messages_bridge_prefetches_without_consuming_source_event():
+    deferred_stream = _deferred_stream()
+    token = is_proxy_stream_header_prefetch.set(True)
+    try:
+        with patch("litellm.acompletion", new=AsyncMock(return_value=deferred_stream)):  # test-quality-ok: handler directly owns this module-level provider-call seam
+            result = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+                max_tokens=32,
+                messages=MESSAGES,
+                model="gemini-3.5-flash",
+                stream=True,
+            )
+    finally:
+        is_proxy_stream_header_prefetch.reset(token)
+
+    deferred_stream.make_call.assert_awaited_once()
+    first_sse_event = await anext(result)
+    assert b"event: message_start" in first_sse_event
+    remaining_events = [event async for event in result]
+    assert sum(b"event: message_start" in event for event in remaining_events) == 0
+
+
+@pytest.mark.asyncio
+async def test_async_messages_bridge_does_not_prefetch_already_connected_gemini_stream_for_proxy():
+    deferred_stream = _deferred_stream()
+    existing_stream = _EmptyAsyncStream()
+    deferred_stream.completion_stream = existing_stream
+    token = is_proxy_stream_header_prefetch.set(True)
+    try:
+        with patch("litellm.acompletion", new=AsyncMock(return_value=deferred_stream)):  # test-quality-ok: handler directly owns this module-level provider-call seam
+            result = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+                max_tokens=32,
+                messages=MESSAGES,
+                model="gemini-3.5-flash",
+                stream=True,
+            )
+    finally:
+        is_proxy_stream_header_prefetch.reset(token)
+
+    assert deferred_stream.make_call.await_count == 0
+    assert b"event: message_start" in await anext(result)
+
+
+@pytest.mark.asyncio
+async def test_async_messages_bridge_closes_prefetched_gemini_stream_on_early_close():
+    upstream = _EmptyAsyncStream()
+    deferred_stream = _deferred_stream()
+    deferred_stream.make_call = AsyncMock(return_value=upstream)
+    token = is_proxy_stream_header_prefetch.set(True)
+    try:
+        with patch("litellm.acompletion", new=AsyncMock(return_value=deferred_stream)):  # test-quality-ok: handler directly owns this module-level provider-call seam
+            result = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+                max_tokens=32,
+                messages=MESSAGES,
+                model="gemini-3.5-flash",
+                stream=True,
+            )
+    finally:
+        is_proxy_stream_header_prefetch.reset(token)
+
+    assert b"event: message_start" in await anext(result)
+    await result.aclose()
+
+    assert upstream.aclosed is True
+    assert deferred_stream.completion_stream is None
+
+
+@pytest.mark.asyncio
+async def test_async_messages_bridge_propagates_initial_fetch_failure():
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    expected_error = VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+    deferred_stream = _deferred_stream()
+    deferred_stream.make_call = AsyncMock(side_effect=expected_error)
+    token = is_proxy_stream_header_prefetch.set(True)
+    try:
+        with patch("litellm.acompletion", new=AsyncMock(return_value=deferred_stream)):  # test-quality-ok: handler directly owns this module-level provider-call seam
+            with pytest.raises(VertexAIError) as excinfo:
+                await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+                    max_tokens=32,
+                    messages=MESSAGES,
+                    model="gemini-3.5-flash",
+                    stream=True,
+                )
+    finally:
+        is_proxy_stream_header_prefetch.reset(token)
+
+    assert excinfo.value is expected_error
+
+
+@pytest.mark.asyncio
+async def test_async_messages_bridge_does_not_prefetch_non_gemini_stream_for_proxy():
+    deferred_stream = _deferred_stream(provider="openai")
+    token = is_proxy_stream_header_prefetch.set(True)
+    try:
+        with patch("litellm.acompletion", new=AsyncMock(return_value=deferred_stream)):  # test-quality-ok: handler directly owns this module-level provider-call seam
+            result = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+                max_tokens=32,
+                messages=MESSAGES,
+                model="other-model",
+                stream=True,
+            )
+    finally:
+        is_proxy_stream_header_prefetch.reset(token)
+
+    assert deferred_stream.make_call.await_count == 0
+    assert b"event: message_start" in await anext(result)
 
 
 class TestAnthropicOnlyRequestKeysExport:

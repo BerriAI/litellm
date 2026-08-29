@@ -254,6 +254,11 @@ class _CombinedChunkSplitter:
         )
         return self._buffer.popleft()
 
+    async def aclose(self) -> None:
+        aclose: Final = getattr(self._stream, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
 
 class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     """
@@ -955,6 +960,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {"type": "message_stop"}
             raise StopAsyncIteration
 
+    async def aclose(self) -> None:
+        aclose: Final = getattr(self.completion_stream, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
     def anthropic_sse_wrapper(self) -> Iterator[bytes]:
         """
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
@@ -972,18 +982,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 yield chunk
 
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
-        """
-        Async version of anthropic_sse_wrapper.
-        Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
-        """
-        async for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged
-                yield chunk
+        try:
+            async for chunk in self:
+                if isinstance(chunk, dict):
+                    event_type: str = str(chunk.get("type", "message"))
+                    payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                    yield payload.encode()
+                else:
+                    yield chunk
+        finally:
+            await self.aclose()
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1

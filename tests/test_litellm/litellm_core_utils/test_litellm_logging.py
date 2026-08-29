@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import os
 import sys
 import asyncio
@@ -4132,6 +4133,81 @@ def _anthropic_messages_logging_obj():
         litellm_call_id="28595",
         function_id="28595",
     )
+
+
+def test_logging_response_timing_metrics_supports_deepcopy():
+    logging_obj = _anthropic_messages_logging_obj()
+    timing_metrics = {"_response_ms": 1000.0}
+    logging_obj.set_response_timing_metrics(timing_metrics)
+    timing_metrics["_response_ms"] = 1.0
+    logging_copy = copy.deepcopy(logging_obj)
+
+    assert logging_copy.response_timing_metrics == {"_response_ms": 1000.0}
+
+
+def test_anthropic_messages_standard_payload_uses_request_timing_without_mutating_response():
+    from datetime import datetime
+
+    logging_obj = LitellmLogging(
+        model="claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="lit-5466",
+        function_id="lit-5466",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.set_response_timing_metrics(
+        {
+            "_response_ms": 1000.0,
+            "litellm_overhead_time_ms": 100.0,
+        }
+    )
+    response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5-20251001",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 7, "output_tokens": 320},
+    }
+    now = datetime.now()
+
+    logging_obj._success_handler_helper_fn(response, now, now)
+
+    payload = logging_obj.model_call_details["standard_logging_object"]
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == 100.0
+    assert "_hidden_params" not in response
+
+
+def test_standard_payload_prefers_response_overhead_to_request_timing():
+    """A response carrying its own overhead keeps it; the request-scoped carrier only fills gaps."""
+    from datetime import datetime
+
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="lit-5466",
+        function_id="lit-5466",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.set_response_timing_metrics({"litellm_overhead_time_ms": 100.0})
+    response = ModelResponse()
+    response._hidden_params = {"litellm_overhead_time_ms": 25.0}
+    now = datetime.now()
+
+    logging_obj._success_handler_helper_fn(response, now, now)
+
+    payload = logging_obj.model_call_details["standard_logging_object"]
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == 25.0
 
 
 def _responses_api_response_with_text(text="hello world"):

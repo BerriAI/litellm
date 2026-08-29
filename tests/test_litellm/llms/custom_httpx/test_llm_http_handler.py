@@ -18,6 +18,7 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
@@ -236,6 +237,45 @@ def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
 
 
 @pytest.mark.asyncio
+async def test_async_response_api_handler_records_llm_api_duration():
+    config = Mock(spec=BaseResponsesAPIConfig)
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://responses.example.com/v1/responses"
+    config.transform_responses_api_request.return_value = {"model": "gpt-5.3-codex", "input": "hi"}
+    config.sign_request.return_value = ({}, None)
+    config.transform_response_api_response.return_value = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[],
+        status="completed",
+        model="gpt-5.3-codex",
+    )
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"id": "resp_1"}, request=request)
+        )
+    )
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+    logging_obj.model_call_details = {}
+
+    response = await BaseLLMHTTPHandler().async_response_api_handler(
+        model="gpt-5.3-codex",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        client=client,
+    )
+
+    assert response.id == "resp_1"
+    assert logging_obj.model_call_details["llm_api_duration_ms"] >= 0
+
+
+@pytest.mark.asyncio
 async def test_async_response_api_handler_streams_when_provider_transform_adds_stream():
     handler = BaseLLMHTTPHandler()
     config = Mock()
@@ -266,6 +306,8 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
         logging_obj=logging_obj,
         client=client,
     )
+
+    assert client.post.call_args.kwargs["logging_obj"] is logging_obj
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True

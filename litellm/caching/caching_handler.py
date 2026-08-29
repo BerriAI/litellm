@@ -221,7 +221,6 @@ class LLMCachingHandler:
             # Init cache timing metrics
             #########################################################
             cache_check_start_time: Final = time.perf_counter()
-            cache_check_end_time: float | None = None
             #########################################################
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             kwargs["parent_otel_span"] = parent_otel_span
@@ -233,19 +232,17 @@ class LLMCachingHandler:
                     kwargs=kwargs,
                     args=args,
                 )
-                cache_check_end_time = time.perf_counter()
+                cache_duration_ms: Final = (time.perf_counter() - cache_check_start_time) * 1000
 
                 if cached_result is not None and not isinstance(cached_result, list):
                     verbose_logger.debug("Cache Hit!")
                     cache_hit: Final = True
-                    end_time: Final = datetime.datetime.now()
                     model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                         model=model,
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         api_base=kwargs.get("api_base", None),
                         api_key=kwargs.get("api_key", None),
                     )
-                    cache_duration_ms: Final = (cache_check_end_time - cache_check_start_time) * 1000
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
                         model=model,
@@ -267,6 +264,7 @@ class LLMCachingHandler:
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
+                    end_time: Final = datetime.datetime.now()
                     if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
                         # LOG SUCCESS
                         self._async_log_cache_hit_on_callbacks(
@@ -344,44 +342,40 @@ class LLMCachingHandler:
                 new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
             self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
             print_verbose("Checking Sync Cache")
+            cache_check_start_time: Final = time.perf_counter()
             cached_result = litellm.cache.get_cache(**new_kwargs)
+            cache_check_end_time: Final = time.perf_counter()
             if cached_result is not None:
                 if "detail" in cached_result:
                     # implies an error occurred
                     pass
                 else:
-                    call_type = original_function.__name__
+                    cache_hit: Final = True
+                    resolved_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                        model=model or "",
+                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                        api_base=kwargs.get("api_base", None),
+                        api_key=kwargs.get("api_key", None),
+                    )
+                    cache_duration_ms: Final = (cache_check_end_time - cache_check_start_time) * 1000
+                    self._update_litellm_logging_obj_environment(
+                        logging_obj=logging_obj,
+                        model=f"{custom_llm_provider}/{resolved_model}",
+                        kwargs=kwargs,
+                        cached_result=cached_result,
+                        is_async=False,
+                        cache_duration_ms=cache_duration_ms,
+                    )
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
-                        call_type=call_type,
+                        call_type=original_function.__name__,
                         kwargs=kwargs,
                         logging_obj=logging_obj,
                         model=model,
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
-
-                    # LOG SUCCESS
-                    cache_hit: Final = True
                     end_time: Final = datetime.datetime.now()
-                    (
-                        model,
-                        custom_llm_provider,
-                        dynamic_api_key,
-                        api_base,
-                    ) = litellm.get_llm_provider(
-                        model=model or "",
-                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                        api_base=kwargs.get("api_base", None),
-                        api_key=kwargs.get("api_key", None),
-                    )
-                    self._update_litellm_logging_obj_environment(
-                        logging_obj=logging_obj,
-                        model=f"{custom_llm_provider}/{model}",
-                        kwargs=kwargs,
-                        cached_result=cached_result,
-                        is_async=False,
-                    )
 
                     if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
                         logging_obj.handle_sync_success_callbacks_for_async_calls(

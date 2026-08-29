@@ -12,6 +12,7 @@ from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
+from litellm._internal_context import is_proxy_stream_header_prefetch
 from litellm._uuid import uuid
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
@@ -2521,6 +2522,72 @@ class TestStreamingOverheadHeader:
         assert "x-litellm-overhead-duration-ms" in headers
         assert headers["x-litellm-overhead-duration-ms"] == "42.5"
 
+    def test_get_custom_headers_uses_detached_stream_timing_before_headers_commit(self):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+        logging_obj = MagicMock()
+        logging_obj.response_timing_metrics = {
+            "_response_ms": 500.0,
+            "litellm_overhead_time_ms": 42.5,
+        }
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            hidden_params={},
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert headers["x-litellm-response-duration-ms"] == "500.0"
+        assert headers["x-litellm-overhead-duration-ms"] == "42.5"
+
+    def test_get_custom_headers_uses_detached_timing_when_response_timing_is_none(self):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+        logging_obj = MagicMock()
+        logging_obj.response_timing_metrics = {
+            "_response_ms": 500.0,
+            "litellm_overhead_time_ms": 42.5,
+        }
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            hidden_params={"_response_ms": None, "litellm_overhead_time_ms": None},
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert headers["x-litellm-response-duration-ms"] == "500.0"
+        assert headers["x-litellm-overhead-duration-ms"] == "42.5"
+
+    def test_get_custom_headers_preserves_zero_response_timing_over_detached_timing(self):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+        logging_obj = MagicMock()
+        logging_obj.response_timing_metrics = {
+            "_response_ms": 500.0,
+            "litellm_overhead_time_ms": 42.5,
+        }
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            hidden_params={"_response_ms": 0, "litellm_overhead_time_ms": 0},
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert headers["x-litellm-response-duration-ms"] == "0"
+        assert headers["x-litellm-overhead-duration-ms"] == "0"
+
     def test_get_custom_headers_omits_overhead_when_none(self):
         """
         get_custom_headers() omits x-litellm-overhead-duration-ms
@@ -4066,7 +4133,14 @@ class TestCancelOnDisconnect:
             await _await_llm_call_cancelling_on_disconnect(request, llm_call)
 
     async def _drive_base_process_llm_request(
-        self, monkeypatch, general_settings: dict, llm_call, request: Request
+        self,
+        monkeypatch,
+        general_settings: dict,
+        llm_call,
+        request: Request,
+        route_type: str = "acompletion",
+        data: dict | None = None,
+        is_streaming_request: bool = False,
     ):
         from litellm.proxy._types import UserAPIKeyAuth
 
@@ -4076,9 +4150,12 @@ class TestCancelOnDisconnect:
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
 
-        processor = ProxyBaseLLMRequestProcessing(
-            data={"model": "fake-model", "litellm_logging_obj": logging_obj}
+        request_data = (
+            {"model": "fake-model", "litellm_logging_obj": logging_obj}
+            if data is None
+            else {**data, "litellm_logging_obj": logging_obj}
         )
+        processor = ProxyBaseLLMRequestProcessing(data=request_data)
 
         proxy_logging_obj = MagicMock(spec=ProxyLogging)
         proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
@@ -4103,12 +4180,240 @@ class TestCancelOnDisconnect:
             request=request,
             fastapi_response=Response(),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
-            route_type="acompletion",
+            route_type=route_type,
             proxy_logging_obj=proxy_logging_obj,
             general_settings=general_settings,
             proxy_config=MagicMock(spec=ProxyConfig),
+            is_streaming_request=is_streaming_request,
             skip_pre_call_logic=True,
         )
+
+    @pytest.mark.parametrize("route_type", ["anthropic_messages", "aresponses"])
+    async def test_native_stream_task_inherits_prefetch_marker_only_for_child(self, monkeypatch, route_type):
+        seen_in_child: list[bool] = []
+
+        async def llm_call():
+            seen_in_child.append(is_proxy_stream_header_prefetch.get())
+            return litellm.ModelResponse()
+
+        assert is_proxy_stream_header_prefetch.get() is False
+        await self._drive_base_process_llm_request(
+            monkeypatch,
+            general_settings={},
+            llm_call=llm_call,
+            request=self._request([]),
+            route_type=route_type,
+            data={"model": "fake-model", "stream": True},
+            is_streaming_request=True,
+        )
+
+        assert seen_in_child == [True]
+        assert is_proxy_stream_header_prefetch.get() is False
+
+    @pytest.mark.parametrize("route_type", ["anthropic_messages", "aresponses"])
+    async def test_native_stream_uses_detached_timing_for_headers_before_body_iteration(self, monkeypatch, route_type):
+        logging_obj = MagicMock()
+        logging_obj._hidden_params = {}
+        logging_obj.response_timing_metrics = {
+            "_response_ms": 500.0,
+            "litellm_overhead_time_ms": 42.5,
+        }
+
+        body_started = asyncio.Event()
+
+        async def response_stream():
+            body_started.set()
+            yield "data: first event\n\n"
+
+        async def llm_call():
+            return response_stream()
+
+        async def fake_route_request(**kwargs):
+            return llm_call()
+
+        async def fake_create_response(generator, media_type, headers, **kwargs):
+            assert body_started.is_set() is False
+            assert headers["x-litellm-response-duration-ms"] == "500.0"
+            assert headers["x-litellm-overhead-duration-ms"] == "42.5"
+            return StreamingResponse(generator, media_type=media_type, headers=headers)
+
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "fake-model", "stream": True, "litellm_logging_obj": logging_obj}
+        )
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(
+            side_effect=lambda data, user_api_key_dict, response: response
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "create_response", fake_create_response)
+
+        def select_data_generator(**kwargs):
+            return kwargs["response"]
+
+        result = await processor.base_process_llm_request(
+            request=self._request([]),
+            fastapi_response=Response(),
+            user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+            route_type=route_type,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=select_data_generator,
+            is_streaming_request=True,
+            skip_pre_call_logic=True,
+        )
+
+        assert isinstance(result, StreamingResponse)
+        assert body_started.is_set() is False
+        assert result.headers["x-litellm-response-duration-ms"] == "500.0"
+        assert result.headers["x-litellm-overhead-duration-ms"] == "42.5"
+
+    @pytest.mark.parametrize("route_type", ["acompletion", "anthropic_messages", "aresponses"])
+    async def test_non_streaming_task_does_not_inherit_prefetch_marker(self, monkeypatch, route_type):
+        seen_in_child: list[bool] = []
+
+        async def llm_call():
+            seen_in_child.append(is_proxy_stream_header_prefetch.get())
+            return litellm.ModelResponse()
+
+        await self._drive_base_process_llm_request(
+            monkeypatch,
+            general_settings={},
+            llm_call=llm_call,
+            request=self._request([]),
+            route_type=route_type,
+            data={"model": "fake-model", "stream": False},
+            is_streaming_request=False,
+        )
+
+        assert seen_in_child == [False]
+        assert is_proxy_stream_header_prefetch.get() is False
+
+    @pytest.mark.parametrize("route_type", ["anthropic_messages", "aresponses"])
+    async def test_truthy_non_boolean_stream_flag_does_not_inherit_prefetch_marker(self, monkeypatch, route_type):
+        seen_in_child: list[bool] = []
+
+        async def llm_call():
+            seen_in_child.append(is_proxy_stream_header_prefetch.get())
+            return litellm.ModelResponse()
+
+        await self._drive_base_process_llm_request(
+            monkeypatch,
+            general_settings={},
+            llm_call=llm_call,
+            request=self._request([]),
+            route_type=route_type,
+            data={"model": "fake-model", "stream": "true"},
+            is_streaming_request=False,
+        )
+
+        assert seen_in_child == [False]
+        assert is_proxy_stream_header_prefetch.get() is False
+
+    @pytest.mark.parametrize("route_type", ["anthropic_messages", "aresponses"])
+    async def test_native_stream_cancels_upstream_on_disconnect_when_enabled(self, monkeypatch, route_type):
+        upstream_cancelled = asyncio.Event()
+
+        async def llm_call():
+            try:
+                await asyncio.sleep(5)
+                return litellm.ModelResponse()
+            except asyncio.CancelledError:
+                upstream_cancelled.set()
+                raise
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._drive_base_process_llm_request(
+                monkeypatch,
+                general_settings={"cancel_on_disconnect": True},
+                llm_call=llm_call,
+                request=self._request([{"type": "http.disconnect"}]),
+                route_type=route_type,
+                data={"model": "fake-model", "stream": True},
+                is_streaming_request=True,
+            )
+
+        assert exc_info.value.status_code == 499
+        assert upstream_cancelled.is_set()
+
+    async def test_cancellation_before_stream_response_transfers_ownership_closes_upstream(self, monkeypatch):
+        class Upstream:
+            def __init__(self):
+                self.aclosed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            async def aclose(self):
+                self.aclosed = True
+
+        upstream = Upstream()
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "test-prefetch-close"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = {"litellm_params": {}}
+        response = litellm.CustomStreamWrapper(
+            completion_stream=upstream,
+            model="gemini-3.5-flash",
+            logging_obj=logging_obj,
+            custom_llm_provider="vertex_ai_beta",
+        )
+        header_hook_started = asyncio.Event()
+
+        async def header_hook(**kwargs):
+            header_hook_started.set()
+            await asyncio.Event().wait()
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "fake-model", "stream": True, "litellm_logging_obj": logging_obj}
+        )
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = header_hook
+
+        async def fake_route_request(**kwargs):
+            async def llm_call():
+                return response
+
+            return llm_call()
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "route_request",
+            fake_route_request,
+        )
+
+        task = asyncio.create_task(
+            processor._process_llm_request(
+                request=self._request([]),
+                fastapi_response=Response(),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                route_type="anthropic_messages",
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                is_streaming_request=True,
+                skip_pre_call_logic=True,
+            )
+        )
+        await header_hook_started.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert upstream.aclosed is True
 
     async def test_disconnect_ignored_when_flag_disabled(self, monkeypatch):
         upstream_cancelled = asyncio.Event()

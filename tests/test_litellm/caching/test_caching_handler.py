@@ -232,18 +232,10 @@ def test_combine_usage_handles_none_details():
 def test_is_chat_completion_cached_dict():
     from litellm.caching.caching_handler import _is_chat_completion_cached_dict
 
-    assert _is_chat_completion_cached_dict(
-        {"id": "chatcmpl-abc", "object": "chat.completion", "choices": []}
-    )
-    assert _is_chat_completion_cached_dict(
-        {"id": "other", "object": "chat.completion.chunk", "choices": []}
-    )
-    assert _is_chat_completion_cached_dict(
-        {"id": "no-object", "choices": [{"index": 0}]}
-    )
-    assert not _is_chat_completion_cached_dict(
-        {"id": "resp_abc", "object": "response", "output": []}
-    )
+    assert _is_chat_completion_cached_dict({"id": "chatcmpl-abc", "object": "chat.completion", "choices": []})
+    assert _is_chat_completion_cached_dict({"id": "other", "object": "chat.completion.chunk", "choices": []})
+    assert _is_chat_completion_cached_dict({"id": "no-object", "choices": [{"index": 0}]})
+    assert not _is_chat_completion_cached_dict({"id": "resp_abc", "object": "response", "output": []})
 
 
 def _build_logging_obj(call_type: str, stream: bool):
@@ -262,15 +254,261 @@ def _build_logging_obj(call_type: str, stream: bool):
     )
 
 
+def test_sync_cached_anthropic_messages_records_cache_read_duration(monkeypatch):
+    import importlib
+
+    import litellm
+
+    caching_handler_module = importlib.import_module("litellm.caching.caching_handler")
+
+    class Cache:
+        cache = None
+        supported_call_types = ["anthropic_messages"]
+
+        def get_cache(self, **kwargs):
+            return {
+                "id": "msg_cached",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "cached"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+
+        def get_cache_key(self, **kwargs):
+            return "cache-key"
+
+        def _get_preset_cache_key_from_kwargs(self, **kwargs):
+            return None
+
+    def anthropic_messages():
+        return None
+
+    cache = Cache()
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    start_time = datetime.now()
+    caching_handler = LLMCachingHandler(
+        original_function=anthropic_messages,
+        request_kwargs={"model": "openai/gpt-4o", "messages": []},
+        start_time=start_time,
+    )
+
+    def resolve_model(**kwargs):
+        caching_handler_module.time.perf_counter()
+        return "gpt-4o", "openai", None, None
+
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "get_llm_provider", resolve_model)
+    monkeypatch.setattr(
+        caching_handler_module.time,
+        "perf_counter",
+        MagicMock(side_effect=(1.0, 1.25, 2.0)),
+    )
+
+    result = caching_handler._sync_get_cache(
+        model="openai/gpt-4o",
+        original_function=anthropic_messages,
+        logging_obj=logging_obj,
+        start_time=start_time,
+        call_type="anthropic_messages",
+        kwargs={"model": "openai/gpt-4o", "messages": []},
+        args=(),
+    )
+
+    timing_metrics = logging_obj.set_response_timing_metrics.call_args.args[0]
+    assert result.cached_result is not None
+    assert "_hidden_params" not in result.cached_result
+    assert logging_obj.caching_details["cache_duration_ms"] == 250.0
+    assert timing_metrics["_response_ms"] - timing_metrics["litellm_overhead_time_ms"] == pytest.approx(250.0)
+
+
+def test_sync_cached_stream_response_preserves_model(monkeypatch):
+    import importlib
+
+    import litellm
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    caching_handler_module = importlib.import_module("litellm.caching.caching_handler")
+
+    class Cache:
+        cache = None
+        supported_call_types = ["completion"]
+
+        def get_cache(self, **kwargs):
+            return {
+                "id": "chatcmpl_cached",
+                "object": "chat.completion",
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "cached"}}],
+            }
+
+        def get_cache_key(self, **kwargs):
+            return "cache-key"
+
+        def _get_preset_cache_key_from_kwargs(self, **kwargs):
+            return None
+
+    def completion():
+        return None
+
+    cache = Cache()
+    logging_obj = MagicMock()
+    start_time = datetime(2025, 1, 1)
+    caching_handler = LLMCachingHandler(
+        original_function=completion,
+        request_kwargs={"model": "openai/gpt-4o", "messages": []},
+        start_time=start_time,
+    )
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(
+        caching_handler_module.time,
+        "perf_counter",
+        MagicMock(side_effect=(1.0, 1.25)),
+    )
+
+    result = caching_handler._sync_get_cache(
+        model="openai/gpt-4o",
+        original_function=completion,
+        logging_obj=logging_obj,
+        start_time=start_time,
+        call_type="completion",
+        kwargs={"model": "openai/gpt-4o", "messages": [], "stream": True},
+        args=(),
+    )
+
+    assert isinstance(result.cached_result, CustomStreamWrapper)
+    assert result.cached_result.model == "openai/gpt-4o"
+
+
+def test_sync_cached_response_records_callback_time_after_conversion(monkeypatch):
+    import importlib
+
+    import litellm
+
+    caching_handler_module = importlib.import_module("litellm.caching.caching_handler")
+
+    class Cache:
+        cache = None
+        supported_call_types = ["completion"]
+
+        def get_cache(self, **kwargs):
+            return {"id": "chatcmpl_cached", "object": "chat.completion", "choices": []}
+
+        def get_cache_key(self, **kwargs):
+            return "cache-key"
+
+        def _get_preset_cache_key_from_kwargs(self, **kwargs):
+            return None
+
+    def completion():
+        return None
+
+    cache = Cache()
+    logging_obj = MagicMock()
+    start_time = datetime(2025, 1, 1)
+    callback_end_time = datetime(2025, 1, 1, 0, 0, 2)
+    conversion_completed = MagicMock()
+
+    def convert_cached_result(**kwargs):
+        conversion_completed()
+        return MagicMock()
+
+    def callback_now():
+        conversion_completed.assert_called_once()
+        return callback_end_time
+
+    caching_handler = LLMCachingHandler(
+        original_function=completion,
+        request_kwargs={"model": "openai/gpt-4o", "messages": []},
+        start_time=start_time,
+    )
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(caching_handler, "_convert_cached_result_to_model_response", convert_cached_result)
+    monkeypatch.setattr(caching_handler_module.datetime, "datetime", MagicMock(now=callback_now))
+
+    caching_handler._sync_get_cache(
+        model="openai/gpt-4o",
+        original_function=completion,
+        logging_obj=logging_obj,
+        start_time=start_time,
+        call_type="completion",
+        kwargs={"model": "openai/gpt-4o", "messages": []},
+        args=(),
+    )
+
+    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_args.kwargs["end_time"] == callback_end_time
+
+
+@pytest.mark.asyncio
+async def test_async_cached_response_records_callback_time_after_conversion(monkeypatch):
+    import importlib
+
+    import litellm
+
+    caching_handler_module = importlib.import_module("litellm.caching.caching_handler")
+
+    class Cache:
+        cache = None
+        supported_call_types = ["acompletion"]
+
+        async def async_get_cache(self, **kwargs):
+            return {"id": "chatcmpl_cached", "object": "chat.completion", "choices": []}
+
+        def get_cache_key(self, **kwargs):
+            return "cache-key"
+
+        def _get_preset_cache_key_from_kwargs(self, **kwargs):
+            return None
+
+        def _supports_async(self):
+            return True
+
+    async def acompletion():
+        return None
+
+    cache = Cache()
+    logging_obj = MagicMock()
+    start_time = datetime(2025, 1, 1)
+    callback_end_time = datetime(2025, 1, 1, 0, 0, 2)
+    conversion_completed = MagicMock()
+
+    def convert_cached_result(**kwargs):
+        conversion_completed()
+        return MagicMock()
+
+    def callback_now():
+        conversion_completed.assert_called_once()
+        return callback_end_time
+
+    caching_handler = LLMCachingHandler(
+        original_function=acompletion,
+        request_kwargs={"model": "openai/gpt-4o", "messages": []},
+        start_time=start_time,
+    )
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(caching_handler, "_convert_cached_result_to_model_response", convert_cached_result)
+    monkeypatch.setattr(caching_handler_module.datetime, "datetime", MagicMock(now=callback_now))
+
+    await caching_handler._async_get_cache(
+        model="openai/gpt-4o",
+        original_function=acompletion,
+        logging_obj=logging_obj,
+        start_time=start_time,
+        call_type="acompletion",
+        kwargs={"model": "openai/gpt-4o", "messages": []},
+        args=(),
+    )
+
+    assert logging_obj.async_success_handler.call_args.kwargs["end_time"] == callback_end_time
+
+
 def test_convert_cached_aresponses_bridge_chat_completion_stream():
     """openai/responses chat-completions bridge: streaming cache hit replays as chat stream."""
     from litellm import aresponses
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.types.utils import CallTypes
 
-    caching_handler = LLMCachingHandler(
-        original_function=aresponses, request_kwargs={}, start_time=datetime.now()
-    )
+    caching_handler = LLMCachingHandler(original_function=aresponses, request_kwargs={}, start_time=datetime.now())
     cached_result = {
         "id": "chatcmpl-bridge-cache-test",
         "object": "chat.completion",
@@ -307,9 +545,7 @@ def test_convert_cached_responses_bridge_chat_completion_nonstream():
     from litellm import responses
     from litellm.types.utils import CallTypes, ModelResponse
 
-    caching_handler = LLMCachingHandler(
-        original_function=responses, request_kwargs={}, start_time=datetime.now()
-    )
+    caching_handler = LLMCachingHandler(original_function=responses, request_kwargs={}, start_time=datetime.now())
     cached_result = {
         "id": "chatcmpl-bridge-nonstream",
         "object": "chat.completion",
@@ -348,9 +584,7 @@ def test_convert_cached_responses_legacy_nonstream_path():
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import CallTypes
 
-    caching_handler = LLMCachingHandler(
-        original_function=responses, request_kwargs={}, start_time=datetime.now()
-    )
+    caching_handler = LLMCachingHandler(original_function=responses, request_kwargs={}, start_time=datetime.now())
     cached_result = {
         "id": "resp_legacy_nonstream",
         "created_at": int(time.time()),
@@ -395,9 +629,7 @@ def test_convert_cached_responses_legacy_stream_path():
     )
     from litellm.types.utils import CallTypes
 
-    caching_handler = LLMCachingHandler(
-        original_function=responses, request_kwargs={}, start_time=datetime.now()
-    )
+    caching_handler = LLMCachingHandler(original_function=responses, request_kwargs={}, start_time=datetime.now())
     cached_result = {
         "id": "resp_legacy_stream",
         "created_at": int(time.time()),

@@ -6,13 +6,19 @@ through _hidden_params to the x-litellm-callback-duration-ms response header.
 """
 
 import datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+import litellm
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
 import litellm.proxy.common_request_processing as common_request_processing_mod
+from litellm._internal_context import is_internal_call, is_proxy_stream_header_prefetch
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
+    prefetch_proxy_stream_for_timing,
+    refresh_response_timing_metrics,
     update_response_metadata,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -68,9 +74,7 @@ class TestCallbackDurationMs:
     def test_update_response_metadata_includes_callback_duration(self):
         """End-to-end: update_response_metadata should propagate callback_duration_ms."""
         result = ModelResponse()
-        logging_obj = self._make_logging_obj(
-            callback_duration_ms=5.5, llm_api_duration_ms=800.0
-        )
+        logging_obj = self._make_logging_obj(callback_duration_ms=5.5, llm_api_duration_ms=800.0)
         logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
@@ -92,25 +96,34 @@ class TestCallbackDurationMs:
         assert hidden.get("litellm_overhead_time_ms") is not None
 
 
-class TestDictResultsSkipMetadataUpdate:
-    """Regression for /v1/messages cost-breakdown clobbering: AnthropicMessagesResponse
-    is a TypedDict, so apply() can never attach _hidden_params to it and the whole
-    metadata pass is discarded - except the cost recompute, whose only observable
-    effect was overwriting the logging object's already-correct cost breakdown with a
-    service-tier-less, reasoning-less recompute on the adapted response."""
+def _messages_response():
+    return {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "usage": {"input_tokens": 7, "output_tokens": 320},
+    }
 
-    def test_update_response_metadata_skips_cost_recompute_for_dict_results(self):
-        anthropic_response = {
-            "id": "msg_123",
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "text", "text": "hi"}],
-            "usage": {"input_tokens": 7, "output_tokens": 320},
-        }
-        logging_obj = MagicMock()
-        logging_obj.model_call_details = {}
-        logging_obj.caching_details = None
-        logging_obj.litellm_call_id = "test-call-id"
+
+def _messages_logging_obj(callback_duration_ms=None):
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"llm_api_duration_ms": 900.0}
+    logging_obj.caching_details = None
+    logging_obj.litellm_call_id = "test-call-id"
+    if callback_duration_ms is None:
+        del logging_obj.callback_duration_ms
+    else:
+        logging_obj.callback_duration_ms = callback_duration_ms
+    return logging_obj
+
+
+class TestDictResultsSkipCostRecompute:
+    """Regression coverage for metadata on Anthropic Messages dict responses."""
+
+    def test_update_response_metadata_adds_timing_without_recomputing_cost(self):
+        anthropic_response = _messages_response()
+        logging_obj = _messages_logging_obj()
 
         update_response_metadata(
             result=anthropic_response,
@@ -123,6 +136,310 @@ class TestDictResultsSkipMetadataUpdate:
 
         logging_obj._response_cost_calculator.assert_not_called()
         assert "_hidden_params" not in anthropic_response
+        assert dict(logging_obj.set_response_timing_metrics.call_args.args[0]) == {
+            "_response_ms": 1000.0,
+            "litellm_overhead_time_ms": 100.0,
+        }
+
+    def test_request_timing_metrics_snapshot_is_read_only(self):
+        anthropic_response = _messages_response()
+        logging_obj = _messages_logging_obj()
+
+        update_response_metadata(
+            result=anthropic_response,
+            logging_obj=logging_obj,
+            model="vertex_ai/gemini-3.5-flash",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        snapshot = logging_obj.set_response_timing_metrics.call_args.args[0]
+        with pytest.raises(TypeError):
+            snapshot["_response_ms"] = 1.0
+
+    def test_cached_messages_response_uses_cache_read_duration(self):
+        anthropic_response = _messages_response()
+        logging_obj = _messages_logging_obj()
+        logging_obj.caching_details = {"cache_hit": True, "cache_duration_ms": 250.0}
+
+        update_response_metadata(
+            result=anthropic_response,
+            logging_obj=logging_obj,
+            model="vertex_ai/gemini-3.5-flash",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        assert dict(logging_obj.set_response_timing_metrics.call_args.args[0]) == {
+            "_response_ms": 1000.0,
+            "litellm_overhead_time_ms": 750.0,
+        }
+
+    def test_internal_sub_call_preserves_outer_request_timing(self):
+        logging_obj = _messages_logging_obj()
+        outer_timing_metrics = {"_response_ms": 2500.0, "litellm_overhead_time_ms": 200.0}
+        logging_obj.response_timing_metrics = outer_timing_metrics
+
+        token = is_internal_call.set(True)
+        try:
+            update_response_metadata(
+                result=_messages_response(),
+                logging_obj=logging_obj,
+                model="vertex_ai/gemini-3.5-flash",
+                kwargs={},
+                start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+                end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+            )
+        finally:
+            is_internal_call.reset(token)
+
+        logging_obj.set_response_timing_metrics.assert_not_called()
+        assert logging_obj.response_timing_metrics is outer_timing_metrics
+
+    def test_streaming_opaque_result_uses_request_timing_without_mutation(self):
+        class OpaqueStream:
+            pass
+
+        result = OpaqueStream()
+        logging_obj = _messages_logging_obj()
+        logging_obj.stream = True
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="vertex_ai/gemini-3.5-flash",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        assert not hasattr(result, "_hidden_params")
+        assert dict(logging_obj.set_response_timing_metrics.call_args.args[0]) == {
+            "_response_ms": 1000.0,
+            "litellm_overhead_time_ms": 100.0,
+        }
+
+    @pytest.mark.parametrize("stream", [False, None, MagicMock()])
+    def test_non_streaming_opaque_result_does_not_set_request_timing(self, stream):
+        class OpaqueResult:
+            pass
+
+        logging_obj = _messages_logging_obj()
+        logging_obj.stream = stream
+
+        update_response_metadata(
+            result=OpaqueResult(),
+            logging_obj=logging_obj,
+            model="vertex_ai/gemini-3.5-flash",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        logging_obj.set_response_timing_metrics.assert_not_called()
+
+    def test_internal_streaming_opaque_result_preserves_outer_request_timing(self):
+        class OpaqueStream:
+            pass
+
+        logging_obj = _messages_logging_obj()
+        logging_obj.stream = True
+        outer_timing_metrics = {"_response_ms": 2500.0, "litellm_overhead_time_ms": 200.0}
+        logging_obj.response_timing_metrics = outer_timing_metrics
+
+        token = is_internal_call.set(True)
+        try:
+            update_response_metadata(
+                result=OpaqueStream(),
+                logging_obj=logging_obj,
+                model="vertex_ai/gemini-3.5-flash",
+                kwargs={},
+                start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+                end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+            )
+        finally:
+            is_internal_call.reset(token)
+
+        logging_obj.set_response_timing_metrics.assert_not_called()
+        assert logging_obj.response_timing_metrics is outer_timing_metrics
+
+
+class TestPrefetchedStreamTiming:
+    @pytest.mark.asyncio
+    async def test_prefetches_deferred_vertex_stream_and_refreshes_timing(self):
+        logging_obj = _messages_logging_obj()
+        logging_obj.start_time = datetime.datetime.now() - datetime.timedelta(milliseconds=1000)
+        async def empty_stream():
+            if False:
+                yield None
+
+        stream = litellm.CustomStreamWrapper(
+            completion_stream=None,
+            model="gemini-3.5-flash",
+            logging_obj=logging_obj,
+            custom_llm_provider="vertex_ai_beta",
+            make_call=AsyncMock(return_value=empty_stream()),
+        )
+
+        token = is_proxy_stream_header_prefetch.set(True)
+        try:
+            await prefetch_proxy_stream_for_timing(stream)
+        finally:
+            is_proxy_stream_header_prefetch.reset(token)
+
+        stream.make_call.assert_awaited_once()
+        assert dict(logging_obj.set_response_timing_metrics.call_args.args[0])["litellm_overhead_time_ms"] > 0
+
+    @pytest.mark.asyncio
+    async def test_prefetch_does_not_open_non_vertex_stream(self):
+        logging_obj = _messages_logging_obj()
+        logging_obj.start_time = datetime.datetime.now() - datetime.timedelta(milliseconds=1000)
+        stream = litellm.CustomStreamWrapper(
+            completion_stream=None,
+            model="other-model",
+            logging_obj=logging_obj,
+            custom_llm_provider="openai",
+            make_call=AsyncMock(return_value=object()),
+        )
+
+        token = is_proxy_stream_header_prefetch.set(True)
+        try:
+            await prefetch_proxy_stream_for_timing(stream)
+        finally:
+            is_proxy_stream_header_prefetch.reset(token)
+
+        stream.make_call.assert_not_awaited()
+        logging_obj.set_response_timing_metrics.assert_not_called()
+
+    def test_refreshes_detached_timing_after_proxy_stream_prefetch(self):
+        logging_obj = _messages_logging_obj()
+        logging_obj.start_time = datetime.datetime.now() - datetime.timedelta(milliseconds=1000)
+
+        token = is_proxy_stream_header_prefetch.set(True)
+        try:
+            refresh_response_timing_metrics(logging_obj)
+        finally:
+            is_proxy_stream_header_prefetch.reset(token)
+
+        assert dict(logging_obj.set_response_timing_metrics.call_args.args[0])["litellm_overhead_time_ms"] > 0
+
+    def test_does_not_refresh_timing_outside_proxy_stream_prefetch(self):
+        logging_obj = _messages_logging_obj()
+        logging_obj.start_time = datetime.datetime.now() - datetime.timedelta(milliseconds=1000)
+
+        refresh_response_timing_metrics(logging_obj)
+
+        logging_obj.set_response_timing_metrics.assert_not_called()
+
+    def test_internal_call_does_not_refresh_outer_request_timing(self):
+        logging_obj = _messages_logging_obj()
+        logging_obj.start_time = datetime.datetime.now() - datetime.timedelta(milliseconds=1000)
+        logging_obj.response_timing_metrics = {"_response_ms": 2500.0, "litellm_overhead_time_ms": 200.0}
+        prefetch_token = is_proxy_stream_header_prefetch.set(True)
+        internal_token = is_internal_call.set(True)
+        try:
+            refresh_response_timing_metrics(logging_obj)
+        finally:
+            is_internal_call.reset(internal_token)
+            is_proxy_stream_header_prefetch.reset(prefetch_token)
+
+        logging_obj.set_response_timing_metrics.assert_not_called()
+        assert logging_obj.response_timing_metrics == {"_response_ms": 2500.0, "litellm_overhead_time_ms": 200.0}
+
+
+class TestDictResponseTimingHeaders:
+    """Regression coverage for Messages timing headers."""
+
+    def _headers_for(self, logging_obj, hidden_params):
+        return ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            hidden_params=hidden_params,
+            litellm_logging_obj=logging_obj,
+        )
+
+    def test_headers_use_request_timing_without_mutating_messages_response(self):
+        anthropic_response = _messages_response()
+        logging_obj = _messages_logging_obj(callback_duration_ms=7.25)
+
+        update_response_metadata(
+            result=anthropic_response,
+            logging_obj=logging_obj,
+            model="vertex_ai/gemini-3.5-flash",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        logging_obj.response_timing_metrics = logging_obj.set_response_timing_metrics.call_args.args[0]
+        headers = self._headers_for(logging_obj, hidden_params={})
+
+        assert "_hidden_params" not in anthropic_response
+        assert headers["x-litellm-response-duration-ms"] == "1000.0"
+        assert headers["x-litellm-overhead-duration-ms"] == "100.0"
+        assert "x-litellm-callback-duration-ms" not in headers
+
+    def test_headers_use_streaming_opaque_request_timing(self):
+        class OpaqueStream:
+            pass
+
+        logging_obj = _messages_logging_obj()
+        logging_obj.stream = True
+        update_response_metadata(
+            result=OpaqueStream(),
+            logging_obj=logging_obj,
+            model="vertex_ai/gemini-3.5-flash",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+        logging_obj.response_timing_metrics = logging_obj.set_response_timing_metrics.call_args.args[0]
+
+        headers = self._headers_for(logging_obj, hidden_params={})
+
+        assert headers["x-litellm-response-duration-ms"] == "1000.0"
+        assert headers["x-litellm-overhead-duration-ms"] == "100.0"
+        assert "x-litellm-callback-duration-ms" not in headers
+
+    def test_headers_accept_legacy_logging_object_without_timing_metrics(self):
+        class LegacyLoggingObject:
+            pass
+
+        headers = self._headers_for(LegacyLoggingObject(), hidden_params={})
+
+        assert "x-litellm-response-duration-ms" not in headers
+        assert "x-litellm-overhead-duration-ms" not in headers
+
+    def test_response_hidden_params_win_over_request_timing(self):
+        logging_obj = _messages_logging_obj()
+        logging_obj.response_timing_metrics = {
+            "_response_ms": 1000.0,
+            "litellm_overhead_time_ms": 100.0,
+        }
+
+        headers = self._headers_for(
+            logging_obj,
+            hidden_params={"_response_ms": 42.0, "litellm_overhead_time_ms": 4.0},
+        )
+
+        assert headers["x-litellm-response-duration-ms"] == "42.0"
+        assert headers["x-litellm-overhead-duration-ms"] == "4.0"
+
+    def test_request_timing_fills_explicit_none_response_timing(self):
+        logging_obj = _messages_logging_obj()
+        logging_obj.response_timing_metrics = {
+            "_response_ms": 1000.0,
+            "litellm_overhead_time_ms": 100.0,
+        }
+
+        headers = self._headers_for(
+            logging_obj,
+            hidden_params={"_response_ms": 42.0, "litellm_overhead_time_ms": None},
+        )
+
+        assert headers["x-litellm-response-duration-ms"] == "42.0"
+        assert headers["x-litellm-overhead-duration-ms"] == "100.0"
 
 
 class TestCallbackDurationInCustomHeaders:
@@ -221,11 +538,19 @@ class TestDetailedTiming:
         assert hidden.get("timing_llm_api_ms") is None
         assert hidden.get("timing_pre_processing_ms") is None
 
+    def test_detailed_timing_headers_accept_none_hidden_params(self, monkeypatch):
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True)
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            hidden_params=None,
+        )
+
+        assert "x-litellm-timing-llm-api-ms" not in headers
+
     def test_detailed_timing_headers_in_custom_headers(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is true, headers flow to get_custom_headers."""
-        monkeypatch.setattr(
-            common_request_processing_mod, "LITELLM_DETAILED_TIMING", True
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
@@ -248,9 +573,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_absent_when_disabled(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is false, no timing headers emitted."""
-        monkeypatch.setattr(
-            common_request_processing_mod, "LITELLM_DETAILED_TIMING", False
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
