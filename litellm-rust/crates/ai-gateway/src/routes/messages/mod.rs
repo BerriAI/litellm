@@ -146,6 +146,9 @@ mod tests {
     use crate::io::realtime_pool::RealtimePool;
     use crate::state::AppState;
 
+    use litellm_core::auth::KeyCache;
+    use std::time::Duration;
+
     fn state(model: &str, api_base: String, master_key: Option<&str>) -> AppState {
         state_with_provider(model, model, api_base, master_key)
     }
@@ -168,6 +171,16 @@ mod tests {
             master_key: master_key.map(Arc::from),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
+            key_cache: Arc::new(KeyCache::new(Duration::from_secs(600), 10_000)),
+            redis: None,
+            postgres: None,
+            spend_worker: None,
+            http_client: Arc::new(reqwest::Client::new()),
+            circuit_breakers: Arc::new(crate::auth::circuit_breaker::CircuitBreakerRegistry::new(
+                crate::auth::circuit_breaker::CircuitBreakerConfig::default(),
+            )),
+            metrics: Arc::new(crate::metrics::GatewayMetrics::new()),
+            config: crate::state::GatewayConfig::from_env(),
         }
     }
 

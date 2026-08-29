@@ -15,7 +15,7 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
-axum = "0.7"
+axum = { version = "0.7", features = ["ws", "macros"] }
 pyo3 = "0.29.0"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 rand = "0.8"
@@ -31,3 +31,5 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 base64 = "0.22"
 tiktoken = "4.1"
 tokenizers = "0.21"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "json", "chrono"] }

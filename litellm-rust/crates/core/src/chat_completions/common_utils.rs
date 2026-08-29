@@ -3,6 +3,7 @@ use serde_json::{Map, Value};
 use crate::error::CoreResult;
 use crate::http_utils::string_headers as shared_string_headers;
 use crate::providers::anthropic::chat_completions::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
+use crate::providers::openai::chat_completions::transformation::OPENAI_CHAT_COMPLETIONS_CONFIG;
 
 use super::transformation::ChatCompletionsProviderConfig;
 
@@ -13,6 +14,7 @@ pub(super) fn chat_completions_provider_config(
 ) -> Option<&'static dyn ChatCompletionsProviderConfig> {
     match provider {
         "anthropic" => Some(&ANTHROPIC_CHAT_COMPLETIONS_CONFIG),
+        "openai" => Some(&OPENAI_CHAT_COMPLETIONS_CONFIG),
         #[cfg(feature = "bedrock-auth")]
         "bedrock" => Some(
             &crate::providers::bedrock::chat_completions::transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,

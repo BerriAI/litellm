@@ -499,6 +499,8 @@ mod tests {
                 .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
                 .await
                 .expect("response");
+            // Keep connection open briefly so tungstenite can read the response
+            tokio::time::sleep(Duration::from_millis(100)).await;
         });
         let (_client_tx, client_rx) = mpsc::unbounded::<ResponsesWsEvent>();
         let (output_tx, _output_rx) = mpsc::unbounded();
@@ -528,6 +530,8 @@ mod tests {
                 .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
                 .await
                 .expect("response");
+            // Keep connection open briefly so tungstenite can read the response
+            tokio::time::sleep(Duration::from_millis(100)).await;
         });
         let (_client_tx, client_rx) = mpsc::unbounded::<ResponsesWsEvent>();
         let (output_tx, _output_rx) = mpsc::unbounded();

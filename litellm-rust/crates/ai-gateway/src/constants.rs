@@ -40,3 +40,12 @@ pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";
 #[cfg(feature = "server")]
 pub(crate) const MESSAGES_HEADERS_NOT_FORWARDED: &[&str] =
     &["authorization", "connection", "content-length", "host"];
+
+/// HTTP path for the OpenAI-compatible chat completions route.
+#[cfg(feature = "server")]
+pub(crate) const CHAT_COMPLETIONS_ROUTE_PATH: &str = "/v1/chat/completions";
+
+/// Request headers owned by the gateway and never forwarded upstream for chat completions.
+#[cfg(feature = "server")]
+pub(crate) const CHAT_COMPLETIONS_HEADERS_NOT_FORWARDED: &[&str] =
+    &["authorization", "connection", "content-length", "host"];

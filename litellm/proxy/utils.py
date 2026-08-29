@@ -5938,9 +5938,14 @@ async def send_email(
 
 
 def hash_token(token: str):
+    from litellm.rust_bridge.auth import try_rust_hash_token
+
+    rust_result = try_rust_hash_token(token)
+    if rust_result is not None:
+        return rust_result
+
     import hashlib
 
-    # Hash the string using SHA-256
     hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
 
     return hashed_token

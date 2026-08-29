@@ -6,11 +6,6 @@ use serde_json::{Map, Value};
 use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
 
 /// A `/chat/completions` call as it crosses into the core.
-///
-/// `optional_params` arrives already mapped to the provider's own parameter
-/// names by the host, exactly as the messages route receives an already
-/// Anthropic-shaped body. The core owns the conversation translation, the
-/// provider call, and the response normalization.
 pub struct ChatCompletionsRequest<'a> {
     pub model: &'a str,
     pub messages: Value,

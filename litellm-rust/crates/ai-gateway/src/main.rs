@@ -10,16 +10,20 @@
 //! wires startup.
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use litellm_ai_gateway::auth::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry};
 use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
+use litellm_ai_gateway::metrics::GatewayMetrics;
 use litellm_ai_gateway::routes;
-use litellm_ai_gateway::state::AppState;
+use litellm_ai_gateway::state::{AppState, GatewayConfig};
+use litellm_core::auth::KeyCache;
+use litellm_core::persistence::{PostgresStore, RedisPostgresSpendFlush, RedisStore};
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
+use litellm_core::spend_tracking::SpendWorker;
 
 use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
 use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
-#[cfg(feature = "python-config")]
-use litellm_ai_gateway::python;
 
 /// Bind to localhost by default so the gateway is not a public, unauthenticated
 /// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).
@@ -28,6 +32,18 @@ const DEFAULT_PORT: u16 = 4001;
 
 #[tokio::main]
 async fn main() {
+    // Initialize structured logging (JSON format for log aggregation)
+    // Set RUST_LOG env var to control log level (e.g., RUST_LOG=info)
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    tracing::info!("starting litellm-ai-gateway");
+
     // Trim before storing so it matches the trimmed bearer token in `auth`
     // (avoids a silent auth failure when the env var has surrounding whitespace).
     let master_key: Option<Arc<str>> = std::env::var("LITELLM_MASTER_KEY")
@@ -48,6 +64,13 @@ async fn main() {
     let loggers: Vec<Arc<dyn CustomLogger>> = vec![proxy_logger];
 
     let router = Arc::new(build_router());
+    eprintln!("router has {} deployments:", router.deployments().len());
+    for d in router.deployments() {
+        eprintln!(
+            "  model_name={}, model={}",
+            d.model_name, d.litellm_params.model
+        );
+    }
 
     // Build the pre-warmed realtime pool and register each deployment's upstream
     // so the background replenisher starts warming it. `REALTIME_POOL_SIZE=0`
@@ -67,11 +90,75 @@ async fn main() {
         );
     }
 
+    // Key cache: in-memory LRU for API key auth objects.
+    let key_cache = Arc::new(KeyCache::new(Duration::from_secs(600), 10_000));
+
+    // Redis: optional, for spend counters and rate limiting.
+    let redis = match std::env::var("REDIS_URL") {
+        Ok(url) => match RedisStore::connect(&url).await {
+            Ok(store) => {
+                eprintln!("Redis connected: {url}");
+                Some(Arc::new(store))
+            }
+            Err(err) => {
+                eprintln!("warning: Redis connection failed ({err}); spend counters disabled");
+                None
+            }
+        },
+        Err(_) => {
+            eprintln!("REDIS_URL not set; Redis spend counters disabled");
+            None
+        }
+    };
+
+    // PostgreSQL: optional, for spend logs and key lookups.
+    let postgres = match std::env::var("DATABASE_URL") {
+        Ok(url) => match PostgresStore::connect(&url).await {
+            Ok(store) => {
+                eprintln!("PostgreSQL connected");
+                Some(Arc::new(store))
+            }
+            Err(err) => {
+                eprintln!("warning: PostgreSQL connection failed ({err}); spend logs disabled");
+                None
+            }
+        },
+        Err(_) => {
+            eprintln!("DATABASE_URL not set; PostgreSQL spend logs disabled");
+            None
+        }
+    };
+
+    // Spend worker: background task that batches spend entries and flushes them.
+    let spend_worker = match (&redis, &postgres) {
+        (Some(redis), Some(postgres)) => {
+            let flush = RedisPostgresSpendFlush::new(
+                RedisStore::from_manager(redis.clone_manager()),
+                PostgresStore::from_pool(postgres.clone_pool()),
+            );
+            let worker = SpendWorker::spawn(100, Duration::from_millis(100), flush);
+            eprintln!("spend tracking enabled: Redis + PostgreSQL");
+            Some(Arc::new(worker))
+        }
+        _ => {
+            eprintln!("spend tracking disabled (need both REDIS_URL and DATABASE_URL)");
+            None
+        }
+    };
+
     let state = AppState {
         router,
         master_key,
         loggers: Arc::new(loggers),
         realtime_pool,
+        key_cache,
+        redis,
+        postgres,
+        spend_worker,
+        http_client: Arc::new(AppState::new_http_client()),
+        circuit_breakers: Arc::new(CircuitBreakerRegistry::new(CircuitBreakerConfig::default())),
+        metrics: Arc::new(GatewayMetrics::new()),
+        config: GatewayConfig::from_env(),
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
@@ -81,9 +168,64 @@ async fn main() {
         .await
         .expect("failed to bind listener");
     eprintln!("litellm-ai-gateway listening on {host}:{port}");
-    axum::serve(listener, routes::app(state))
-        .await
-        .expect("server error");
+
+    // Graceful shutdown: wait for SIGTERM or SIGINT, then drain in-flight requests
+    let shutdown = async {
+        let ctrl_c = async {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install Ctrl+C handler");
+        };
+
+        #[cfg(unix)]
+        let terminate = async {
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .await
+                .expect("failed to install SIGTERM handler")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = terminate => {},
+        }
+
+        eprintln!("shutdown signal received, draining in-flight requests...");
+    };
+
+    let app = routes::app(state);
+
+    let tls_cert = std::env::var("TLS_CERT").ok();
+    let tls_key = std::env::var("TLS_KEY").ok();
+
+    match (tls_cert, tls_key) {
+        (Some(cert_path), Some(key_path)) => {
+            use axum_server::tls_rustls::RustlsConfig;
+
+            eprintln!("TLS enabled: cert={cert_path}, key={key_path}");
+            let rustls_config = RustlsConfig::from_pem_file(&cert_path, &key_path)
+                .await
+                .expect("failed to load TLS certificate and key");
+
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            axum_server::bind_rustls(addr, rustls_config)
+                .serve(app.into_make_service())
+                .await
+                .expect("TLS server error");
+        }
+        _ => {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown)
+                .await
+                .expect("server error");
+        }
+    }
+
+    eprintln!("shutdown complete");
 }
 
 /// Register every deployment's upstream key with the pool so the replenisher
@@ -118,19 +260,18 @@ fn resolve_port() -> u16 {
     }
 }
 
-/// Build the router. With the `python-config` feature and `LITELLM_CONFIG_PATH`
-/// set, load the resolved `model_list` from the proxy config via the embedded
-/// Python reader (load time only). Otherwise fall back to the env stand-in.
+/// Build the router. Tries config sources in order:
+/// 1. Native YAML loader (`LITELLM_YAML_CONFIG` env var)
+/// 2. Env-based fallback (single deployment from `OPENAI_REALTIME_MODEL`)
 fn build_router() -> Router {
-    #[cfg(feature = "python-config")]
-    if let Ok(config_path) = std::env::var("LITELLM_CONFIG_PATH") {
-        match python::config::load_router_from_config(&config_path) {
+    if let Ok(config_path) = std::env::var("LITELLM_YAML_CONFIG") {
+        match litellm_ai_gateway::config::load_router_from_yaml(&config_path) {
             Ok(router) => {
-                eprintln!("loaded model_list from {config_path} via python config reader");
+                eprintln!("loaded model_list from {config_path} via native YAML loader");
                 return router;
             }
             Err(err) => {
-                eprintln!("config load failed ({err}); falling back to env deployment");
+                eprintln!("YAML config load failed ({err}); falling back to env deployment");
             }
         }
     }
