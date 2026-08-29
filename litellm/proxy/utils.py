@@ -457,8 +457,37 @@ def _pipeline_managed_guardrail_names(
     )
 
 
+def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket_value: object) -> None:
+    if not isinstance(modified_bucket_value, dict):
+        return
+    modified_bucket: Final = cast("dict[str, object]", modified_bucket_value)  # cast-ok: metadata buckets are str-keyed
+    surviving_writes: Final = {key: value for key, value in modified_bucket.items() if key != "guardrails"}
+    existing_bucket: Final = data.get(bucket_key)
+    if isinstance(existing_bucket, dict):
+        cast("dict[str, object]", existing_bucket).update(surviving_writes)  # cast-ok: metadata buckets are str-keyed
+    else:
+        data[bucket_key] = surviving_writes
+
+
+def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, object]) -> None:
+    """
+    Copy metadata-bucket writes from a pipeline's working copy back onto the request.
+
+    Post_call pipelines run step hooks against a copied request dict so the payload
+    already sent upstream stays untouched, but hooks record proxy-internal logging
+    state in the metadata buckets (``applied_guardrails`` for response headers,
+    ``standard_logging_guardrail_information`` for spend logs), and those writes
+    must reach the request dict the proxy keeps reading after the pipeline returns.
+
+    The ``guardrails`` key is the executor's per-step activation flag for
+    ``should_run_guardrail``, not a hook write, so it stays in the working copy.
+    """
+    for bucket_key in ("metadata", "litellm_metadata"):
+        _merge_pipeline_metadata_bucket(data, bucket_key, modified_data.get(bucket_key))
+
+
 def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object]) -> None:
-    if data.get("stream") is not True:
+    if data.get("stream") is not True and data.get("background") is not True:
         return
     post_call_policies: Final = tuple(
         policy_name for policy_name, pipeline in _policy_pipelines(data) if pipeline.mode == "post_call"
@@ -470,9 +499,10 @@ def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object]) -> None
         detail={
             "error": {
                 "message": (
-                    "Policies with post_call guardrail pipelines cannot govern streaming responses yet: "
-                    f"{', '.join(post_call_policies)}. Retry with stream=false, or move these policies' output "
-                    "guardrails from pipeline steps to guardrails.add, which scans streamed output."
+                    "Policies with post_call guardrail pipelines cannot govern streaming or background "
+                    f"responses yet: {', '.join(post_call_policies)}. Retry with stream=false and "
+                    "background=false, or move these policies' output guardrails from pipeline steps to "
+                    "guardrails.add, which scans streamed output."
                 ),
                 "type": "guardrail_pipeline_error",
                 "policies": list(post_call_policies),
@@ -1667,11 +1697,16 @@ class ProxyLogging:
         Returns data dict if allowed, raises on block/modify_response.
         ``original_response`` is set on the post_call path, where the request
         payload (already sent upstream) must stay untouched; a replacement
-        response carried in ``modified_data`` is adopted by the caller.
+        response carried in ``modified_data`` is adopted by the caller, and
+        metadata-bucket writes (applied guardrails, guardrail logging info)
+        are merged back so headers and spend logs still see them.
         """
         if result.terminal_action == "allow":
-            if result.modified_data is not None and original_response is None:
-                data.update(result.modified_data)
+            if result.modified_data is not None:
+                if original_response is None:
+                    data.update(result.modified_data)
+                else:
+                    _merge_pipeline_metadata_writes(data, result.modified_data)
             return data
 
         if result.terminal_action == "block":
