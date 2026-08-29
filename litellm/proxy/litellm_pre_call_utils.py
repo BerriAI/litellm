@@ -7,7 +7,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException, Request
 from pydantic import ValidationError as PydanticValidationError
@@ -1343,6 +1343,8 @@ class LiteLLMProxyRequestSetup:
     def get_sanitized_user_information_from_key(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> StandardLoggingUserAPIKeyMetadata:
+        stripped_metadata: Final = strip_callback_config(user_api_key_dict.metadata)
+        auth_metadata: Final = cast("dict[str, str] | None", stripped_metadata)  # cast-ok: metadata is free-form JSON
         user_api_key_logged_metadata: Final = StandardLoggingUserAPIKeyMetadata(
             user_api_key_hash=user_api_key_dict.api_key,  # just the hashed token
             user_api_key_alias=user_api_key_dict.key_alias,
@@ -1365,7 +1367,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_budget_reset_at=(
                 user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None
             ),
-            user_api_key_auth_metadata=strip_callback_config(user_api_key_dict.metadata),
+            user_api_key_auth_metadata=auth_metadata,
         )
         return user_api_key_logged_metadata
 

@@ -2476,6 +2476,9 @@ async def _validate_update_key_data(
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """Validate permissions and constraints for key update."""
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "Database not connected"})
+
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
     validate_budget_duration(data.budget_duration)
@@ -2594,7 +2597,7 @@ async def _validate_update_key_data(
     # _check_key_admin_access that would otherwise require team/org admin status.
     _key_is_team_key: Final = getattr(existing_key_row, "team_id", None) is not None
     can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not _is_budget_change
-    if (not _is_proxy_admin) and prisma_client is not None and not can_skip_admin_check:
+    if (not _is_proxy_admin) and not can_skip_admin_check:
         hashed_key: Final = existing_key_row.token
         await _check_key_admin_access(
             user_api_key_dict=user_api_key_dict,

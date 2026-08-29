@@ -36,6 +36,7 @@ from litellm.types.llms.anthropic import (
     CompactionBlock,
     UsageIteration,
 )
+from litellm.types.llms.openai import AllMessageValues
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -867,7 +868,7 @@ def _append_text_to_content(content: object, extra_text: str) -> object:
 
 
 class _SummaryCallUserKwarg(TypedDict, total=False):
-    user: ReadOnly[object]
+    user: ReadOnly[str]
 
 
 class _SummaryCallRegionKwarg(TypedDict, total=False):
@@ -876,11 +877,11 @@ class _SummaryCallRegionKwarg(TypedDict, total=False):
 
 class _SummaryCallKwargs(TypedDict):
     model: ReadOnly[str]
-    messages: ReadOnly[list[dict[str, object]]]
+    messages: ReadOnly[list[AllMessageValues]]
     max_tokens: ReadOnly[int]
     timeout: ReadOnly[float]
     litellm_metadata: ReadOnly[Mapping[str, object]]
-    user: NotRequired[ReadOnly[object]]
+    user: NotRequired[ReadOnly[str]]
     allowed_model_region: NotRequired[ReadOnly[str]]
 
 
@@ -927,11 +928,15 @@ async def _call_summary_model(
     end_user_id: Final = metadata.get("user_api_key_end_user_id")
     call_kwargs: Final[_SummaryCallKwargs] = {
         "model": summary_model,
-        "messages": summary_messages,
+        "messages": cast("list[AllMessageValues]", summary_messages),  # cast-ok: built as OpenAI chat messages
         "max_tokens": max_tokens,
         "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
         "litellm_metadata": metadata,
-        **(_SummaryCallUserKwarg(user=end_user_id) if end_user_id else _SummaryCallUserKwarg()),
+        **(
+            _SummaryCallUserKwarg(user=end_user_id)
+            if isinstance(end_user_id, str) and end_user_id
+            else _SummaryCallUserKwarg()
+        ),
         **(
             _SummaryCallRegionKwarg(allowed_model_region=allowed_model_region)
             if allowed_model_region is not None

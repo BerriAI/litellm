@@ -1,7 +1,7 @@
 import re
 from copy import deepcopy
 from enum import Enum
-from typing import Any, Final, Literal, get_type_hints
+from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
 
@@ -726,8 +726,9 @@ def set_schema_property_ordering(schema: dict[str, object], depth: int = 0) -> d
             schema["propertyOrdering"] = [k for k, v in schema["properties"].items()]
         for k, v in schema["properties"].items():
             set_schema_property_ordering(v, depth + 1)
-    if "items" in schema:
-        set_schema_property_ordering(schema["items"], depth + 1)
+    items: Final = schema.get("items")
+    if isinstance(items, dict):
+        set_schema_property_ordering(cast("dict[str, object]", items), depth + 1)  # cast-ok: JSON Schema child
     return schema
 
 

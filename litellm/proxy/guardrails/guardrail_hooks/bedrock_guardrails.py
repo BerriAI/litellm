@@ -364,9 +364,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_request["content"] = bedrock_request_content
         return bedrock_request
 
-    def _build_response_content_items(
-        self, response: object, has_grounding: bool
-    ) -> list[BedrockContentItem]:
+    def _build_response_content_items(self, response: object, has_grounding: bool) -> list[BedrockContentItem]:
         """Build content item(s) from the model response. When the request supplied
         grounding, the response is qualified ``guard_content`` so Bedrock can score it.
         """

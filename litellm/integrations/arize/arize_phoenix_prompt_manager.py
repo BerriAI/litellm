@@ -4,7 +4,7 @@ Fetches prompt versions from Arize Phoenix and provides workspace-based access c
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -203,7 +203,9 @@ class ArizePhoenixTemplateManager:
             # Combine rendered content
             final_content = " ".join(rendered_content_parts)
 
-            rendered_messages.append({"role": role, "content": final_content})
+            rendered_messages.append(
+                cast("AllMessageValues", {"role": role, "content": final_content})  # cast-ok: Phoenix roles are OpenAI
+            )
 
         return rendered_messages
 

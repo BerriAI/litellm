@@ -19,7 +19,7 @@ import hashlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, cast
 
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
@@ -294,7 +294,8 @@ class ValkeySemanticCache(RedisSemanticCache):
                 print_verbose("No prompt provided for semantic caching")
                 return
 
-            embedding: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
+            metadata: Final = cast("dict[str, object] | None", kwargs.get("metadata"))  # cast-ok: untyped kwargs
+            embedding: Final = await self._get_async_embedding(prompt, metadata=metadata)
             await self._ensure_index_async(len(embedding))
 
             doc_key: Final = self._doc_key(key)
