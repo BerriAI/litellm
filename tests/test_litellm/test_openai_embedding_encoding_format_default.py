@@ -1,124 +1,102 @@
-from unittest.mock import MagicMock, patch
+import json
+from typing import Final
 
+import httpx
 import pytest
+import respx
 
-from litellm import embedding
+import litellm
 
 
-@pytest.mark.parametrize(
-    "set_env, env_value, expected",
-    [
-        (False, None, "float"),
-        (True, "base64", "base64"),
-    ],
-)
-def test_openai_embedding_encoding_format_default(
-    monkeypatch, set_env, env_value, expected
-):
-    monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
-    if set_env:
-        monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", env_value)
-
-    mock_response = MagicMock()
-    mock_response.parse.return_value = MagicMock(
-        model_dump=lambda: {
-            "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
-            "model": "text-embedding-ada-002",
-            "object": "list",
-            "usage": {"prompt_tokens": 1, "total_tokens": 1},
-        }
+def _mock_openai_embedding_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://api.openai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
     )
-    mock_response.headers = {}
 
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
-    ) as mock_get_client:
-        mock_client_instance = MagicMock()
-        mock_get_client.return_value = mock_client_instance
-        mock_client_instance.embeddings.with_raw_response.create.return_value = (
-            mock_response
-        )
 
-        embedding(
-            model="text-embedding-ada-002",
-            input="Hello world",
-        )
+@pytest.fixture(autouse=True)
+def clear_default_encoding_format_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
 
-        call_kwargs = (
-            mock_client_instance.embeddings.with_raw_response.create.call_args[1]
-        )
-        assert call_kwargs["encoding_format"] == expected
+
+def test_embedding_openai_omits_encoding_format_when_client_omits_it(respx_mock: respx.MockRouter) -> None:
+    mock_route: Final = _mock_openai_embedding_route(respx_mock)
+
+    response: Final = litellm.embedding(model="openai/text-embedding-3-small", input=["hello"], api_key="sk-test")
+
+    request_body: Final = json.loads(mock_route.calls.last.request.read())
+    assert "encoding_format" not in request_body
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_embedding_openai_forwards_explicit_encoding_format(respx_mock: respx.MockRouter) -> None:
+    mock_route: Final = _mock_openai_embedding_route(respx_mock)
+
+    litellm.embedding(
+        model="openai/text-embedding-3-small", input=["hello"], api_key="sk-test", encoding_format="base64"
+    )
+
+    request_body: Final = json.loads(mock_route.calls.last.request.read())
+    assert request_body["encoding_format"] == "base64"
+
+
+def test_embedding_openai_explicit_encoding_format_wins_over_env_var(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", "float")
+    mock_route: Final = _mock_openai_embedding_route(respx_mock)
+
+    litellm.embedding(
+        model="openai/text-embedding-3-small", input=["hello"], api_key="sk-test", encoding_format="base64"
+    )
+
+    request_body: Final = json.loads(mock_route.calls.last.request.read())
+    assert request_body["encoding_format"] == "base64"
+
+
+@pytest.mark.parametrize("env_value", ["float", "base64"])
+def test_embedding_openai_env_var_sets_default_encoding_format(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, env_value: str
+) -> None:
+    monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", env_value)
+    mock_route: Final = _mock_openai_embedding_route(respx_mock)
+
+    litellm.embedding(model="openai/text-embedding-3-small", input=["hello"], api_key="sk-test")
+
+    request_body: Final = json.loads(mock_route.calls.last.request.read())
+    assert request_body["encoding_format"] == env_value
 
 
 @pytest.mark.parametrize("env_none", ["none", "NONE", " none "])
-def test_openai_embedding_encoding_format_env_none_omits_param(
-    monkeypatch, env_none
-):
-    """LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT=none omits encoding_format (provider default)."""
+def test_embedding_openai_env_none_omits_encoding_format(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, env_none: str
+) -> None:
     monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", env_none)
+    mock_route: Final = _mock_openai_embedding_route(respx_mock)
 
-    mock_response = MagicMock()
-    mock_response.parse.return_value = MagicMock(
-        model_dump=lambda: {
-            "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
-            "model": "text-embedding-ada-002",
-            "object": "list",
-            "usage": {"prompt_tokens": 1, "total_tokens": 1},
-        }
-    )
-    mock_response.headers = {}
+    litellm.embedding(model="openai/text-embedding-3-small", input=["hello"], api_key="sk-test")
 
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
-    ) as mock_get_client:
-        mock_client_instance = MagicMock()
-        mock_get_client.return_value = mock_client_instance
-        mock_client_instance.embeddings.with_raw_response.create.return_value = (
-            mock_response
-        )
-
-        embedding(
-            model="text-embedding-ada-002",
-            input="Hello world",
-        )
-
-        call_kwargs = (
-            mock_client_instance.embeddings.with_raw_response.create.call_args[1]
-        )
-        assert "encoding_format" not in call_kwargs
+    request_body: Final = json.loads(mock_route.calls.last.request.read())
+    assert "encoding_format" not in request_body
 
 
-def test_openai_embedding_encoding_format_explicit_overrides_env(monkeypatch):
-    """Request `encoding_format` wins over LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT."""
-    monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", "float")
+@pytest.mark.asyncio
+async def test_aembedding_openai_omits_encoding_format_when_client_omits_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    mock_route: Final = _mock_openai_embedding_route(respx_mock)
 
-    mock_response = MagicMock()
-    mock_response.parse.return_value = MagicMock(
-        model_dump=lambda: {
-            "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
-            "model": "text-embedding-ada-002",
-            "object": "list",
-            "usage": {"prompt_tokens": 1, "total_tokens": 1},
-        }
-    )
-    mock_response.headers = {}
+    response: Final = await litellm.aembedding(model="openai/text-embedding-3-small", input=["hello"], api_key="sk-test")
 
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
-    ) as mock_get_client:
-        mock_client_instance = MagicMock()
-        mock_get_client.return_value = mock_client_instance
-        mock_client_instance.embeddings.with_raw_response.create.return_value = (
-            mock_response
-        )
-
-        embedding(
-            model="text-embedding-ada-002",
-            input="Hello world",
-            encoding_format="base64",
-        )
-
-        call_kwargs = (
-            mock_client_instance.embeddings.with_raw_response.create.call_args[1]
-        )
-        assert call_kwargs["encoding_format"] == "base64"
+    request_body: Final = json.loads(mock_route.calls.last.request.read())
+    assert "encoding_format" not in request_body
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
