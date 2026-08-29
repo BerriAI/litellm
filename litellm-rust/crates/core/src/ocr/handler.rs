@@ -2,10 +2,10 @@ use crate::CoreResult;
 use crate::error::CoreError;
 use crate::http_utils::truncate_error_body;
 use crate::ocr::transformation::OcrResponseHandling;
+use crate::providers::azure_ai::ocr::poll_document_intelligence;
 use serde_json::Value;
 
 use super::client::http_client;
-use super::document_intelligence::poll_document_intelligence;
 use super::types::ProviderOcrRequest;
 
 pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> CoreResult<Value> {
@@ -36,8 +36,9 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Co
                     "Azure Document Intelligence returned 202 but no Operation-Location header found"
                         .to_string(),
                 )
-            })?;
+        })?;
         let response_json = poll_document_intelligence(
+            http_client(),
             &operation_url,
             &request.url,
             &request.upstream_headers,

@@ -6,8 +6,6 @@ use crate::CoreResult;
 use crate::error::CoreError;
 use crate::http_utils::truncate_error_body;
 
-use super::client::http_client;
-
 const POLL_TIMEOUT_SECS: u64 = 120;
 
 fn same_origin(left: &str, right: &str) -> bool {
@@ -55,7 +53,8 @@ fn operation_status(response_json: &Value) -> CoreResult<&str> {
     }
 }
 
-pub(super) async fn poll_document_intelligence(
+pub(crate) async fn poll_document_intelligence(
+    client: &reqwest::Client,
     operation_url: &str,
     original_url: &str,
     headers: &[(String, String)],
@@ -77,7 +76,7 @@ pub(super) async fn poll_document_intelligence(
             )));
         }
 
-        let mut request_builder = http_client().get(operation_url);
+        let mut request_builder = client.get(operation_url);
         for (key, value) in headers {
             if key.eq_ignore_ascii_case("ocp-apim-subscription-key") {
                 request_builder = request_builder.header(key, value);

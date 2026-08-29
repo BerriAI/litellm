@@ -2,7 +2,6 @@
 
 mod client;
 mod document_fetch;
-mod document_intelligence;
 mod handler;
 mod hooks;
 mod prepare;
