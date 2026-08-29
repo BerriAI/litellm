@@ -2,10 +2,10 @@
  * SectionHeader - Datadog-style header with icon, label, metrics, and copy
  */
 
-import { Typography, Button, Tooltip } from "antd";
-import { MessageOutlined, CopyOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
-
-const { Text } = Typography;
+import { ChevronDown, ChevronUp, Copy, MessageSquare } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/cva.config";
 
 interface SectionHeaderProps {
   type: "input" | "output";
@@ -29,80 +29,57 @@ export function SectionHeader({
   return (
     <div
       onClick={onToggleCollapse}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "10px 16px",
-        borderBottom: isCollapsed ? "none" : "1px solid #f0f0f0",
-        background: "#fafafa",
-        cursor: onToggleCollapse ? "pointer" : "default",
-        transition: "background 0.15s ease",
-      }}
-      onMouseEnter={(e) => {
-        if (onToggleCollapse) {
-          e.currentTarget.style.background = "#f5f5f5";
-        }
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "#fafafa";
-      }}
+      className={cn(
+        "flex items-center justify-between bg-muted px-4 py-2.5 transition-colors",
+        isCollapsed ? "border-b-0" : "border-b border-border",
+        onToggleCollapse ? "cursor-pointer hover:bg-accent" : "cursor-default",
+      )}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-        {/* Collapse Arrow */}
-        {onToggleCollapse && (
-          <div style={{ display: "flex", alignItems: "center" }}>
-            {isCollapsed ? (
-              <DownOutlined style={{ fontSize: 10, color: "#8c8c8c" }} />
-            ) : (
-              <UpOutlined style={{ fontSize: 10, color: "#8c8c8c" }} />
-            )}
-          </div>
-        )}
-
-        {/* Icon + Label */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {type === "input" ? (
-            <MessageOutlined style={{ color: "#8c8c8c", fontSize: 14 }} />
+      <div className="flex items-center gap-4">
+        {onToggleCollapse &&
+          (isCollapsed ? (
+            <ChevronDown className="size-2.5 text-muted-foreground" />
           ) : (
-            <span style={{ fontSize: 14, filter: "grayscale(1)", opacity: 0.6 }}>✨</span>
+            <ChevronUp className="size-2.5 text-muted-foreground" />
+          ))}
+
+        <div className="flex items-center gap-2">
+          {type === "input" ? (
+            <MessageSquare className="size-3.5 text-muted-foreground" />
+          ) : (
+            <span className="text-sm opacity-60 grayscale">✨</span>
           )}
-          <Text style={{ fontWeight: 500, fontSize: 14 }}>{type === "input" ? "Input" : "Output"}</Text>
+          <span className="text-sm font-medium">{type === "input" ? "Input" : "Output"}</span>
         </div>
 
-        {/* Tokens */}
         {tokens !== undefined && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Tokens: {tokens.toLocaleString()}
-          </Text>
+          <span className="text-xs text-muted-foreground">Tokens: {tokens.toLocaleString()}</span>
         )}
 
-        {/* Cost */}
-        {cost !== undefined && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Cost: ${cost.toFixed(6)}
-          </Text>
-        )}
+        {cost !== undefined && <span className="text-xs text-muted-foreground">Cost: ${cost.toFixed(6)}</span>}
 
-        {/* Turn count */}
         {turnCount !== undefined && turnCount > 0 && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Turns: {turnCount}
-          </Text>
+          <span className="text-xs text-muted-foreground">Turns: {turnCount}</span>
         )}
       </div>
 
-      {/* Copy Button */}
-      <Tooltip title="Copy">
-        <Button
-          type="text"
-          size="small"
-          icon={<CopyOutlined />}
-          onClick={(e) => {
-            e.stopPropagation(); // Prevent triggering collapse
-            onCopy();
-          }}
-        />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Copy"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCopy();
+              }}
+            />
+          }
+        >
+          <Copy />
+        </TooltipTrigger>
+        <TooltipContent>Copy</TooltipContent>
       </Tooltip>
     </div>
   );

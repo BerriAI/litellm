@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from e2e_config import settle_propagation
 from e2e_http import NoBody, Result, Success, get_external, is_ok
 from proxy_client import ProxyClient
 
@@ -298,7 +299,9 @@ class A2AClient:
         the next DB reload. A card read or message/send issued the instant this
         returns can therefore 404 on the agent it just created. Waiting here keeps
         every caller from having to poll, the same way ProxyClient.create_model
-        waits for a new model to become servable.
+        waits for a new model to become servable -- including the settle that
+        covers the other replicas, since one successful card read only proves the
+        replica that answered it has the agent.
         """
         result = self.proxy.transport.post(
             "/v1/agents",
@@ -307,7 +310,9 @@ class A2AClient:
             response_type=AgentResponse,
         )
         if isinstance(result, Success):
+            written_at = time.monotonic()
             self._await_agent_servable(result.data.agent_id)
+            settle_propagation(written_at)
         return result
 
     def _await_agent_servable(self, agent_id: str) -> None:

@@ -7,7 +7,7 @@ Litellm provider slug: `anthropic_text/<model_name>`
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -31,6 +31,9 @@ from litellm.types.utils import (
     ModelResponse,
     Usage,
 )
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class AnthropicTextError(BaseLLMException):
@@ -182,7 +185,7 @@ class AnthropicTextConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -198,15 +201,14 @@ class AnthropicTextConfig(BaseConfig):
             )
         else:
             if len(completion_response["completion"]) > 0:
-                model_response.choices[0].message.content = completion_response[  # type: ignore
-                    "completion"
-                ]
+                model_response.choices[0].message.content = completion_response["completion"]
             model_response.choices[0].finish_reason = completion_response["stop_reason"]
 
         ## CALCULATING USAGE
-        prompt_tokens: Final = len(encoding.encode(prompt))  ##[TODO] use the anthropic tokenizer here
+        tokenizer: Final = encoding if encoding is not None else litellm.encoding
+        prompt_tokens: Final = len(tokenizer.encode(prompt))  ##[TODO] use the anthropic tokenizer here
         completion_tokens: Final = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+            tokenizer.encode(model_response["choices"][0]["message"].get("content", ""))
         )  ##[TODO] use the anthropic tokenizer here
 
         model_response.created = int(time.time())

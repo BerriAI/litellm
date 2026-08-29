@@ -1,6 +1,8 @@
 import base64
 import json
+import logging
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
+    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
@@ -331,7 +334,6 @@ def test_bedrock_get_document_format_fallback_mimes():
     This tests the fallback mechanism when mimetypes.guess_all_extensions returns empty results,
     which can happen in Docker containers where mimetypes depends on OS-installed MIME types.
     """
-    from unittest.mock import patch
 
     # Test DOCX fallback
     docx_mime = (
@@ -1168,7 +1170,7 @@ def test_bedrock_image_processor_content_type_fallback_failure():
     # Test with URL without recognizable extension
     image_url = "https://example.com/unknown-file"
 
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match='Unable to determine content type from URL: https') as excinfo:
         BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
 
     assert "Unable to determine content type" in str(excinfo.value)
@@ -2076,7 +2078,7 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     assert "$defs" not in tool_schema, "$defs should be removed after expansion"
 
 
-def test_anthropic_messages_pt_file_block_preserves_cache_control():
+def test_anthropic_messages_pt_file_block_cache_control_with_explicit_provider():
     """
     Test that cache_control on file-type content blocks is preserved
     when translating to Anthropic message format.
@@ -2284,6 +2286,116 @@ def test_bedrock_tool_call_invoke_non_dict_arguments():
     result = _convert_to_bedrock_tool_call_invoke(tool_calls)
     assert len(result) == 1
     assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_malformed_json_does_not_raise():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/18667.
+
+    When the model emits malformed JSON in tool-call arguments (here a
+    missing comma between keys), replaying that history must NOT raise
+    `Unable to convert openai tool calls ... Expecting ',' delimiter`.
+    It degrades to an empty-object input so the conversation can continue.
+    """
+    tool_calls = [
+        {
+            "id": "toolu_abc123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston" "unit": "celsius"}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["toolUseId"] == "toolu_abc123"
+    assert result[0]["toolUse"]["name"] == "get_weather"
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_salvages_valid_prefix_before_truncated_tail():
+    """
+    A valid leading object followed by a truncated tail keeps the valid
+    object rather than dropping everything or raising.
+    """
+    tool_calls = [
+        {
+            "id": "call_partial",
+            "type": "function",
+            "function": {"name": "shell", "arguments": '{"cmd": "ls"}{"cmd":'},
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {"cmd": "ls"}
+
+
+def test_bedrock_tool_call_invoke_mixed_turn_survives_one_malformed_call():
+    """
+    Regression for LIT-4574: an assistant turn with several tool calls where only one
+    has malformed/truncated arguments must keep the valid calls intact and degrade just
+    the bad one to empty input, instead of killing the entire turn.
+    """
+    tool_calls = [
+        {
+            "id": "t_good",
+            "type": "function",
+            "function": {
+                "name": "good_tool",
+                "arguments": '{"item_type": "email", "item_id": "AAMkAD=="}',
+            },
+        },
+        {
+            "id": "t_bad",
+            "type": "function",
+            "function": {"name": "bad_tool", "arguments": '{"item_type": "email"'},
+        },
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    tool_uses = [block["toolUse"] for block in result if "toolUse" in block]
+    assert len(tool_uses) == 2
+    by_name = {tool_use["name"]: tool_use for tool_use in tool_uses}
+    assert by_name["good_tool"]["input"] == {"item_type": "email", "item_id": "AAMkAD=="}
+    assert by_name["bad_tool"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_truncated_json_arguments():
+    """
+    Truncated tool call arguments (issue #35303) must not raise. A client replaying a
+    partially streamed tool call would otherwise trigger a pre-network exception that the
+    router maps to a retryable APIConnectionError and retries through the fallback graph.
+    """
+    tool_calls = [
+        {
+            "id": "tooluse_MAh2QLVjBRkvi5QJkLQ08V",
+            "type": "function",
+            "function": {
+                "name": "replace_note_content",
+                "arguments": '{"note_id": "999af35c-4061-4ece-8581-7d43fc988ba4", "title": "WG"',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["toolUseId"] == "tooluse_MAh2QLVjBRkvi5QJkLQ08V"
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_unconvertible_raises_non_retryable_bad_request():
+    """
+    Conversion failures are client input errors, so they must surface as a non-retryable
+    BadRequestError instead of a bare Exception that maps to APIConnectionError, and the
+    message must not embed the tool call payload (issue #35303).
+    """
+    tool_calls = [{"id": "call_bad", "type": "function", "function": None}]
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    assert exc_info.value.status_code == 400
+    assert "call_bad" in str(exc_info.value)
+    assert "function" not in str(exc_info.value).split("Received error=")[0]
 
 
 def test_make_valid_bedrock_tool_name_preserves_hyphens():
@@ -2734,7 +2846,7 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     assert text_block["cache_control"]["type"] == "ephemeral"
 
 
-def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
+def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
     """
     Tools with cache_control ttl should preserve the ttl in the cachePoint
     block for Claude 4.5+ models on Bedrock, matching the behavior of system
@@ -2757,7 +2869,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
 
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         tool_with_1h = {
@@ -2817,10 +2929,10 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
-def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
+def test_bedrock_tools_pt_passes_ttl_for_claude_4_5(monkeypatch):
     """
     End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
     for Claude 4.5+ models when tools have cache_control with ttl.
@@ -2834,7 +2946,7 @@ def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
 
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         tools = [
@@ -2870,7 +2982,7 @@ def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
@@ -3199,6 +3311,66 @@ def test_get_tool_calls_from_response_include_all_choices_reads_every_choice():
     assert names == ["tool_alpha", "tool_beta"]
 
 
+def test_get_tool_calls_from_response_silences_redacted_arguments(caplog):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "Read",
+                                "arguments": "redacted-by-litellm",
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "Read", "arguments": {}}]
+    assert "Failed to parse tool call arguments" not in caplog.text
+
+
+def test_get_tool_calls_from_response_warns_for_malformed_arguments(caplog):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "Read",
+                                "arguments": "not-json",
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "Read", "arguments": {}}]
+    assert "Failed to parse tool call arguments" in caplog.text
+
+
 def test_group_tool_exchanges_pairs_assistant_with_its_tool_rows():
     from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
 
@@ -3269,3 +3441,189 @@ def test_group_tool_exchanges_is_linear_in_message_count():
 
     assert len(groups) == 100_000
     assert elapsed < 3.0, f"grouping 100k messages took {elapsed:.2f}s; suspect superlinear accumulation"
+
+
+_PDF_DATA_URI = "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4 regression fixture").decode()
+_PNG_DATA_URI = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def _text_blocks(message):
+    return [block["text"] for block in message["content"] if "text" in block]
+
+
+def test_bedrock_converse_pdf_only_user_message_gets_text_block():
+    """
+    Regression for LIT-4523: Claude Code sends a PDF as a user turn whose only
+    content is the document (an image_url part with a pdf data URI after the
+    /v1/messages -> completion bridge). Bedrock Converse rejects any user
+    message carrying a document without a sibling text block, so the builder
+    must inject a placeholder text block.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _PDF_DATA_URI}}],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert len(result) == 1
+    assert any("document" in block for block in result[0]["content"])
+    assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+def test_bedrock_converse_document_with_text_gets_no_extra_text_block():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": _PDF_DATA_URI}},
+                {"type": "text", "text": "summarize this"},
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert _text_blocks(result[0]) == ["summarize this"]
+
+
+def test_bedrock_converse_image_only_user_message_gets_no_text_block():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert any("image" in block for block in result[0]["content"])
+    assert _text_blocks(result[0]) == []
+
+
+def test_bedrock_converse_tool_round_trip_document_injects_text_before_cache_point():
+    """
+    Claude Code shape: after a Read tool round trip, the document-only user
+    turn (with cache_control) merges into the toolResult message. The injected
+    text block must land before the trailing cachePoint so the cache boundary
+    stays the final block, and earlier turns must stay untouched.
+    """
+    messages = [
+        {"role": "user", "content": "read the pdf"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "tooluse_pdf1",
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tooluse_pdf1", "content": "read ok"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "dGVzdA==",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-haiku-4-5", "bedrock"
+    )
+
+    assert _text_blocks(result[0]) == ["read the pdf"]
+    document_message = result[-1]
+    block_keys = [next(iter(block)) for block in document_message["content"]]
+    assert block_keys == ["toolResult", "document", "text", "cachePoint"]
+    assert _text_blocks(document_message) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_pdf_only_user_message_gets_text_block_async():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _PDF_DATA_URI}}],
+        }
+    ]
+
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+    assert len(result) == 1
+    assert any("document" in block for block in result[0]["content"])
+    assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+def test_convert_to_anthropic_tool_result_keeps_tool_reference_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_result
+
+    result = convert_to_anthropic_tool_result(
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [
+                {"type": "text", "text": "loaded"},
+                {"type": "tool_reference", "tool_name": "WebFetch"},
+            ],
+        }
+    )
+
+    assert result == {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01",
+        "content": [
+            {"type": "text", "text": "loaded"},
+            {"type": "tool_reference", "tool_name": "WebFetch"},
+        ],
+    }
+
+
+def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
+    """Every Gemini function call needs a function response, even when the tool result carries no text.
+    Fixes: https://github.com/BerriAI/litellm/issues/37462
+    """
+    result = convert_to_gemini_tool_call_result(
+        message=ChatCompletionToolMessage(
+            role="tool",
+            tool_call_id="toolu_01",
+            content=[{"type": "tool_reference", "tool_name": "WebFetch"}],
+        ),
+        last_message_with_tool_calls={
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "ToolSearch", "arguments": '{"query": "select:WebFetch"}'},
+                }
+            ],
+        },
+    )
+
+    assert result == {"function_response": {"name": "ToolSearch", "response": {"content": ""}}}

@@ -17,13 +17,14 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LiteLLM_VerificationTokenView
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.utils import PrismaClient
 
 
@@ -83,7 +84,7 @@ def test_jsonify_object_fallback_for_unserializable_dict(
 
 
 def test_jsonify_object_error_on_non_dict(prisma_client: PrismaClient) -> None:
-    with pytest.raises(AttributeError):
+    with pytest.raises(TypeError):
         prisma_client.jsonify_object(None)  # type: ignore[arg-type]
 
 
@@ -133,7 +134,7 @@ def test_jsonify_team_object_converts_budget_limits_to_json_string(
 
 
 def test_jsonify_team_object_error_on_non_dict(prisma_client: PrismaClient) -> None:
-    with pytest.raises(AttributeError):
+    with pytest.raises(TypeError):
         prisma_client.jsonify_team_object(None)  # type: ignore[arg-type]
 
 
@@ -270,6 +271,9 @@ async def test_query_first_with_cached_plan_fallback_reconnects_then_retries_ide
     assert retry_call.args == first_call.args == (original_query, "abc")
     reconnect.assert_awaited_once()
     assert reconnect.await_args.kwargs.get("force", False) is False
+    # https://github.com/BerriAI/litellm/issues/36418: without this the healthy
+    # writer probe skips the recreate and the stale plans survive the retry
+    assert reconnect.await_args.kwargs.get("force_recreate") is True
     assert [name for name, *_ in manager.mock_calls] == [
         "query_first",
         "attempt_db_reconnect",
@@ -563,4 +567,69 @@ async def test_get_data_team_keys_forward_limit_as_take(
         "take": limit,
         "where": {"team_id": "team-1"},
         "include": {"litellm_budget_table": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_query_first_with_cached_plan_fallback_reports_pre_query_engine_generation(
+    prisma_client: PrismaClient,
+) -> None:
+    """The generation is snapshotted before the query, not after it fails: it
+    names the engine that prepared the stale statement, which is what lets the
+    reconnect bypass an unrelated cooldown while that engine is still live
+    (https://github.com/BerriAI/litellm/issues/36418). Reading it after the
+    failure would miss a recreate that landed in between and force a
+    needless second one."""
+    prisma_client.db.engine_generation = 3
+
+    async def _fail_then_bump(*args: Any, **kwargs: Any) -> dict[str, str]:
+        if prisma_client.db.engine_generation == 3:
+            prisma_client.db.engine_generation = 4
+            raise RuntimeError("cached plan must not change result type")
+        return {"token": "abc"}
+
+    prisma_client.db.query_first = AsyncMock(side_effect=_fail_then_bump)
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+
+    await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
+
+    kwargs = prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert kwargs.get("stale_read_engine").generation == 3
+
+
+@pytest.mark.asyncio
+async def test_query_first_with_cached_plan_fallback_reports_the_reader_generation(
+    prisma_client: PrismaClient,
+) -> None:
+    """With a read replica configured the query runs on the READER, so the
+    reader's generation is the one that names the engine holding the stale
+    prepared statement. Snapshotting the writer's instead would let an
+    unrelated writer reconnect re-arm the cooldown while the reader stayed
+    poisoned (https://github.com/BerriAI/litellm/issues/36418). The two
+    generations are deliberately far apart so only the right one matches."""
+    writer = MagicMock(name="writer")
+    writer.engine_generation = 99
+    writer.query_first = AsyncMock(return_value={"token": "wrong-engine"})
+    reader = MagicMock(name="reader")
+    reader.engine_generation = 3
+    reader.query_first = AsyncMock(
+        side_effect=[RuntimeError("cached plan must not change result type"), {"token": "abc"}]
+    )
+    prisma_client.db = RoutingPrismaWrapper(writer=writer, reader=reader)
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+
+    await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
+
+    reported: Final = prisma_client.attempt_db_reconnect.await_args.kwargs.get("stale_read_engine")
+    pinned = {
+        "reported_generation": reported.generation,
+        "reported_the_reader_itself": reported.wrapper is reader,
+        "reader_served_the_query": reader.query_first.await_count,
+        "writer_served_the_query": writer.query_first.await_count,
+    }
+    assert pinned == {
+        "reported_generation": 3,
+        "reported_the_reader_itself": True,
+        "reader_served_the_query": 2,
+        "writer_served_the_query": 0,
     }

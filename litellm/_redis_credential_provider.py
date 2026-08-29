@@ -3,7 +3,7 @@ import threading
 import time
 from typing import Any, Final
 
-from redis.credentials import CredentialProvider  # type: ignore[attr-defined]
+from redis.credentials import CredentialProvider
 
 # Azure AD scope for Redis Cache for Azure.
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"

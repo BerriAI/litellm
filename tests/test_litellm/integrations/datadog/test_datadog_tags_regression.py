@@ -1,12 +1,12 @@
+import datetime
 import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../"))
 
-from litellm.integrations.datadog.datadog_handler import get_datadog_tags
+from litellm.integrations.datadog.datadog import DataDogLogger
+from litellm.integrations.datadog.datadog_handler import get_datadog_tags, normalize_datadog_tag_value
 from litellm.integrations.datadog.datadog_cost_management import (
     DatadogCostManagementLogger,
 )
@@ -27,6 +27,7 @@ class TestDatadogTagsRegression:
                 "POD_NAME": "test-pod",
                 "DD_API_KEY": "mock-api-key",
                 "DD_APP_KEY": "mock-app-key",
+                "DD_SITE": "test.datadoghq.com",
             },
         ):
             yield
@@ -57,6 +58,57 @@ class TestDatadogTagsRegression:
         assert "service:test-service" in tags_with_team
         # Verify NEW team tag is added
         assert "team:regression-team" in tags_with_team
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        (
+            ("P&T", "p_t"),
+            ("CTO-B2B", "cto-b2b"),
+            ("  Team  &  Key!!  ", "team_key"),
+            ("regression-team", "regression-team"),
+        ),
+    )
+    def test_normalize_datadog_tag_value(self, value, expected):
+        assert normalize_datadog_tag_value(value) == expected
+
+    def test_get_datadog_tags_normalizes_alias_and_request_tag_values(self, mock_env_vars):
+        payload = StandardLoggingPayload(
+            request_tags=["capability:P&T"],
+            metadata=StandardLoggingMetadata(user_api_key_team_alias="CTO-B2B"),
+        )
+
+        tags = get_datadog_tags(payload)
+
+        assert "request_tag:capability:p_t" in tags
+        assert "team:cto-b2b" in tags
+
+    def test_get_datadog_tags_keeps_non_string_tag_values(self, mock_env_vars):
+        payload = StandardLoggingPayload(
+            request_tags=[12345, "capability:P&T"],
+            metadata=StandardLoggingMetadata(user_api_key_team_id=67890),
+        )
+
+        tags = get_datadog_tags(payload)
+
+        assert "request_tag:12345" in tags
+        assert "request_tag:capability:p_t" in tags
+        assert "team:67890" in tags
+
+    @pytest.mark.asyncio
+    async def test_non_string_request_tag_still_emits_the_datadog_payload(self, mock_env_vars):
+        with patch("asyncio.create_task"):
+            logger = DataDogLogger()
+        payload = StandardLoggingPayload(request_tags=[12345], metadata=StandardLoggingMetadata())
+
+        await logger.async_log_success_event(
+            kwargs={"standard_logging_object": payload},
+            response_obj=None,
+            start_time=datetime.datetime(2026, 1, 1),
+            end_time=datetime.datetime(2026, 1, 1),
+        )
+
+        assert len(logger.log_queue) == 1
+        assert "request_tag:12345" in logger.log_queue[0]["ddtags"].split(",")
 
     @pytest.mark.asyncio
     async def test_datadog_cost_management_tags_regression(self, mock_env_vars):
@@ -89,3 +141,32 @@ class TestDatadogTagsRegression:
         assert tags_new["env"] == "test-env"
         assert tags_new["user"] == "new-user"
         assert tags_new["team"] == "new-team-alias"  # New feature verified
+
+    @pytest.mark.asyncio
+    async def test_datadog_cost_management_normalizes_alias_and_custom_tag_values(self, mock_env_vars):
+        logger = DatadogCostManagementLogger(cost_tag_keys=["capability"])
+        payload = StandardLoggingPayload(
+            request_tags=["capability:Space & Punctuation!"],
+            metadata=StandardLoggingMetadata(
+                user_api_key_alias="P&T",
+                user_api_key_team_alias="CTO-B2B",
+            ),
+        )
+
+        tags = logger._extract_tags(payload)
+
+        assert tags["user"] == "p_t"
+        assert tags["team"] == "cto-b2b"
+        assert tags["capability"] == "space_punctuation"
+
+    @pytest.mark.asyncio
+    async def test_datadog_cost_management_keeps_non_string_alias_values(self, mock_env_vars):
+        logger = DatadogCostManagementLogger()
+        payload = StandardLoggingPayload(
+            metadata=StandardLoggingMetadata(user_api_key_alias=12345, user_api_key_team_id=67890),
+        )
+
+        tags = logger._extract_tags(payload)
+
+        assert tags["user"] == "12345"
+        assert tags["team"] == "67890"

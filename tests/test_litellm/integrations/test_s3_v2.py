@@ -751,7 +751,7 @@ async def test_strip_base64_mixed_nested_objects():
 
 
 @pytest.mark.asyncio
-async def test_s3_verify_false_handling():
+async def test_s3_verify_false_handling(monkeypatch: pytest.MonkeyPatch):
     """
     Test that s3_verify=False is properly handled and not treated as None.
 
@@ -763,15 +763,19 @@ async def test_s3_verify_false_handling():
     import litellm
 
     # Set up s3_callback_params with s3_verify=False
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "test-bucket",
-        "s3_endpoint_url": "https://localhost:443",
-        "s3_aws_access_key_id": "minioadmin",
-        "s3_aws_secret_access_key": "minioadmin",
-        "s3_region_name": "us-east-1",
-        "s3_verify": False,  # This should NOT be ignored
-        "s3_use_ssl": False,  # This should also NOT be ignored
-    }
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+                "s3_bucket_name": "test-bucket",
+                "s3_endpoint_url": "https://localhost:443",
+                "s3_aws_access_key_id": "minioadmin",
+                "s3_aws_secret_access_key": "minioadmin",
+                "s3_region_name": "us-east-1",
+                "s3_verify": False,  # This should NOT be ignored
+                "s3_use_ssl": False,  # This should also NOT be ignored
+            },
+    )
 
     with patch("asyncio.create_task"):
         with patch(
@@ -801,12 +805,9 @@ async def test_s3_verify_false_handling():
                 "ssl_verify": False
             }, f"Expected ssl_verify=False in params, got {call_kwargs.get('params')}"
 
-    # Clean up
-    litellm.s3_callback_params = None
-
 
 @pytest.mark.asyncio
-async def test_s3_verify_none_handling():
+async def test_s3_verify_none_handling(monkeypatch: pytest.MonkeyPatch):
     """
     Test that s3_verify=None uses default behavior.
     """
@@ -815,12 +816,16 @@ async def test_s3_verify_none_handling():
     import litellm
 
     # Set up s3_callback_params without s3_verify
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "test-bucket",
-        "s3_aws_access_key_id": "test-key",
-        "s3_aws_secret_access_key": "test-secret",
-        "s3_region_name": "us-east-1",
-    }
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+                "s3_bucket_name": "test-bucket",
+                "s3_aws_access_key_id": "test-key",
+                "s3_aws_secret_access_key": "test-secret",
+                "s3_region_name": "us-east-1",
+            },
+    )
 
     with patch("asyncio.create_task"):
         with patch(
@@ -846,12 +851,9 @@ async def test_s3_verify_none_handling():
                 assert call_kwargs["params"].get("ssl_verify") is None
             # Either params is None or params={'ssl_verify': None} is acceptable
 
-    # Clean up
-    litellm.s3_callback_params = None
-
 
 @pytest.mark.asyncio
-async def test_s3_verify_false_creates_httpx_client_with_verify_false():
+async def test_s3_verify_false_creates_httpx_client_with_verify_false(monkeypatch: pytest.MonkeyPatch):
     """
     Test that when s3_verify=False, the actual httpx client has verify=False.
 
@@ -862,14 +864,18 @@ async def test_s3_verify_false_creates_httpx_client_with_verify_false():
     import litellm
 
     # Set up s3_callback_params with s3_verify=False
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "test-bucket",
-        "s3_endpoint_url": "https://localhost:443",
-        "s3_aws_access_key_id": "minioadmin",
-        "s3_aws_secret_access_key": "minioadmin",
-        "s3_region_name": "us-east-1",
-        "s3_verify": False,
-    }
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+                "s3_bucket_name": "test-bucket",
+                "s3_endpoint_url": "https://localhost:443",
+                "s3_aws_access_key_id": "minioadmin",
+                "s3_aws_secret_access_key": "minioadmin",
+                "s3_region_name": "us-east-1",
+                "s3_verify": False,
+            },
+    )
 
     with patch("asyncio.create_task"):
         # Create logger - this creates the httpx client
@@ -888,12 +894,9 @@ async def test_s3_verify_false_creates_httpx_client_with_verify_false():
                     httpx_client._verify is False
                 ), f"Expected httpx client _verify=False, got {httpx_client._verify}"
 
-    # Clean up
-    litellm.s3_callback_params = None
-
 
 @pytest.mark.asyncio
-async def test_s3_verify_false_async_client():
+async def test_s3_verify_false_async_client(monkeypatch: pytest.MonkeyPatch):
     """
     Test that the async httpx client respects s3_verify=False.
     """
@@ -903,14 +906,18 @@ async def test_s3_verify_false_async_client():
     from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 
     # Set up s3_callback_params with s3_verify=False
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "test-bucket",
-        "s3_endpoint_url": "https://localhost:443",
-        "s3_aws_access_key_id": "minioadmin",
-        "s3_aws_secret_access_key": "minioadmin",
-        "s3_region_name": "us-east-1",
-        "s3_verify": False,
-    }
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+                "s3_bucket_name": "test-bucket",
+                "s3_endpoint_url": "https://localhost:443",
+                "s3_aws_access_key_id": "minioadmin",
+                "s3_aws_secret_access_key": "minioadmin",
+                "s3_region_name": "us-east-1",
+                "s3_verify": False,
+            },
+    )
 
     with patch("asyncio.create_task"):
         logger = S3Logger()
@@ -944,9 +951,6 @@ async def test_s3_verify_false_async_client():
                 assert (
                     httpx_client._verify is False
                 ), f"Expected async httpx client _verify=False, got {httpx_client._verify}"
-
-    # Clean up
-    litellm.s3_callback_params = None
 
 
 @pytest.mark.asyncio
@@ -1169,26 +1173,22 @@ def test_create_s3_batch_logging_element_flat_key_for_arn_response_id():
 # --------------------------------------------------------------
 # params_source / s3_callback_params_override (audit-log decoupling)
 # --------------------------------------------------------------
-def test_s3_callback_params_override_uses_alternate_dict():
+def test_s3_callback_params_override_uses_alternate_dict(monkeypatch):
     """`s3_callback_params_override` makes the logger read its config from
     the override dict instead of `litellm.s3_callback_params`."""
     import litellm
 
-    original = litellm.s3_callback_params
-    litellm.s3_callback_params = {"s3_bucket_name": "normal-bucket"}
-    try:
-        logger = S3Logger(
-            s3_callback_params_override={
-                "s3_bucket_name": "audit-bucket",
-                "s3_path": "audit-prefix",
-                "s3_region_name": "us-west-2",
-            }
-        )
-        assert logger.s3_bucket_name == "audit-bucket"
-        assert logger.s3_path == "audit-prefix"
-        assert logger.s3_region_name == "us-west-2"
-    finally:
-        litellm.s3_callback_params = original
+    monkeypatch.setattr(litellm, "s3_callback_params", {"s3_bucket_name": "normal-bucket"})
+    logger = S3Logger(
+        s3_callback_params_override={
+            "s3_bucket_name": "audit-bucket",
+            "s3_path": "audit-prefix",
+            "s3_region_name": "us-west-2",
+        }
+    )
+    assert logger.s3_bucket_name == "audit-bucket"
+    assert logger.s3_path == "audit-prefix"
+    assert logger.s3_region_name == "us-west-2"
 
 
 def test_s3_callback_params_override_does_not_mutate_inputs(monkeypatch):
@@ -1198,43 +1198,31 @@ def test_s3_callback_params_override_does_not_mutate_inputs(monkeypatch):
 
     monkeypatch.setenv("MY_AUDIT_BUCKET", "resolved-bucket")
     override = {"s3_bucket_name": "os.environ/MY_AUDIT_BUCKET"}
-    original_global = litellm.s3_callback_params
-    litellm.s3_callback_params = {"s3_bucket_name": "os.environ/MY_AUDIT_BUCKET"}
-    try:
-        logger = S3Logger(s3_callback_params_override=override)
-        assert logger.s3_bucket_name == "resolved-bucket"
-        assert override["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
-        assert (
-            litellm.s3_callback_params["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
-        )
-    finally:
-        litellm.s3_callback_params = original_global
+    monkeypatch.setattr(litellm, "s3_callback_params", {"s3_bucket_name": "os.environ/MY_AUDIT_BUCKET"})
+    logger = S3Logger(s3_callback_params_override=override)
+    assert logger.s3_bucket_name == "resolved-bucket"
+    assert override["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
+    assert (
+        litellm.s3_callback_params["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
+    )
 
 
-def test_s3_callback_params_override_none_falls_back_to_global():
+def test_s3_callback_params_override_none_falls_back_to_global(monkeypatch):
     """No override → behaves exactly as today (reads `litellm.s3_callback_params`)."""
     import litellm
 
-    original = litellm.s3_callback_params
-    litellm.s3_callback_params = {"s3_bucket_name": "from-global"}
-    try:
-        logger = S3Logger()
-        assert logger.s3_bucket_name == "from-global"
-    finally:
-        litellm.s3_callback_params = original
+    monkeypatch.setattr(litellm, "s3_callback_params", {"s3_bucket_name": "from-global"})
+    logger = S3Logger()
+    assert logger.s3_bucket_name == "from-global"
 
 
-def test_s3_callback_params_override_empty_dict_is_opt_in():
+def test_s3_callback_params_override_empty_dict_is_opt_in(monkeypatch):
     """An empty override dict skips the global entirely (env/IAM-only config)."""
     import litellm
 
-    original = litellm.s3_callback_params
-    litellm.s3_callback_params = {"s3_bucket_name": "from-global"}
-    try:
-        logger = S3Logger(s3_callback_params_override={})
-        assert logger.s3_bucket_name is None
-    finally:
-        litellm.s3_callback_params = original
+    monkeypatch.setattr(litellm, "s3_callback_params", {"s3_bucket_name": "from-global"})
+    logger = S3Logger(s3_callback_params_override={})
+    assert logger.s3_bucket_name is None
 
 
 def _expected_content_md5(payload: dict) -> str:
@@ -1374,20 +1362,20 @@ async def test_async_upload_sets_server_side_encryption_header_when_configured()
     assert headers["x-amz-server-side-encryption"] == "aws:kms"
 
 
-def test_s3_server_side_encryption_read_from_callback_params():
+def test_s3_server_side_encryption_read_from_callback_params(monkeypatch):
     """s3_server_side_encryption can be configured via s3_callback_params."""
     import litellm
 
-    original = litellm.s3_callback_params
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "from-global",
-        "s3_server_side_encryption": "aws:kms",
-    }
-    try:
-        logger = S3Logger()
-        assert logger.s3_server_side_encryption == "aws:kms"
-    finally:
-        litellm.s3_callback_params = original
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+                "s3_bucket_name": "from-global",
+                "s3_server_side_encryption": "aws:kms",
+            },
+    )
+    logger = S3Logger()
+    assert logger.s3_server_side_encryption == "aws:kms"
 
 
 @pytest.mark.asyncio
@@ -1505,21 +1493,21 @@ async def test_async_upload_omits_kms_key_id_header_when_not_configured():
     assert "x-amz-server-side-encryption-aws-kms-key-id" not in headers
 
 
-def test_s3_sse_kms_key_id_read_from_callback_params():
+def test_s3_sse_kms_key_id_read_from_callback_params(monkeypatch):
     """s3_sse_kms_key_id can be configured via s3_callback_params."""
     import litellm
 
-    original = litellm.s3_callback_params
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "from-global",
-        "s3_server_side_encryption": "aws:kms",
-        "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
-    }
-    try:
-        logger = S3Logger()
-        assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/test-key-id")
-    finally:
-        litellm.s3_callback_params = original
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+                "s3_bucket_name": "from-global",
+                "s3_server_side_encryption": "aws:kms",
+                "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+            },
+    )
+    logger = S3Logger()
+    assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/test-key-id")
 
 
 @pytest.mark.asyncio
@@ -1561,80 +1549,339 @@ async def test_async_upload_infers_aws_kms_when_only_key_id_set():
     )
 
 
-def test_s3_sse_kms_key_id_read_from_audit_override_params():
+def test_s3_sse_kms_key_id_read_from_audit_override_params(monkeypatch):
     """The audit-log override path must honor s3_sse_kms_key_id too."""
     import litellm
 
-    original = litellm.s3_callback_params
-    litellm.s3_callback_params = {"s3_bucket_name": "normal-logs-bucket"}
-    try:
-        logger = S3Logger(
-            s3_callback_params_override={
-                "s3_bucket_name": "audit-logs-bucket",
-                "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/audit-key-id",
-            }
-        )
-        assert logger.s3_bucket_name == "audit-logs-bucket"
-        assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/audit-key-id")
-    finally:
-        litellm.s3_callback_params = original
+    monkeypatch.setattr(litellm, "s3_callback_params", {"s3_bucket_name": "normal-logs-bucket"})
+    logger = S3Logger(
+        s3_callback_params_override={
+            "s3_bucket_name": "audit-logs-bucket",
+            "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/audit-key-id",
+        }
+    )
+    assert logger.s3_bucket_name == "audit-logs-bucket"
+    assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/audit-key-id")
 
 
-def test_kms_key_id_dropped_when_algorithm_is_not_kms():
+def test_kms_key_id_dropped_when_algorithm_is_not_kms(monkeypatch):
     """
     AES256 plus a KMS key id is an invalid S3 combination; the key id must be
     dropped at init so uploads keep working instead of silently 400ing.
     """
     import litellm
 
-    original = litellm.s3_callback_params
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "from-global",
-        "s3_server_side_encryption": "AES256",
-        "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
-    }
-    try:
-        logger = S3Logger()
-        assert logger.s3_server_side_encryption == "AES256"
-        assert logger.s3_sse_kms_key_id is None
-    finally:
-        litellm.s3_callback_params = original
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+                "s3_bucket_name": "from-global",
+                "s3_server_side_encryption": "AES256",
+                "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+            },
+    )
+    logger = S3Logger()
+    assert logger.s3_server_side_encryption == "AES256"
+    assert logger.s3_sse_kms_key_id is None
 
 
-def test_non_string_algorithm_is_dropped_and_valid_key_id_is_rescued():
+def test_non_string_algorithm_is_dropped_and_valid_key_id_is_rescued(monkeypatch):
     """
     A YAML boolean in s3_server_side_encryption must not crash logger init and
     must not discard the valid key id; aws:kms is inferred from the key id.
     """
     import litellm
 
-    original = litellm.s3_callback_params
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "from-global",
-        "s3_server_side_encryption": True,
-        "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
-    }
-    try:
-        logger = S3Logger()
-        assert logger.s3_server_side_encryption == "aws:kms"
-        assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/test-key-id")
-    finally:
-        litellm.s3_callback_params = original
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+                "s3_bucket_name": "from-global",
+                "s3_server_side_encryption": True,
+                "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+            },
+    )
+    logger = S3Logger()
+    assert logger.s3_server_side_encryption == "aws:kms"
+    assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/test-key-id")
 
 
-def test_non_string_key_id_is_dropped_and_valid_algorithm_is_kept():
+def test_non_string_key_id_is_dropped_and_valid_algorithm_is_kept(monkeypatch):
     """A mistyped key id (unquoted YAML number) must not disable the valid algorithm."""
     import litellm
 
-    original = litellm.s3_callback_params
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "from-global",
-        "s3_server_side_encryption": "aws:kms",
-        "s3_sse_kms_key_id": 12345,
-    }
-    try:
-        logger = S3Logger()
-        assert logger.s3_server_side_encryption == "aws:kms"
-        assert logger.s3_sse_kms_key_id is None
-    finally:
-        litellm.s3_callback_params = original
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+                "s3_bucket_name": "from-global",
+                "s3_server_side_encryption": "aws:kms",
+                "s3_sse_kms_key_id": 12345,
+            },
+    )
+    logger = S3Logger()
+    assert logger.s3_server_side_encryption == "aws:kms"
+    assert logger.s3_sse_kms_key_id is None
+
+
+_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+_SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+_KEY_WITH_SPACE = "LOGS/LLM AI Projects/2026-08-04/time-13-01-00-abc.json"
+
+
+def _signature_for(signer_cls, url: str, method: str, body: bytes | None, headers: dict[str, str]) -> str:
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    sent = {name.lower(): value for name, value in headers.items()}
+    signed_header_names = sent["authorization"].split("SignedHeaders=")[1].split(", ")[0].split(";")
+    request = AWSRequest(
+        method=method,
+        url=url,
+        data=body,
+        headers={name: sent[name] for name in signed_header_names if name in sent},
+    )
+    request.context["timestamp"] = sent["x-amz-date"]
+    signer = signer_cls(Credentials(_ACCESS_KEY, _SECRET_KEY), "s3", "us-east-1")
+    canonical_request = signer.canonical_request(request)
+    return signer.signature(signer.string_to_sign(request, canonical_request), request)
+
+
+def _as_s3_canonicalizes(url: str) -> str:
+    """
+    The path S3 rebuilds from the wire path: percent-encode everything outside the unreserved
+    set, without normalizing or double-encoding. `=` becomes `%3D`, `%20` stays `%20`.
+    """
+    from urllib.parse import quote, unquote, urlsplit, urlunsplit
+
+    split = urlsplit(url)
+    return urlunsplit(split._replace(path=quote(unquote(split.path), safe="/~")))
+
+
+def _assert_signed_for_s3_canonicalization(url: str, method: str, body: bytes | None, headers: dict[str, str]) -> None:
+    """
+    S3 rebuilds the canonical request from the wire path with single percent-encoding, which
+    botocore models as S3SigV4Auth; plain SigV4Auth double-encodes it (%2520 for a space) and S3
+    answers 403 SignatureDoesNotMatch. Assert we sent an already-encoded path and signed it the
+    way S3 reads it.
+    """
+    from botocore.auth import S3SigV4Auth, SigV4Auth
+
+    assert url == _as_s3_canonicalizes(url)
+    sent_signature = headers["Authorization"].split("Signature=")[1].strip()
+    assert sent_signature == _signature_for(S3SigV4Auth, url, method, body, headers)
+    assert sent_signature != _signature_for(SigV4Auth, url, method, body, headers)
+
+
+def _logger_for_signing() -> S3Logger:
+    return S3Logger(
+        s3_bucket_name="logs-bucket",
+        s3_aws_access_key_id=_ACCESS_KEY,
+        s3_aws_secret_access_key=_SECRET_KEY,
+        s3_region_name="us-east-1",
+    )
+
+
+def _element_with_space():
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    return s3BatchLoggingElement(
+        s3_object_key=_KEY_WITH_SPACE,
+        payload={"test": "sigv4"},
+        s3_object_download_filename="log.json",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_upload_signs_object_key_with_space_the_way_s3_does():
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(_element_with_space())
+
+    call = logger.async_httpx_client.put.call_args
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+def test_sync_upload_signs_object_key_with_space_the_way_s3_does():
+    from unittest.mock import MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    mock_sync_client = MagicMock()
+    mock_sync_client.put.return_value = response
+
+    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+        logger.upload_data_to_s3(_element_with_space())
+
+    call = mock_sync_client.put.call_args
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_signs_object_key_with_space_the_way_s3_does():
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.json = MagicMock(return_value={"downloaded": "data"})
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.get.return_value = response
+
+    assert await logger._download_object_from_s3(_KEY_WITH_SPACE) == {"downloaded": "data"}
+
+    call = logger.async_httpx_client.get.call_args
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="GET",
+        body=None,
+        headers=call.kwargs["headers"],
+    )
+
+_RESERVED_CHAR_KEYS = (
+    "2026-08-21/time-05-29-36_resp_bGl0ZWxsbTpjdXN0b20=.json",
+    "session=logs/2026-08-21/time-05-29-36_abc.json",
+    "a+b/2026-08-21/time-05-29-36_abc.json",
+    "a&b/2026-08-21/time-05-29-36_abc.json",
+    "a#b/2026-08-21/time-05-29-36_abc.json",
+    "a?b/2026-08-21/time-05-29-36_abc.json",
+    "a%b/2026-08-21/time-05-29-36_abc.json",
+    _KEY_WITH_SPACE,
+)
+
+
+def _element_for(s3_object_key: str):
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    return s3BatchLoggingElement(
+        s3_object_key=s3_object_key,
+        payload={"test": "sigv4"},
+        s3_object_download_filename="log.json",
+    )
+
+
+def _expected_wire_url(s3_object_key: str) -> str:
+    """The URL boto3 itself would put on the wire for this key."""
+    from urllib.parse import quote
+
+    return f"https://logs-bucket.s3.us-east-1.amazonaws.com/{quote(s3_object_key, safe='/')}"
+
+
+@pytest.mark.parametrize("s3_object_key", _RESERVED_CHAR_KEYS)
+@pytest.mark.asyncio
+async def test_async_upload_percent_encodes_reserved_characters_in_object_key(s3_object_key):
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(_element_for(s3_object_key))
+
+    call = logger.async_httpx_client.put.call_args
+    assert call[0][0] == _expected_wire_url(s3_object_key)
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+@pytest.mark.parametrize("s3_object_key", _RESERVED_CHAR_KEYS)
+def test_sync_upload_percent_encodes_reserved_characters_in_object_key(s3_object_key):
+    from unittest.mock import MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    mock_sync_client = MagicMock()
+    mock_sync_client.put.return_value = response
+
+    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+        logger.upload_data_to_s3(_element_for(s3_object_key))
+
+    call = mock_sync_client.put.call_args
+    assert call[0][0] == _expected_wire_url(s3_object_key)
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+@pytest.mark.parametrize("s3_object_key", _RESERVED_CHAR_KEYS)
+@pytest.mark.asyncio
+async def test_download_percent_encodes_reserved_characters_in_object_key(s3_object_key):
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.json = MagicMock(return_value={"downloaded": "data"})
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.get.return_value = response
+
+    assert await logger._download_object_from_s3(s3_object_key) == {"downloaded": "data"}
+
+    call = logger.async_httpx_client.get.call_args
+    assert call[0][0] == _expected_wire_url(s3_object_key)
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="GET",
+        body=None,
+        headers=call.kwargs["headers"],
+    )
+
+
+def _s3_logger_for_region(region_name: str) -> S3Logger:
+    logger = S3Logger.__new__(S3Logger)
+    logger.s3_endpoint_url = None
+    logger.s3_bucket_name = "my-litellm-audit"
+    logger.s3_region_name = region_name
+    return logger
+
+
+@pytest.mark.parametrize(
+    "region_name,expected_url",
+    [
+        (
+            "cn-northwest-1",
+            "https://my-litellm-audit.s3.cn-northwest-1.amazonaws.com.cn/2025-01-01/key.json",
+        ),
+        (
+            "us-gov-west-1",
+            "https://my-litellm-audit.s3.us-gov-west-1.amazonaws.com/2025-01-01/key.json",
+        ),
+        (
+            "us-east-1",
+            "https://my-litellm-audit.s3.us-east-1.amazonaws.com/2025-01-01/key.json",
+        ),
+    ],
+)
+def test_build_object_url_uses_partition_dns_suffix(region_name: str, expected_url: str) -> None:
+    assert _s3_logger_for_region(region_name)._build_object_url("2025-01-01/key.json") == expected_url

@@ -62,6 +62,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
 
     @staticmethod
+    def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
+        """Whether this request's reasoning effort ends up as "none", the one condition
+        under which a non-default temperature is accepted.
+
+        Delegates to the chat-completions gpt-5 config so both surfaces answer from one
+        rule: the Responses API reaches the same models over a different wire, and a second
+        copy of the rule here is what let this surface keep forwarding temperature after the
+        chat surface stopped.
+        """
+        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+        return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
+
+    @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
         """Raise sub-minimum max_output_tokens up to the OpenAI Responses API minimum.
 
@@ -116,17 +130,17 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 reasoning: Final = params.get("reasoning") or {}
                 effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
                 supports_none: Final = self._supports_reasoning_effort_none(model=model)
-                if supports_none and (effort == "none" or effort is None):
+                if supports_none and self._effort_resolves_to_none(model, effort):
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
                     params.pop("temperature", None)
                 else:
                     raise litellm.UnsupportedParamsError(
                         message=(
-                            f"gpt-5 models don't support temperature={temperature}. "
-                            "Only temperature=1 is supported. "
-                            "For models like gpt-5.1/5.4, temperature is supported "
-                            "when reasoning.effort='none' (or not specified). "
+                            f"{model} doesn't support temperature={temperature} while reasoning is "
+                            "active. Only temperature=1 is supported unless reasoning.effort resolves "
+                            "to 'none', either set explicitly on the request or declared as the "
+                            "model's default_reasoning_effort. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ),
                         status_code=400,
@@ -165,10 +179,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self,
         model: str,  # allows overrides to selectively run this
         input: str | ResponseInputParam,
-        tools: List[ALL_RESPONSES_API_TOOL_PARAMS] | None = None,
-    ) -> Tuple[
+        tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None = None,
+    ) -> tuple[
         str | ResponseInputParam,
-        List[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+        list[ALL_RESPONSES_API_TOOL_PARAMS] | None,
     ]:
         """Sibling of `remove_cache_control_flag_from_messages_and_tools` on
         the chat path. Strips Anthropic-only `cache_control` markers from
@@ -219,7 +233,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)
-            return validated_input  # type: ignore
+            return validated_input
         # Input is expected to be either str or List, no single BaseModel expected
         return input
 
@@ -354,6 +368,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return event_pydantic_model.model_construct(**parsed_chunk)
 
     @staticmethod
+    def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+        for chunk_str in reversed(all_chunks):
+            for event_model in (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent):
+                try:
+                    return event_model.model_validate_json(chunk_str.removeprefix("data: ")).response
+                except ValueError:
+                    continue
+        return None
+
+    @staticmethod
     def get_event_model_class(event_type: str) -> Any:
         """
         Returns the appropriate event model class based on the event type.
@@ -447,7 +471,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the delete response API request into a URL and data
 
@@ -482,7 +506,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the get response API request into a URL and data
 
@@ -525,10 +549,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         headers: dict,
         after: str | None = None,
         before: str | None = None,
-        include: List[str] | None = None,
+        include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}/input_items"
         params: Final[dict[str, Any]] = {}
@@ -563,7 +587,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the cancel response API request into a URL and data
 
@@ -607,7 +631,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the compact response API request into a URL and data
 

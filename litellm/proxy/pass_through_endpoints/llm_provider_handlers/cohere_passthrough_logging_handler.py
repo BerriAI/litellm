@@ -82,7 +82,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         Handle Cohere passthrough logging with route detection and cost tracking.
         """
         # Check if this is an embed endpoint
-        if "/v1/embed" in url_route:
+        if "/v1/embed" in url_route and "/v1/embeddings" not in url_route:
             model: Final = request_body.get("model", response_body.get("model", ""))
             try:
                 cohere_embed_config: Final = CohereEmbeddingConfig()

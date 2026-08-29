@@ -64,7 +64,7 @@ class AmazonTitanG1Config:
 
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanG1EmbeddingResponse(**response)  # type: ignore
+            _parsed_response = AmazonTitanG1EmbeddingResponse(**response)
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],

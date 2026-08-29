@@ -16,11 +16,16 @@ from litellm.llms.together_ai.rerank.transformation import TogetherAIRerankConfi
 from litellm.types.rerank import RerankRequest, RerankResponse
 
 
+def _rerank_url(api_base: str) -> str:
+    return f"{api_base.rstrip('/')}/rerank"
+
+
 class TogetherAIRerank(BaseLLM):
     def rerank(
         self,
         model: str,
         api_key: str,
+        api_base: str,
         query: str,
         documents: list[str | dict[str, Any]],
         top_n: int | None = None,
@@ -46,10 +51,10 @@ class TogetherAIRerank(BaseLLM):
             raise ValueError("TogetherAI does not support max_chunks_per_doc")
 
         if _is_async:
-            return self.async_rerank(request_data_dict, api_key)  # type: ignore # Call async method
+            return self.async_rerank(request_data_dict, api_key, api_base)
 
         response: Final = client.post(
-            "https://api.together.xyz/v1/rerank",
+            _rerank_url(api_base),
             headers={
                 "accept": "application/json",
                 "content-type": "application/json",
@@ -69,11 +74,12 @@ class TogetherAIRerank(BaseLLM):
         self,
         request_data_dict: dict[str, Any],
         api_key: str,
+        api_base: str,
     ) -> RerankResponse:
         client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.TOGETHER_AI)  # Use async client
 
         response: Final = await client.post(
-            "https://api.together.xyz/v1/rerank",
+            _rerank_url(api_base),
             headers={
                 "accept": "application/json",
                 "content-type": "application/json",

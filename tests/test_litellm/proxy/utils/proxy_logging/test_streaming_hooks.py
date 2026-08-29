@@ -10,6 +10,7 @@ Covers ``_wrap_streaming_iterator_with_enrichment``,
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,6 +19,10 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    BaseAnthropicMessagesStreamingIterator,
+)
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -344,6 +349,134 @@ async def test_async_post_call_streaming_iterator_hook_upstream_error_raises(pro
             request_data={},
         ):
             pass
+
+
+# ---------------------------------------------------------------------------
+# deferred native /v1/messages stream logging (LIT-6409)
+# ---------------------------------------------------------------------------
+
+
+_NATIVE_MESSAGES_STREAM_EVENTS = (
+    {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 3, "output_tokens": 1}}},
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+    {"type": "message_stop"},
+)
+
+
+def _armed_native_messages_stream(test_name: str, request_data: Dict[str, Any], events: List[Any]):
+    """The proxy-side setup for a native /v1/messages stream with post_call
+    guardrails active: a real BaseAnthropicMessagesStreamingIterator whose
+    logging_obj carries the deferred-dispatch callback the proxy arms in
+    common_request_processing. The callback records what the guardrail
+    metadata contained at the moment the deferred logging was dispatched."""
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id=test_name,
+        function_id=test_name,
+    )
+
+    async def _dispatch_deferred_logging(logging_coroutine):
+        events.append(
+            (
+                "logging_dispatched",
+                "post_call_entry_visible",
+                bool(request_data.get("metadata", {}).get("standard_logging_guardrail_information")),
+            )
+        )
+        logging_coroutine.close()
+
+    logging_obj._on_deferred_stream_complete = _dispatch_deferred_logging
+    request_data["litellm_logging_obj"] = logging_obj
+
+    iterator = BaseAnthropicMessagesStreamingIterator(litellm_logging_obj=logging_obj, request_body={})
+
+    async def _upstream():
+        for event in _NATIVE_MESSAGES_STREAM_EVENTS:
+            yield event
+
+    return logging_obj, iterator.async_sse_wrapper(_upstream())
+
+
+@pytest.mark.asyncio
+async def test_native_messages_stream_logging_fires_after_guardrail_end_of_stream_scan(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Regression test for LIT-6409: on native /v1/messages streams the
+    end-of-stream guardrail scan writes its post_call entry AFTER the
+    upstream iterator is exhausted, so success logging dispatched at
+    upstream exhaustion never sees it. The deferred dispatch must fire
+    only after the guardrail chain fully drains.
+    """
+    events: List[Any] = []
+    request_data: Dict[str, Any] = {"metadata": {}}
+    _, native_stream = _armed_native_messages_stream(
+        "test_native_stream_deferred_ordering", request_data, events
+    )
+
+    class _EndOfStreamScanGuardrail(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for chunk in response:
+                yield chunk
+            request_data.setdefault("metadata", {})["standard_logging_guardrail_information"] = [
+                {"guardrail_mode": "post_call", "guardrail_status": "success"}
+            ]
+            events.append("scan_appended")
+
+    monkeypatch.setattr(litellm, "callbacks", [_EndOfStreamScanGuardrail()])
+
+    async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+        response=native_stream,
+        user_api_key_dict=make_user_api_key_auth(),
+        request_data=request_data,
+    ):
+        pass
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert events == ["scan_appended", ("logging_dispatched", "post_call_entry_visible", True)]
+
+
+@pytest.mark.asyncio
+async def test_native_messages_stream_logging_fires_when_guardrail_blocks_after_stream_end(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    A guardrail block raised after upstream exhaustion (unified_guardrail
+    re-raises HTTPException for blocked content) must still flush the
+    parked deferred logging, or the blocked stream loses its spend log.
+    """
+    events: List[Any] = []
+    request_data: Dict[str, Any] = {"metadata": {}}
+    logging_obj, native_stream = _armed_native_messages_stream(
+        "test_native_stream_deferred_block", request_data, events
+    )
+
+    class _BlockingGuardrail(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for chunk in response:
+                yield chunk
+            raise HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+
+    monkeypatch.setattr(litellm, "callbacks", [_BlockingGuardrail()])
+
+    with pytest.raises(HTTPException):
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=native_stream,
+            user_api_key_dict=make_user_api_key_auth(),
+            request_data=request_data,
+        ):
+            pass
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert [event[0] for event in events] == ["logging_dispatched"]
+    assert logging_obj._deferred_stream_complete_args is None
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,10 @@
 import React, { useState, useCallback } from "react";
-import { Table, Select, InputNumber, Button, Radio } from "antd";
-import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import { Plus, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { SearchSelect } from "@/components/shared/SearchSelect";
 import { PricingCalculatorProps, ModelEntry } from "./types";
 import MultiCostResults from "./multi_cost_results";
 import { useMultiCostEstimate } from "./use_multi_cost_estimate";
@@ -63,132 +67,115 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
 
   const multiModelResult = getMultiModelResult(entries);
 
-  const columns = [
-    {
-      title: "Model",
-      dataIndex: "model",
-      key: "model",
-      width: "35%",
-      render: (_: string, record: ModelEntry) => (
-        <Select
-          showSearch
-          placeholder="Select a model"
-          value={record.model || undefined}
-          onChange={(value) => handleEntryChange(record.id, "model", value)}
-          optionFilterProp="label"
-          filterOption={(input, option) =>
-            String(option?.label ?? "")
-              .toLowerCase()
-              .includes(input.toLowerCase())
-          }
-          options={models.map((model) => ({
-            value: model,
-            label: model,
-          }))}
-          style={{ width: "100%" }}
-          size="small"
-        />
-      ),
-    },
-    {
-      title: "Input Tokens",
-      dataIndex: "input_tokens",
-      key: "input_tokens",
-      width: "18%",
-      render: (_: number, record: ModelEntry) => (
-        <InputNumber
-          min={0}
-          value={record.input_tokens}
-          onChange={(value) => handleEntryChange(record.id, "input_tokens", value ?? 0)}
-          style={{ width: "100%" }}
-          size="small"
-          formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-        />
-      ),
-    },
-    {
-      title: "Output Tokens",
-      dataIndex: "output_tokens",
-      key: "output_tokens",
-      width: "18%",
-      render: (_: number, record: ModelEntry) => (
-        <InputNumber
-          min={0}
-          value={record.output_tokens}
-          onChange={(value) => handleEntryChange(record.id, "output_tokens", value ?? 0)}
-          style={{ width: "100%" }}
-          size="small"
-          formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-        />
-      ),
-    },
-    {
-      title: `Requests/${timePeriod === "day" ? "Day" : "Month"}`,
-      dataIndex: timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month",
-      key: "num_requests",
-      width: "20%",
-      render: (_: number | undefined, record: ModelEntry) => (
-        <InputNumber
-          min={0}
-          value={timePeriod === "day" ? record.num_requests_per_day : record.num_requests_per_month}
-          onChange={(value) =>
-            handleEntryChange(
-              record.id,
-              timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month",
-              value ?? undefined,
-            )
-          }
-          style={{ width: "100%" }}
-          size="small"
-          placeholder="-"
-          formatter={(value) => (value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",") : "")}
-        />
-      ),
-    },
-    {
-      title: "",
-      key: "actions",
-      width: 50,
-      render: (_: unknown, record: ModelEntry) => (
-        <Button
-          type="text"
-          icon={<DeleteOutlined />}
-          onClick={() => handleRemoveEntry(record.id)}
-          disabled={entries.length === 1}
-          danger
-          size="small"
-        />
-      ),
-    },
-  ];
+  const modelOptions = models.map((model) => ({ label: model, value: model }));
+  const requestsField = timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month";
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-end mb-2">
-        <Radio.Group
+        <RadioGroup
           value={timePeriod}
-          onChange={(e) => handleTimePeriodChange(e.target.value)}
-          size="small"
-          optionType="button"
-          buttonStyle="solid"
+          onValueChange={(value) => handleTimePeriodChange(value as TimePeriod)}
+          className="flex w-auto items-center gap-4"
         >
-          <Radio.Button value="day">Per Day</Radio.Button>
-          <Radio.Button value="month">Per Month</Radio.Button>
-        </Radio.Group>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <RadioGroupItem value="day" />
+            Per Day
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <RadioGroupItem value="month" />
+            Per Month
+          </label>
+        </RadioGroup>
       </div>
 
-      <Table
-        columns={columns}
-        dataSource={entries}
-        rowKey="id"
-        pagination={false}
-        size="small"
-        footer={() => (
-          <Button type="dashed" onClick={handleAddEntry} icon={<PlusOutlined />} className="w-full">
-            Add Another Model
-          </Button>
-        )}
-      />
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[35%]">Model</TableHead>
+            <TableHead className="w-[18%]">Input Tokens</TableHead>
+            <TableHead className="w-[18%]">Output Tokens</TableHead>
+            <TableHead className="w-[20%]">Requests/{timePeriod === "day" ? "Day" : "Month"}</TableHead>
+            <TableHead className="w-[50px]">
+              <span className="sr-only">Actions</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {entries.map((record, index) => (
+            <TableRow key={record.id}>
+              <TableCell className="whitespace-normal">
+                <SearchSelect
+                  options={modelOptions}
+                  value={record.model || undefined}
+                  onValueChange={(value) => handleEntryChange(record.id, "model", value)}
+                  placeholder="Select a model"
+                />
+              </TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  min={0}
+                  className="h-8"
+                  value={record.input_tokens}
+                  onChange={(e) =>
+                    handleEntryChange(record.id, "input_tokens", e.target.value === "" ? 0 : Number(e.target.value))
+                  }
+                />
+              </TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  min={0}
+                  className="h-8"
+                  value={record.output_tokens}
+                  onChange={(e) =>
+                    handleEntryChange(record.id, "output_tokens", e.target.value === "" ? 0 : Number(e.target.value))
+                  }
+                />
+              </TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  min={0}
+                  className="h-8"
+                  placeholder="-"
+                  value={record[requestsField] ?? ""}
+                  onChange={(e) =>
+                    handleEntryChange(
+                      record.id,
+                      requestsField,
+                      e.target.value === "" ? undefined : Number(e.target.value),
+                    )
+                  }
+                />
+              </TableCell>
+              <TableCell>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Remove model row ${index + 1}`}
+                  onClick={() => handleRemoveEntry(record.id)}
+                  disabled={entries.length === 1}
+                  className="text-destructive"
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+        <TableFooter>
+          <TableRow>
+            <TableCell colSpan={5}>
+              <Button variant="outline" onClick={handleAddEntry} className="w-full border-dashed">
+                <Plus className="size-3.5" />
+                Add Another Model
+              </Button>
+            </TableCell>
+          </TableRow>
+        </TableFooter>
+      </Table>
 
       <MultiCostResults multiResult={multiModelResult} timePeriod={timePeriod} />
     </div>

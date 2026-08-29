@@ -165,9 +165,7 @@ class PredibaseConfig(BaseConfig):
             )
 
         if len(completion_response["generated_text"]) > 0:
-            model_response.choices[0].message.content = self.output_parser(  # type: ignore
-                completion_response["generated_text"]
-            )
+            model_response.choices[0].message.content = self.output_parser(completion_response["generated_text"])
 
         if "details" in completion_response and "tokens" in completion_response["details"]:
             model_response.choices[0].finish_reason = map_finish_reason(completion_response["details"]["finish_reason"])
@@ -176,7 +174,7 @@ class PredibaseConfig(BaseConfig):
                 if token["logprob"] is not None:
                     sum_logprob += token["logprob"]
             setattr(
-                model_response.choices[0].message,  # type: ignore
+                model_response.choices[0].message,
                 "_logprob",
                 sum_logprob,  # [TODO] move this to using the actual logprobs
             )
@@ -238,7 +236,7 @@ class PredibaseConfig(BaseConfig):
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
         )
-        model_response.usage = usage  # type: ignore
+        model_response.usage = usage
 
         predibase_headers: Final = raw_response.headers
         response_headers: Final = {}

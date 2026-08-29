@@ -212,7 +212,7 @@ def _chat_body_from_inputs(inputs: GenericGuardrailAPIInputs, agent_id: str, req
     structured: Final = inputs.get("structured_messages")
     texts: Final = inputs.get("texts")
     if structured:
-        messages = list(structured)  # type: ignore[arg-type]
+        messages = list(structured)
     elif texts:
         if len(texts) == 1:
             messages = [{"role": "user", "content": texts[0]}]
@@ -789,7 +789,7 @@ async def _stream_llm_competitor_names(
     )
     buffer = ""
     count = len(existing)
-    async for chunk in response:  # type: ignore[union-attr]
+    async for chunk in response:
         delta = chunk.choices[0].delta.content or ""
         buffer += delta
         while "\n" in buffer:
@@ -923,7 +923,7 @@ async def _generate_competitor_variations(competitors: list, model: str = DEFAUL
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
         )
-        raw: Final = response.choices[0].message.content or ""  # type: ignore
+        raw: Final = response.choices[0].message.content or ""
         return _parse_variations_response(raw, capped)
     except Exception as e:
         verbose_proxy_logger.error("LLM competitor variation generation failed: %s", e)
@@ -963,7 +963,7 @@ async def _discover_competitors_via_llm(prompt: str, model: str = DEFAULT_COMPET
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
         )
-        raw: Final = response.choices[0].message.content or ""  # type: ignore
+        raw: Final = response.choices[0].message.content or ""
         competitors = [name for line in raw.strip().split("\n") if (name := _clean_competitor_line(line)) is not None]
         return competitors[:MAX_COMPETITOR_NAMES]
     except Exception as e:

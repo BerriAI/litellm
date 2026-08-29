@@ -23,6 +23,7 @@ from litellm.constants import (
     BEDROCK_MAX_POLICY_SIZE,
     STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS,
 )
+from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
 
@@ -348,7 +349,7 @@ class BaseAWSLLM:
     def _get_aws_region_from_model_arn(self, model: str | None) -> str | None:
         try:
             # First check if the string contains the expected prefix
-            if not isinstance(model, str) or "arn:aws:bedrock" not in model:
+            if not isinstance(model, str) or not contains_bedrock_arn(model):
                 return None
 
             # Split the ARN and check if we have enough parts
@@ -625,24 +626,29 @@ class BaseAWSLLM:
         return match.group(1) if match else None
 
     @staticmethod
-    def _resolve_sts_region(aws_sts_endpoint: str | None = None) -> str | None:
-        """STS signing region: parsed from aws_sts_endpoint else AWS_REGION / AWS_DEFAULT_REGION."""
+    def _resolve_sts_region(
+        aws_sts_endpoint: str | None = None,
+        aws_region_name: str | None = None,
+    ) -> str | None:
+        """STS signing region: parsed from aws_sts_endpoint, else AWS_REGION / AWS_DEFAULT_REGION, else the configured aws_region_name."""
         return (
             BaseAWSLLM._parse_sts_region_from_endpoint(aws_sts_endpoint)
             or os.getenv("AWS_REGION")
             or os.getenv("AWS_DEFAULT_REGION")
+            or aws_region_name
         )
 
     def _build_sts_client_kwargs(
         self,
         aws_sts_endpoint: str | None = None,
         ssl_verify: bool | str | None = None,
+        aws_region_name: str | None = None,
     ) -> dict:
         """STS client kwargs with aligned endpoint_url and region_name (SigV4)."""
         kwargs: Final[dict] = {"verify": self._get_ssl_verify(ssl_verify)}
         if aws_sts_endpoint is not None:
             kwargs["endpoint_url"] = aws_sts_endpoint
-        sts_region: Final = self._resolve_sts_region(aws_sts_endpoint)
+        sts_region: Final = self._resolve_sts_region(aws_sts_endpoint, aws_region_name)
         if sts_region is not None:
             kwargs["region_name"] = sts_region
         return kwargs
@@ -837,6 +843,7 @@ class BaseAWSLLM:
         sts_client_kwargs: Final = self._build_sts_client_kwargs(
             aws_sts_endpoint=aws_sts_endpoint,
             ssl_verify=ssl_verify,
+            aws_region_name=aws_region_name,
         )
 
         with tracer.trace("boto3.client(sts)"):
@@ -859,6 +866,7 @@ class BaseAWSLLM:
                     "Action": [
                         "bedrock:InvokeModel",
                         "bedrock:InvokeModelWithResponseStream",
+                        "bedrock:CountTokens",
                         "bedrock:ApplyGuardrail",
                         "bedrock:GetGuardrail",
                         "bedrock:ListGuardrails",
@@ -947,6 +955,7 @@ class BaseAWSLLM:
         aws_external_id: str | None = None,
         aws_sts_endpoint: str | None = None,
         ssl_verify: bool | str | None = None,
+        aws_region_name: str | None = None,
     ) -> dict:
         """Handle cross-account role assumption for IRSA."""
         import boto3
@@ -960,6 +969,7 @@ class BaseAWSLLM:
         irsa_sts_kwargs: Final = self._build_sts_client_kwargs(
             aws_sts_endpoint=aws_sts_endpoint,
             ssl_verify=ssl_verify,
+            aws_region_name=aws_region_name,
         )
 
         # Create an STS client without credentials
@@ -1016,6 +1026,7 @@ class BaseAWSLLM:
         aws_external_id: str | None = None,
         aws_sts_endpoint: str | None = None,
         ssl_verify: bool | str | None = None,
+        aws_region_name: str | None = None,
     ) -> dict:
         """Handle same-account role assumption for IRSA."""
         import boto3
@@ -1023,6 +1034,7 @@ class BaseAWSLLM:
         irsa_sts_kwargs: Final = self._build_sts_client_kwargs(
             aws_sts_endpoint=aws_sts_endpoint,
             ssl_verify=ssl_verify,
+            aws_region_name=aws_region_name,
         )
 
         verbose_logger.debug("Same account role assumption, using automatic IRSA")
@@ -1152,6 +1164,7 @@ class BaseAWSLLM:
                         aws_external_id,
                         aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
+                        aws_region_name=aws_region_name,
                     )
                 else:
                     sts_response = self._handle_irsa_same_account(
@@ -1160,6 +1173,7 @@ class BaseAWSLLM:
                         aws_external_id,
                         aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
+                        aws_region_name=aws_region_name,
                     )
 
                 return self._extract_credentials_and_ttl(sts_response)
@@ -1181,6 +1195,7 @@ class BaseAWSLLM:
         sts_client_kwargs: Final = self._build_sts_client_kwargs(
             aws_sts_endpoint=aws_sts_endpoint,
             ssl_verify=ssl_verify,
+            aws_region_name=aws_region_name,
         )
         if aws_access_key_id is None and aws_secret_access_key is None:
             with tracer.trace("boto3.client(sts)"):
@@ -1362,14 +1377,15 @@ class BaseAWSLLM:
         """
         Select the default endpoint url based on the endpoint type
 
-        Default endpoint url is https://bedrock-runtime.{aws_region_name}.amazonaws.com
+        Default endpoint url is https://bedrock-runtime.{aws_region_name}.{partition dns suffix}
         """
+        dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
         if endpoint_type == "agent":
-            return f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+            return f"https://bedrock-agent-runtime.{aws_region_name}.{dns_suffix}"
         elif endpoint_type == "agentcore":
-            return f"https://bedrock-agentcore.{aws_region_name}.amazonaws.com"
+            return f"https://bedrock-agentcore.{aws_region_name}.{dns_suffix}"
         else:
-            return f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+            return f"https://bedrock-runtime.{aws_region_name}.{dns_suffix}"
 
     def _get_boto_credentials_from_optional_params(
         self, optional_params: dict, model: str | None = None
@@ -1433,9 +1449,12 @@ class BaseAWSLLM:
         data: str | bytes,
         headers: dict,
         api_key: str | None = None,
+        supports_bearer_token: bool = True,
     ) -> AWSPreparedRequest:
-        if api_key is not None:
-            aws_bearer_token: str | None = api_key
+        if not supports_bearer_token:
+            aws_bearer_token: str | None = None
+        elif api_key is not None:
+            aws_bearer_token = api_key
         else:
             aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 

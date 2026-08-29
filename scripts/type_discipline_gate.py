@@ -13,10 +13,12 @@ emits is gated: LIT001 (mutable collection in any annotation), LIT002
 without codes or reason), LIT006 (cast), LIT008 (`**kwargs`), LIT009 (inert
 `# type: ignore`, dead syntax while enableTypeIgnoreComments is false), LIT010
 (assignment without a Final declaration; suppress deliberate rebinding with
-`# rebind-ok: <reason>`), and LIT011 (parameter rebinding or in-place mutation)
-carry limits at or above their current count to ratchet down; LIT005 (`*-ok`
-suppression without a reason) is frozen at limit 0 so any net-new reasonless
-suppression trips the gate; and LIT007 (TypeGuard/TypeIs) is a hard zero.
+`# rebind-ok: <reason>`), LIT011 (parameter rebinding or in-place mutation), and
+LIT012 (TypedDict field without a `ReadOnly[...]` qualifier; suppress with
+`# writable-ok: <reason>`) carry limits at or above their current count to
+ratchet down; LIT005 (`*-ok` suppression without a reason) is frozen at limit 0
+so any net-new reasonless suppression trips the gate; and LIT007
+(TypeGuard/TypeIs) is a hard zero.
 LIT010 and LIT011 were seeded at 1.5x the count left after the sweep that
 annotated every never-rebound name with Final, so that headroom is the hard
 line new code cannot cross.
@@ -36,7 +38,7 @@ import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECKER = REPO_ROOT / "scripts" / "check_type_discipline.py"
@@ -67,6 +69,25 @@ def _run(cmd: list, cwd: Path = REPO_ROOT) -> str:
         sys.stderr.write(proc.stderr)
         raise SystemExit(f"{cmd[0]} exited {proc.returncode}")
     return proc.stdout
+
+
+def resolve_base_point(base_ref: str, cwd: Path = REPO_ROOT) -> str:
+    """The snapshot commit base counts are measured at: merge-base(base_ref, HEAD),
+    made aware of an in-progress merge. Mid-merge, HEAD is still the pre-merge tip,
+    so its merge-base is the old branch point and every violation the base gained
+    since then would be blamed on this change. While MERGE_HEAD exists, prefer
+    merge-base(base_ref, MERGE_HEAD) whenever it is the newer of the two."""
+    head_point: Final = _run(["git", "merge-base", base_ref, "HEAD"], cwd=cwd).strip()
+    if not head_point:
+        return base_ref
+    merge_head: Final = _run(["git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD"], cwd=cwd).strip()
+    if not merge_head:
+        return head_point
+    merge_point: Final = _run(["git", "merge-base", base_ref, merge_head], cwd=cwd).strip()
+    if not merge_point:
+        return head_point
+    older: Final = _run(["git", "merge-base", head_point, merge_point], cwd=cwd).strip()
+    return merge_point if older == head_point else head_point
 
 
 def _check(root: Path, checker: Path) -> list:
@@ -160,7 +181,7 @@ def cmd_check(base: str) -> None:
     if not over_ceiling(head_counts, budget):
         print(f"OK: every LIT rule is within its codebase ceiling (base {base})")
         return
-    base_point = _run(["git", "merge-base", base, "HEAD"]).strip() or base
+    base_point = resolve_base_point(base)
     breaches = evaluate(head_counts, base_counts(base_point), budget)
     if not breaches:
         print(f"OK: every LIT rule is within its codebase ceiling (base {base})")
@@ -182,7 +203,8 @@ def cmd_check(base: str) -> None:
         "Remove the new violations, give each a reason (`# noqa: XXX  # <reason>`, "
         "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, "
         "`# cast-ok: <reason>`, `# guard-ok: <reason>`, `# kwargs-ok: <reason>`, "
-        "`# rebind-ok: <reason>`), or remove an equal number elsewhere; the ceiling "
+        "`# rebind-ok: <reason>`, `# writable-ok: <reason>`), or remove an equal "
+        "number elsewhere; the ceiling "
         "is the limit in type-discipline-budget.json."
     )
     raise SystemExit(1)
@@ -225,7 +247,7 @@ def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
     fixes tighten its own ceilings by exactly what they cleared since it diverged.
     """
     budget = json.loads(BUDGET_PATH.read_text())
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+    base_point = resolve_base_point(base_ref)
     seeded = frozenset(budget) - _base_budget_rules(base_point)
     updated = ratcheted_budget(
         budget, count_by_rule(head_violations()), base_counts(base_point), seeded
@@ -245,7 +267,10 @@ def main() -> None:
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
-    cmd_update(args.base) if args.update else cmd_check(args.base)
+    from gate_slot_lock import held_slot
+
+    with held_slot():
+        cmd_update(args.base) if args.update else cmd_check(args.base)
 
 
 if __name__ == "__main__":
