@@ -23614,7 +23614,12 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
+        "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
         "source": "https://ai.google.dev/gemini-api/docs/pricing"
     },
     "gemini/gemma-4-31b-it": {
@@ -23625,7 +23630,12 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
+        "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
         "source": "https://ai.google.dev/gemini-api/docs/pricing"
     },
     "gemini/imagen-3.0-fast-generate-001": {
