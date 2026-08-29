@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use litellm_ai_gateway::auth::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry};
+use litellm_ai_gateway::hardening::GlobalRateLimiter;
 use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
 use litellm_ai_gateway::metrics::GatewayMetrics;
 use litellm_ai_gateway::routes;
@@ -159,6 +160,13 @@ async fn main() {
         circuit_breakers: Arc::new(CircuitBreakerRegistry::new(CircuitBreakerConfig::default())),
         metrics: Arc::new(GatewayMetrics::new()),
         config: GatewayConfig::from_env(),
+        global_rate_limiter: Arc::new(GlobalRateLimiter::new(
+            std::env::var("GLOBAL_RATE_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10_000),
+            60, // 60-second window
+        )),
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());

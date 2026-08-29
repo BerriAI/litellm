@@ -1,0 +1,9 @@
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+      api_key: mock-key
+      api_base: http://127.0.0.1:11434/v1
+
+general_settings:
+  master_key: sk-test

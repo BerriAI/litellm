@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures::Stream;
@@ -13,6 +14,14 @@ use litellm_core::{CoreError, CoreResult};
 use serde_json::{Map, Value};
 
 use crate::state::AppState;
+
+// Global request counter for zero-alloc request IDs
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Generate a zero-alloc request ID using atomic counter
+fn next_request_id() -> u64 {
+    REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Build a spend-tracking Redis key on the stack (no heap allocation).
 /// Format: `spend:<entity_type>:<entity_id>`
@@ -49,6 +58,7 @@ pub async fn run(
     hashed_token: &HashedToken,
 ) -> CoreResult<ChatCompletionsResult> {
     let start = Instant::now();
+    let request_id = next_request_id();
 
     let model = body
         .get("model")
@@ -60,11 +70,17 @@ pub async fn run(
         })?;
 
     tracing::info!(
+        request_id = request_id,
         model = %model,
         hashed_token = %hashed_token.as_hex_str(),
         event = "chat_completions.start",
         "audit: request started"
     );
+
+    // Check global rate limit
+    if !state.global_rate_limiter.check().await {
+        return Err(CoreError::Auth("global rate limit exceeded".to_string()));
+    }
 
     // Check model access
     if !key_object.has_model_access(model) {
@@ -86,30 +102,38 @@ pub async fn run(
         if let Some(ref team_id) = key_object.team_id {
             let mut key_buf = [0u8; 256];
             let key = spend_key(&mut key_buf, "team", team_id);
-            let team_spend: f64 = redis
-                .incr_by_float(key, 0.0)
-                .await
-                .unwrap_or(0.0);
-            let team_budget = state.config.team_budget;
-            if team_spend >= team_budget {
-                return Err(CoreError::Auth(format!(
-                    "team '{team_id}' has exceeded its budget (${team_spend:.2} / ${team_budget:.2})"
-                )));
+            match redis.incr_by_float(key, 0.0).await {
+                Ok(team_spend) => {
+                    let team_budget = state.config.team_budget;
+                    if team_spend >= team_budget {
+                        return Err(CoreError::Auth(format!(
+                            "team '{team_id}' has exceeded its budget (${team_spend:.2} / ${team_budget:.2})"
+                        )));
+                    }
+                }
+                Err(e) => {
+                    crate::hardening::log_degradation("redis", "team_budget_check", &e.to_string());
+                    // Fail open: allow request if Redis is down
+                }
             }
         }
 
         if let Some(ref org_id) = key_object.org_id {
             let mut key_buf = [0u8; 256];
             let key = spend_key(&mut key_buf, "org", org_id);
-            let org_spend: f64 = redis
-                .incr_by_float(key, 0.0)
-                .await
-                .unwrap_or(0.0);
-            let org_budget = state.config.org_budget;
-            if org_spend >= org_budget {
-                return Err(CoreError::Auth(format!(
-                    "organization '{org_id}' has exceeded its budget (${org_spend:.2} / ${org_budget:.2})"
-                )));
+            match redis.incr_by_float(key, 0.0).await {
+                Ok(org_spend) => {
+                    let org_budget = state.config.org_budget;
+                    if org_spend >= org_budget {
+                        return Err(CoreError::Auth(format!(
+                            "organization '{org_id}' has exceeded its budget (${org_spend:.2} / ${org_budget:.2})"
+                        )));
+                    }
+                }
+                Err(e) => {
+                    crate::hardening::log_degradation("redis", "org_budget_check", &e.to_string());
+                    // Fail open: allow request if Redis is down
+                }
             }
         }
     }
@@ -324,6 +348,7 @@ pub async fn run(
                     state.metrics.tokens_total.with_label_values(&[provider_model, "completion"]).inc_by(response.usage.completion_tokens as u64);
 
                     tracing::info!(
+                        request_id = request_id,
                         model = %provider_model,
                         hashed_token = %hashed_token.as_hex_str(),
                         prompt_tokens = response.usage.prompt_tokens,
@@ -382,6 +407,7 @@ pub async fn run(
         state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
 
         tracing::warn!(
+            request_id = request_id,
             model = %provider_model,
             hashed_token = %hashed_token.as_hex_str(),
             error = %err,

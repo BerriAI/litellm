@@ -23,6 +23,8 @@ pub mod config;
 #[cfg(feature = "server")]
 pub mod config_watcher;
 #[cfg(feature = "server")]
+pub mod hardening;
+#[cfg(feature = "server")]
 pub mod metrics;
 #[cfg(feature = "server")]
 pub mod routes;
