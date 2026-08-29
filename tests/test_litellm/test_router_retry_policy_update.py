@@ -1,7 +1,15 @@
 """
-Tests for the retry_policy fix on Router.update_settings (LIT-3152).
+Tests for the router-settings write path: ``POST /config/update`` ->
+``UpdateRouterConfig`` -> ``Router.update_settings``.
 
-Bug: the Admin UI Model Retry Settings tab posts a global ``retry_policy``
+A setting has to clear two independent gates to take effect, and a field
+missing from either one is discarded behind a 200. ``retry_policy``
+(LIT-3152) was the first field found stranded; ``max_fallbacks`` and
+``enable_weighted_failover`` (LIT-5880) were the next two, so this file also
+pins the three lists against each other rather than only the fields that have
+been reported so far.
+
+LIT-3152. The Admin UI Model Retry Settings tab posts a global ``retry_policy``
 through ``POST /config/update`` -> ``UpdateRouterConfig`` ->
 ``Router.update_settings``. Both the pydantic schema and
 ``update_settings`` were dropping the field silently:
@@ -28,11 +36,43 @@ from pydantic import ValidationError
 
 
 import litellm
+from litellm.router import ROUTER_UPDATABLE_SETTINGS
+from litellm.types.management_endpoints import ROUTER_SETTINGS_FIELDS
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
 
 # ---------------------------------------------------------------------------
 # UpdateRouterConfig schema membership (LIT-3152 part 1)
 # ---------------------------------------------------------------------------
+
+
+def test_every_admin_ui_router_setting_is_writable():
+    """``POST /config/update`` parses ``router_settings`` through
+    ``UpdateRouterConfig``, which ignores undeclared keys. A setting the Admin
+    UI renders but the schema omits is accepted with a 200 and silently
+    discarded, so the save appears to work and nothing changes."""
+    ui_settings = {field.field_name for field in ROUTER_SETTINGS_FIELDS}
+    assert ui_settings <= set(UpdateRouterConfig.model_fields)
+
+
+def test_every_admin_ui_router_setting_is_applied_at_runtime():
+    """Clearing the schema is only half the trip: ``update_settings`` drops
+    anything outside ``ROUTER_UPDATABLE_SETTINGS``, which leaves the value in
+    the config row while the live Router keeps serving the old one."""
+    ui_settings = {field.field_name for field in ROUTER_SETTINGS_FIELDS}
+    assert ui_settings <= ROUTER_UPDATABLE_SETTINGS
+
+
+def test_every_runtime_applicable_router_setting_is_writable():
+    """The reverse direction: a setting the Router can apply is unreachable
+    through the config API unless the schema declares it."""
+    assert ROUTER_UPDATABLE_SETTINGS <= set(UpdateRouterConfig.model_fields)
+
+
+def test_unset_router_settings_are_absent_from_dumps():
+    """The handler merges ``dict(exclude_none=True)`` over the stored row, so a
+    field defaulting to anything but ``None`` is written on every save and
+    overwrites what the caller never sent."""
+    assert UpdateRouterConfig().model_dump(exclude_none=True) == {}
 
 
 def test_update_router_config_exposes_retry_policy_field():
@@ -280,3 +320,76 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     assert read_back.BadRequestErrorRetries == 5
     assert read_back.TimeoutErrorRetries == 3
     assert read_back.RateLimitErrorRetries == 7
+
+
+async def _post_router_settings(monkeypatch, router, table=None, **settings):
+    """Drive one Admin UI save through the real chain: ``POST /config/update``
+    writes the LiteLLM_Config row, ``add_deployment`` applies it to the router.
+
+    Returns the stored row and the table, so a caller can chain a second save
+    onto the first and assert on how the two merge.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+
+    fake_table = table if table is not None else _FakeConfigTable()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config = fake_table
+
+    async def _apply_router_settings(*args, **kwargs):
+        await proxy_server.proxy_config._add_router_settings_from_db_config(
+            config_data={}, llm_router=router, prisma_client=prisma_client
+        )
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", _apply_router_settings)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    await proxy_server.update_config(
+        config_info=ConfigYAML(router_settings=UpdateRouterConfig(**settings)),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"),
+    )
+    return fake_table.rows["router_settings"].param_value, fake_table
+
+
+@pytest.mark.asyncio
+async def test_config_update_persists_and_applies_max_fallbacks(monkeypatch):
+    """max_fallbacks was stranded at both gates the way retry_policy was: absent
+    from the schema, so /config/update returned 200 and discarded it, and absent
+    from the apply allowlist, so feeding it directly was a no-op too (LIT-5880)."""
+    router = _build_router()
+    assert router.max_fallbacks != 9
+
+    persisted, _ = await _post_router_settings(monkeypatch, router, max_fallbacks=9)
+
+    assert persisted["max_fallbacks"] == 9
+    assert router.max_fallbacks == 9
+
+
+@pytest.mark.asyncio
+async def test_config_update_persists_and_applies_enable_weighted_failover(monkeypatch):
+    """enable_weighted_failover was stranded at the schema gate only: the Router
+    could always apply it, but no config API payload ever reached it."""
+    router = _build_router()
+    assert router.enable_weighted_failover is False
+
+    persisted, _ = await _post_router_settings(monkeypatch, router, enable_weighted_failover=True)
+
+    assert persisted["enable_weighted_failover"] is True
+    assert router.enable_weighted_failover is True
+
+
+@pytest.mark.asyncio
+async def test_config_update_leaves_unsent_router_settings_alone(monkeypatch):
+    """The handler merges the request over the stored row, so a field the
+    caller never sent must not appear in the payload and clobber what is
+    already there. ``model_group_alias`` defaulted to ``{}`` and did exactly
+    that on every unrelated save."""
+    router = _build_router()
+
+    _, table = await _post_router_settings(monkeypatch, router, model_group_alias={"gpt-4": "gpt-4o"})
+    persisted, _ = await _post_router_settings(monkeypatch, router, num_retries=4, table=table)
+
+    assert persisted["model_group_alias"] == {"gpt-4": "gpt-4o"}
+    assert router.model_group_alias == {"gpt-4": "gpt-4o"}

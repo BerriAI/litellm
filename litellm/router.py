@@ -549,6 +549,38 @@ set_live_deployment_replay(_replay_live_router_model_cost)
 # breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
 # handled separately by mask_credentials_in_payload, which scrubs credential-named values from
 # whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
+ROUTER_UPDATABLE_SETTINGS: Final[frozenset[str]] = frozenset(
+    {
+        "routing_strategy_args",
+        "routing_strategy",
+        "routing_groups",
+        "allowed_fails",
+        "cooldown_time",
+        "num_retries",
+        "timeout",
+        "max_retries",
+        "retry_after",
+        "fallbacks",
+        "context_window_fallbacks",
+        "content_policy_fallbacks",
+        "max_fallbacks",
+        "retry_policy",
+        "model_group_retry_policy",
+        "model_group_alias",
+        "enable_weighted_failover",
+        "enable_tag_filtering",
+        "tag_filtering_match_any",
+        "tag_routing_prefix",
+        "enable_pre_call_checks",
+        "disable_cooldowns",
+        "stream_timeout",
+        "default_max_parallel_requests",
+        "default_litellm_params",
+        "set_verbose",
+    }
+)
+
+
 RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
     (
         "messages",
@@ -11128,43 +11160,32 @@ class Router:
         """
         Update the router settings.
         """
-        # only the following settings are allowed to be configured
-        _allowed_settings: Final = [
-            "routing_strategy_args",
-            "routing_strategy",
-            "routing_groups",
-            "allowed_fails",
-            "cooldown_time",
-            "num_retries",
-            "timeout",
-            "max_retries",
-            "retry_after",
-            "fallbacks",
-            "context_window_fallbacks",
-            "retry_policy",
-            "model_group_retry_policy",
-            "model_group_alias",
-            "enable_weighted_failover",
-            "enable_tag_filtering",
-            "tag_routing_prefix",
-        ]
-
         _int_settings: Final = [
             "timeout",
             "num_retries",
             "retry_after",
             "allowed_fails",
             "cooldown_time",
+            "max_fallbacks",
+            "default_max_parallel_requests",
         ]
 
         _existing_router_settings: Final = self.get_settings()
         rebuild_routing_groups = False
         relink_lar1_from_args = False
         for var in kwargs:
-            if var in _allowed_settings:
+            if var in ROUTER_UPDATABLE_SETTINGS:
                 if var in _int_settings:
-                    _casted_value = int(kwargs[var])
+                    _casted_value = None if kwargs[var] is None else int(kwargs[var])
                     setattr(self, var, _casted_value)
+                elif var == "default_litellm_params":
+                    params = kwargs[var] or {}
+                    self.default_litellm_params = params
+                    self.chat = litellm.Chat(params=params, router_obj=self)
+                elif var == "set_verbose":
+                    self.set_verbose = bool(kwargs[var])
+                    if self.set_verbose is True:
+                        verbose_router_logger.setLevel(logging.DEBUG if self.debug_level == "DEBUG" else logging.INFO)
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True
