@@ -1093,6 +1093,7 @@ def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSc
 _TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("allOf", "anyOf", "oneOf")
 _OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS: Final = ("enum", "const", "not")
 _LOCAL_SCHEMA_REF_PREFIXES: Final = (("#/$defs/", "$defs"), ("#/definitions/", "definitions"))
+_MAX_SCHEMA_FLATTEN_DEPTH: Final = 32
 _EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -1101,11 +1102,9 @@ def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
     return properties if isinstance(properties, dict) else _EMPTY_SCHEMA
 
 
-def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[Mapping[str, object], ...]:
+def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[object, ...]:
     branches: Final = schema.get(combinator)
-    if not isinstance(branches, list):
-        return ()
-    return tuple(branch for branch in branches if isinstance(branch, dict))
+    return tuple(branches) if isinstance(branches, list) else ()
 
 
 def _schema_required_names(schema: Mapping[str, object]) -> frozenset[str]:
@@ -1140,29 +1139,48 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
 
 
 def _mergeable_branch(
-    root: Mapping[str, object], branch: Mapping[str, object], seen_refs: frozenset[str]
+    root: Mapping[str, object],
+    branch: object,
+    seen_refs: frozenset[str],
+    depth: int,
+    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
 ) -> Mapping[str, object] | None:
-    ref: Final = branch.get("$ref")
-    if isinstance(ref, str):
-        if ref in seen_refs:
-            return None
-        target: Final = _resolve_local_schema_ref(root, ref)
-        if target is None:
-            return None
-        return _mergeable_branch(root, target, seen_refs | frozenset((ref,)))
-    flattened: Final = _flatten_schema_against_root(branch, root, seen_refs)
-    if any(combinator in flattened for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS):
+    if not isinstance(branch, dict) or depth > _MAX_SCHEMA_FLATTEN_DEPTH:
         return None
-    return flattened
+    ref: Final = branch.get("$ref")
+    if not isinstance(ref, str):
+        flattened: Final = _flatten_schema_against_root(branch, root, seen_refs, depth, expanded_refs)
+        if any(combinator in flattened for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS):
+            return None
+        return flattened
+    if ref in expanded_refs:
+        return expanded_refs[ref]
+    if ref in seen_refs:
+        return None
+    target: Final = _resolve_local_schema_ref(root, ref)
+    expanded: Final = (
+        None
+        if target is None
+        else _mergeable_branch(root, target, seen_refs | frozenset((ref,)), depth + 1, expanded_refs)
+    )
+    expanded_refs[ref] = expanded
+    return expanded
 
 
 def _flatten_schema_against_root(
-    schema: Mapping[str, object], root: Mapping[str, object], seen_refs: frozenset[str]
+    schema: Mapping[str, object],
+    root: Mapping[str, object],
+    seen_refs: frozenset[str],
+    depth: int,
+    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
 ) -> Mapping[str, object]:
     raw_branch_groups: Final = tuple(
         (
             combinator,
-            tuple(_mergeable_branch(root, branch, seen_refs) for branch in _schema_branches(schema, combinator)),
+            tuple(
+                _mergeable_branch(root, branch, seen_refs, depth + 1, expanded_refs)
+                for branch in _schema_branches(schema, combinator)
+            ),
         )
         for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS
         if isinstance(schema.get(combinator), list)
@@ -1189,15 +1207,11 @@ def _flatten_schema_against_root(
     merged_properties: Final = {  # mutable-ok: tool parameters are JSON dicts
         name: value for source in (*reversed(branches), schema) for name, value in _schema_properties(source).items()
     }
-    fallback_required: Final = frozenset(
-        name for combinator, group in branch_groups for name in _combinator_required_names(combinator, group)
+    required_names: Final = _schema_required_names(schema).union(
+        *(_combinator_required_names(combinator, group) for combinator, group in branch_groups)
     )
     kept: Final = MappingProxyType({key: value for key, value in schema.items() if key not in dropped})
-    required_update: Final = (
-        MappingProxyType({"required": sorted(fallback_required)})
-        if "required" not in kept and fallback_required
-        else _EMPTY_SCHEMA
-    )
+    required_update: Final = MappingProxyType({"required": sorted(required_names)}) if required_names else _EMPTY_SCHEMA
     return {  # mutable-ok: tool parameters are JSON dicts
         **kept,
         "type": "object",
@@ -1214,16 +1228,18 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     are accepted), while lenient backends such as the ChatGPT backend Codex
     talks to natively accept them, so an MCP tool declaring a top-level union
     400s through LiteLLM. Branch properties merge without clobbering (the
-    top-level schema wins, then earlier branches); a missing ``required``
-    becomes the intersection of the branch lists for anyOf/oneOf and their
-    union for allOf. Branches that are local ``$ref``s (``#/$defs/...`` or
-    ``#/definitions/...``) are resolved first and branches that are themselves
-    combinators are flattened recursively; a branch that cannot be fully
-    merged (an external or cyclic ``$ref``, or a non-object union) leaves the
-    whole schema untouched so OpenAI's own validation still applies.
-    Non-object schemas pass through unchanged and the input is never mutated.
+    top-level schema wins, then earlier branches); ``required`` becomes the
+    top-level list plus the intersection of the branch lists for anyOf/oneOf
+    or their union for allOf. Branches that are local ``$ref``s
+    (``#/$defs/...`` or ``#/definitions/...``) are resolved first, each ref
+    at most once per call, and branches that are themselves combinators are
+    flattened recursively up to a fixed depth; a branch that cannot be fully
+    merged (a boolean schema, an external or cyclic ``$ref``, a non-object
+    union, or nesting past the depth cap) leaves the whole schema untouched so
+    OpenAI's own validation still applies. Non-object schemas pass through
+    unchanged and the input is never mutated.
     """
-    return _flatten_schema_against_root(schema, schema, frozenset())
+    return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
 
 
 def _get_image_mime_type_from_url(url: str) -> str | None:
