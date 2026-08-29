@@ -26,9 +26,8 @@ from pydantic import BaseModel, ConfigDict
 
 from datadog_reader import DdLogEvent, DdLogsReader
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import NoBody
 from lifecycle import ResourceManager
-from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok
+from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
 from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
@@ -55,13 +54,10 @@ def _assert_datadog_configured(client: LoggingClient) -> None:
     """Recorded state: the proxy reports the DataDog callback among its active
     callbacks, so a missing destination config fails here, before any
     delivery-based assertion can time out confusingly."""
-    result = client.proxy.probe("/health/readiness/details", params=NoBody())
-    assert result.status_code == 200, (
-        f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
-    )
-    assert DD_LOGGER_NAME in result.body, (
+    body = readiness_details_body(client)
+    assert DD_LOGGER_NAME in body, (
         f"the proxy must report the {DD_LOGGER_NAME} callback active "
-        f"(callbacks + DD_* env in the compose config); got: {result.body[:400]}"
+        f"(callbacks + DD_* env in the compose config); got: {body[:400]}"
     )
 
 

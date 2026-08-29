@@ -22,10 +22,9 @@ import math
 import pytest
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
-from e2e_http import NoBody
 from gcs_reader import GcsLogReader, build_gcs_reader, utc_now
 from lifecycle import ResourceManager
-from logging_client import LoggingClient, completion_response_id, first_ok
+from logging_client import LoggingClient, completion_response_id, first_ok, readiness_details_body
 
 pytestmark = pytest.mark.e2e
 
@@ -43,14 +42,11 @@ def _assert_gcs_configured(client: LoggingClient) -> None:
     active callbacks, so a missing destination config (or a missing enterprise
     license - gcs_bucket refuses to initialize without one) fails here, before
     any delivery-based assertion can time out confusingly."""
-    result = client.proxy.probe("/health/readiness/details", params=NoBody())
-    assert result.status_code == 200, (
-        f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
-    )
-    assert GCS_LOGGER_NAME in result.body, (
+    body = readiness_details_body(client)
+    assert GCS_LOGGER_NAME in body, (
         f"the proxy must report the {GCS_LOGGER_NAME} callback active "
         f"(litellm_settings.callbacks: ['gcs_bucket'] + GCS_BUCKET_NAME env + enterprise license); "
-        f"got: {result.body[:400]}"
+        f"got: {body[:400]}"
     )
 
 

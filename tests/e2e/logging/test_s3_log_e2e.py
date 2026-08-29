@@ -27,13 +27,13 @@ import time
 import pytest
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
-from e2e_http import NoBody
 from lifecycle import ResourceManager
 from logging_client import (
     INVALID_UPSTREAM_API_KEY,
     LoggingClient,
     completion_response_id,
     first_ok,
+    readiness_details_body,
 )
 from models import LiteLLMParamsBody
 from s3_reader import S3LogReader, build_s3_reader
@@ -53,14 +53,11 @@ def _assert_s3_configured(client: LoggingClient) -> None:
     """Recorded state: the proxy reports the s3_v2 callback among its active
     callbacks, so a missing destination config fails here, before any
     delivery-based assertion can time out confusingly."""
-    result = client.proxy.probe("/health/readiness/details", params=NoBody())
-    assert result.status_code == 200, (
-        f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
-    )
-    assert S3_LOGGER_NAME in result.body, (
+    body = readiness_details_body(client)
+    assert S3_LOGGER_NAME in body, (
         f"the proxy must report the {S3_LOGGER_NAME} callback active "
         f"(litellm_settings.callbacks: ['s3_v2'] + s3_callback_params in the proxy config); "
-        f"got: {result.body[:400]}"
+        f"got: {body[:400]}"
     )
 
 
