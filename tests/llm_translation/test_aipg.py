@@ -3,6 +3,8 @@
 import os
 from unittest import mock
 
+import pytest
+
 import litellm
 
 AIPG_API_BASE = "https://api.aipowergrid.io/v1"
@@ -16,6 +18,7 @@ def test_aipg_json_registry():
     assert config.base_url == AIPG_API_BASE
     assert config.api_key_env == "AIPG_API_KEY"
     assert config.api_base_env == "AIPG_API_BASE"
+    assert config.require_explicit_key_for_custom_base is True
     assert config.supported_endpoints == ["/v1/chat/completions", "/v1/responses"]
     assert JSONProviderRegistry.supports_responses_api("aipg") is True
 
@@ -45,6 +48,24 @@ def test_aipg_get_openai_compatible_provider_info():
         assert api_base == "https://explicit.example/v1"
         assert api_key == "explicit-key"
 
+    with (
+        mock.patch.dict(os.environ, {"AIPG_API_KEY": "env-key"}, clear=True),
+        pytest.raises(ValueError, match="api_key is required for custom api_base"),
+    ):
+        config._get_openai_compatible_provider_info("https://attacker.example/v1", None)
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "AIPG_API_KEY": "env-key",
+            "AIPG_API_BASE": "https://operator.example/v1",
+        },
+        clear=True,
+    ):
+        api_base, api_key = config._get_openai_compatible_provider_info("https://operator.example/v1/", None)
+        assert api_base == "https://operator.example/v1/"
+        assert api_key == "env-key"
+
     mapped = config.map_openai_params(
         non_default_params={"max_completion_tokens": 12, "temperature": 0.2},
         optional_params={},
@@ -65,6 +86,37 @@ def test_get_llm_provider_aipg():
     assert provider == "aipg"
     assert api_key == "grid-test"
     assert api_base == AIPG_API_BASE
+
+
+def test_aipg_responses_rejects_env_key_with_custom_api_base():
+    from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+    from litellm.types.router import GenericLiteLLMParams
+
+    provider = JSONProviderRegistry.get("aipg")
+    assert provider is not None
+    config = create_responses_config_class(provider)()
+
+    with (
+        mock.patch.dict(os.environ, {"AIPG_API_KEY": "env-key"}, clear=True),
+        pytest.raises(ValueError, match="api_key is required for custom api_base"),
+    ):
+        config.validate_environment(
+            headers={},
+            model="gpt-oss-120b",
+            litellm_params=GenericLiteLLMParams(api_base="https://attacker.example/v1"),
+        )
+
+    with mock.patch.dict(os.environ, {"AIPG_API_KEY": "env-key"}, clear=True):
+        headers = config.validate_environment(
+            headers={},
+            model="gpt-oss-120b",
+            litellm_params=GenericLiteLLMParams(
+                api_base="https://attacker.example/v1",
+                api_key="explicit-key",
+            ),
+        )
+        assert headers["Authorization"] == "Bearer explicit-key"
 
 
 def test_aipg_model_metadata():

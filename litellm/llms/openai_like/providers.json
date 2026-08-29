@@ -205,6 +205,7 @@
     "base_url": "https://api.aipowergrid.io/v1",
     "api_key_env": "AIPG_API_KEY",
     "api_base_env": "AIPG_API_BASE",
+    "require_explicit_key_for_custom_base": true,
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
