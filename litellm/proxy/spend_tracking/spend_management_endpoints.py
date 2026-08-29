@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -2754,11 +2755,13 @@ async def _fetch_session_representatives(
         ) AS session_representatives
     """
     rep_rows: Final[Sequence[Mapping[str, object]]] = await _query_raw(
-        prisma_client, rep_query, *sql_params, list(session_keys)
+        prisma_client, rep_query, *sql_params, list(session_keys)  # mutable-ok: prisma serializes array params from a list
     )
-    rep_by_key: Final = {row["session_key"]: dict(row) for row in rep_rows}
-    return [
-        {key: value for key, value in rep_by_key[session_key].items() if key != "session_key"}
+    rep_by_key: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {str(row["session_key"]): row for row in rep_rows}
+    )
+    return [  # mutable-ok: downstream enrichment mutates rows in place
+        {key: value for key, value in rep_by_key[session_key].items() if key != "session_key"}  # mutable-ok: downstream enrichment mutates rows in place
         for session_key in session_keys
         if session_key in rep_by_key
     ]
@@ -2849,12 +2852,12 @@ async def _ui_session_grouped_spend_logs(
             session_keys=session_keys,
         )
         if session_keys
-        else []
+        else []  # mutable-ok: downstream enrichment mutates rows in place
     )
     _hydrate_spend_log_metadata(data)
 
     total_pages: Final = (total_records + page_size - 1) // page_size
-    response: Final[dict[str, object]] = await _build_ui_spend_logs_response(
+    response: Final[Mapping[str, object]] = await _build_ui_spend_logs_response(
         prisma_client,
         data,
         total_records,
@@ -2864,7 +2867,7 @@ async def _ui_session_grouped_spend_logs(
         enrich_session_counts=True,
         total_is_capped=total_is_capped,
     )
-    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}
+    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}  # mutable-ok: FastAPI response body
 
 
 class RequestResponsePayload(NamedTuple):
