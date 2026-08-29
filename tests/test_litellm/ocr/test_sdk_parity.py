@@ -51,7 +51,7 @@ def _execute_sdk_case(sdk_input: MistralOcrParityInput, route: SDKRoute, mock_ur
 def test_recorded_ocr_sdk_parity(ocr_fixture: OcrParityCase, route: SDKRoute, tmp_path: Path) -> None:
     case_file: Final = tmp_path / f"{route.value}-ocr-parity-case.json"
     case_file.write_text(ocr_fixture.model_dump_json(indent=2, exclude_unset=True), encoding="utf-8")
-    response: Final = ocr_fixture.upstream_response
+    response: Final = ocr_fixture.provider_response
     response_body: Final = response.body_bytes()
     response_headers: Final = tuple((header.name, header.value) for header in response.headers)
     runner: Final = PythonScriptRunner(
@@ -90,7 +90,7 @@ def _child_main() -> None:
     mock_url: Final = sys.argv[3]
     report_file: Final = Path(sys.argv[4])
     case: Final = OcrParityCase.model_validate_json(case_file.read_text(encoding="utf-8"))
-    report: Final = _execute_sdk_case(case.input, route, mock_url)
+    report: Final = _execute_sdk_case(case.litellm_input, route, mock_url)
     report_file.write_text(report.model_dump_json(indent=2), encoding="utf-8")
 
 

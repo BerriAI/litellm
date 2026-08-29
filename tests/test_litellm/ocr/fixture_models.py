@@ -87,5 +87,5 @@ class RecordedHttpResponse(_FixtureModel):
 
 
 class OcrParityCase(_FixtureModel):
-    input: MistralOcrParityInput
-    upstream_response: RecordedHttpResponse
+    litellm_input: MistralOcrParityInput
+    provider_response: RecordedHttpResponse
