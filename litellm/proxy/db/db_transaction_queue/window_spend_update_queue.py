@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from itertools import chain, groupby
 from typing import Final, TypedDict
 
+from typing_extensions import ReadOnly
+
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
 from litellm.proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
@@ -37,13 +39,13 @@ class WindowSpendTransaction(TypedDict):
     seed drop the historical row that id already paid for.
     """
 
-    entity_type: str
-    entity_id: str
-    window_duration: str
-    window_start: str
-    spend: float
-    request_ids: Sequence[str]
-    started_at: str | None
+    entity_type: ReadOnly[str]
+    entity_id: ReadOnly[str]
+    window_duration: ReadOnly[str]
+    window_start: ReadOnly[str]
+    spend: ReadOnly[float]
+    request_ids: ReadOnly[Sequence[str]]
+    started_at: ReadOnly[str | None]
 
 
 def to_naive_utc(value: datetime) -> datetime:
