@@ -10311,6 +10311,11 @@ def test_introspect_route_requires_virtual_key_auth_and_is_advertised():
 
     assert "/introspect" in LiteLLMRoutes.mcp_routes.value
 
+    from litellm.proxy._lazy_features import LAZY_FEATURES
+
+    discoverable = next(feature for feature in LAZY_FEATURES if feature.name == "mcp_discoverable")
+    assert "/introspect" in discoverable.path_prefixes
+
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
