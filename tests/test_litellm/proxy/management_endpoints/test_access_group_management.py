@@ -955,7 +955,7 @@ async def test_get_access_group_budget_returns_the_budget_and_the_shared_spend()
     _seed_budget(prisma, "prod-models", spend=42.5, max_budget=100.0, budget_duration="30d")
 
     with _proxy(prisma):
-        response = await get_access_group_budget(access_group="prod-models", user_api_key_dict=_admin())
+        response = await get_access_group_budget(access_group="prod-models")
 
     assert response.access_group == "prod-models"
     assert response.spend == 42.5
@@ -974,7 +974,7 @@ async def test_get_access_group_budget_on_a_budgetless_group_is_200_not_404():
     prisma = _FakePrismaClient([], deployments=[_deployment()])
 
     with _proxy(prisma):
-        response = await get_access_group_budget(access_group="prod-models", user_api_key_dict=_admin())
+        response = await get_access_group_budget(access_group="prod-models")
 
     assert response.spend == 0.0
     assert response.budget is None
@@ -998,16 +998,14 @@ async def test_access_group_budget_routes_404_on_an_unknown_group():
     admin = _admin()
 
     calls = (
-        lambda: get_access_group_budget(access_group="ghost-group", user_api_key_dict=admin),
+        lambda: get_access_group_budget(access_group="ghost-group"),
         lambda: set_access_group_budget(
             access_group="ghost-group",
             data=AccessGroupBudgetRequest(max_budget=1.0),
             user_api_key_dict=admin,
             auth_cache=cache,
         ),
-        lambda: delete_access_group_budget(
-            access_group="ghost-group", user_api_key_dict=admin, auth_cache=cache
-        ),
+        lambda: delete_access_group_budget(access_group="ghost-group", auth_cache=cache),
     )
 
     with _proxy(prisma):
@@ -1033,9 +1031,7 @@ async def test_delete_access_group_budget_drops_the_row_and_spares_the_shared_bu
     cache = _FakeAuthCache()
 
     with _proxy(prisma):
-        response = await delete_access_group_budget(
-            access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache
-        )
+        response = await delete_access_group_budget(access_group="prod-models", auth_cache=cache)
 
     assert response.budget_deleted is True
     assert prisma.access_group_budget_table.rows == {}
@@ -1056,9 +1052,7 @@ async def test_delete_access_group_budget_on_a_budgetless_group_still_evicts():
     cache = _FakeAuthCache(journal)
 
     with _proxy(prisma):
-        response = await delete_access_group_budget(
-            access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache
-        )
+        response = await delete_access_group_budget(access_group="prod-models", auth_cache=cache)
 
     assert response.budget_deleted is False
     assert prisma.budget_table.deleted_ids == []
@@ -1160,9 +1154,7 @@ async def test_delete_access_group_budget_evicts_both_auth_cache_keys():
     cache = _FakeAuthCache(journal)
 
     with _proxy(prisma):
-        await delete_access_group_budget(
-            access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache
-        )
+        await delete_access_group_budget(access_group="prod-models", auth_cache=cache)
 
     _assert_evicted_after_write(journal, "prod-models", "access_group_budget.delete:prod-models")
 
