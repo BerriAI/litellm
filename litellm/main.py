@@ -2536,17 +2536,17 @@ def _complete_custom_openai(
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
-        from litellm.llms.github_copilot.authenticator import Authenticator
-        from litellm.llms.github_copilot.common_utils import (
-            get_copilot_default_headers,
-        )
+        from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 
-        copilot_auth: Final = Authenticator()
-        copilot_api_key: Final = copilot_auth.get_api_key()
-        copilot_headers: Final = get_copilot_default_headers(copilot_api_key)
-        if extra_headers:
-            copilot_headers.update(extra_headers)
-        extra_headers = copilot_headers
+        copilot_config: Final = (
+            provider_config if isinstance(provider_config, GithubCopilotConfig) else GithubCopilotConfig()
+        )
+        api_key, extra_headers = copilot_config.resolve_request_credentials(
+            model=model,
+            api_key=ctx.api_key,
+            headers=extra_headers,
+            litellm_params=litellm_params,
+        )
 
     if extra_headers is not None:
         optional_params["extra_headers"] = extra_headers
@@ -6163,12 +6163,21 @@ def embedding(
     non_default_params: Final = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
+    github_copilot_token_dir: Final = (
+        kwargs["github_copilot_token_dir"]
+        if "github_copilot_token_dir" in kwargs and isinstance(kwargs["github_copilot_token_dir"], str)
+        else None
+    )
+    provider_litellm_params: Final = GenericLiteLLMParams.model_validate(
+        {"github_copilot_token_dir": github_copilot_token_dir} if github_copilot_token_dir is not None else {}
+    )
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
+        litellm_params=provider_litellm_params,
     )
 
     if dynamic_api_key is not None:
@@ -6249,7 +6258,6 @@ def embedding(
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "github_copilot":
-            api_key = api_key or litellm.api_key
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,

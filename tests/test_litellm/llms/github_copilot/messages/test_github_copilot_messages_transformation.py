@@ -1,7 +1,8 @@
+import json
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
-
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
@@ -122,6 +123,35 @@ def test_github_copilot_anthropic_messages_validate_environment():
     assert validated_headers["x-interaction-type"] == "messages-proxy"
     assert validated_headers["x-github-api-version"] == "2026-06-01"
     assert api_base == "https://api.githubcopilot.com"
+
+
+def test_github_copilot_messages_uses_per_deployment_token_directory(tmp_path):
+    token_dir = tmp_path / "messages-account"
+    token_dir.mkdir()
+    (token_dir / "api-key.json").write_text(
+        json.dumps(
+            {
+                "token": "messages-account-key",
+                "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
+                "endpoints": {"api": "https://messages-account.example"},
+            }
+        )
+    )
+    params = {"github_copilot_token_dir": str(token_dir)}
+    config = GithubCopilotAnthropicMessagesConfig()
+
+    headers, api_base = config.validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-haiku-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params=params,
+        api_key=None,
+        api_base="https://attacker.example.com",
+    )
+
+    assert headers["Authorization"] == "Bearer messages-account-key"
+    assert api_base == "https://messages-account.example"
 
 
 def test_github_copilot_anthropic_messages_validate_environment_injects_beta_headers():

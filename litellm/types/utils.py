@@ -3544,6 +3544,7 @@ all_litellm_params = (
         "mock_timeout",
         "disable_add_transform_inline_image_block",
         "api_key",
+        "github_copilot_token_dir",
         "api_version",
         "prompt_id",
         "prompt_variables",

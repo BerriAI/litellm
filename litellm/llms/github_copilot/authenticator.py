@@ -1,6 +1,8 @@
 import json
 import os
+import tempfile
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final
 
@@ -22,22 +24,20 @@ DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
 DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
+GITHUB_COPILOT_TOKEN_DIR_PARAM: Final = "github_copilot_token_dir"
 
 
 class Authenticator:
-    def __init__(self) -> None:
+    def __init__(self, token_dir: str | None = None) -> None:
         """Initialize the GitHub Copilot authenticator with configurable token paths."""
-        # Token storage paths
-        self.token_dir = os.getenv(
-            "GITHUB_COPILOT_TOKEN_DIR",
-            os.path.expanduser("~/.config/litellm/github_copilot"),
+        self.token_dir = os.path.expanduser(
+            token_dir or os.getenv("GITHUB_COPILOT_TOKEN_DIR") or "~/.config/litellm/github_copilot"
         )
         self.access_token_file = os.path.join(
             self.token_dir,
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
         self.api_key_file = os.path.join(self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"))
-        self._ensure_token_dir()
 
     def get_access_token(self) -> str:
         """
@@ -62,8 +62,7 @@ class Authenticator:
             try:
                 access_token = self._login()
                 try:
-                    with open(self.access_token_file, "w") as f:
-                        f.write(access_token)
+                    self._write_private_text(self.access_token_file, access_token)
                 except OSError:
                     verbose_logger.error("Error saving access token to file")
                 return access_token
@@ -106,8 +105,7 @@ class Authenticator:
 
         try:
             api_key_info = self._refresh_api_key()
-            with open(self.api_key_file, "w") as f:
-                json.dump(api_key_info, f)
+            self._write_private_text(self.api_key_file, json.dumps(api_key_info))
             token: Final = api_key_info.get("token")
             if token:
                 return token
@@ -141,6 +139,11 @@ class Authenticator:
                 endpoints: Final = api_key_info.get("endpoints", {})
                 api_endpoint: Final = endpoints.get("api")
                 return api_endpoint
+        except FileNotFoundError:
+            # A global token file is intentionally absent when all Copilot
+            # deployments use their own token directories.
+            verbose_logger.debug("No API endpoint file found at %s", self.api_key_file)
+            return None
         except (OSError, json.JSONDecodeError, KeyError) as e:
             verbose_logger.warning("Error reading API endpoint from file: %s", e)
             return None
@@ -185,7 +188,21 @@ class Authenticator:
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""
         if not os.path.exists(self.token_dir):
-            os.makedirs(self.token_dir, exist_ok=True)
+            os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
+
+    def _write_private_text(self, file_path: str, value: str) -> None:
+        self._ensure_token_dir()
+        file_descriptor, temporary_path = tempfile.mkstemp(prefix=".litellm-", dir=self.token_dir, text=True)
+        try:
+            with os.fdopen(file_descriptor, "w") as temporary_file:
+                temporary_file.write(value)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            os.chmod(temporary_path, 0o600)
+            os.replace(temporary_path, file_path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
 
     def _get_github_headers(self, access_token: str | None = None) -> dict[str, str]:
         """
@@ -354,3 +371,18 @@ class Authenticator:
         )
 
         return self._poll_for_access_token(device_code)
+
+
+def get_authenticator_for_litellm_params(
+    default_authenticator: Authenticator,
+    litellm_params: Mapping[str, object] | None,
+) -> Authenticator:
+    if litellm_params is None:
+        return default_authenticator
+    token_dir: Final = litellm_params.get(GITHUB_COPILOT_TOKEN_DIR_PARAM)
+    if not isinstance(token_dir, str) or not token_dir.strip():
+        return default_authenticator
+    expanded_token_dir: Final = os.path.expanduser(token_dir.strip())
+    if expanded_token_dir == default_authenticator.token_dir:
+        return default_authenticator
+    return Authenticator(token_dir=expanded_token_dir)
