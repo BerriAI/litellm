@@ -8,11 +8,13 @@ import threading
 import time
 import uuid
 import webbrowser
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Final
+from typing import Final
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
@@ -31,6 +33,40 @@ XAI_OAUTH_CALLBACK_TIMEOUT_SECONDS: Final = 180
 _XAI_OAUTH_REFRESH_LOCK: Final = threading.Lock()
 
 
+class XAIOAuthRecord(TypedDict):
+    access_token: ReadOnly[str]
+    refresh_token: ReadOnly[str]
+    id_token: ReadOnly[str | None]
+    token_type: ReadOnly[str]
+    token_endpoint: ReadOnly[str]
+    expires_at: ReadOnly[float | None]
+
+
+class _TokenPayload(TypedDict):
+    access_token: NotRequired[ReadOnly[str]]
+    refresh_token: NotRequired[ReadOnly[str]]
+    id_token: NotRequired[ReadOnly[str | None]]
+    token_type: NotRequired[ReadOnly[str]]
+    expires_in: NotRequired[ReadOnly[float]]
+
+
+class _DiscoveryDocument(TypedDict):
+    authorization_endpoint: NotRequired[ReadOnly[str]]
+    token_endpoint: NotRequired[ReadOnly[str]]
+
+
+class _AuthFileView(TypedDict):
+    record: ReadOnly[XAIOAuthRecord | None]
+
+
+class _TokenPayloadView(TypedDict):
+    payload: ReadOnly[_TokenPayload | None]
+
+
+class _DiscoveryView(TypedDict):
+    document: ReadOnly[_DiscoveryDocument]
+
+
 class XAIOAuthError(Exception):
     pass
 
@@ -40,7 +76,7 @@ class XAIOAuthLoginRequiredError(XAIOAuthError):
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
-    server: "_CallbackServer"
+    server: "_CallbackServer"  # pyright: ignore[reportIncompatibleVariableOverride]  # stdlib stubs type server as BaseServer; _CallbackServer is the only server this handler is registered on
 
     def do_GET(self) -> None:
         parsed: Final = urlparse(self.path)
@@ -75,7 +111,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         )
         self.wfile.write(body)
 
-    def log_message(self, format: str, *args: Any) -> None:
+    def log_message(self, format: str, *args: object) -> None:
         return
 
 
@@ -115,7 +151,7 @@ class XAIOAuthAuthenticator:
             refreshed: Final = self._refresh_tokens(locked_auth_data)
             return refreshed["access_token"]
 
-    def login(self, force: bool = False, no_browser: bool = False) -> dict[str, Any]:
+    def login(self, force: bool = False, no_browser: bool = False) -> XAIOAuthRecord:
         existing: Final = self._read_auth_file()
         if existing and not force and existing.get("access_token"):
             if not self._is_expired(existing):
@@ -177,15 +213,16 @@ class XAIOAuthAuthenticator:
         except OSError:
             verbose_logger.debug("Could not chmod xAI OAuth token directory")
 
-    def _read_auth_file(self) -> dict[str, Any] | None:
+    def _read_auth_file(self) -> XAIOAuthRecord | None:
         try:
             with open(self.auth_file, "r") as f:
-                data: Final = json.load(f)
+                loaded: Final[_AuthFileView] = {"record": json.load(f)}
+            data: Final = loaded["record"]
             return data if isinstance(data, dict) else None
         except (OSError, json.JSONDecodeError):
             return None
 
-    def _write_auth_file(self, data: dict[str, Any]) -> None:
+    def _write_auth_file(self, data: XAIOAuthRecord) -> None:
         self._ensure_token_dir()
         tmp_file: Final = os.path.join(
             self.token_dir,
@@ -216,7 +253,7 @@ class XAIOAuthAuthenticator:
                 pass
             raise
 
-    def _is_expired(self, auth_data: dict[str, Any]) -> bool:
+    def _is_expired(self, auth_data: XAIOAuthRecord) -> bool:
         expires_at: Final = auth_data.get("expires_at")
         if expires_at is None:
             return True
@@ -234,9 +271,10 @@ class XAIOAuthAuthenticator:
                 f"xAI OAuth discovery request failed: {exc.response.status_code} {exc.response.text}"
             ) from exc
         try:
-            data: Final = response.json()
+            discovered: Final[_DiscoveryView] = {"document": response.json()}
         except ValueError as exc:
             raise XAIOAuthError("xAI OAuth discovery response was not valid JSON") from exc
+        data: Final = discovered["document"]
         authorization_endpoint: Final = data.get("authorization_endpoint")
         token_endpoint: Final = data.get("token_endpoint")
         if not authorization_endpoint or not token_endpoint:
@@ -304,7 +342,7 @@ class XAIOAuthAuthenticator:
             server.server_close()
         raise XAIOAuthError("Timed out waiting for xAI OAuth callback")
 
-    def _exchange_token(self, token_endpoint: str, data: dict[str, str]) -> dict[str, Any]:
+    def _exchange_token(self, token_endpoint: str, data: dict[str, str]) -> _TokenPayload:
         try:
             response: Final = self._client().post(
                 token_endpoint,
@@ -320,19 +358,20 @@ class XAIOAuthAuthenticator:
                 f"xAI OAuth token request failed: {exc.response.status_code} {exc.response.text}"
             ) from exc
         try:
-            body: Final = response.json()
+            exchanged: Final[_TokenPayloadView] = {"payload": response.json()}
         except ValueError as exc:
             raise XAIOAuthError("xAI OAuth token response was not valid JSON") from exc
+        body: Final = exchanged["payload"]
         if not isinstance(body, dict):
             raise XAIOAuthError("xAI OAuth token response was not an object")
         return body
 
     def _build_auth_record(
         self,
-        token_payload: dict[str, Any],
+        token_payload: _TokenPayload,
         token_endpoint: str,
         fallback_refresh_token: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> XAIOAuthRecord:
         access_token: Final = token_payload.get("access_token")
         refresh_token: Final = token_payload.get("refresh_token") or fallback_refresh_token
         if not access_token:
@@ -353,7 +392,7 @@ class XAIOAuthAuthenticator:
             "expires_at": expires_at,
         }
 
-    def _refresh_tokens(self, auth_data: dict[str, Any]) -> dict[str, Any]:
+    def _refresh_tokens(self, auth_data: XAIOAuthRecord) -> XAIOAuthRecord:
         token_endpoint = auth_data.get("token_endpoint")
         if not token_endpoint:
             token_endpoint = self._discover()["token_endpoint"]
@@ -379,5 +418,5 @@ class XAIOAuthAuthenticator:
         return refreshed
 
 
-def should_use_xai_oauth(litellm_params: dict[str, Any] | None) -> bool:
+def should_use_xai_oauth(litellm_params: Mapping[str, object] | None) -> bool:
     return bool((litellm_params or {}).get("use_xai_oauth"))

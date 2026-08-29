@@ -173,7 +173,7 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
                 {card.sub && (
                   <div
                     className={`text-xs mt-0.5 ${
-                      card.subVariant === "error" ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                      card.subVariant === "error" ? "text-destructive" : "text-muted-foreground"
                     }`}
                   >
                     {card.sub}

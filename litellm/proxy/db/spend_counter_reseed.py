@@ -335,7 +335,7 @@ class SpendCounterReseed:
         try:
             response: Final = await SpendLogsRepository(prisma_client).table.group_by(
                 by=[group_field],
-                where=where,  # type: ignore[arg-type]
+                where=where,
                 sum={"spend": True},
             )
         except Exception:

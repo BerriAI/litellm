@@ -147,7 +147,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 speed_value = None
             if speed_value is not None:
                 if isinstance(params.get("voice_settings"), dict):
-                    params["voice_settings"]["speed"] = speed_value  # type: ignore[index]
+                    params["voice_settings"]["speed"] = speed_value
                 else:
                     params["voice_settings"] = {"speed": speed_value}
 

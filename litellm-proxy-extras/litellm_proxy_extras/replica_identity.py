@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras.prisma_toolchain import prisma_command_timeout
 
 REPLICA_IDENTITY_FULL_ENV_VAR = "LITELLM_SET_REPLICA_IDENTITY_FULL"
 
@@ -75,7 +76,7 @@ def apply_replica_identity_full(
                     "--schema",
                     schema_path,
                 ],
-                timeout=60,
+                timeout=prisma_command_timeout(),
                 check=True,
                 capture_output=True,
                 text=True,

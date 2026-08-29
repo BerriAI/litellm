@@ -6,9 +6,10 @@ import concurrent.futures
 import inspect
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, Union, cast
+from types import UnionType
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -28,6 +29,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
@@ -53,8 +55,8 @@ from litellm.types.guardrails import (
 if TYPE_CHECKING:
     from types import CodeType
 
-    from prisma.actions import LiteLLM_GuardrailsTableActions
     from prisma.models import LiteLLM_GuardrailsTable
+    from pydantic.fields import FieldInfo
 
     from litellm.proxy.utils import PrismaClient
 
@@ -64,24 +66,27 @@ router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 
 
-def _guardrails_table(prisma_client: "PrismaClient") -> "LiteLLM_GuardrailsTableActions[LiteLLM_GuardrailsTable]":
-    table: Final[LiteLLM_GuardrailsTableActions[LiteLLM_GuardrailsTable]] = GuardrailsRepository(prisma_client).table
-    return table
+def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
+    return mapping
+
+
+def _guardrails_table(prisma_client: "PrismaClient") -> "TableActions[LiteLLM_GuardrailsTable]":
+    return GuardrailsRepository(prisma_client).table
 
 
 async def _create_guardrail_row(prisma_client: "PrismaClient", data: Mapping[str, object]) -> "LiteLLM_GuardrailsTable":
-    row: Final[LiteLLM_GuardrailsTable] = await GuardrailsRepository(prisma_client).table.create(data=data)
+    row: Final = await _guardrails_table(prisma_client).create(data=data)
     return row
 
 
 async def _delete_guardrail_row(prisma_client: "PrismaClient", where: Mapping[str, object]) -> None:
-    await GuardrailsRepository(prisma_client).table.delete(where=where)
+    await _guardrails_table(prisma_client).delete(where=where)
 
 
 async def _find_team_guardrail_rows(
     prisma_client: "PrismaClient", where: Mapping[str, object]
 ) -> "Sequence[LiteLLM_GuardrailsTable]":
-    rows: Final[Sequence[LiteLLM_GuardrailsTable]] = await GuardrailsRepository(prisma_client).table.find_many(
+    rows: Final = await _guardrails_table(prisma_client).find_many(
         where=where,
         order={"created_at": "desc"},
     )
@@ -212,7 +217,7 @@ async def list_guardrails_v2(
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
-    is_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_admin: Final = _user_has_admin_view(user_api_key_dict)
 
     try:
         guardrails = (
@@ -498,10 +503,12 @@ async def update_guardrail(
         if existing_guardrail is None:
             raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
 
-        result: Final = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
-            guardrail_id=guardrail_id,
-            guardrail=request.guardrail,
-            prisma_client=prisma_client,
+        result: Final = _as_str_object_mapping(
+            await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+                guardrail_id=guardrail_id,
+                guardrail=request.guardrail,
+                prisma_client=prisma_client,
+            )
         )
 
         guardrail_name: Final = result.get("guardrail_name", "Unknown")
@@ -612,7 +619,7 @@ class RegisterGuardrailRequest(BaseModel):
     """Request body for POST /guardrails/register. Follows Generic Guardrail API config."""
 
     guardrail_name: str
-    litellm_params: dict[str, Any]  # guardrail, mode, api_base required; api_key, headers, etc. optional
+    litellm_params: dict[str, object]  # guardrail, mode, api_base required; api_key, headers, etc. optional
     guardrail_info: dict[str, object] | None = None
     team_id: str | None = None
 
@@ -944,7 +951,7 @@ async def get_guardrail_submission(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
-    is_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_admin: Final = _user_has_admin_view(user_api_key_dict)
 
     try:
         row: Final = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
@@ -1171,12 +1178,14 @@ async def patch_guardrail(
         )
 
         # Update litellm_params if default_on is provided or pii_entities_config is provided
-        litellm_params = LitellmParams(**dict(existing_guardrail.get("litellm_params", {})))
+        existing_litellm_params: Final = _as_str_object_mapping(dict(existing_guardrail.get("litellm_params", {})))
+        litellm_params = LitellmParams(**existing_litellm_params)
         if request.litellm_params is not None:
             requested_litellm_params: Final = request.litellm_params.model_dump(exclude_unset=True)
             litellm_params_dict: Final = litellm_params.model_dump(exclude_unset=True)
             litellm_params_dict.update(requested_litellm_params)
-            litellm_params = LitellmParams(**litellm_params_dict)
+            merged_litellm_params: Final = _as_str_object_mapping(litellm_params_dict)
+            litellm_params = LitellmParams(**merged_litellm_params)
 
         # Update guardrail_info if provided
         guardrail_info: Final = (
@@ -1192,10 +1201,12 @@ async def patch_guardrail(
             litellm_params=litellm_params,
             guardrail_info=guardrail_info,
         )
-        result: Final = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
-            guardrail_id=guardrail_id,
-            guardrail=guardrail,
-            prisma_client=prisma_client,
+        result: Final = _as_str_object_mapping(
+            await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+                guardrail_id=guardrail_id,
+                guardrail=guardrail,
+                prisma_client=prisma_client,
+            )
         )
 
         guardrail_name = result.get("guardrail_name", "Unknown")
@@ -1207,6 +1218,30 @@ async def patch_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
+        except (ValueError, TypeError) as update_error:
+            # The new config is invalid (e.g. an unsupported on_flagged combination):
+            # reinitialize_guardrail already restored the previous live instance, but
+            # update_guardrail_in_db above already persisted the rejected config to
+            # the DB. Roll that back too, so the DB and the live guardrail never
+            # disagree about what's actually enforcing, and surface the rejection to
+            # the caller instead of a misleading 200.
+            await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+                guardrail_id=guardrail_id,
+                guardrail=Guardrail(
+                    guardrail_id=guardrail_id,
+                    guardrail_name=existing_guardrail.get("guardrail_name") or "",
+                    litellm_params=LitellmParams(**existing_litellm_params),
+                    guardrail_info=existing_guardrail.get(
+                        "guardrail_info",
+                        {},  # mutable-ok: Guardrail's own constructor takes a plain dict
+                    ),
+                ),
+                prisma_client=prisma_client,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid guardrail configuration, update rejected: {update_error}",
+            ) from update_error
         except Exception as update_error:
             verbose_proxy_logger.warning(
                 "Immediate sync: Failed to update '%s' (ID: %s) in memory: %s",
@@ -1551,35 +1586,46 @@ async def validate_blocked_words_file(request: dict[str, str]):
         return {"valid": False, "error": f"Validation error: {e}"}
 
 
-def _get_field_type_from_annotation(field_annotation: Any) -> str:
+def _dunder_origin(annotation: object) -> object:
+    origin: Final[object] = getattr(annotation, "__origin__", None)
+    return origin
+
+
+def _dunder_name(annotation: object) -> object:
+    name: Final[object] = getattr(annotation, "__name__", None)
+    return name
+
+
+def _dunder_args(annotation: object) -> tuple[object, ...]:
+    args: Final[tuple[object, ...]] = getattr(annotation, "__args__", ())
+    return args
+
+
+def _get_field_type_from_annotation(field_annotation: object) -> str:
     """
     Convert a Python type annotation to a UI-friendly type string
     """
     # Handle Union types (like Optional[T])
-    if (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is Union
-        and hasattr(field_annotation, "__args__")
-    ):
+    if get_origin(field_annotation) is Union or get_origin(field_annotation) is UnionType:
         # For Optional[T], get the non-None type
-        args: Final = field_annotation.__args__
+        args: Final[tuple[object, ...]] = get_args(field_annotation)
         non_none_args: Final = [arg for arg in args if arg is not type(None)]
         if non_none_args:
             field_annotation = non_none_args[0]
 
     # Handle List types
-    if hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is list:
+    if hasattr(field_annotation, "__origin__") and _dunder_origin(field_annotation) is list:
         return "array"
 
     # Handle Dict types
-    if hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is dict:
+    if hasattr(field_annotation, "__origin__") and _dunder_origin(field_annotation) is dict:
         return "dict"
 
     # Handle Literal types
     if hasattr(field_annotation, "__origin__") and hasattr(field_annotation, "__args__"):
         # Check for Literal types (Python 3.8+)
-        origin: Final = field_annotation.__origin__
-        if hasattr(origin, "__name__") and origin.__name__ == "Literal":
+        origin: Final = _dunder_origin(field_annotation)
+        if hasattr(origin, "__name__") and _dunder_name(origin) == "Literal":
             return "select"  # For dropdown/select inputs
 
     # Handle basic types
@@ -1598,66 +1644,66 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
     return "string"
 
 
-def _extract_literal_values(annotation: Any) -> list[str]:
+def _extract_literal_values(annotation: object) -> Sequence[object]:
     """
     Extract literal values from a Literal type annotation
     """
     if hasattr(annotation, "__origin__") and hasattr(annotation, "__args__"):
-        origin: Final = annotation.__origin__
-        if hasattr(origin, "__name__") and origin.__name__ == "Literal":
-            return list(annotation.__args__)
+        origin: Final = _dunder_origin(annotation)
+        if hasattr(origin, "__name__") and _dunder_name(origin) == "Literal":
+            return list(_dunder_args(annotation))
     return []
 
 
-def _get_dict_key_options(field_annotation: Any) -> list[str] | None:
+def _get_dict_key_options(field_annotation: object) -> Sequence[object] | None:
     """
     Extract key options from Dict[Literal[...], T] types
     """
     if (
         hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is dict
+        and _dunder_origin(field_annotation) is dict
         and hasattr(field_annotation, "__args__")
     ):
-        args: Final = field_annotation.__args__
+        args: Final = _dunder_args(field_annotation)
         if len(args) >= 2:
             key_type: Final = args[0]
             return _extract_literal_values(key_type)
     return None
 
 
-def _get_dict_value_type(field_annotation: Any) -> str:
+def _get_dict_value_type(field_annotation: object) -> str:
     """
     Get the value type from Dict[K, V] types
     """
     if (
         hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is dict
+        and _dunder_origin(field_annotation) is dict
         and hasattr(field_annotation, "__args__")
     ):
-        args: Final = field_annotation.__args__
+        args: Final = _dunder_args(field_annotation)
         if len(args) >= 2:
             value_type: Final = args[1]
             return _get_field_type_from_annotation(value_type)
     return "string"
 
 
-def _get_list_element_options(field_annotation: Any) -> list[str] | None:
+def _get_list_element_options(field_annotation: object) -> Sequence[object] | None:
     """
     Extract element options from List[Literal[...]] types
     """
     if (
         hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is list
+        and _dunder_origin(field_annotation) is list
         and hasattr(field_annotation, "__args__")
     ):
-        args: Final = field_annotation.__args__
+        args: Final = _dunder_args(field_annotation)
         if len(args) >= 1:
             element_type: Final = args[0]
             return _extract_literal_values(element_type)
     return None
 
 
-def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool:
+def _should_skip_optional_params(field_name: str, field_annotation: object) -> bool:
     """Check if optional_params field should be skipped (not meaningfully overridden)."""
     if field_name != "optional_params":
         return False
@@ -1667,12 +1713,12 @@ def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool
 
     # Check if the annotation is still a generic TypeVar (not specialized)
     if isinstance(field_annotation, TypeVar) or (
-        hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is TypeVar
+        hasattr(field_annotation, "__origin__") and _dunder_origin(field_annotation) is TypeVar
     ):
         return True
 
     # Also skip if it's a generic type that wasn't specialized
-    if hasattr(field_annotation, "__name__") and field_annotation.__name__ in (
+    if hasattr(field_annotation, "__name__") and _dunder_name(field_annotation) in (
         "T",
         "TypeVar",
     ):
@@ -1680,22 +1726,18 @@ def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool
 
     # Handle Optional[T] where T is still a TypeVar
     if hasattr(field_annotation, "__args__"):
-        non_none_args: Final = [arg for arg in field_annotation.__args__ if arg is not type(None)]
+        non_none_args: Final = [arg for arg in _dunder_args(field_annotation) if arg is not type(None)]
         if non_none_args and isinstance(non_none_args[0], TypeVar):
             return True
 
     return False
 
 
-def _unwrap_optional_type(field_annotation: Any) -> Any:
+def _unwrap_optional_type(field_annotation: object) -> object:
     """Unwrap Optional types to get the actual type."""
-    if (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is Union
-        and hasattr(field_annotation, "__args__")
-    ):
+    if get_origin(field_annotation) is Union or get_origin(field_annotation) is UnionType:
         # For Optional[BaseModel], get the non-None type
-        args: Final = field_annotation.__args__
+        args: Final[tuple[object, ...]] = get_args(field_annotation)
         non_none_args: Final = [arg for arg in args if arg is not type(None)]
         if non_none_args:
             return non_none_args[0]
@@ -1703,20 +1745,20 @@ def _unwrap_optional_type(field_annotation: Any) -> Any:
 
 
 def _build_field_dict(
-    field: Any,
-    field_annotation: Any,
+    field: "FieldInfo",
+    field_annotation: object,
     description: str,
     required: bool,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build field dictionary for non-nested fields."""
     # Determine the field type from annotation
     field_type = _get_field_type_from_annotation(field_annotation)
 
     # Check for custom UI type override
-    field_json_schema_extra: Final = getattr(field, "json_schema_extra", {})
+    field_json_schema_extra: Final[Mapping[str, object]] = getattr(field, "json_schema_extra", {})
     if field_json_schema_extra and "ui_type" in field_json_schema_extra:
         ui_type: Final = field_json_schema_extra["ui_type"]
-        field_type = ui_type.value if hasattr(ui_type, "value") else ui_type
+        field_type = getattr(ui_type, "value", ui_type)
     elif field_json_schema_extra and "type" in field_json_schema_extra:
         field_type = field_json_schema_extra["type"]
 
@@ -1755,8 +1797,9 @@ def _build_field_dict(
             field_dict["options"] = literal_options
 
     # Add default value if it exists
-    if field.default is not None and field.default is not ...:
-        field_dict["default_value"] = field.default
+    field_default: Final[object] = getattr(field, "default", None)
+    if field_default is not None and field_default is not ...:
+        field_dict["default_value"] = field_default
 
     # Copy min, max, step from json_schema_extra for number/percentage inputs
     if field_json_schema_extra:
@@ -1770,7 +1813,7 @@ def _build_field_dict(
 def _extract_fields_recursive(
     model: type[BaseModel],
     depth: int = 0,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     # Check if we've exceeded the maximum recursion depth
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise HTTPException(
@@ -1824,7 +1867,7 @@ def _extract_fields_recursive(
     return fields
 
 
-def _get_fields_from_model(model_class: type[BaseModel]) -> dict[str, Any]:
+def _get_fields_from_model(model_class: type[BaseModel]) -> dict[str, object]:
     """
     Get the fields from a Pydantic model as a nested dictionary structure
     """
@@ -2148,7 +2191,26 @@ def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type:
     return "response" if input_type == "response" else "request"
 
 
-def _patch_logging_obj_for_guardrail(litellm_logging_obj: Any, request: ApplyGuardrailRequest) -> None:
+class _GuardrailLoggingObj(Protocol):
+    call_type: str
+    model_call_details: dict[str, object]
+
+    @property
+    def update_messages(self) -> "Callable[..., object]": ...
+
+    @property
+    def async_success_handler(self) -> "Callable[..., Awaitable[object]]": ...
+
+    @property
+    def success_handler(self) -> "Callable[..., object]": ...
+
+
+class _GuardrailProxyLogging(Protocol):
+    @property
+    def post_call_success_hook(self) -> "Callable[..., Awaitable[object]]": ...
+
+
+def _patch_logging_obj_for_guardrail(litellm_logging_obj: _GuardrailLoggingObj, request: ApplyGuardrailRequest) -> None:
     """Configure the logging object so Langfuse/OTEL extract input and output correctly."""
     litellm_logging_obj.call_type = "pass_through_endpoint"
     litellm_logging_obj.model_call_details["call_type"] = "pass_through_endpoint"
@@ -2158,8 +2220,8 @@ def _patch_logging_obj_for_guardrail(litellm_logging_obj: Any, request: ApplyGua
 
 
 async def _emit_guardrail_success_logs(
-    proxy_logging_obj: Any,
-    litellm_logging_obj: Any,
+    proxy_logging_obj: _GuardrailProxyLogging,
+    litellm_logging_obj: _GuardrailLoggingObj | None,
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
     response: ApplyGuardrailResponse,
@@ -2251,8 +2313,12 @@ async def apply_guardrail(
     litellm_logging_obj = None
     start_time: Final = datetime.now(timezone.utc)
 
+    from litellm.proxy.common_utils.registry_read_through import (
+        get_initialized_guardrail_with_read_through,
+    )
+
     try:
-        active_guardrail: Final[CustomGuardrail | None] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+        active_guardrail: Final[CustomGuardrail | None] = await get_initialized_guardrail_with_read_through(
             guardrail_name=request.guardrail_name
         )
         if active_guardrail is None:

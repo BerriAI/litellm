@@ -2,6 +2,7 @@
 Translate between Cohere's `/rerank` format and Deepinfra's `/rerank` format.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
@@ -67,6 +68,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("DEEPINFRA_API_KEY")
@@ -122,7 +124,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
                     optional_rerank_params["instruction"] = v
                 elif k == "webhook" and v is not None:
                     optional_rerank_params["webhook"] = v
-        return OptionalRerankParams(**optional_rerank_params)  # type: ignore
+        return OptionalRerankParams(**optional_rerank_params)
 
     def transform_rerank_request(
         self,

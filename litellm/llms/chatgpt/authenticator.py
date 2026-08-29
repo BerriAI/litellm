@@ -2,9 +2,11 @@ import base64
 import json
 import os
 import time
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final, TypeAlias
 
 import httpx
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -27,6 +29,16 @@ DEVICE_CODE_TIMEOUT_SECONDS: Final = 15 * 60
 DEVICE_CODE_COOLDOWN_SECONDS: Final = 5 * 60
 DEVICE_CODE_POLL_SLEEP_SECONDS: Final = 5
 
+OPENAI_AUTH_CLAIM_KEY: Final = "https://api.openai.com/auth"
+
+JsonObject: TypeAlias = Mapping[str, JsonValue]
+
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
+
+
+def _optional_str(value: JsonValue | None) -> str | None:
+    return value if isinstance(value, str) else None
+
 
 class Authenticator:
     def __init__(self) -> None:
@@ -43,10 +55,10 @@ class Authenticator:
     def get_access_token(self) -> str:
         auth_data: Final = self._read_auth_file()
         if auth_data:
-            access_token: Final = auth_data.get("access_token")
+            access_token: Final = _optional_str(auth_data.get("access_token"))
             if access_token and not self._is_token_expired(auth_data, access_token):
                 return access_token
-            refresh_token: Final = auth_data.get("refresh_token")
+            refresh_token: Final = _optional_str(auth_data.get("refresh_token"))
             if refresh_token:
                 try:
                     refreshed: Final = self._refresh_tokens(refresh_token)
@@ -67,48 +79,47 @@ class Authenticator:
         auth_data: Final = self._read_auth_file()
         if not auth_data:
             return None
-        account_id: Final = auth_data.get("account_id")
+        account_id: Final = _optional_str(auth_data.get("account_id"))
         if account_id:
             return account_id
         id_token: Final = auth_data.get("id_token")
         access_token: Final = auth_data.get("access_token")
-        derived: Final = self._extract_account_id(id_token or access_token)
+        derived: Final = self._extract_account_id(_optional_str(id_token or access_token))
         if derived:
-            auth_data["account_id"] = derived
-            self._write_auth_file(auth_data)
+            self._write_auth_file({**auth_data, "account_id": derived})
         return derived
 
     def _ensure_token_dir(self) -> None:
         if not os.path.exists(self.token_dir):
             os.makedirs(self.token_dir, exist_ok=True)
 
-    def _read_auth_file(self) -> dict[str, Any] | None:
+    def _read_auth_file(self) -> JsonObject | None:
         try:
             with open(self.auth_file, "r") as f:
-                return json.load(f)
+                return _JSON_OBJECT_ADAPTER.validate_python(json.load(f))
         except OSError:
             return None
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, ValidationError) as exc:
             verbose_logger.warning("Invalid ChatGPT auth file: %s", exc)
             return None
 
-    def _write_auth_file(self, data: dict[str, Any]) -> None:
+    def _write_auth_file(self, data: JsonObject) -> None:
         try:
             with open(self.auth_file, "w") as f:
                 json.dump(data, f)
         except OSError as exc:
             verbose_logger.error("Failed to write ChatGPT auth file: %s", exc)
 
-    def _is_token_expired(self, auth_data: dict[str, Any], access_token: str) -> bool:
-        expires_at = auth_data.get("expires_at")
-        if expires_at is None:
-            expires_at = self._get_expires_at(access_token)
-            if expires_at:
-                auth_data["expires_at"] = expires_at
-                self._write_auth_file(auth_data)
-        if expires_at is None:
+    def _is_token_expired(self, auth_data: JsonObject, access_token: str) -> bool:
+        stored_expires_at: Final = auth_data.get("expires_at")
+        if isinstance(stored_expires_at, (int, float)):
+            return time.time() >= float(stored_expires_at) - TOKEN_EXPIRY_SKEW_SECONDS
+        derived_expires_at: Final = self._get_expires_at(access_token)
+        if derived_expires_at:
+            self._write_auth_file({**auth_data, "expires_at": derived_expires_at})
+        if derived_expires_at is None:
             return True
-        return time.time() >= float(expires_at) - TOKEN_EXPIRY_SKEW_SECONDS
+        return time.time() >= float(derived_expires_at) - TOKEN_EXPIRY_SKEW_SECONDS
 
     def _get_expires_at(self, token: str) -> int | None:
         claims: Final = self._decode_jwt_claims(token)
@@ -117,15 +128,14 @@ class Authenticator:
             return int(exp)
         return None
 
-    def _decode_jwt_claims(self, token: str) -> dict[str, Any]:
+    def _decode_jwt_claims(self, token: str) -> JsonObject:
         try:
             parts: Final = token.split(".")
             if len(parts) < 2:
                 return {}
-            payload_b64 = parts[1]
-            payload_b64 += "=" * (-len(payload_b64) % 4)
+            payload_b64: Final = parts[1] + "=" * (-len(parts[1]) % 4)
             payload_bytes: Final = base64.urlsafe_b64decode(payload_b64)
-            return json.loads(payload_bytes.decode("utf-8"))
+            return _JSON_OBJECT_ADAPTER.validate_python(json.loads(payload_bytes.decode("utf-8")))
         except Exception:
             return {}
 
@@ -133,7 +143,7 @@ class Authenticator:
         if not token:
             return None
         claims: Final = self._decode_jwt_claims(token)
-        auth_claims: Final = claims.get("https://api.openai.com/auth")
+        auth_claims: Final = claims.get(OPENAI_AUTH_CLAIM_KEY)
         if isinstance(auth_claims, dict):
             account_id: Final = auth_claims.get("chatgpt_account_id")
             if isinstance(account_id, str) and account_id:
@@ -170,7 +180,7 @@ class Authenticator:
                 json={"client_id": CHATGPT_CLIENT_ID},
             )
             resp.raise_for_status()
-            data: Final = resp.json()
+            data: Final = _JSON_OBJECT_ADAPTER.validate_python(resp.json())
         except httpx.HTTPStatusError as exc:
             raise GetDeviceCodeError(
                 message=f"Failed to request device code: {exc}",
@@ -182,8 +192,8 @@ class Authenticator:
                 status_code=400,
             )
 
-        device_auth_id: Final = data.get("device_auth_id")
-        user_code: Final = data.get("user_code") or data.get("usercode")
+        device_auth_id: Final = _optional_str(data.get("device_auth_id"))
+        user_code: Final = _optional_str(data.get("user_code") or data.get("usercode"))
         interval: Final = data.get("interval")
         if not device_auth_id or not user_code:
             raise GetDeviceCodeError(
@@ -210,16 +220,16 @@ class Authenticator:
                     },
                 )
                 if resp.status_code == 200:
-                    data = resp.json()
-                    if all(
-                        key in data
-                        for key in (
-                            "authorization_code",
-                            "code_challenge",
-                            "code_verifier",
-                        )
-                    ):
-                        return data
+                    data = _JSON_OBJECT_ADAPTER.validate_python(resp.json())
+                    authorization_code = _optional_str(data.get("authorization_code"))
+                    code_challenge = _optional_str(data.get("code_challenge"))
+                    code_verifier = _optional_str(data.get("code_verifier"))
+                    if authorization_code and code_challenge and code_verifier:
+                        return {
+                            "authorization_code": authorization_code,
+                            "code_challenge": code_challenge,
+                            "code_verifier": code_verifier,
+                        }
                 if resp.status_code in (403, 404):
                     time.sleep(max(interval, DEVICE_CODE_POLL_SLEEP_SECONDS))
                     continue
@@ -262,7 +272,7 @@ class Authenticator:
                 content=body,
             )
             resp.raise_for_status()
-            data: Final = resp.json()
+            data: Final = _JSON_OBJECT_ADAPTER.validate_python(resp.json())
         except httpx.HTTPStatusError as exc:
             raise GetAccessTokenError(
                 message=f"Token exchange failed: {exc}",
@@ -274,15 +284,18 @@ class Authenticator:
                 status_code=400,
             )
 
-        if not all(key in data for key in ("access_token", "refresh_token", "id_token")):
+        access_token: Final = _optional_str(data.get("access_token"))
+        refresh_token: Final = _optional_str(data.get("refresh_token"))
+        id_token: Final = _optional_str(data.get("id_token"))
+        if not access_token or not refresh_token or not id_token:
             raise GetAccessTokenError(
                 message=f"Token exchange response missing fields: {data}",
                 status_code=400,
             )
         return {
-            "access_token": data["access_token"],
-            "refresh_token": data["refresh_token"],
-            "id_token": data["id_token"],
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "id_token": id_token,
         }
 
     def _refresh_tokens(self, refresh_token: str) -> dict[str, str]:
@@ -298,7 +311,7 @@ class Authenticator:
                 },
             )
             resp.raise_for_status()
-            data: Final = resp.json()
+            data: Final = _JSON_OBJECT_ADAPTER.validate_python(resp.json())
         except httpx.HTTPStatusError as exc:
             raise RefreshAccessTokenError(
                 message=f"Refresh token failed: {exc}",
@@ -310,8 +323,8 @@ class Authenticator:
                 status_code=400,
             )
 
-        access_token: Final = data.get("access_token")
-        id_token: Final = data.get("id_token")
+        access_token: Final = _optional_str(data.get("access_token"))
+        id_token: Final = _optional_str(data.get("id_token"))
         if not access_token or not id_token:
             raise RefreshAccessTokenError(
                 message=f"Refresh response missing fields: {data}",
@@ -320,14 +333,14 @@ class Authenticator:
 
         refreshed: Final = {
             "access_token": access_token,
-            "refresh_token": data.get("refresh_token", refresh_token),
+            "refresh_token": _optional_str(data.get("refresh_token")) or refresh_token,
             "id_token": id_token,
         }
         auth_data: Final = self._build_auth_record(refreshed)
         self._write_auth_file(auth_data)
         return refreshed
 
-    def _build_auth_record(self, tokens: dict[str, str]) -> dict[str, Any]:
+    def _build_auth_record(self, tokens: dict[str, str]) -> JsonObject:
         access_token: Final = tokens.get("access_token")
         id_token: Final = tokens.get("id_token")
         expires_at: Final = self._get_expires_at(access_token) if access_token else None
@@ -340,31 +353,30 @@ class Authenticator:
             "account_id": account_id,
         }
 
-    def _get_device_code_cooldown_remaining(self, auth_data: dict[str, Any] | None) -> float:
+    def _get_device_code_cooldown_remaining(self, auth_data: JsonObject | None) -> float:
         if not auth_data:
             return 0.0
-        requested_at = auth_data.get("device_code_requested_at")
+        requested_at: Final = auth_data.get("device_code_requested_at")
         if not isinstance(requested_at, (int, float, str)):
             return 0.0
         try:
-            requested_at = float(requested_at)
+            requested_seconds: Final = float(requested_at)
         except (TypeError, ValueError):
             return 0.0
-        elapsed: Final = time.time() - requested_at
+        elapsed: Final = time.time() - requested_seconds
         remaining: Final = DEVICE_CODE_COOLDOWN_SECONDS - elapsed
         return max(0.0, remaining)
 
     def _record_device_code_request(self) -> None:
         auth_data: Final = self._read_auth_file() or {}
-        auth_data["device_code_requested_at"] = time.time()
-        self._write_auth_file(auth_data)
+        self._write_auth_file({**auth_data, "device_code_requested_at": time.time()})
 
     def _wait_for_access_token(self, timeout_seconds: float) -> str | None:
         deadline: Final = time.time() + timeout_seconds
         while time.time() < deadline:
             auth_data = self._read_auth_file()
             if auth_data:
-                access_token = auth_data.get("access_token")
+                access_token = _optional_str(auth_data.get("access_token"))
                 if access_token and not self._is_token_expired(auth_data, access_token):
                     return access_token
             sleep_for = min(DEVICE_CODE_POLL_SLEEP_SECONDS, max(0.0, deadline - time.time()))

@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -25,6 +25,9 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse, ModelResponseStream, ServerToolUse
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+
+if TYPE_CHECKING:
+    import tiktoken
 
 GROQ_COMPOUND_MODELS: Final = frozenset({"compound", "compound-mini"})
 
@@ -147,7 +150,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
                 new_message = ChatCompletionAssistantMessage(role="assistant")
                 for k, v in _message.items():
                     if v is not None:
-                        new_message[k] = v  # type: ignore
+                        new_message[k] = v
                 messages[idx] = new_message
 
         if is_async:
@@ -159,7 +162,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
-        api_base = api_base or get_secret_str("GROQ_API_BASE") or "https://api.groq.com/openai/v1"  # type: ignore
+        api_base = api_base or get_secret_str("GROQ_API_BASE") or "https://api.groq.com/openai/v1"
         dynamic_api_key: Final = api_key or get_secret_str("GROQ_API_KEY")
         return api_base, dynamic_api_key
 
@@ -283,7 +286,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
