@@ -108,8 +108,10 @@ class PipelineExecutor:
                 action,
             )
 
-            # Forward modified data to next step if pass_data is True
-            if step.pass_data and modified_data is not None:
+            # Forward modified data to the next step if pass_data is True;
+            # post_call response replacements always chain, matching the flat
+            # callback loop where each hook sees the previous hook's response
+            if modified_data is not None and (step.pass_data or mode == "post_call"):
                 working_data = {**working_data, **modified_data}
 
             # Handle terminal actions
@@ -227,11 +229,14 @@ class PipelineExecutor:
             # same contract as run_in_parallel/scan_raw_request elsewhere: any
             # data it returned is discarded, since applying it on top of the
             # raw snapshot would silently undo whatever an earlier step in
-            # this pipeline already did.
-            modified_data = None
-            if response is not None and isinstance(response, dict) and not scans_raw_request:
-                modified_data = response
-            return ("pass", modified_data, None, None)
+            # this pipeline already did. A post_call hook's non-None return is
+            # a replacement response (the flat callback-loop contract), carried
+            # under the same "response" key the step input uses.
+            if response is None or scans_raw_request:
+                return ("pass", None, None, None)
+            if mode == "post_call":
+                return ("pass", {"response": response}, None, None)
+            return ("pass", response if isinstance(response, dict) else None, None, None)
 
         except Exception as e:
             if CustomGuardrail._is_guardrail_intervention(e):
