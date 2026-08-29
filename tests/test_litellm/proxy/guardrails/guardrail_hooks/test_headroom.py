@@ -2015,6 +2015,32 @@ async def test_pre_call_deployment_hook_still_compresses_for_deployment_level_co
 
 
 @pytest.mark.asyncio
+async def test_pre_call_deployment_hook_converts_stream_after_deployment_level_compression(
+    guardrail: HeadroomGuardrail,
+):
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [dict(m) for m in ORIGINAL_MESSAGES],
+        "stream": True,
+        "guardrails": ["headroom"],
+        "metadata": {},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH),
+    ):
+        result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
+
+    assert result is not None
+    assert has_headroom_retrieve_tool(result["tools"])
+    assert result["stream"] is False
+    assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
+
+
+@pytest.mark.asyncio
 async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
     guardrail: HeadroomGuardrail,
     respx_mock: respx.MockRouter,
