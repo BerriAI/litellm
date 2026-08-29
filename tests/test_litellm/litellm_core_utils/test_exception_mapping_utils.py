@@ -1107,6 +1107,94 @@ def test_provider_rate_limit_phrases_reach_dispatch_boundary(
     assert raised.value.llm_provider == provider
 
 
+@pytest.mark.parametrize(
+    ("provider", "error_message"),
+    [
+        (
+            "gemini",
+            '{"error": {"code": 400, "status": "RESOURCE_EXHAUSTED", "message": "quota exceeded"}}',
+        ),
+        (
+            "vertex_ai",
+            '{"error": {"code": 400, "status": "RESOURCE_EXHAUSTED", "message": "quota exceeded"}}',
+        ),
+        (
+            "bedrock",
+            '{"__type": "ProvisionedThroughputExceededException", "message": "provisioned throughput exceeded"}',
+        ),
+        (
+            "azure",
+            '{"error": {"code": "429", "type": "rate_limit_error", "message": "too many requests"}}',
+        ),
+        (
+            "anthropic",
+            'AnthropicException - b\'{"type": "error", "error": {"type": "rate_limit_error", "message": "too many requests"}}\'',
+        ),
+    ],
+)
+def test_structured_provider_rate_limit_reaches_dispatch_boundary(
+    provider, error_message, quiet_exception_mapping
+):
+    """Structured provider throttling signals remain RateLimitError on HTTP 400."""
+    with pytest.raises(litellm.RateLimitError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(error_message, 400),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.llm_provider == provider
+
+
+@pytest.mark.parametrize(
+    ("provider", "error_message", "error_body"),
+    [
+        (
+            "gemini",
+            '{"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "Invalid value: too many requests"}}',
+            None,
+        ),
+        (
+            "vertex_ai",
+            '{"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "Invalid value: too many requests"}}',
+            None,
+        ),
+        (
+            "bedrock",
+            '{"__type": "ValidationException", "message": "Invalid request: too many requests"}',
+            {"__type": "ValidationException", "reason": {"echo": "too many requests"}},
+        ),
+        (
+            "azure",
+            '{"error": {"code": "invalid_request_error", "type": "invalid_request_error", "message": "Invalid request: too many requests"}}',
+            None,
+        ),
+        (
+            "anthropic",
+            '{"type": "error", "error": {"type": "invalid_request_error", "message": "Invalid request: too many requests"}}',
+            None,
+        ),
+    ],
+)
+def test_validation_echo_does_not_reach_rate_limit_boundary(
+    provider, error_message, error_body, quiet_exception_mapping
+):
+    """A structured 400 validation echo must not become RateLimitError."""
+    original_exception = _UpstreamErrorWithMessage(error_message, 400)
+    if error_body is not None:
+        original_exception.body = error_body
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert not isinstance(raised.value, litellm.RateLimitError)
+    assert raised.value.status_code == 400
+
+
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
 def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(
     provider, quiet_exception_mapping

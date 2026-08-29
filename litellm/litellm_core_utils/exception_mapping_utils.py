@@ -28,13 +28,137 @@ from ..exceptions import (
 )
 
 
+_RATE_LIMIT_STRUCTURED_MARKERS: Final = frozenset(
+    {
+        "429",
+        "capacity_temporarily_exceeded",
+        "concurrency_limit_reached",
+        "concurrent_requests_limit_exceeded",
+        "insufficient_quota",
+        "provisioned_throughput_exceeded",
+        "quota_exceeded",
+        "rate_limit",
+        "rate_limit_error",
+        "request_rate_too_large",
+        "requests_per_day_exceeded",
+        "requests_per_minute_exceeded",
+        "resource_exhausted",
+        "throttling_exception",
+        "tokens_per_day_exceeded",
+        "tokens_per_minute_exceeded",
+        "too_many_requests",
+    }
+)
+_VALIDATION_STRUCTURED_MARKERS: Final = frozenset(
+    {
+        "bad_request",
+        "invalid_argument",
+        "invalid_request",
+        "invalid_request_error",
+        "validation_error",
+        "validation_exception",
+    }
+)
+_STRUCTURED_ERROR_SIGNAL_KEYS: Final = (
+    "code",
+    "error_code",
+    "status",
+    "status_code",
+    "type",
+    "error_type",
+    "__type",
+    "reason",
+)
+
+
+def _normalise_structured_marker(value: Any) -> str:
+    """Normalize provider code/type values for marker comparison."""
+    if not isinstance(value, (int, str)):
+        return ""
+    value_string = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value))
+    return re.sub(r"[^a-z0-9]+", "_", value_string.lower()).strip("_")
+
+
+def _parse_structured_error_payload(error_text: str) -> dict[str, Any] | None:
+    """Parse a JSON error body, including SDK prefixes around the JSON."""
+    candidates = [error_text.strip()]
+    start = error_text.find("{")
+    end = error_text.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(error_text[start : end + 1])
+
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _structured_rate_limit_signal(
+    *,
+    error_str: str,
+    response: httpx.Response | None = None,
+    error_body: Any | None = None,
+) -> bool | None:
+    """Return an explicit rate-limit/validation signal when the provider supplies one."""
+    payloads: list[dict[str, Any]] = []
+    if isinstance(error_body, dict):
+        payloads.append(error_body)
+    if response is not None:
+        try:
+            response_payload = response.json()
+        except Exception:
+            response_payload = None
+        if isinstance(response_payload, dict):
+            payloads.append(response_payload)
+    parsed_error = _parse_structured_error_payload(error_str)
+    if parsed_error is not None:
+        payloads.append(parsed_error)
+
+    saw_validation_signal = False
+    for payload in payloads:
+        error_objects = [payload]
+        nested_error = payload.get("error")
+        if isinstance(nested_error, dict):
+            error_objects.append(nested_error)
+
+        for error_object in error_objects:
+            for key in _STRUCTURED_ERROR_SIGNAL_KEYS:
+                value = error_object.get(key)
+                if value is None:
+                    continue
+                marker = _normalise_structured_marker(value)
+                if marker in _RATE_LIMIT_STRUCTURED_MARKERS or any(
+                    rate_limit_marker in marker
+                    for rate_limit_marker in _RATE_LIMIT_STRUCTURED_MARKERS
+                    if rate_limit_marker != "429"
+                ):
+                    return True
+                if marker in _VALIDATION_STRUCTURED_MARKERS or any(
+                    validation_marker in marker
+                    for validation_marker in _VALIDATION_STRUCTURED_MARKERS
+                ):
+                    saw_validation_signal = True
+
+    return False if saw_validation_signal else None
+
+
 class ExceptionCheckers:
     """
     Helper class for checking various error conditions in exception strings.
     """
 
     @staticmethod
-    def is_error_str_rate_limit(error_str: str, status_code: int | None = None) -> bool:
+    def is_error_str_rate_limit(
+        error_str: str,
+        status_code: int | None = None,
+        *,
+        response: httpx.Response | None = None,
+        error_body: Any | None = None,
+    ) -> bool:
         """
         Check if an error string indicates a rate limit error.
 
@@ -44,6 +168,8 @@ class ExceptionCheckers:
                 bare-number branch: providers echo the request back in validation errors and
                 429 is an ordinary token id, so an echoed prompt can put a standalone 429 in
                 the body of a 400. The phrase branches stay ungated (#11455).
+            response: The provider response, when available, for structured error fields.
+            error_body: The parsed provider error body, when available.
 
         Returns:
             True if the error indicates a rate limit, False otherwise
@@ -55,6 +181,14 @@ class ExceptionCheckers:
         # status is read off an arbitrary exception, so a non-integer means "unknown".
         if re.search(r"\b429\b", error_str) and (not isinstance(status_code, int) or status_code == 429):
             return True
+
+        structured_signal = _structured_rate_limit_signal(
+            error_str=error_str,
+            response=response,
+            error_body=error_body,
+        )
+        if structured_signal is not None:
+            return structured_signal
 
         _error_str_lower: Final = error_str.lower()
 
@@ -542,7 +676,10 @@ def _map_anthropic_exception(
             llm_provider="anthropic",
         )
     elif ExceptionCheckers.is_error_str_rate_limit(
-        error_str, status_code=getattr(original_exception, "status_code", None)
+        error_str,
+        status_code=getattr(original_exception, "status_code", None),
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
     ):
         raise RateLimitError(
             message=f"AnthropicException - {error_str}",
@@ -902,7 +1039,10 @@ def _map_bedrock_exception(
             llm_provider="bedrock",
         )
     elif ExceptionCheckers.is_error_str_rate_limit(
-        error_str, status_code=getattr(original_exception, "status_code", None)
+        error_str,
+        status_code=getattr(original_exception, "status_code", None),
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
     ):
         raise RateLimitError(
             message=f"BedrockException - {error_str}",
@@ -1242,7 +1382,10 @@ def _map_vertex_exception(
         or "IndexError: list index out of range" in error_str
         or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
         or ExceptionCheckers.is_error_str_rate_limit(
-            error_str, status_code=getattr(original_exception, "status_code", None)
+            error_str,
+            status_code=getattr(original_exception, "status_code", None),
+            response=getattr(original_exception, "response", None),
+            error_body=getattr(original_exception, "body", None),
         )
     ):
         raise RateLimitError(
@@ -2041,7 +2184,10 @@ def _map_azure_exception(
             body=getattr(original_exception, "body", None),
         )
     elif ExceptionCheckers.is_error_str_rate_limit(
-        error_str, status_code=getattr(original_exception, "status_code", None)
+        error_str,
+        status_code=getattr(original_exception, "status_code", None),
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
     ):
         raise RateLimitError(
             message=f"AzureException RateLimitError - {message}",
