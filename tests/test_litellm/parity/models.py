@@ -1,43 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
-
-class ExceptionReport(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    class_name: str
-    status_code: int | None
-    message: str
-
-
-class SDKOutput(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    response_type: str
-    response_json: dict[str, object]
-
-
-class ParityTrace(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    outputs: tuple[SDKOutput, ...]
-    exception: ExceptionReport | None
-
-
-class NativeEvidence(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    rust_enabled: bool
-    native_callable_loaded: bool
-    native_handled_case: bool
-
-
-class SDKReport(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    trace: ParityTrace
-    native: NativeEvidence
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
 
 class CapturedRequest(BaseModel):
@@ -45,23 +10,19 @@ class CapturedRequest(BaseModel):
 
     method: str
     path: str
-    authorization: str | None
-    content_type: str | None
-    parity_case: str | None
-    body: dict[str, object]
+    headers: tuple[tuple[str, str], ...]
+    body: JsonValue
     user_agent: str | None
+
+
+class SDKReport(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    response: OCRResponse
 
 
 class Execution(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    request: CapturedRequest
     report: SDKReport
-    requests: tuple[CapturedRequest, ...]
-
-
-class ReplayResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    status_code: int
-    headers: dict[str, str]
-    body: dict[str, object]

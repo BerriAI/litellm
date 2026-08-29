@@ -15,3 +15,4 @@ def test_json_file_cache_is_content_addressed_and_recursive(tmp_path: Path) -> N
     assert stored_path.name == cache.path_for(reordered_key).name
     assert cache.get(reordered_key) == value
     assert JsonFileCache(tmp_path).values() == (value,)
+    assert tuple((tmp_path / "provider").glob("*.tmp")) == ()

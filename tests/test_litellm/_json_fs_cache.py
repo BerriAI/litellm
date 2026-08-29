@@ -33,7 +33,9 @@ class JsonFileCache:
     def put(self, key: Mapping[str, object], value: Mapping[str, object]) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
         path: Final = self.path_for(key)
-        path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        temporary_path: Final = path.with_suffix(".tmp")
+        temporary_path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        temporary_path.replace(path)
         return path
 
     def values(self) -> tuple[dict[str, object], ...]:

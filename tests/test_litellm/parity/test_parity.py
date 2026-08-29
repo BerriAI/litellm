@@ -2,24 +2,54 @@ from __future__ import annotations
 
 from typing import Final
 
-from tests.test_litellm.parity.compare import parity_comparison
-from tests.test_litellm.parity.models import ParityTrace, SDKOutput
+import pytest
+from pydantic import JsonValue
+
+from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
+from tests.test_litellm.parity.compare import assert_parity
+from tests.test_litellm.parity.models import CapturedRequest, Execution, SDKReport
+
+SENTINEL: Final = "python-ocr-parity-fallback"
 
 
-def test_parity_comparison_reports_first_nested_output_difference() -> None:
-    python: Final = ParityTrace(
-        outputs=(SDKOutput(response_type="Chunk", response_json={"choices": [{"delta": {"content": "a"}}]}),),
-        exception=None,
+def _execution(*, body: JsonValue = None, markdown: str = "same", user_agent: str | None = None) -> Execution:
+    return Execution(
+        request=CapturedRequest(
+            method="POST",
+            path="/v1/ocr?mode=test",
+            headers=(("authorization", "Bearer test-key"), ("content-type", "application/json")),
+            body={"model": "mistral-ocr-latest"} if body is None else body,
+            user_agent=user_agent,
+        ),
+        report=SDKReport(
+            response=OCRResponse(
+                pages=[OCRPage(index=0, markdown=markdown)],
+                model="mistral-ocr-latest",
+                object="ocr",
+            )
+        ),
     )
-    rust: Final = ParityTrace(
-        outputs=(SDKOutput(response_type="Chunk", response_json={"choices": [{"delta": {"content": "b"}}]}),),
-        exception=None,
-    )
 
-    explanation: Final = parity_comparison(rust, python)
 
-    assert explanation is not None
-    assert explanation == [
-        "Comparing ParityTrace values:",
-        "  $.outputs[0].response_json.choices[0].delta.content: 'b' != 'a'",
-    ]
+def test_parity_rejects_request_difference() -> None:
+    python: Final = _execution(user_agent=SENTINEL)
+    rust: Final = _execution(body={"model": "different"}, user_agent="litellm-rust")
+
+    with pytest.raises(AssertionError):
+        assert_parity(python, rust, SENTINEL)
+
+
+def test_parity_rejects_response_difference() -> None:
+    python: Final = _execution(user_agent=SENTINEL)
+    rust: Final = _execution(markdown="different", user_agent="litellm-rust")
+
+    with pytest.raises(AssertionError):
+        assert_parity(python, rust, SENTINEL)
+
+
+def test_parity_rejects_rust_fallback() -> None:
+    python: Final = _execution(user_agent=SENTINEL)
+    rust: Final = _execution(user_agent=SENTINEL)
+
+    with pytest.raises(AssertionError, match="fell back"):
+        assert_parity(python, rust, SENTINEL)
