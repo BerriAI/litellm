@@ -1297,3 +1297,126 @@ class TestResponsesIteratorDeferredLogging:
         assert len(created) == 1
         await created[0]
         assert recorded["dispatched"] is True
+
+
+class TestArmDeferredStreamDispatch:
+    """Regression for PR #38722: the closure shape armed on logging_obj must
+    match the args the stream's logging owner stores.  Bridged /v1/responses
+    (LiteLLMCompletionStreamingIterator) shares its inner CustomStreamWrapper's
+    logging_obj, which stores (assembled_response, cache_hit); arming the
+    single-coroutine native closure there made _fire_deferred_stream_logging
+    raise TypeError inside the streaming hook, leaking an in-stream 500 error
+    frame on every streamed /v1/responses request."""
+
+    def _processor(self):
+        return ProxyBaseLLMRequestProcessing(data={"model": "gpt-test"})
+
+    def _dispatch_recording_logging_obj(self):
+        recorded = {}
+
+        async def dispatch_success_handlers(
+            result=None, start_time=None, end_time=None, cache_hit=None, prefer_async_handlers=False
+        ):
+            recorded["result"] = result
+            recorded["cache_hit"] = cache_hit
+            recorded["prefer_async_handlers"] = prefer_async_handlers
+
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = dispatch_success_handlers
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj._deferred_stream_complete_args = None
+        return logging_obj, recorded
+
+    @pytest.mark.asyncio
+    async def test_bridged_responses_iterator_gets_csw_arg_shape(self):
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
+        bridged = object.__new__(LiteLLMCompletionStreamingIterator)
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=bridged,
+            route_type="aresponses",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+
+        assembled = object()
+        logging_obj._deferred_stream_complete_args = (assembled, False)
+        ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+        await asyncio.sleep(0)
+
+        assert recorded["result"] is assembled
+        assert recorded["cache_hit"] is False
+        assert recorded["prefer_async_handlers"] is True
+
+    @pytest.mark.asyncio
+    async def test_native_stream_closure_enqueues_single_coroutine(self):
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        logging_obj, _ = self._dispatch_recording_logging_obj()
+
+        async def _agen():
+            yield b"x"
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=_agen(),
+            route_type="anthropic_messages",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+        closure = logging_obj._on_deferred_stream_complete
+        assert closure is not None
+
+        async def _logging_coroutine():
+            return None
+
+        coro = _logging_coroutine()
+        with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+            GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
+        ) as mock_enqueue:
+            await closure(coro)
+        mock_enqueue.assert_called_once_with(async_coroutine=coro)
+        coro.close()
+
+    @pytest.mark.asyncio
+    async def test_csw_closure_routes_through_deferred_stream_guardrails(self, monkeypatch):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
+        csw = object.__new__(CustomStreamWrapper)
+        processor = self._processor()
+
+        monkeypatch.setattr(  # test-quality-ok: empty the process-global callback registry so no ambient guardrail runs
+            litellm, "callbacks", []
+        )
+        processor._arm_deferred_stream_dispatch(
+            response=csw,
+            route_type="acompletion",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+        assembled = object()
+        await logging_obj._on_deferred_stream_complete(assembled, False)
+        await asyncio.sleep(0)
+
+        assert recorded["result"] is assembled
+        assert recorded["cache_hit"] is False
+        assert recorded["prefer_async_handlers"] is True
+
+    def test_non_native_route_generator_not_armed(self):
+        logging_obj, _ = self._dispatch_recording_logging_obj()
+
+        async def _agen():
+            yield b"x"
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=_agen(),
+            route_type="acompletion",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+
+        assert logging_obj._on_deferred_stream_complete is None
