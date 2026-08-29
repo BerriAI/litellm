@@ -104,7 +104,7 @@ async def test_router_get_available_deployments(async_test):
     router.leastbusy_logger.test_flag = True
 
     model_group = "azure-model"
-    request_count_dict = {1: 10, 2: 54, 3: 100}
+    request_count_dict = {"1": 10, "2": 54, "3": 100}
     cache_key = f"{model_group}_request_count"
     if async_test is True:
         await router.cache.async_set_cache(key=cache_key, value=request_count_dict)
@@ -130,9 +130,9 @@ async def test_router_get_available_deployments(async_test):
     time.sleep(2)
 
     assert router.leastbusy_logger.logged_success == 1
-    assert return_dict[1] == 10
-    assert return_dict[2] == 54
-    assert return_dict[3] == 100
+    assert return_dict["1"] == 10
+    assert return_dict["2"] == 54
+    assert return_dict["3"] == 100
 
 
 ## Test with Real calls ##

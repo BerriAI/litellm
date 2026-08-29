@@ -164,6 +164,11 @@ class LeastBusyLoggingHandler(CustomLogger):
     ):
         """
         Helper to get deployments using least busy strategy
+
+        Only healthy deployments are weighed, so an id the cache still holds for a deployment that is
+        no longer healthy cannot win the minimum. Ties are broken at random: comparing with a strict
+        `<` always kept the first deployment, and since the counts drain back to zero between
+        requests, in light traffic every request is a tie.
         """
         for d in healthy_deployments:
             ## if healthy deployment not yet used
@@ -171,21 +176,9 @@ class LeastBusyLoggingHandler(CustomLogger):
                 all_deployments[d["model_info"]["id"]] = 0
         # map deployment to id
         # pick least busy deployment
-        min_traffic = float("inf")
-        min_deployment = None
-        for k, v in all_deployments.items():
-            if v < min_traffic:
-                min_traffic = v
-                min_deployment = k
-        if min_deployment is not None:
-            ## check if min deployment is a string, if so, cast it to int
-            for m in healthy_deployments:
-                if m["model_info"]["id"] == min_deployment:
-                    return m
-            min_deployment = random.choice(healthy_deployments)
-        else:
-            min_deployment = random.choice(healthy_deployments)
-        return min_deployment
+        traffic: Final = tuple(all_deployments[d["model_info"]["id"]] for d in healthy_deployments)
+        min_traffic: Final = min(traffic)
+        return random.choice(tuple(d for d, t in zip(healthy_deployments, traffic) if t == min_traffic))
 
     def get_available_deployments(
         self,
