@@ -4433,6 +4433,22 @@ class TestBedrockCohereEmbeddingDispatch:
         )
         assert optional_params.get("embedding_types") == ["float"]
 
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.embed-english-v3",
+            "cohere.embed-multilingual-v3",
+            "cohere.embed-v4:0",
+        ],
+    )
+    def test_cohere_embed_models_map_base64_to_float(self, model):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model=model,
+            encoding_format="base64",
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("embedding_types") == ["float"]
+
     def test_cohere_embed_english_v3_maps_dimensions(self):
         optional_params = litellm.utils.get_optional_params_embeddings(
             model="cohere.embed-english-v3",
