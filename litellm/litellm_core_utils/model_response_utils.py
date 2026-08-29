@@ -3,52 +3,20 @@ Utility functions for ModelResponse and ModelResponseStream objects.
 """
 
 from collections.abc import Mapping
-from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final
 
-from litellm.types.utils import Delta, ModelResponseBase, ModelResponseStream
+from typing_extensions import ReadOnly, TypedDict
 
-_NO_EXTRA_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
-
-
-class _HasModelExtra(Protocol):
-    """A Pydantic model, seen through the extra fields it collected."""
-
-    @property
-    def model_extra(self) -> Mapping[str, object] | None: ...
+from litellm.types.utils import Delta, ModelResponseBase, ModelResponseStream, StreamingChoices
 
 
-class _StreamingChoice(_HasModelExtra, Protocol):
-    """The streaming-choice fields this emptiness check reads."""
-
-    @property
-    def finish_reason(self) -> object: ...
-
-    @property
-    def logprobs(self) -> object: ...
-
-    @property
-    def enhancements(self) -> object: ...
-
-    @property
-    def delta(self) -> Delta | None: ...
+class _AttributeView(TypedDict):
+    value: ReadOnly[object]
 
 
-def _extra_fields(model: _HasModelExtra) -> Mapping[str, object]:
-    """The dynamically added fields Pydantic stored on ``model``."""
-    return model.model_extra or _NO_EXTRA_FIELDS
-
-
-def _attribute(obj: object, name: str) -> object:
-    """The named attribute of ``obj``, or ``None`` when it is absent."""
-    attribute: Final[object] = getattr(obj, name, None)
-    return attribute
-
-
-def _has_callable_attribute(obj: object, name: str) -> bool:
-    """Whether the named attribute of ``obj`` is callable."""
-    attribute: Final[object] = getattr(obj, name)
-    return callable(attribute)
+def _attribute_of(source: object, name: str) -> object:
+    attribute: Final[_AttributeView] = {"value": getattr(source, name)}
+    return attribute["value"]
 
 
 def is_model_response_stream_empty(model_response: ModelResponseStream) -> bool:
@@ -84,10 +52,10 @@ def is_model_response_stream_empty(model_response: ModelResponseStream) -> bool:
         return False
 
     # Check model_extra for dynamically added fields (this is where Pydantic stores them)
-    if hasattr(model_response, "model_extra") and model_response.model_extra:
-        for extra_field_name, extra_field_value in _extra_fields(model_response).items():
-            if _has_meaningful_content(extra_field_value):
-                return False
+    stream_extra_fields: Final[Mapping[str, object]] = model_response.model_extra or {}
+    for extra_field_value in stream_extra_fields.values():
+        if _has_meaningful_content(extra_field_value):
+            return False
 
     # Check for any non-base fields that are set
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
@@ -101,7 +69,7 @@ def is_model_response_stream_empty(model_response: ModelResponseStream) -> bool:
             continue
 
         # Check if any other field has meaningful content
-        model_response_value = _attribute(model_response, model_response_field)
+        model_response_value: object = getattr(model_response, model_response_field, None)
         if _has_meaningful_content(model_response_value):
             return False
 
@@ -146,7 +114,7 @@ def _has_meaningful_content(value: object) -> bool:
     return True
 
 
-def _is_choice_non_empty(choice: _StreamingChoice) -> bool:
+def _is_choice_non_empty(choice: StreamingChoices) -> bool:
     """
     Deep check if a choice contains any meaningful content.
 
@@ -157,41 +125,41 @@ def _is_choice_non_empty(choice: _StreamingChoice) -> bool:
         bool: True if the choice has meaningful content, False otherwise
     """
     # Check finish_reason
-    if hasattr(choice, "finish_reason") and choice.finish_reason is not None:
+    if getattr(choice, "finish_reason", None) is not None:
         return True
 
     # Check logprobs
-    if hasattr(choice, "logprobs") and choice.logprobs is not None:
+    if getattr(choice, "logprobs", None) is not None:
         return True
 
     # Check enhancements (if present)
-    if hasattr(choice, "enhancements") and choice.enhancements is not None:
+    if getattr(choice, "enhancements", None) is not None:
         return True
 
     # Deep check delta object
-    if hasattr(choice, "delta") and choice.delta is not None:
-        if _is_delta_non_empty(choice.delta):
-            return True
+    choice_delta: Final[Delta | None] = getattr(choice, "delta", None)
+    if choice_delta is not None and _is_delta_non_empty(choice_delta):
+        return True
 
     # Check model_extra for dynamically added fields on the choice
-    if hasattr(choice, "model_extra") and choice.model_extra:
-        for extra_field_name, extra_field_value in _extra_fields(choice).items():
-            # Skip certain structural fields that are just default/None placeholders
-            if extra_field_name == "index" and extra_field_value == 0:
-                continue
-            if extra_field_name in {"finish_reason", "logprobs"} and extra_field_value is None:
-                continue
-            if extra_field_name == "delta":
-                continue
-            if _has_meaningful_content(extra_field_value):
-                return True
+    choice_extra_fields: Final[Mapping[str, object]] = choice.model_extra or {}
+    for extra_field_name, extra_field_value in choice_extra_fields.items():
+        # Skip certain structural fields that are just default/None placeholders
+        if extra_field_name == "index" and extra_field_value == 0:
+            continue
+        if extra_field_name in {"finish_reason", "logprobs"} and extra_field_value is None:
+            continue
+        if extra_field_name == "delta":
+            continue
+        if _has_meaningful_content(extra_field_value):
+            return True
 
     # Check for any other non-standard fields on the choice
     for attr_name in dir(choice):
         # Skip private attributes, methods, and known empty fields
         if (
             attr_name.startswith("_")
-            or _has_callable_attribute(choice, attr_name)
+            or callable(_attribute_of(choice, attr_name))
             or attr_name.startswith("model_")
             or attr_name
             in {
@@ -204,8 +172,8 @@ def _is_choice_non_empty(choice: _StreamingChoice) -> bool:
         ):
             continue
 
-        attr_value = _attribute(choice, attr_name)
-        if _has_meaningful_content(attr_value):
+        choice_attr_value: object = getattr(choice, attr_name, None)
+        if _has_meaningful_content(choice_attr_value):
             return True
 
     return False
@@ -222,20 +190,20 @@ def _is_delta_non_empty(delta: Delta) -> bool:
         bool: True if the delta has meaningful content, False otherwise
     """
     # Check model_extra for dynamically added fields (this is where Pydantic stores them)
-    if hasattr(delta, "model_extra") and delta.model_extra:
-        for extra_field_name, extra_field_value in _extra_fields(delta).items():
-            # Even structural fields are meaningful if they have actual content
-            if _has_meaningful_content(extra_field_value):
-                return True
+    delta_extra_fields: Final[Mapping[str, object]] = delta.model_extra or {}
+    for extra_field_value in delta_extra_fields.values():
+        # Even structural fields are meaningful if they have actual content
+        if _has_meaningful_content(extra_field_value):
+            return True
 
     # Check all regular attributes of the delta object
     for attr_name in dir(delta):
         # Skip private attributes, methods, and Pydantic-specific fields
-        if attr_name.startswith("_") or _has_callable_attribute(delta, attr_name) or attr_name.startswith("model_"):
+        if attr_name.startswith("_") or callable(_attribute_of(delta, attr_name)) or attr_name.startswith("model_"):
             continue
 
-        attr_value = _attribute(delta, attr_name)
-        if _has_meaningful_content(attr_value):
+        delta_attr_value: object = getattr(delta, attr_name, None)
+        if _has_meaningful_content(delta_attr_value):
             return True
 
     return False

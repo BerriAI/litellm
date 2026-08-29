@@ -20,14 +20,61 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 """
 
 import socket
-from collections.abc import Sequence
 from ipaddress import ip_address, ip_network
-from typing import Any, Final
+from typing import Any, Final, Protocol
 from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+
+_SockAddr = tuple[str, int] | tuple[str, int, int, int] | tuple[int, bytes]
+
+
+class _LocationHeaderView(TypedDict):
+    location: ReadOnly[object]
+
+
+class _ResponseView(TypedDict):
+    response: ReadOnly[httpx.Response]
+
+
+class _UrlFetcher(Protocol):
+    """The slice of ``httpx.Client`` / ``HTTPHandler`` that ``safe_get`` drives."""
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = False,
+    ) -> httpx.Response: ...
+
+
+class _AsyncUrlFetcher(Protocol):
+    """The slice of ``httpx.AsyncClient`` / ``AsyncHTTPHandler`` that ``async_safe_get`` drives."""
+
+    async def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = False,
+    ) -> httpx.Response: ...
+
+
+class _FetcherView(TypedDict):
+    fetcher: ReadOnly[_UrlFetcher]
+
+
+class _AsyncFetcherView(TypedDict):
+    fetcher: ReadOnly[_AsyncUrlFetcher]
+
+
+class _CallerHeadersView(TypedDict):
+    headers: ReadOnly[dict[str, str]]
+
 
 # Globally-routable IPs that are cloud-internal. Everything else
 # non-public is caught by ``not ip.is_global`` (RFC 6890, as implemented by
@@ -78,11 +125,7 @@ def encode_url_path_segments(value: object, *, field_name: str = "path") -> str:
     if value_str == "":
         raise ValueError(f"{field_name} is required")
 
-    encoded_segments: Final = tuple(
-        encode_url_path_segment(segment, field_name=field_name) for segment in value_str.split("/")
-    )
-
-    return "/".join(encoded_segments)
+    return "/".join(encode_url_path_segment(segment, field_name=field_name) for segment in value_str.split("/"))
 
 
 def _is_blocked_ip(addr: str) -> bool:
@@ -203,7 +246,7 @@ def _format_host_header(hostname: str, port: int, default_port: int) -> str:
     return f"{bracketed}:{port}"
 
 
-def _sockaddr_host(sockaddr: Sequence[object]) -> str:
+def _sockaddr_host(sockaddr: _SockAddr) -> str:
     """Return the host element of a ``getaddrinfo`` sockaddr as ``str``.
 
     ``getaddrinfo`` with ``IPPROTO_TCP`` returns AF_INET / AF_INET6 sockaddrs
@@ -286,8 +329,8 @@ def validate_url(url: str) -> tuple[str, str]:
         raise SSRFError(f"No addresses found for '{hostname}'")
 
     if not is_allowlisted:
-        for _family, _type, _proto, _canonname, sockaddr in addrinfo:
-            resolved_ip = _sockaddr_host(sockaddr)
+        for addrinfo_entry in addrinfo:
+            resolved_ip = _sockaddr_host(addrinfo_entry[4])
             if _is_blocked_ip(resolved_ip):
                 raise SSRFError(
                     f"URL targets a blocked address ({resolved_ip}). "
@@ -366,7 +409,8 @@ _MAX_REDIRECTS: Final = 10
 
 def _extract_redirect_url(response: httpx.Response, request_url: str) -> str:
     """Extract and resolve the redirect target from a response's Location header."""
-    location: Final = response.headers.get("location")
+    header_view: Final[_LocationHeaderView] = {"location": response.headers.get("location")}
+    location: Final = header_view["location"]
     if not isinstance(location, str) or not location:
         raise SSRFError("Redirect response has no Location header")
     # Resolve relative URLs against the request URL
@@ -394,14 +438,17 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     """
     if not getattr(litellm, "user_url_validation", True):
         kwargs.setdefault("follow_redirects", True)
-        return client.get(url, **kwargs)
+        unvalidated: Final[_ResponseView] = {"response": client.get(url, **kwargs)}
+        return unvalidated["response"]
+    fetcher_view: Final[_FetcherView] = {"fetcher": client}
+    fetcher: Final = fetcher_view["fetcher"]
     kwargs.pop("follow_redirects", None)
-    caller_headers: Final = kwargs.pop("headers", {})
+    headers_view: Final[_CallerHeadersView] = {"headers": kwargs.pop("headers", {})}
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
-        response: httpx.Response = client.get(
+        response = fetcher.get(
             validated_url,
-            headers={**caller_headers, "Host": original_host},
+            headers={**headers_view["headers"], "Host": original_host},
             follow_redirects=False,
             **kwargs,
         )
@@ -417,14 +464,17 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response
     """Async version of safe_get."""
     if not getattr(litellm, "user_url_validation", True):
         kwargs.setdefault("follow_redirects", True)
-        return await client.get(url, **kwargs)
+        unvalidated: Final[_ResponseView] = {"response": await client.get(url, **kwargs)}
+        return unvalidated["response"]
+    fetcher_view: Final[_AsyncFetcherView] = {"fetcher": client}
+    fetcher: Final = fetcher_view["fetcher"]
     kwargs.pop("follow_redirects", None)
-    caller_headers: Final = kwargs.pop("headers", {})
+    headers_view: Final[_CallerHeadersView] = {"headers": kwargs.pop("headers", {})}
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
-        response: httpx.Response = await client.get(
+        response = await fetcher.get(
             validated_url,
-            headers={**caller_headers, "Host": original_host},
+            headers={**headers_view["headers"], "Host": original_host},
             follow_redirects=False,
             **kwargs,
         )

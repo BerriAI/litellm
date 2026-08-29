@@ -11,30 +11,22 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy.client import Client
 
-
-class _CliContext(TypedDict):
-    """The proxy connection settings the CLI group stores on the click context."""
-
-    base_url: ReadOnly[str]
-    api_key: ReadOnly[str | None]
+from ._cli_context import cli_context_values
 
 
-def _cli_context(ctx: click.Context) -> _CliContext:
-    """The proxy connection settings the CLI group stored on the click context."""
-    ctx_obj: Final[_CliContext] = ctx.obj
-    return ctx_obj
+class _TeamRow(TypedDict):
+    team_alias: ReadOnly[str | None]
+    team_id: ReadOnly[str | None]
+    models: ReadOnly[Sequence[str]]
+    max_budget: ReadOnly[object]
 
 
-def _proxy_client(ctx: click.Context) -> Client:
-    """A proxy client for the base URL and API key on the click context."""
-    ctx_obj: Final = _cli_context(ctx)
-    return Client(ctx_obj["base_url"], ctx_obj["api_key"])
+class _TeamModelsView(TypedDict):
+    models: ReadOnly[Sequence[str]]
 
 
-def _http_error_detail(error: requests.exceptions.HTTPError) -> object:
-    """The ``detail`` the proxy reported for a failed request."""
-    error_body: Final[Mapping[str, object]] = error.response.json()
-    return error_body.get("detail", "Unknown error")
+class _ErrorBodyView(TypedDict):
+    body: ReadOnly[Mapping[str, object]]
 
 
 @click.group()
@@ -59,10 +51,14 @@ def display_teams_table(teams: Sequence[dict[str, Any]]) -> None:
     table.add_column("Role", style="red")
 
     for i, team in enumerate(teams):
-        team_alias = team.get("team_alias") or "N/A"
-        team_id: str = team.get("team_id", "N/A")
-        models: Sequence[str] = team.get("models", [])
-        max_budget = team.get("max_budget")
+        row: _TeamRow = {
+            "team_alias": team.get("team_alias") or "N/A",
+            "team_id": team.get("team_id", "N/A"),
+            "models": team.get("models", []),
+            "max_budget": team.get("max_budget"),
+        }
+        models = row["models"]
+        max_budget = row["max_budget"]
 
         # Format models list
         if models:
@@ -82,7 +78,7 @@ def display_teams_table(teams: Sequence[dict[str, Any]]) -> None:
             # This would need to be implemented based on actual API response structure
             pass
 
-        table.add_row(str(i + 1), team_alias, team_id, models_str, budget_str, role)
+        table.add_row(str(i + 1), row["team_alias"], row["team_id"], models_str, budget_str, role)
 
     console.print(table)
 
@@ -91,7 +87,8 @@ def display_teams_table(teams: Sequence[dict[str, Any]]) -> None:
 @click.pass_context
 def list(ctx: click.Context):
     """List teams that you belong to"""
-    client: Final = _proxy_client(ctx)
+    context: Final = cli_context_values(ctx)
+    client: Final = Client(context["base_url"], context["api_key"])
 
     try:
         # Use list() for simpler response structure (returns array directly)
@@ -99,7 +96,8 @@ def list(ctx: click.Context):
         display_teams_table(teams)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        click.echo(f"Details: {_http_error_detail(e)}", err=True)
+        error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
+        click.echo(f"Details: {error_body['body'].get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -110,7 +108,8 @@ def list(ctx: click.Context):
 @click.pass_context
 def available(ctx: click.Context):
     """List teams that are available to join"""
-    client: Final = _proxy_client(ctx)
+    context: Final = cli_context_values(ctx)
+    client: Final = Client(context["base_url"], context["api_key"])
 
     try:
         teams: Final = client.teams.get_available()
@@ -122,7 +121,8 @@ def available(ctx: click.Context):
             click.echo("No available teams to join.")
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        click.echo(f"Details: {_http_error_detail(e)}", err=True)
+        error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
+        click.echo(f"Details: {error_body['body'].get('detail', 'Unknown error')}", err=True)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         raise click.Abort()
@@ -133,8 +133,9 @@ def available(ctx: click.Context):
 @click.pass_context
 def assign_key(ctx: click.Context, team_id: str | None):
     """Assign your current CLI key to a team"""
-    client: Final = _proxy_client(ctx)
-    api_key: Final = _cli_context(ctx)["api_key"]
+    context: Final = cli_context_values(ctx)
+    client: Final = Client(context["base_url"], context["api_key"])
+    api_key: Final = context["api_key"]
 
     if not api_key:
         click.echo("No API key found. Please login first using 'litellm login'")
@@ -170,16 +171,17 @@ def assign_key(ctx: click.Context, team_id: str | None):
             teams = client.teams.list()
             for team in teams:
                 if team.get("team_id") == team_id:
-                    models: Sequence[str] = team.get("models", [])
-                    if models:
-                        click.echo(f"You can now access models: {', '.join(models)}")
+                    team_models: _TeamModelsView = {"models": team.get("models", [])}
+                    if team_models["models"]:
+                        click.echo(f"You can now access models: {', '.join(team_models['models'])}")
                     else:
                         click.echo("You can now access all available models")
                     break
 
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        click.echo(f"Details: {_http_error_detail(e)}", err=True)
+        error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
+        click.echo(f"Details: {error_body['body'].get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
         click.echo(f"Error: {e}", err=True)

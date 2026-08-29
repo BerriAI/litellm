@@ -7,9 +7,7 @@ GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
-from collections.abc import Mapping, Sequence
-from datetime import datetime
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,49 +15,16 @@ from litellm_enterprise.types.proxy.audit_logging_endpoints import (
     AuditLogResponse,
     PaginatedAuditLogResponse,
 )
-from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import AuditLogRepository
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 router = APIRouter()
-
-
-class _AuditLogFields(TypedDict):
-    """Columns of the `LiteLLM_AuditLog` table, as returned by `model_dump()`."""
-
-    id: ReadOnly[str]
-    updated_at: ReadOnly[datetime]
-    changed_by: ReadOnly[str]
-    changed_by_api_key: ReadOnly[str]
-    action: ReadOnly[str]
-    table_name: ReadOnly[str]
-    object_id: ReadOnly[str]
-    before_value: ReadOnly[dict[str, object] | None]
-    updated_values: ReadOnly[dict[str, object] | None]
-
-
-class _AuditLogRecord(Protocol):
-    """Row of the `LiteLLM_AuditLog` table as materialised by the Prisma client."""
-
-    def model_dump(self) -> _AuditLogFields: ...
-
-
-class _AuditLogTable(Protocol):
-    """The `litellm_auditlog` accessor of the Prisma client."""
-
-    async def find_many(
-        self,
-        *,
-        where: Mapping[str, object],
-        order: Mapping[str, str],
-        skip: int,
-        take: int,
-    ) -> Sequence[_AuditLogRecord]: ...
-
-    async def count(self, *, where: Mapping[str, object]) -> int: ...
-
-    async def find_unique(self, *, where: Mapping[str, str]) -> _AuditLogRecord | None: ...
 
 
 def _build_json_field_or_condition(json_key: str, value: str) -> dict[str, object]:
@@ -141,41 +106,34 @@ async def get_audit_logs(
             detail={"message": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    # Build filter conditions
-    where_conditions: Final[dict[str, object]] = {}
-    if changed_by:
-        where_conditions["changed_by"] = changed_by
-    if changed_by_api_key:
-        where_conditions["changed_by_api_key"] = changed_by_api_key
-    if action:
-        where_conditions["action"] = action
-    if table_name:
-        where_conditions["table_name"] = table_name
-    if object_id:
-        where_conditions["object_id"] = object_id
-    if start_date or end_date:
-        date_filter: Final[Mapping[str, str]] = {
-            bound: bound_value for bound, bound_value in (("gte", start_date), ("lte", end_date)) if bound_value
-        }
-        where_conditions["updated_at"] = date_filter
+    date_filter: Final[dict[str, str]] = {
+        **({"gte": start_date} if start_date else {}),
+        **({"lte": end_date} if end_date else {}),
+    }
 
     # JSON field filters (PostgreSQL only) — each filter is AND'd with the
     # others, but checks both before_value and updated_values internally (OR).
-    if object_team_id or object_key_hash:
-        where_conditions["AND"] = [
-            _build_json_field_or_condition(json_key, json_value)
-            for json_key, json_value in (
-                ("team_id", object_team_id),
-                ("token", object_key_hash),
-            )
-            if json_value
-        ]
+    json_field_conditions: Final[list[dict[str, object]]] = [
+        *([_build_json_field_or_condition("team_id", object_team_id)] if object_team_id else []),
+        *([_build_json_field_or_condition("token", object_key_hash)] if object_key_hash else []),
+    ]
 
-    # Build sort conditions
-    sort_column: Final[str] = sort_by if sort_by and isinstance(sort_by, str) else "updated_at"
-    order_by: Final[Mapping[str, str]] = {sort_column: sort_order}
+    # Build filter conditions
+    where_conditions: Final[dict[str, object]] = {
+        **({"changed_by": changed_by} if changed_by else {}),
+        **({"changed_by_api_key": changed_by_api_key} if changed_by_api_key else {}),
+        **({"action": action} if action else {}),
+        **({"table_name": table_name} if table_name else {}),
+        **({"object_id": object_id} if object_id else {}),
+        **({"updated_at": date_filter} if start_date or end_date else {}),
+        **({"AND": json_field_conditions} if json_field_conditions else {}),
+    }
 
-    audit_log_table: Final[_AuditLogTable] = prisma_client.db.litellm_auditlog
+    order_by: Final[dict[str, str]] = (
+        {sort_by: sort_order} if sort_by and isinstance(sort_by, str) else {"updated_at": sort_order}
+    )
+
+    audit_log_table: Final[TableActions["prisma_models.LiteLLM_AuditLog"]] = AuditLogRepository(prisma_client).table
 
     # Get paginated results
     audit_logs: Final = await audit_log_table.find_many(
@@ -192,7 +150,8 @@ async def get_audit_logs(
     # Return paginated response
     return PaginatedAuditLogResponse(
         audit_logs=[
-            AuditLogResponse(**audit_log.model_dump()) for audit_log in audit_logs
+            AuditLogResponse.model_validate(audit_log.model_dump())
+            for audit_log in audit_logs
         ]
         if audit_logs
         else [],
@@ -236,7 +195,7 @@ async def get_audit_log_by_id(
             detail={"message": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    audit_log_table: Final[_AuditLogTable] = prisma_client.db.litellm_auditlog
+    audit_log_table: Final[TableActions["prisma_models.LiteLLM_AuditLog"]] = AuditLogRepository(prisma_client).table
 
     # Get the audit log by ID
     audit_log: Final = await audit_log_table.find_unique(where={"id": id})
@@ -247,4 +206,4 @@ async def get_audit_log_by_id(
         )
 
     # Convert to response model
-    return AuditLogResponse(**audit_log.model_dump())
+    return AuditLogResponse.model_validate(audit_log.model_dump())

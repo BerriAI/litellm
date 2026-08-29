@@ -4,31 +4,36 @@ BitBucket API client for fetching .prompt files from BitBucket repositories.
 
 import base64
 import urllib.parse
-from collections.abc import Mapping, Sequence
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, TypedDict
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
-class BitBucketSrcEntry(TypedDict, total=False):
-    """One entry of a BitBucket ``src`` directory listing."""
-
-    type: ReadOnly[str]
-    path: ReadOnly[str]
+class BitBucketSrcEntry(TypedDict):
+    path: ReadOnly[NotRequired[str]]
+    type: ReadOnly[NotRequired[str]]
 
 
-class BitBucketSrcListing(TypedDict, total=False):
-    """A page of a BitBucket ``src`` directory listing."""
-
-    values: ReadOnly[Sequence[BitBucketSrcEntry]]
+class BitBucketSrcListing(TypedDict):
+    values: ReadOnly[NotRequired[list[BitBucketSrcEntry]]]
 
 
-class BitBucketBranchListing(TypedDict, total=False):
-    """A page of a BitBucket ``refs/branches`` listing."""
+class BitBucketBranch(TypedDict):
+    name: ReadOnly[NotRequired[str]]
+    type: ReadOnly[NotRequired[str]]
 
-    values: ReadOnly[Sequence[Mapping[str, object]]]
+
+class BitBucketBranchListing(TypedDict):
+    values: ReadOnly[NotRequired[list[BitBucketBranch]]]
+
+
+class BitBucketFileMetadata(TypedDict):
+    content_type: ReadOnly[str | None]
+    content_length: ReadOnly[str | None]
+    last_modified: ReadOnly[str | None]
 
 
 def _sanitize_file_path(file_path: str) -> str:
@@ -158,7 +163,6 @@ class BitBucketClient:
             response.raise_for_status()
 
             data: Final[BitBucketSrcListing] = response.json()
-
             return [
                 file_path
                 for item in data.get("values", [])
@@ -210,7 +214,7 @@ class BitBucketClient:
         except Exception:
             return False
 
-    def get_branches(self) -> Sequence[Mapping[str, object]]:
+    def get_branches(self) -> list[BitBucketBranch]:
         """
         Get list of branches in the repository.
 
@@ -228,7 +232,7 @@ class BitBucketClient:
         except Exception as e:
             raise Exception(f"Failed to get branches: {e}")
 
-    def get_file_metadata(self, file_path: str) -> Mapping[str, object] | None:
+    def get_file_metadata(self, file_path: str) -> BitBucketFileMetadata | None:
         """
         Get metadata about a file (size, last modified, etc.).
 

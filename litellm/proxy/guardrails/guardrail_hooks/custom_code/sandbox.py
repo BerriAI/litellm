@@ -14,10 +14,11 @@ We subclass it to permit those specific nodes, while keeping every other
 restriction intact.
 """
 
+import ast
 import operator
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import CodeType
-from typing import Any, Final
+from typing import Final
 
 from RestrictedPython import (
     RestrictingNodeTransformer,
@@ -47,20 +48,20 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
     ``node_contents_visit`` so their children still get transformed.
     """
 
-    def visit_AsyncFunctionDef(self, node: Any) -> Any:
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
         return self.visit_FunctionDef(node)
 
-    def visit_AsyncFor(self, node: Any) -> Any:
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> ast.AST:
         return self.node_contents_visit(node)
 
-    def visit_AsyncWith(self, node: Any) -> Any:
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> ast.AST:
         return self.node_contents_visit(node)
 
-    def visit_Await(self, node: Any) -> Any:
+    def visit_Await(self, node: ast.Await) -> ast.AST:
         return self.node_contents_visit(node)
 
 
-_INPLACE_OPS: Final[dict[str, Callable[[object, object], object]]] = {
+_INPLACE_OPS: Final[Mapping[str, Callable[[object, object], object]]] = {
     "+=": operator.iadd,
     "-=": operator.isub,
     "*=": operator.imul,
@@ -107,15 +108,16 @@ def build_sandbox_globals() -> dict[str, object]:
     ``allow``/``block``/``modify``, etc.) plus the RestrictedPython guards
     that the compiled bytecode expects to find by name.
     """
-    sandbox: Final[dict[str, object]] = get_custom_code_primitives().copy()
-    sandbox["__builtins__"] = _build_sandbox_builtins()
-    sandbox["_getattr_"] = safer_getattr
-    sandbox["_getitem_"] = default_guarded_getitem
-    sandbox["_getiter_"] = default_guarded_getiter
-    sandbox["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
-    sandbox["_write_"] = full_write_guard
-    sandbox["_inplacevar_"] = _inplacevar_
-    return sandbox
+    return {
+        **get_custom_code_primitives(),
+        "__builtins__": _build_sandbox_builtins(),
+        "_getattr_": safer_getattr,
+        "_getitem_": default_guarded_getitem,
+        "_getiter_": default_guarded_getiter,
+        "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+        "_write_": full_write_guard,
+        "_inplacevar_": _inplacevar_,
+    }
 
 
 def compile_sandboxed(source: str, filename: str = "<guardrail>") -> CodeType:

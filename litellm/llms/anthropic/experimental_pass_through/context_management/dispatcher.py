@@ -1,10 +1,8 @@
 """Dispatch ``context_management`` edits to registered polyfill editors."""
 
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
-from typing import TYPE_CHECKING, Final, TypeAlias, TypedDict, cast
-
-from typing_extensions import ReadOnly
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AppliedEdit
@@ -17,50 +15,41 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
-AnthropicMessages: TypeAlias = list[dict[str, object]]
-AnthropicSystem: TypeAlias = str | list[dict[str, object]] | None
-AnthropicTools: TypeAlias = list[dict[str, object]] | None
-EditSpec: TypeAlias = dict[str, object]
-ContextManagementSpec: TypeAlias = EditSpec | list[EditSpec] | None
-SyncEditorReturn: TypeAlias = tuple[AnthropicMessages, AppliedEdit | None]
-EditorFn: TypeAlias = Callable[..., object]
+EditorResult: TypeAlias = "PolyfillResult | tuple[list[dict[str, object]], AppliedEdit | None]"
 
+EditorFn: TypeAlias = "Callable[..., EditorResult | Awaitable[EditorResult]]"
 
-class EditorKwargs(TypedDict):
-    """The keyword payload every registered editor accepts."""
-
-    model: ReadOnly[str]
-    messages: ReadOnly[AnthropicMessages]
-    tools: ReadOnly[AnthropicTools]
-    system: ReadOnly[AnthropicSystem]
-    edit_spec: ReadOnly[EditSpec]
-
-
-_EDITOR_REGISTRY: Final[Mapping[str, EditorFn]] = {
+_EDITOR_REGISTRY: Final[dict[str, EditorFn]] = {
     CLEAR_TOOL_USES_EDIT_TYPE: apply_clear_tool_uses_20250919,
     COMPACT_EDIT_TYPE: apply_compact_20260112,
 }
 
 
-def _map_openai_spec(spec: list[EditSpec]) -> EditSpec | None:
-    """Translate the OpenAI list form into the Anthropic-native dict form."""
-    # Local import to avoid an import cycle at module load.
-    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-
-    return AnthropicConfig.map_openai_context_management_to_anthropic(spec)
-
-
-def _normalize_spec(spec: ContextManagementSpec) -> list[EditSpec] | None:
-    """Accept Anthropic-native dict form or OpenAI list form; return edits list."""
-    normalized: Final = _map_openai_spec(spec) if isinstance(spec, list) else spec
-
+def _edits_from(normalized: dict[str, object] | None) -> list[dict[str, object]] | None:
     edits: Final = normalized.get("edits") if isinstance(normalized, dict) else None
     if not edits or not isinstance(edits, list):
         return None
     return [edit for edit in edits if isinstance(edit, dict)]
 
 
-def _wrap_editor_return(raw: object, *, fallback_system: AnthropicSystem) -> PolyfillResult:
+def _normalize_spec(
+    spec: dict[str, object] | list[dict[str, object]] | None,
+) -> list[dict[str, object]] | None:
+    """Accept Anthropic-native dict form or OpenAI list form; return edits list."""
+    if isinstance(spec, list):
+        # Local import to avoid an import cycle at module load.
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        return _edits_from(AnthropicConfig.map_openai_context_management_to_anthropic(spec))
+
+    return _edits_from(spec)
+
+
+def _wrap_editor_return(
+    raw: EditorResult,
+    *,
+    fallback_system: str | list[dict[str, object]] | None,
+) -> PolyfillResult:
     """Coerce an editor's native return shape into a ``PolyfillResult``.
 
     v0 sync editors (e.g. ``clear_tool_uses_20250919``) return a 2-tuple
@@ -71,7 +60,7 @@ def _wrap_editor_return(raw: object, *, fallback_system: AnthropicSystem) -> Pol
         return raw
     # Legacy 2-tuple return — sync editors don't mutate ``system``, so
     # carry the caller's value forward.
-    messages, applied = cast(SyncEditorReturn, raw)
+    messages, applied = raw
     return PolyfillResult(
         messages=messages,
         system=fallback_system,
@@ -82,11 +71,11 @@ def _wrap_editor_return(raw: object, *, fallback_system: AnthropicSystem) -> Pol
 async def apply_context_management(
     *,
     model: str,
-    messages: AnthropicMessages,
-    tools: AnthropicTools,
-    system: AnthropicSystem,
-    context_management_spec: ContextManagementSpec,
-    litellm_metadata: Mapping[str, object] | None = None,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
+    system: str | list[dict[str, object]] | None,
+    context_management_spec: dict[str, object] | list[dict[str, object]] | None,
+    litellm_metadata: dict[str, object] | None = None,
     llm_router: "Router | None" = None,
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
 ) -> PolyfillResult:
@@ -117,24 +106,30 @@ async def apply_context_management(
             )
             continue
 
-        kwargs: EditorKwargs = {
-            "model": model,
-            "messages": current_messages,
-            "tools": tools,
-            "system": current_system,
-            "edit_spec": edit_spec,
-        }
         # Only async editors accept these — passing them to sync v0 editors
         # would break their signature.
-        if inspect.iscoroutinefunction(editor):
-            raw_result = await cast(Callable[..., Awaitable[PolyfillResult]], editor)(
-                **kwargs,
+        editor_is_async = inspect.iscoroutinefunction(editor)
+        editor_return = (
+            editor(
+                model=model,
+                messages=current_messages,
+                tools=tools,
+                system=current_system,
+                edit_spec=edit_spec,
                 litellm_metadata=litellm_metadata,
                 llm_router=llm_router,
                 user_api_key_auth=user_api_key_auth,
             )
-        else:
-            raw_result = editor(**kwargs)
+            if editor_is_async
+            else editor(
+                model=model,
+                messages=current_messages,
+                tools=tools,
+                system=current_system,
+                edit_spec=edit_spec,
+            )
+        )
+        raw_result = editor_return if isinstance(editor_return, (PolyfillResult, tuple)) else await editor_return
 
         result = _wrap_editor_return(raw_result, fallback_system=current_system)
 

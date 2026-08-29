@@ -1,10 +1,10 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypedDict
+from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -12,7 +12,6 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import AgentsRepository, ObjectPermissionRepository
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
@@ -115,6 +114,13 @@ def object_permission_table(
     return table
 
 
+def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
+    model_dump: Final[Callable[[], dict[str, object]] | None] = getattr(raw, "model_dump", None)
+    if model_dump is not None:
+        return model_dump()
+    return dict(raw) if raw else {}
+
+
 class GrantMigrationResult(NamedTuple):
     rewritten: int
     missed: int
@@ -206,7 +212,7 @@ class AgentRegistry:
     def load_agents_from_db_and_config(
         self,
         agent_config: Sequence[AgentConfig] | None = None,
-        db_agents: list[dict[str, Any]] | None = None,
+        db_agents: Sequence[Mapping[str, object]] | None = None,
     ):
         """
         Rebuild the registry from the DB rows plus the agents declared in config.yaml.
@@ -228,7 +234,7 @@ class AgentRegistry:
                 if not isinstance(db_agent, dict):
                     raise ValueError("db_agents must be a list of dictionaries")
 
-                self.register_agent(agent_config=AgentResponse(**db_agent))
+                self.register_agent(agent_config=AgentResponse.model_validate(db_agent))
 
         self.load_agents_from_config(agent_config if agent_config is not None else self.config_agents)
         return self.agent_list
@@ -296,21 +302,13 @@ class AgentRegistry:
             agent_name: Final = agent.get("agent_name")
 
             # Serialize litellm_params
-            litellm_params_obj: Final[Mapping[str, object] | SupportsModelDump] = agent.get("litellm_params", {})
-            litellm_params_dict: Final[Mapping[str, object]] = (
-                litellm_params_obj.model_dump()
-                if isinstance(litellm_params_obj, SupportsModelDump)
-                else (dict(litellm_params_obj) if litellm_params_obj else {})
-            )
+            litellm_params_obj: Final = agent.get("litellm_params", {})
+            litellm_params_dict: Final[dict[str, object]] = _dump_agent_params(litellm_params_obj)
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)
 
             # Serialize agent_card_params
-            agent_card_params_obj: Final[Mapping[str, object] | SupportsModelDump] = agent.get("agent_card_params", {})
-            agent_card_params_dict: Final[Mapping[str, object]] = (
-                agent_card_params_obj.model_dump()
-                if isinstance(agent_card_params_obj, SupportsModelDump)
-                else (dict(agent_card_params_obj) if agent_card_params_obj else {})
-            )
+            agent_card_params_obj: Final = agent.get("agent_card_params", {})
+            agent_card_params_dict: Final[dict[str, object]] = _dump_agent_params(agent_card_params_obj)
             agent_card_params: Final[str] = safe_dumps(agent_card_params_dict)
 
             # Handle object_permission (MCP tool access for agent)
@@ -477,21 +475,13 @@ class AgentRegistry:
             agent_name: Final = agent.get("agent_name")
 
             # Serialize litellm_params
-            litellm_params_obj: Final[Mapping[str, object] | SupportsModelDump] = agent.get("litellm_params", {})
-            litellm_params_dict: Final[Mapping[str, object]] = (
-                litellm_params_obj.model_dump()
-                if isinstance(litellm_params_obj, SupportsModelDump)
-                else (dict(litellm_params_obj) if litellm_params_obj else {})
-            )
+            litellm_params_obj: Final = agent.get("litellm_params", {})
+            litellm_params_dict: Final[dict[str, object]] = _dump_agent_params(litellm_params_obj)
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)
 
             # Serialize agent_card_params
-            agent_card_params_obj: Final[Mapping[str, object] | SupportsModelDump] = agent.get("agent_card_params", {})
-            agent_card_params_dict: Final[Mapping[str, object]] = (
-                agent_card_params_obj.model_dump()
-                if isinstance(agent_card_params_obj, SupportsModelDump)
-                else (dict(agent_card_params_obj) if agent_card_params_obj else {})
-            )
+            agent_card_params_obj: Final = agent.get("agent_card_params", {})
+            agent_card_params_dict: Final[dict[str, object]] = _dump_agent_params(agent_card_params_obj)
             agent_card_params: Final[str] = safe_dumps(agent_card_params_dict)
 
             # Serialize static_headers for update

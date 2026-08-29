@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Final, Protocol
 
@@ -13,25 +12,22 @@ from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
-class RustResponsesWebSocketSocket(Protocol):
-    """Open socket handle handed back by the native bridge."""
+class RustResponsesWebSocket(Protocol):
+    async def send_text(self, text: str) -> None: ...
 
-    def send_text(self, text: str) -> Awaitable[None]: ...
+    async def recv_text(self) -> str | None: ...
 
-    def recv_text(self) -> Awaitable[str | None]: ...
-
-    def close(self) -> Awaitable[None]: ...
+    async def close(self) -> None: ...
 
 
 class RustResponsesWebSocketConnection(Protocol):
     @classmethod
-    def connect(
+    async def connect(
         cls,
         url: str,
         headers: dict[str, str],
         timeout_seconds: float | None,
-    ) -> Awaitable[RustResponsesWebSocketSocket]:
-        raise NotImplementedError
+    ) -> RustResponsesWebSocket: ...
 
 
 class _Unset:
@@ -43,7 +39,7 @@ _UNSET: Final[_Unset] = _Unset()
 
 @dataclass(slots=True)
 class _RustResponsesWebSocketState:
-    connection: type[RustResponsesWebSocketConnection] | None = None
+    connection: RustResponsesWebSocketConnection | None = None
 
 
 _STATE: Final[_RustResponsesWebSocketState] = _RustResponsesWebSocketState()
@@ -51,27 +47,27 @@ _STATE: Final[_RustResponsesWebSocketState] = _RustResponsesWebSocketState()
 
 def set_rust_responses_websocket(
     *,
-    connection: type[RustResponsesWebSocketConnection] | None | _Unset = _UNSET,
+    connection: RustResponsesWebSocketConnection | None | _Unset = _UNSET,
 ) -> None:
     if not isinstance(connection, _Unset):
         _STATE.connection = connection
 
 
-def load_rust_responses_websocket() -> type[RustResponsesWebSocketConnection] | None:
+def load_rust_responses_websocket() -> RustResponsesWebSocketConnection | None:
     if _STATE.connection is not None:
         return _STATE.connection
     native_bridge: Final = get_native_bridge()
     if native_bridge is None:
         return None
-    try:
-        return native_bridge.ResponsesWebSocketConnection
-    except AttributeError:
-        return None
+    connection_type: Final[RustResponsesWebSocketConnection | None] = getattr(
+        native_bridge, "ResponsesWebSocketConnection", None
+    )
+    return connection_type
 
 
 class _ConnectionAdapter:
-    def __init__(self, connection: RustResponsesWebSocketSocket):
-        self._connection = connection
+    def __init__(self, connection: RustResponsesWebSocket):
+        self._connection: Final[RustResponsesWebSocket] = connection
 
     async def send(self, text: str) -> None:
         await self._connection.send_text(text)
