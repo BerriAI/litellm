@@ -9,7 +9,7 @@ Audio Speech request shape and returns raw audio bytes, so the same
 OpenAI SDK works here unchanged.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
 from httpx import Headers
@@ -48,7 +48,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
     TTS_BASE_URL = "https://tts.gandr.ai/v1"
     TTS_ENDPOINT_PATH = "/audio/speech"
     DEFAULT_OUTPUT_FORMAT = "wav"
-    SUPPORTED_MODES = ["audio_speech"]
+    SUPPORTED_MODES: ClassVar[list[str]] = ["audio_speech"]
 
     #: Gandr's speed range. The engine clamps speed to 0.6-1.5.
     SUPPORTED_SPEED_RANGE = (0.6, 1.5)
