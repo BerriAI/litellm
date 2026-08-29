@@ -2,9 +2,10 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
+from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, Final, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -626,6 +627,7 @@ class CheckBatchCost:
         later poll.
         """
         from litellm.batches.batch_utils import (
+            _count_error_file_failed_requests,
             _get_file_content_as_dictionary,
             calculate_batch_cost_and_usage,
         )
@@ -761,11 +763,30 @@ class CheckBatchCost:
             model_id=model_id,
             deployment_model=litellm_model_name,
         )
-        batch_result = await calculate_batch_cost_and_usage(
+        batch_file_provider: Final = cast(
+            Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"], llm_provider
+        )
+        output_file_result: Final = await calculate_batch_cost_and_usage(
             file_content_dictionary=file_content_as_dict,
-            custom_llm_provider=llm_provider,  # type: ignore
+            custom_llm_provider=batch_file_provider,
             model_name=model_name,
             model_info=deployment_model_info,
+        )
+        error_file_failed_requests: Final = await _count_error_file_failed_requests(
+            response,
+            custom_llm_provider=batch_file_provider,
+            litellm_params={
+                **credentials,
+                "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
+            },
+        )
+        batch_result: Final = (
+            output_file_result
+            if not error_file_failed_requests
+            else dataclasses_replace(
+                output_file_result,
+                failed_requests=output_file_result.failed_requests + error_file_failed_requests,
+            )
         )
         logging_obj = LiteLLMLogging(
             model=batch_result.models[0],
