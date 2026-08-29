@@ -51,7 +51,8 @@ where
         provider_model,
         params.api_key.as_deref(),
         params.api_base.as_deref(),
-    ) && let Some(handoff) = pool.take(&key) {
+    ) && let Some(handoff) = pool.take(&key)
+    {
         return crate::io::realtime::realtime_warm(
             provider_model,
             handoff,
