@@ -24,6 +24,7 @@ def _txn(
     duration: str = "30d",
     entity_type: str = "key",
     request_id: str | None = None,
+    started_at: datetime | None = None,
 ):
     return build_window_spend_transaction(
         entity_type=entity_type,
@@ -32,6 +33,7 @@ def _txn(
         window_start=window_start,
         spend=spend,
         request_id=request_id,
+        started_at=started_at,
     )
 
 
@@ -47,7 +49,33 @@ def test_build_window_spend_transaction_stores_naive_utc_iso():
         "window_start": "2026-08-02T00:00:00.000000",
         "spend": 1.0,
         "request_ids": ("req-1",),
+        "started_at": None,
     }
+
+
+def test_build_window_spend_transaction_stores_started_at_as_naive_utc_iso():
+    """started_at is compared against LiteLLM_SpendLogs.startTime, which the
+    spend log writer stores after converting the request start to UTC."""
+    non_utc = datetime(2026, 8, 10, 8, 30, 15, 123456, tzinfo=timezone(timedelta(hours=-4)))
+
+    assert _txn("k1", WINDOW_A, 1.0, started_at=non_utc)["started_at"] == "2026-08-10T12:30:15.123456"
+
+
+@pytest.mark.asyncio
+async def test_aggregation_keeps_the_earliest_started_at_of_the_batch():
+    """The seed bounds its request-id exclusion at the batch's earliest start,
+    so a later start must never win the merge."""
+    queue = WindowSpendUpdateQueue()
+    earliest = datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc)
+    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-2", started_at=earliest + timedelta(seconds=5)))
+    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-1", started_at=earliest))
+    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-3"))
+
+    aggregated = await queue.flush_and_get_aggregated_window_spend_transactions()
+
+    assert len(aggregated) == 1
+    assert aggregated[0]["started_at"] == "2026-08-10T12:00:00.000000"
+    assert aggregated[0]["request_ids"] == ("req-1", "req-2", "req-3")
 
 
 def test_to_naive_utc_leaves_naive_values_alone():

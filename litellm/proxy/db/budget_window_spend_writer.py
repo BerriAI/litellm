@@ -65,13 +65,23 @@ _ROLL_WINDOW_SPEND_SQL: Final = (
 _SEED_FROM_SPEND_LOGS_KEY_SQL: Final = (
     'SELECT COALESCE(SUM(spend), 0.0) AS total FROM "LiteLLM_SpendLogs" '
     "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC') "
-    "AND NOT (request_id = ANY($3::text[]))"
+    "AND NOT (request_id = ANY($3::text[]) AND \"startTime\" >= ($4::timestamptz AT TIME ZONE 'UTC'))"
 )
 
 _SEED_FROM_SPEND_LOGS_TEAM_SQL: Final = (
     'SELECT COALESCE(SUM(spend), 0.0) AS total FROM "LiteLLM_SpendLogs" '
     "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC') "
-    "AND NOT (request_id = ANY($3::text[]))"
+    "AND NOT (request_id = ANY($3::text[]) AND \"startTime\" >= ($4::timestamptz AT TIME ZONE 'UTC'))"
+)
+
+_SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL: Final = (
+    'SELECT COALESCE(SUM(spend), 0.0) AS total FROM "LiteLLM_SpendLogs" '
+    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
+)
+
+_SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL: Final = (
+    'SELECT COALESCE(SUM(spend), 0.0) AS total FROM "LiteLLM_SpendLogs" '
+    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
 )
 
 _UPSERT_TRANSACTION_TIMEOUT: Final = timedelta(seconds=60)
@@ -92,6 +102,7 @@ class WindowSpendLogsAggregate(Protocol):
         entity_id: str,
         window_start: datetime,
         exclude_request_ids: Sequence[str],
+        exclude_started_at: datetime | None,
     ) -> float | None: ...
 
 
@@ -101,6 +112,7 @@ async def spend_logs_total_excluding(
     entity_id: str,
     window_start: datetime,
     exclude_request_ids: Sequence[str],
+    exclude_started_at: datetime | None,
 ) -> float | None:
     """LiteLLM_SpendLogs spend for one entity since window_start, minus the
     requests already accounted for by the increments being flushed.
@@ -110,20 +122,41 @@ async def spend_logs_total_excluding(
     by the time a window row is seeded its batch's log rows are normally
     already in the table. Counting them in the seed and again in the increment
     is what made a fresh row land at twice the true spend.
+
+    The exclusion is bounded to rows that started at or after the batch's
+    earliest request. request_id can be chosen by the client
+    (x-litellm-call-id), so an unbounded exclusion would let a replayed old id
+    erase a historical row from the seed while its increment still lands.
+    Without a known start the batch's ids are not excluded at all: that can
+    only over-count once, which enforcement tolerates, whereas under-counting
+    is a budget bypass.
     """
     if entity_type == Litellm_EntityType.KEY.value:
-        rows = await prisma_client.db.query_raw(
-            _SEED_FROM_SPEND_LOGS_KEY_SQL, entity_id, window_start, tuple(exclude_request_ids)
-        )
+        bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_KEY_SQL, _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL
     elif entity_type == Litellm_EntityType.TEAM.value:
-        rows = await prisma_client.db.query_raw(
-            _SEED_FROM_SPEND_LOGS_TEAM_SQL, entity_id, window_start, tuple(exclude_request_ids)
-        )
+        bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_TEAM_SQL, _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL
     else:
         return None
+    rows: Final = (
+        await prisma_client.db.query_raw(unbounded_sql, entity_id, window_start)
+        if exclude_started_at is None or not exclude_request_ids
+        else await prisma_client.db.query_raw(
+            bounded_sql,
+            entity_id,
+            window_start,
+            tuple(exclude_request_ids),
+            _exclusion_lower_bound(exclude_started_at),
+        )
+    )
     if not rows:
         return 0.0
     return float(rows[0].get("total") or 0.0)
+
+
+def _exclusion_lower_bound(started_at: datetime) -> datetime:
+    """LiteLLM_SpendLogs.startTime is TIMESTAMP(3); floor to the second so a
+    millisecond rounding of the batch's own earliest row cannot slip under it."""
+    return to_naive_utc(started_at).replace(microsecond=0)
 
 
 def _primary_key(transaction: WindowSpendTransaction) -> tuple[str, str, str]:
@@ -168,8 +201,16 @@ async def _seed_base_for_missing_row(
         entity_id=transaction["entity_id"],
         window_start=datetime.fromisoformat(transaction["window_start"]).replace(tzinfo=timezone.utc),
         exclude_request_ids=transaction["request_ids"],
+        exclude_started_at=_transaction_started_at(transaction),
     )
     return float(base or 0.0)
+
+
+def _transaction_started_at(transaction: WindowSpendTransaction) -> datetime | None:
+    started_at: Final = transaction.get("started_at")
+    if started_at is None:
+        return None
+    return datetime.fromisoformat(started_at).replace(tzinfo=timezone.utc)
 
 
 def _upsert_params(
