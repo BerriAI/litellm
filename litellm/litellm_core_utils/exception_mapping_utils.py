@@ -27,7 +27,6 @@ from ..exceptions import (
     UnprocessableEntityError,
 )
 
-
 _VALIDATION_STRUCTURED_MARKERS: Final = frozenset(
     {
         "bad_request",
