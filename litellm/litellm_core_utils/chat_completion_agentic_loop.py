@@ -1,7 +1,7 @@
 # this is a patch to allow for agentic loops covering llm_http_handler.py and openai sdk based calling flows for the .completion() api
 
 import json
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -18,6 +18,9 @@ from litellm.types.integrations.custom_logger import (
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
     (
@@ -87,16 +90,38 @@ def _check_agentic_loop_safety(
     return fingerprint
 
 
-def _wrap_response_as_fake_stream(response: object) -> object:
+def _wrap_response_as_fake_stream(
+    response: object,
+    *,
+    model: str,
+    custom_llm_provider: str,
+    logging_obj: object,
+) -> object:
+    """Present a non-streamed response to a caller that asked for a stream.
+
+    The caller is iterating the result, so this has to be a real async iterable.
+    Handing back a bare ModelResponseStream raised "'async for' requires an
+    object with __aiter__ method" and left a chunk-shaped object in the response
+    cache for the next request to trip over.
+    """
+    if isinstance(response, CustomStreamWrapper):
+        return response
     if getattr(response, "object", None) == "chat.completion.chunk":
         return response
     if not hasattr(response, "choices"):
         return response
-    from litellm.llms.base_llm.base_model_iterator import (
-        convert_model_response_to_streaming,
-    )
+    if not hasattr(logging_obj, "model_call_details"):
+        # Without a logging object there is nothing to build a wrapper around;
+        # returning the response unchanged beats raising from the wrapper.
+        return response
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
-    return convert_model_response_to_streaming(cast(ModelResponse, response))
+    return CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=cast(ModelResponse, response)),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=cast("LiteLLMLoggingObj", logging_obj),  # cast-ok: duck-typed on model_call_details above
+    )
 
 
 def _add_agentic_loop_metadata(kwargs_for_followup: dict[str, object]) -> None:
@@ -178,7 +203,12 @@ async def _execute_chat_completion_agentic_plan(
                     str(e),
                 )
         if kwargs.get("_code_interpreter_interception_converted_stream") and not depth:
-            return _wrap_response_as_fake_stream(response_followup)
+            return _wrap_response_as_fake_stream(
+                response_followup,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
         return response_followup
     finally:
         try:
@@ -305,6 +335,11 @@ async def maybe_run_chat_completion_agentic_loop(
     if kwargs.get("_code_interpreter_interception_converted_stream") and not depth and hasattr(response, "choices"):
         return cast(
             "ModelResponse | CustomStreamWrapper",
-            _wrap_response_as_fake_stream(response),
+            _wrap_response_as_fake_stream(
+                response,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            ),
         )
     return None
