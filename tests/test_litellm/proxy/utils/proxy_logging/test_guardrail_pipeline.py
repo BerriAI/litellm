@@ -25,6 +25,10 @@ from litellm.integrations.custom_guardrail import (
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.policy_engine.pipeline_types import (
+    GuardrailPipeline,
+    PipelineStep,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -348,6 +352,45 @@ async def test_maybe_execute_pipelines_skips_pipelines_with_other_mode(proxy_log
     )
     executed.assert_not_called()
     assert out is data
+
+
+@pytest.mark.parametrize(
+    ("policy_state_key", "caller_metadata_key", "call_type"),
+    [
+        ("litellm_metadata", "metadata", "anthropic_messages"),
+        ("metadata", "litellm_metadata", "completion"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_maybe_execute_pipelines_finds_policy_state_when_caller_sends_own_metadata(
+    proxy_logging, make_user_api_key_auth, monkeypatch, policy_state_key, caller_metadata_key, call_type
+):
+    """The route picks the bucket the policy engine writes to (``litellm_metadata`` on
+    /v1/messages, ``metadata`` on chat completions), and the caller can populate the other
+    one, e.g. Claude Code sending ``metadata.user_id``. The pipeline must still run and block."""
+
+    class BlockingGuardrail(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise HTTPException(status_code=400, detail={"error": "blocked by pipeline"})
+
+    monkeypatch.setattr(litellm, "callbacks", [BlockingGuardrail(guardrail_name="gr-1")])
+    pipeline = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="gr-1", on_fail="block")])
+    data = {
+        caller_metadata_key: {"user_id": "user_abc"},
+        policy_state_key: {"_guardrail_pipelines": [("policy-1", pipeline)]},
+        "messages": [],
+        "model": "m",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_logging._maybe_execute_pipelines(
+            data=data,
+            user_api_key_dict=make_user_api_key_auth(),
+            call_type=call_type,
+            event_hook="pre_call",
+        )
+    assert exc_info.value.detail["error"] == "blocked by pipeline"
+    assert exc_info.value.detail["guardrail_name"] == "gr-1"
 
 
 @pytest.mark.asyncio
@@ -775,3 +818,50 @@ async def test_process_prompt_template_async_get_prompt_error_raises(proxy_loggi
             prompt_version=None,
             call_type="completion",
         )
+
+
+@pytest.mark.asyncio
+async def test_process_prompt_template_aresponses_swaps_model_and_merges_input(proxy_logging, monkeypatch):
+    from litellm.proxy.prompts import prompt_registry
+
+    custom_logger = MagicMock()
+    prompt_spec = MagicMock()
+    prompt_spec.litellm_params = MagicMock(prompt_id="resolved-id")
+    monkeypatch.setattr(
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY,
+        "get_prompt_callback_by_id",
+        lambda *a, **kw: custom_logger,
+    )
+    monkeypatch.setattr(
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: prompt_spec
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.async_get_chat_completion_prompt = AsyncMock(
+        return_value=(
+            "gpt-4o-mini",
+            [
+                {"role": "user", "content": "You are a pirate."},
+                {"role": "user", "content": "Who are you?"},
+            ],
+            {},
+        )
+    )
+    data: dict[str, object] = {"input": "Who are you?", "model": "anthropic-haiku-4-5", "prompt_id": "x"}
+    await proxy_logging._process_prompt_template(
+        data=data,
+        litellm_logging_obj=logging_obj,
+        prompt_id="x",
+        prompt_version=None,
+        call_type="aresponses",
+    )
+    assert data["model"] == "gpt-4o-mini"
+    assert data["input"] == [
+        {"role": "user", "content": "You are a pirate."},
+        {"role": "user", "content": "Who are you?"},
+    ]
+    assert "messages" not in data
+    assert "prompt_id" not in data
+    hook_kwargs = logging_obj.async_get_chat_completion_prompt.await_args.kwargs
+    assert hook_kwargs["messages"] == [{"role": "user", "content": "Who are you?"}]
+    assert hook_kwargs["prompt_spec"] is prompt_spec

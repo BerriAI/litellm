@@ -18,7 +18,10 @@ until they're actually needed.
 import importlib
 import sys
 from collections.abc import Callable
-from typing import Any, Final, cast
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Final, cast
+
+from typing_extensions import ReadOnly, TypedDict
 
 # Import all the data structures that define what can be lazy-loaded
 # These are just lists of names and maps of where to find them
@@ -53,6 +56,9 @@ from ._lazy_imports_registry import (
     UTILS_NAMES,
 )
 
+if TYPE_CHECKING:
+    from tiktoken import Encoding
+
 
 def get_litellm_globals() -> dict:
     """
@@ -78,10 +84,10 @@ def _get_utils_globals() -> dict:
 # They're separate from the main lazy import system because they have specific use cases
 
 # Lazy loader for default encoding - avoids importing heavy tiktoken library at startup
-_default_encoding: Any | None = None
+_default_encoding: "Encoding | None" = None
 
 
-def _get_default_encoding() -> Any:
+def _get_default_encoding() -> "Encoding":
     """
     Lazily load and cache the default OpenAI encoding.
 
@@ -100,10 +106,10 @@ def _get_default_encoding() -> Any:
 
 
 # Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time
-_get_modified_max_tokens_func: Any | None = None
+_get_modified_max_tokens_func: "Callable[..., int | None] | None" = None
 
 
-def _get_modified_max_tokens() -> Any:
+def _get_modified_max_tokens() -> "Callable[..., int | None]":
     """
     Lazily load and cache the get_modified_max_tokens function.
 
@@ -124,10 +130,10 @@ def _get_modified_max_tokens() -> Any:
 
 
 # Lazy loader for token_counter to avoid importing token_counter module at module import time
-_token_counter_new_func: Any | None = None
+_token_counter_new_func: "Callable[..., int] | None" = None
 
 
-def _get_token_counter_new() -> Any:
+def _get_token_counter_new() -> "Callable[..., int]":
     """
     Lazily load and cache the token_counter function (aliased as token_counter_new).
 
@@ -154,10 +160,10 @@ def _get_token_counter_new() -> Any:
 # This registry maps attribute names (like "ModelResponse") to handler functions
 # It's built once the first time someone accesses a lazy-loaded attribute
 # Example: {"ModelResponse": _lazy_import_utils, "Cache": _lazy_import_caching, ...}
-_LAZY_IMPORT_REGISTRY: dict[str, Callable[[str], Any]] | None = None
+_LAZY_IMPORT_REGISTRY: dict[str, Callable[[str], object]] | None = None
 
 
-def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:
+def _get_lazy_import_registry() -> dict[str, Callable[[str], object]]:
     """
     Build the registry that maps attribute names to their handler functions.
 
@@ -206,7 +212,18 @@ def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:
     return _LAZY_IMPORT_REGISTRY
 
 
-def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], category: str) -> Any:
+class _AttributeView(TypedDict):
+    """Holds one module attribute so the lazily fetched value is read back as ``object``."""
+
+    value: ReadOnly[object]
+
+
+def _module_attribute(module: ModuleType, attr_name: str) -> object:
+    attribute: Final[_AttributeView] = {"value": getattr(module, attr_name)}
+    return attribute["value"]
+
+
+def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], category: str) -> object:
     """
     Generic function that handles lazy importing for most attributes.
 
@@ -255,7 +272,7 @@ def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], cate
 
     # Step 6: Get the actual attribute from the module
     # Example: getattr(utils_module, "ModelResponse") returns the ModelResponse class
-    value: Final = getattr(module, attr_name)
+    value: Final = _module_attribute(module, attr_name)
 
     # Step 7: Cache it so we don't have to import again next time
     _globals[name] = value
@@ -272,62 +289,62 @@ def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], cate
 # The registry (above) maps attribute names to these handler functions.
 
 
-def _lazy_import_utils(name: str) -> Any:
+def _lazy_import_utils(name: str) -> object:
     """Handler for utils module attributes (ModelResponse, token_counter, etc.)"""
     return _generic_lazy_import(name, _UTILS_IMPORT_MAP, "Utils")
 
 
-def _lazy_import_cost_calculator(name: str) -> Any:
+def _lazy_import_cost_calculator(name: str) -> object:
     """Handler for cost calculator functions (completion_cost, cost_per_token, etc.)"""
     return _generic_lazy_import(name, _COST_CALCULATOR_IMPORT_MAP, "Cost calculator")
 
 
-def _lazy_import_token_counter(name: str) -> Any:
+def _lazy_import_token_counter(name: str) -> object:
     """Handler for token counter utilities"""
     return _generic_lazy_import(name, _TOKEN_COUNTER_IMPORT_MAP, "Token counter")
 
 
-def _lazy_import_bedrock_types(name: str) -> Any:
+def _lazy_import_bedrock_types(name: str) -> object:
     """Handler for Bedrock type aliases"""
     return _generic_lazy_import(name, _BEDROCK_TYPES_IMPORT_MAP, "Bedrock types")
 
 
-def _lazy_import_types_utils(name: str) -> Any:
+def _lazy_import_types_utils(name: str) -> object:
     """Handler for types from litellm.types.utils (BudgetConfig, ImageObject, etc.)"""
     return _generic_lazy_import(name, _TYPES_UTILS_IMPORT_MAP, "Types utils")
 
 
-def _lazy_import_caching(name: str) -> Any:
+def _lazy_import_caching(name: str) -> object:
     """Handler for caching classes (Cache, DualCache, RedisCache, etc.)"""
     return _generic_lazy_import(name, _CACHING_IMPORT_MAP, "Caching")
 
 
-def _lazy_import_dotprompt(name: str) -> Any:
+def _lazy_import_dotprompt(name: str) -> object:
     """Handler for dotprompt integration globals"""
     return _generic_lazy_import(name, _DOTPROMPT_IMPORT_MAP, "Dotprompt")
 
 
-def _lazy_import_types(name: str) -> Any:
+def _lazy_import_types(name: str) -> object:
     """Handler for type classes (GuardrailItem, etc.)"""
     return _generic_lazy_import(name, _TYPES_IMPORT_MAP, "Types")
 
 
-def _lazy_import_llm_configs(name: str) -> Any:
+def _lazy_import_llm_configs(name: str) -> object:
     """Handler for LLM config classes (AnthropicConfig, OpenAILikeChatConfig, etc.)"""
     return _generic_lazy_import(name, _LLM_CONFIGS_IMPORT_MAP, "LLM config")
 
 
-def _lazy_import_litellm_logging(name: str) -> Any:
+def _lazy_import_litellm_logging(name: str) -> object:
     """Handler for litellm_logging module (Logging, modify_integration)"""
     return _generic_lazy_import(name, _LITELLM_LOGGING_IMPORT_MAP, "Litellm logging")
 
 
-def _lazy_import_llm_provider_logic(name: str) -> Any:
+def _lazy_import_llm_provider_logic(name: str) -> object:
     """Handler for LLM provider logic functions (get_llm_provider, etc.)"""
     return _generic_lazy_import(name, _LLM_PROVIDER_LOGIC_IMPORT_MAP, "LLM provider logic")
 
 
-def _lazy_import_utils_module(name: str) -> Any:
+def _lazy_import_utils_module(name: str) -> object:
     """
     Handler for utils module lazy imports.
 
@@ -355,7 +372,7 @@ def _lazy_import_utils_module(name: str) -> Any:
         module = importlib.import_module(module_path)
 
     # Get the actual attribute from the module
-    value: Final = getattr(module, attr_name)
+    value: Final = _module_attribute(module, attr_name)
 
     # Cache it so we don't have to import again next time
     _globals[name] = value
@@ -370,7 +387,7 @@ def _lazy_import_utils_module(name: str) -> Any:
 # These handlers have custom logic that doesn't fit the generic pattern
 
 
-def _lazy_import_llm_client_cache(name: str) -> Any:
+def _lazy_import_llm_client_cache(name: str) -> object:
     """
     Handler for LLM client cache - has special logic for singleton instance.
 
@@ -386,8 +403,7 @@ def _lazy_import_llm_client_cache(name: str) -> Any:
         return _globals[name]
 
     # Import the class
-    module: Final = importlib.import_module("litellm.caching.llm_caching_handler")
-    LLMClientCache: Final = getattr(module, "LLMClientCache")
+    from litellm.caching.llm_caching_handler import LLMClientCache
 
     # If they want the class itself, return it
     if name == "LLMClientCache":
@@ -403,7 +419,7 @@ def _lazy_import_llm_client_cache(name: str) -> Any:
     raise AttributeError(f"LLM client cache lazy import: unknown attribute {name!r}")
 
 
-def _lazy_import_http_handlers(name: str) -> Any:
+def _lazy_import_http_handlers(name: str) -> object:
     """
     Handler for HTTP clients - has special logic for creating client instances.
 

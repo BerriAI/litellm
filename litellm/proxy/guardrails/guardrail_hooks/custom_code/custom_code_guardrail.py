@@ -36,6 +36,7 @@ Example: block when response rejects the user (input_type response only):
 
 import asyncio
 import threading
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
@@ -59,9 +60,9 @@ if TYPE_CHECKING:
 class CustomCodeGuardrailError(Exception):
     """Raised when custom code guardrail execution fails."""
 
-    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+    def __init__(self, message: str, details: Mapping[str, object] | None = None) -> None:
         super().__init__(message)
-        self.details = details or {}
+        self.details: Mapping[str, object] = details or {}
 
 
 class CustomCodeCompilationError(CustomCodeGuardrailError):
@@ -116,8 +117,8 @@ class CustomCodeGuardrail(CustomGuardrail):
             guardrail_name: Name of this guardrail instance
             **kwargs: Additional arguments passed to CustomGuardrail
         """
-        self.custom_code = custom_code
-        self._compiled_function: Any | None = None
+        self.custom_code: str = custom_code
+        self._compiled_function: Callable[..., object] | None = None
         self._compile_lock = threading.Lock()
         self._compile_error: str | None = None
 
@@ -191,7 +192,7 @@ class CustomCodeGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -233,15 +234,14 @@ class CustomCodeGuardrail(CustomGuardrail):
             safe_request_data: Final = self._prepare_safe_request_data(request_data)
 
             # Execute the custom function - handle both sync and async functions
-            result = self._compiled_function(inputs, safe_request_data, input_type)
+            raw_result: Final = self._compiled_function(inputs, safe_request_data, input_type)
 
             # If the function is async (returns a coroutine), await it
-            if asyncio.iscoroutine(result):
-                result = await result
+            resolved_result: Final[object] = await raw_result if asyncio.iscoroutine(raw_result) else raw_result
 
             # Process the result
             return self._process_result(
-                result=result,
+                result=resolved_result,
                 inputs=inputs,
                 request_data=request_data,
                 input_type=input_type,
@@ -263,7 +263,7 @@ class CustomCodeGuardrail(CustomGuardrail):
                 },
             ) from e
 
-    def _prepare_safe_request_data(self, request_data: dict) -> dict[str, Any]:
+    def _prepare_safe_request_data(self, request_data: Mapping[str, object]) -> dict[str, object]:
         """
         Prepare a safe subset of request_data for code execution.
 
@@ -286,9 +286,9 @@ class CustomCodeGuardrail(CustomGuardrail):
 
     def _process_result(
         self,
-        result: Any,
+        result: object,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
     ) -> GenericGuardrailAPIInputs:
         """

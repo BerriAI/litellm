@@ -58,8 +58,8 @@ describe("MCPAppsPanel logos", () => {
     renderPanel();
 
     expect(await screen.findByText("external_logo")).toBeInTheDocument();
-    expect(screen.getByAltText("external_logo logo").getAttribute("src")).toBe("https://cdn.example.com/ext.png");
-    expect(screen.getByAltText("local_logo logo").getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+    expect(screen.getByAltText("external_logo logo")).toHaveAttribute("src", "https://cdn.example.com/ext.png");
+    expect(screen.getByAltText("local_logo logo")).toHaveAttribute("src", "/litellm/ui/assets/logos/github.svg");
   });
 
   it("renders a colored letter avatar for servers without logo_url", async () => {
@@ -83,7 +83,7 @@ describe("MCPAppsPanel logos", () => {
     fireEvent.click(await screen.findByText("local_logo"));
 
     expect(await screen.findByRole("heading", { name: "local_logo" })).toBeInTheDocument();
-    expect(screen.getByAltText("local_logo logo").getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+    expect(screen.getByAltText("local_logo logo")).toHaveAttribute("src", "/litellm/ui/assets/logos/github.svg");
   });
 });
 
@@ -239,7 +239,7 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
 
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.queryByText("revoked_srv")).not.toBeInTheDocument();
-    expect(screen.getByText("Connected", { exact: false }).textContent).toBe("Connected");
+    expect(screen.getByText("Connected", { exact: false })).toHaveTextContent("Connected");
   });
 
   it("does not select a server when Connect resolves in the same tick the refetch drops it", async () => {

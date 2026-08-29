@@ -5,7 +5,7 @@ The Model Router is a special Azure AI deployment that automatically routes requ
 to the best available model. It has specific cost tracking requirements.
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 from httpx import Response
 
@@ -13,6 +13,9 @@ from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class AzureModelRouterConfig(AzureAIStudioConfig):
@@ -56,7 +59,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -65,15 +68,24 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
 
         Extracts the actual model used from the Azure response (e.g., gpt-5-nano-2025-08-07)
         and returns it with the azure_ai/ prefix for proper display and cost tracking.
+
+        Also stamps that model onto ``_hidden_params`` so downstream consumers (spend logs,
+        response restamping) can read it instead of guessing the route from the model string.
         """
-        from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+        from litellm.llms.azure_ai.common_utils import (
+            AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+            AzureFoundryModelInfo,
+        )
+        from litellm.router_utils.add_retry_fallback_headers import (
+            get_hidden_params_dict,
+        )
 
         # Get base model for the parent call (strips routing prefixes for API compatibility)
         base_model: Final[str] = AzureFoundryModelInfo.get_base_model(model)
 
         # Call parent transform_response first - this will extract the actual model
         # from the raw response (e.g., "gpt-5-nano-2025-08-07")
-        model_response = super().transform_response(
+        transformed_response: Final = super().transform_response(
             model=base_model,
             raw_response=raw_response,
             model_response=model_response,
@@ -86,7 +98,15 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-        return model_response
+        selected_model: Final = transformed_response.model
+        if selected_model:
+            # Rebuilt rather than mutated in place: ModelResponseBase declares _hidden_params as a
+            # class-level dict, so an in-place write can bleed into unrelated responses.
+            transformed_response._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter  # mutable-ok: ModelResponse requires _hidden_params to be a plain dict
+                **get_hidden_params_dict(transformed_response),
+                AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model,
+            }
+        return transformed_response
 
     def calculate_additional_costs(self, model: str, prompt_tokens: int, completion_tokens: int) -> dict | None:
         """

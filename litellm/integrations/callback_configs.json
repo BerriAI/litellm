@@ -220,6 +220,12 @@
         "ui_name": "Host URL",
         "description": "Langfuse host URL (default: https://cloud.langfuse.com)",
         "required": false
+      },
+      "langfuse_environment": {
+        "type": "text",
+        "ui_name": "Tracing Environment",
+        "description": "Langfuse tracing environment (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)",
+        "required": false
       }
     },
     "description": "Langfuse v2 Logging Integration"
@@ -246,6 +252,12 @@
         "type": "text",
         "ui_name": "Host URL",
         "description": "Langfuse host URL (default: https://cloud.langfuse.com)",
+        "required": false
+      },
+      "langfuse_environment": {
+        "type": "text",
+        "ui_name": "Tracing Environment",
+        "description": "Langfuse tracing environment (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)",
         "required": false
       }
     },
@@ -294,12 +306,18 @@
     "id": "newrelic",
     "displayName": "New Relic",
     "logo": "newrelic.png",
-    "supports_key_team_logging": false,
+    "supports_key_team_logging": true,
     "dynamic_params": {
-      "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED": {
+      "newrelic_api_key": {
+        "type": "password",
+        "ui_name": "New Relic Ingest License Key",
+        "description": "Per-team ingest (license) key. Team traces export to this key's New Relic account over OTLP.",
+        "required": false
+      },
+      "newrelic_region": {
         "type": "text",
-        "ui_name": "Record AI Content (default: true)",
-        "description": "Whether to record AI message content. Set to false to disable.",
+        "ui_name": "New Relic Region (us or eu)",
+        "description": "Data center region for this team's account. Defaults to us.",
         "required": false
       }
     },

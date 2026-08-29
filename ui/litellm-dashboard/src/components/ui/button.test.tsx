@@ -23,9 +23,9 @@ describe("Button", () => {
   });
 
   it("resolves conflicting classes through twMerge so className wins", () => {
-    render(<Button className="bg-red-500">Override</Button>);
+    render(<Button className="bg-destructive">Override</Button>);
     const button = screen.getByRole("button", { name: "Override" });
-    expect(button).toHaveClass("bg-red-500");
+    expect(button).toHaveClass("bg-destructive");
     expect(button).not.toHaveClass("bg-primary");
   });
 

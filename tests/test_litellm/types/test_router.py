@@ -46,12 +46,30 @@ def test_custom_pricing_params_keeps_every_field_it_had():
 
 @pytest.mark.parametrize("field", SPECIAL_MODEL_INFO_PARAMS)
 def test_deployment_mirrors_pricing_from_litellm_params_onto_model_info(field):
+    value = [{"range": [0, 128000], "input_cost_per_token": 3e-06}] if field == "tiered_pricing" else 3e-06
     deployment = Deployment(
         model_name="my-model",
-        litellm_params=LiteLLM_Params(model="gpt-4o", **{field: 3e-06}),
+        litellm_params=LiteLLM_Params(model="gpt-4o", **{field: value}),
     )
-    assert getattr(deployment.model_info, field) == 3e-06
-    assert deployment.model_info.model_dump(exclude_none=True)[field] == 3e-06
+    assert getattr(deployment.model_info, field) == value
+    assert deployment.model_info.model_dump(exclude_none=True)[field] == value
+
+
+def test_deployment_mirrors_tiered_pricing_onto_model_info():
+    """
+    Regression: tiered_pricing set under a deployment's litellm_params was silently
+    ignored at cost time because the Deployment mirror excluded it, so the logging
+    path never flagged the deployment as custom-priced.
+    """
+    tiers = [
+        {"range": [0, 3000], "input_cost_per_token": 3.25e-07, "output_cost_per_token": 1.95e-06},
+        {"range": [3000, 128000], "input_cost_per_token": 6.5e-07, "output_cost_per_token": 3.9e-06},
+    ]
+    deployment = Deployment(
+        model_name="my-model",
+        litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-4-5", tiered_pricing=tiers),
+    )
+    assert deployment.model_info.tiered_pricing == tiers
 
 
 def test_unset_pricing_is_still_absent_from_dumps():
@@ -69,5 +87,5 @@ def test_pricing_strings_are_coerced_to_float():
 
 
 def test_invalid_pricing_is_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", input_cost_per_token="free")

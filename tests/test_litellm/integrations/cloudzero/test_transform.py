@@ -1,12 +1,9 @@
-import os
-import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.integrations.cloudzero.transform import CBFTransformer
 from litellm.types.integrations.cloudzero import CBFRecord
