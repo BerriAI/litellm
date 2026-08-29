@@ -979,7 +979,7 @@ async def test_responses_request_sends_compressed_input_and_retrieve_tool_upstre
         result = await OpenAIResponsesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
 
     assert result["instructions"] == ORIGINAL_MESSAGES[0]["content"]
-    assert [item["content"][0]["text"] for item in result["input"]] == [
+    assert [item["content"] for item in result["input"]] == [
         COMPRESSED_MESSAGES_WITH_HASH[0]["content"],
         ORIGINAL_MESSAGES[2]["content"],
         ORIGINAL_MESSAGES[3]["content"],

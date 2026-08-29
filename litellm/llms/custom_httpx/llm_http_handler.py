@@ -2744,7 +2744,7 @@ class BaseLLMHTTPHandler:
         )
 
         if self._has_agentic_completion_hook(logging_obj):
-            agentic_kwargs: Final = dict(litellm_params)
+            agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
             final_response: Final = run_async_function(
                 self._call_agentic_completion_hooks,
                 response=initial_response,
@@ -2931,7 +2931,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
-        agentic_kwargs: Final = dict(litellm_params)
+        agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
