@@ -93,8 +93,8 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     """
     Handle Anthropic OAuth token detection and header setup.
 
-    If an OAuth token is detected in the Authorization header, extracts it
-    and sets the required OAuth headers.
+    If an OAuth token is detected in the Authorization header (any casing),
+    extracts it and sets the required OAuth headers.
 
     Args:
         headers: Request headers dict
@@ -104,16 +104,21 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
         Tuple of (updated headers, api_key)
     """
     # Check Authorization header (passthrough / forwarded requests)
-    auth_header: Final = headers.get("authorization", "")
-    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-        api_key = auth_header.replace("Bearer ", "")
-        headers.pop("x-api-key", None)
+    auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
+    if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        api_key = auth_header.removeprefix("Bearer ")
+        for name in tuple(
+            header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
+        ):
+            headers.pop(name)
+        headers["authorization"] = auth_header
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
-        headers.pop("x-api-key", None)
+        for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
+            headers.pop(name)
         headers["authorization"] = f"Bearer {api_key}"
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
@@ -969,19 +974,25 @@ def strip_advisor_blocks_from_messages(messages: list[Any], replace_with_text: b
     return messages
 
 
-def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
+def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     """
-    Detect Anthropic 400 errors caused by missing or invalid thinking signatures.
+    Detect Anthropic 400 errors caused by invalid thinking blocks in replayed
+    history: a missing or invalid signature, or a block with empty thinking text.
 
     Known error formats:
     {"message":"messages.2.content.0.thinking.signature.str: Input should be a valid string"}
     messages.N.content.M.thinking.signature.str: Input should be a valid string
     messages.N.content.M: Invalid `signature` in `thinking` block
+    messages.N.content.M.thinking: each thinking block must contain thinking
     """
     if not error_text:
         return False
     lower: Final = error_text.lower()
-    return "thinking" in lower and "signature" in lower and ("invalid" in lower or "valid string" in lower)
+    if "thinking" not in lower:
+        return False
+    if "signature" in lower and ("invalid" in lower or "valid string" in lower):
+        return True
+    return "must contain thinking" in lower
 
 
 def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[Any]:
@@ -1023,22 +1034,29 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data.pop("thinking", None)
 
 
-def strip_empty_text_blocks_from_anthropic_messages(
+def strip_empty_content_blocks_from_anthropic_messages(
     messages: list[Any],
 ) -> list[Any]:
     """
     Return a new message list with empty or whitespace-only ``{"type": "text"}``
-    content blocks removed.
+    and ``{"type": "thinking"}`` content blocks removed.
 
     Anthropic's API rejects requests containing such blocks with
-    ``"messages: text content blocks must be non-empty"``, but assistant
-    messages from Anthropic routinely arrive with ``{"type": "text", "text": ""}``
-    alongside ``tool_use`` blocks (see anthropics/anthropic-sdk-python#461).
+    ``"messages: text content blocks must be non-empty"`` and
+    ``"messages.N.content.M.thinking: each thinking block must contain
+    thinking"`` respectively.  Assistant messages routinely arrive with
+    ``{"type": "text", "text": ""}`` alongside ``tool_use`` blocks (see
+    anthropics/anthropic-sdk-python#461), and a turn served by a
+    non-Anthropic reasoning model through the /v1/messages bridge can carry
+    ``{"type": "thinking", "thinking": ""}`` when the model produced no
+    reasoning text (e.g. it went straight to parallel tool calls).
     Multi-turn tool-use clients (e.g. Claude Code) loop these prior responses
     back as conversation history, which then causes the next request to 400
     on the unified ``/v1/messages`` path.  ``/v1/chat/completions`` already
     handles this in ``anthropic_messages_pt``; this helper provides the
     equivalent guarantee for the native Anthropic Messages path.
+    ``redacted_thinking`` blocks are never touched: they carry opaque
+    ``data`` instead of thinking text.
 
     Messages whose content is a list and becomes empty after stripping are
     omitted, matching :func:`strip_thinking_blocks_from_anthropic_messages`.
@@ -1051,7 +1069,7 @@ def strip_empty_text_blocks_from_anthropic_messages(
             out.append(m)
             continue
         content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b)]
+        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_thinking_block(b)]
         if len(filtered) == len(content):
             out.append(m)
         elif filtered:
@@ -1064,6 +1082,21 @@ def _is_empty_text_block(block: Any) -> bool:
         return False
     text: Final = block.get("text")
     return not isinstance(text, str) or not text.strip()
+
+
+def is_empty_thinking_block(block: object) -> bool:
+    """
+    True for a ``{"type": "thinking"}`` content block whose thinking text is
+    missing, not a string, or empty/whitespace-only after ``.strip()``.
+    Anthropic rejects such blocks with ``"each thinking block must contain
+    thinking"`` (whitespace-only included, verified live), regardless of any
+    signature they carry.  ``redacted_thinking`` blocks are a different type
+    and always return False.
+    """
+    if not isinstance(block, dict) or block.get("type") != "thinking":
+        return False
+    thinking: Final = block.get("thinking")
+    return not isinstance(thinking, str) or not thinking.strip()
 
 
 def normalize_anthropic_tool_use_id(raw_id: str) -> str:

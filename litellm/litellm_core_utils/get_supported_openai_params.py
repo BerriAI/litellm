@@ -2,6 +2,7 @@ from typing import Final, Literal
 
 import litellm
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
@@ -30,6 +31,10 @@ def get_supported_openai_params(
     - List if custom_llm_provider is mapped
     - None if unmapped
     """
+    if not custom_llm_provider:
+        custom_llm_provider = declared_authenticating_provider(
+            model
+        )  # rebind-ok: resolving would run the provider's OAuth flow
     if not custom_llm_provider:
         try:
             custom_llm_provider = litellm.get_llm_provider(model=model)[1]

@@ -27,6 +27,7 @@ from litellm.types.utils import (
 )
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    CostCalculatorUtils,
     PromptTokensDetailsResult,
     TokenTypeCostBreakdown,
     _calculate_input_cost,
@@ -529,6 +530,74 @@ def test_generic_cost_per_token_bedrock_mantle_gpt56_long_context(_local_model_c
     assert round(long_completion_cost, 10) == round(
         model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens, 10
     )
+
+
+@pytest.mark.parametrize(
+    "model,input_rate,cache_read_rate,output_rate,long_input_rate,long_cache_read_rate,long_output_rate",
+    [
+        ("bedrock_mantle/openai.gpt-5.5", 5.5e-06, 5.5e-07, 3.3e-05, 1.1e-05, 1.1e-06, 4.95e-05),
+        ("bedrock_mantle/openai.gpt-5.4", 2.75e-06, 2.75e-07, 1.65e-05, 5.5e-06, 5.5e-07, 2.475e-05),
+        ("bedrock_mantle/openai.gpt-5.6-sol", 5.5e-06, 5.5e-07, 3.3e-05, 1.1e-05, 1.1e-06, 4.95e-05),
+    ],
+)
+def test_generic_cost_per_token_bedrock_mantle_gpt5_matches_aws_invoiced_rates(
+    _local_model_cost_map,
+    model,
+    input_rate,
+    cache_read_rate,
+    output_rate,
+    long_input_rate,
+    long_cache_read_rate,
+    long_output_rate,
+):
+    """AWS bills a Bedrock GPT-5.x prompt past 272K under its long-context usage types, the whole prompt at
+    2x input, 2x cache read, and 1.5x output. The flat rates undercounted a 300K gpt-5.5 prompt by half and
+    sol's base rates sat 20% under the invoice."""
+
+    cached_tokens = 100000
+    completion_tokens = 1000
+
+    invoiced_prompt_tokens = 300238
+    long_usage = Usage(
+        prompt_tokens=invoiced_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=invoiced_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    long_prompt_cost, long_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=long_usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert long_prompt_cost == pytest.approx(
+        long_input_rate * (invoiced_prompt_tokens - cached_tokens) + long_cache_read_rate * cached_tokens
+    )
+    assert long_completion_cost == pytest.approx(long_output_rate * completion_tokens)
+
+    threshold_prompt_tokens = 272000
+    short_usage = Usage(
+        prompt_tokens=threshold_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=threshold_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    short_prompt_cost, short_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=short_usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert short_prompt_cost == pytest.approx(
+        input_rate * (threshold_prompt_tokens - cached_tokens) + cache_read_rate * cached_tokens
+    )
+    assert short_completion_cost == pytest.approx(output_rate * completion_tokens)
+
+
+def test_bedrock_mantle_gpt56_sol_cache_write_matches_aws_invoiced_rate(_local_model_cost_map):
+    """The invoice bills sol 30-minute cache writes at $6.88 per million tokens, 1.25x the $5.50 input rate."""
+
+    sol = litellm.model_cost["bedrock_mantle/openai.gpt-5.6-sol"]
+    assert sol["cache_creation_input_token_cost"] == pytest.approx(6.875e-06)
+    assert sol["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(1.375e-05)
 
 
 def test_generic_cost_per_token_honors_non_standard_above_threshold():
@@ -1513,6 +1582,76 @@ def test_string_cost_values():
     # Assert costs are calculated correctly
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
+
+
+def test_generic_cost_per_token_overlapping_cached_and_image_tokens():
+    """Some providers report cached_tokens and image_tokens as overlapping subsets of
+    prompt_tokens. Billing each in full charged the overlap twice, once at the cache rate
+    and again at the input rate."""
+    model = "litellm-test-overlapping-cached-image"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "cache_read_input_token_cost": 1e-7,
+                "output_cost_per_token": 2e-6,
+            }
+        }
+    )
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=None, cached_tokens=90, image_tokens=80
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider="openai"
+    )
+
+    # 90 cached at 1e-7, the remaining 10 uncached tokens once at 1e-6
+    assert prompt_cost == pytest.approx(90 * 1e-7 + 10 * 1e-6)
+    assert completion_cost == pytest.approx(10 * 2e-6)
+
+
+def test_generic_cost_per_token_warm_prefix_cache_spanning_text_and_image_tokens():
+    """xAI reports text_tokens + image_tokens = prompt_tokens with cached_tokens overlapping
+    both, so a warm prefix cache covering the whole image exceeds the text-only count.
+    Observed live on grok-4.6 (issue #37281): the image tokens were billed a second time at
+    the full input rate on top of the cache-read bucket, 0.003500 in vs the provider's own
+    0.001274 bill."""
+    model = "litellm-test-warm-prefix-cache-overlap"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 2e-6,
+                "cache_read_input_token_cost": 5e-7,
+                "output_cost_per_token": 6e-6,
+            }
+        }
+    )
+    usage = Usage(
+        prompt_tokens=2461,
+        completion_tokens=440,
+        total_tokens=2901,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=1319, cached_tokens=2432, image_tokens=1142
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider="openai"
+    )
+
+    # 2432 cached at the cache-read rate, the 29 uncached tokens once at the input rate
+    assert prompt_cost == pytest.approx(2432 * 5e-7 + 29 * 2e-6)
+    assert completion_cost == pytest.approx(440 * 6e-6)
 
 
 def test_calculate_cost_component_with_string_values():
@@ -2727,6 +2866,46 @@ def test_token_type_cost_breakdown_matches_real_gemini_numbers(_local_model_cost
     assert breakdown.cache_creation_cost == 0.0
 
 
+def test_token_type_cost_breakdown_flex_tier_prices_reasoning_at_flex_rate(_local_model_cost_map):
+    """Regression for the flex-tier breakdown drift: gemini-3.5-flash defines a flat
+    output_cost_per_reasoning_token (9e-06, the standard output rate) but no _flex
+    variant, so the breakdown priced reasoning at the standard rate on flex requests
+    while the total billed it at the flex output rate (4.5e-06). The reasoning
+    sub-cost then exceeded the entire flex completion cost."""
+
+    usage = Usage(
+        prompt_tokens=7,
+        completion_tokens=320,
+        total_tokens=327,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=315, text_tokens=5),
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+        service_tier="flex",
+    )
+
+    assert breakdown.reasoning_cost == pytest.approx(315 * 4.5e-06)
+
+    _, flex_completion_cost = generic_cost_per_token(
+        model="gemini-3.5-flash",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        service_tier="flex",
+    )
+    assert breakdown.reasoning_cost <= flex_completion_cost
+
+    standard_breakdown = get_token_type_cost_breakdown(
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+        service_tier=None,
+    )
+    assert standard_breakdown.reasoning_cost == pytest.approx(315 * 9e-06)
+
+
 def test_token_type_cost_breakdown_xai_at_exactly_200k_uses_higher_tier_rates(_local_model_cost_map):
 
     usage = Usage(
@@ -3340,6 +3519,53 @@ def test_generic_cost_per_token_gemini_35_flash_lite(_local_model_cost_map):
     assert completion_cost == pytest.approx(0.00125)
 
 
+GEMINI_35_FLASH_LITE_TIER_RATES_BY_SURFACE = [
+    ("gemini", None, 3e-07, 2.5e-06, 3e-08),
+    ("gemini", "flex", 1.5e-07, 1.25e-06, 2e-08),
+    ("gemini", "priority", 5.4e-07, 4.5e-06, 5e-08),
+    ("vertex_ai", None, 3e-07, 2.5e-06, 3e-08),
+    ("vertex_ai", "flex", 1.5e-07, 1.25e-06, 1.5e-08),
+    ("vertex_ai", "priority", 5.4e-07, 4.5e-06, 5e-08),
+]
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider,service_tier,input_rate,output_rate,cache_read_rate",
+    GEMINI_35_FLASH_LITE_TIER_RATES_BY_SURFACE,
+)
+def test_gemini_35_flash_lite_service_tier_pricing(
+    custom_llm_provider, service_tier, input_rate, output_rate, cache_read_rate, _local_model_cost_map
+):
+    """Regression: Vertex publishes flash-lite flex context caching at $0.015/M while the
+    Gemini API publishes $0.02/M, so vertex_ai flex cache reads must bill 1.5e-08/token
+    instead of the 2e-08 the map used to carry, without disturbing the Gemini API rate."""
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=500,
+        total_tokens=1_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200, text_tokens=800),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gemini-3.5-flash-lite",
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=service_tier,
+    )
+
+    assert prompt_cost == pytest.approx(800 * input_rate + 200 * cache_read_rate, rel=1e-9)
+    assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
+
+
+def test_gemini_35_flash_lite_flex_cache_read_map_entries(_local_model_cost_map):
+    """Each map entry carries its own surface's published flex cache-read rate: the bare
+    and vertex_ai keys are the Vertex surface at $0.015/M, the gemini key is the Gemini
+    API surface at $0.02/M."""
+    assert litellm.model_cost["gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 1.5e-08
+    assert litellm.model_cost["vertex_ai/gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 1.5e-08
+    assert litellm.model_cost["gemini/gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 2e-08
+
+
 @pytest.mark.parametrize(
     "service_tier,input_rate,cache_read_rate,cache_write_rate,output_rate",
     [
@@ -3647,3 +3873,76 @@ def test_generic_cost_per_token_grok_46_long_context(_local_model_cost_map):
     )
     assert prompt_cost == pytest.approx(200_000 * 4e-06 + 50_000 * 1e-06)
     assert completion_cost == pytest.approx(1_000 * 1.2e-05)
+
+
+@pytest.mark.parametrize(
+    ("response_quality", "requested_quality", "expected_cost"),
+    [
+        (None, "low", 0.04),
+        (None, None, 0.06),
+        ("high", "low", 0.08),
+    ],
+)
+def test_route_image_generation_cost_falls_back_to_requested_quality(
+    monkeypatch, response_quality, requested_quality, expected_cost
+):
+    def tier(cost):
+        return {"litellm_provider": "xai", "mode": "image_generation", "input_cost_per_image": cost}
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "xai/grok-imagine-image-2.0": tier(0.06),
+            "low/1024-x-1024/grok-imagine-image-2.0": tier(0.04),
+            "high/1024-x-1024/grok-imagine-image-2.0": tier(0.08),
+        },
+    )
+    response = ImageResponse(data=[ImageObject(url="https://example.com/image.png")], quality=response_quality)
+    optional_params = {} if requested_quality is None else {"quality": requested_quality}
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="xai/grok-imagine-image-2.0",
+        completion_response=response,
+        custom_llm_provider="xai",
+        optional_params=optional_params,
+        call_type="image_generation",
+    )
+
+    assert cost == expected_cost
+
+
+@pytest.mark.parametrize(
+    ("requested_size", "expected_cost"),
+    [
+        ("1536x1024", 0.05),
+        ("1536-x-1024", 0.05),
+        ("auto", 0.04),
+        (None, 0.04),
+    ],
+)
+def test_route_image_generation_cost_falls_back_to_requested_size(monkeypatch, requested_size, expected_cost):
+    def tier(cost):
+        return {"litellm_provider": "xai", "mode": "image_generation", "input_cost_per_image": cost}
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "xai/grok-imagine-image-2.0": tier(0.06),
+            "low/1024-x-1024/grok-imagine-image-2.0": tier(0.04),
+            "low/1536-x-1024/grok-imagine-image-2.0": tier(0.05),
+        },
+    )
+    response = ImageResponse(data=[ImageObject(url="https://example.com/image.png")])
+    optional_params = {"quality": "low", **({} if requested_size is None else {"size": requested_size})}
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="xai/grok-imagine-image-2.0",
+        completion_response=response,
+        custom_llm_provider="xai",
+        optional_params=optional_params,
+        call_type="image_generation",
+    )
+
+    assert cost == expected_cost

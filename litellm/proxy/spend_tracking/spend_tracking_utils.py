@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -91,6 +92,8 @@ def _get_spend_logs_metadata(
     metadata: dict | None,
     applied_guardrails: list[str] | None = None,
     batch_models: list[str] | None = None,
+    batch_successful_requests: int | None = None,
+    batch_failed_requests: int | None = None,
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = None,
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None = None,
     guardrail_information: list[StandardLoggingGuardrailInformation] | None = None,
@@ -120,6 +123,8 @@ def _get_spend_logs_metadata(
             error_information=None,
             proxy_server_request=None,
             batch_models=None,
+            batch_successful_requests=None,
+            batch_failed_requests=None,
             mcp_tool_call_metadata=None,
             vector_store_request_metadata=None,
             model_map_information=None,
@@ -136,6 +141,7 @@ def _get_spend_logs_metadata(
             cost_breakdown=None,
             compression_savings=None,
             autorouter_savings=autorouter_savings,
+            litellm_gateway_injected_cache=None,
             litellm_call_id=litellm_call_id,
         )
     verbose_proxy_logger.debug(
@@ -152,6 +158,8 @@ def _get_spend_logs_metadata(
     clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_redacted=_already_redacted)
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
+    clean_metadata["batch_successful_requests"] = batch_successful_requests
+    clean_metadata["batch_failed_requests"] = batch_failed_requests
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
         vector_store_request_metadata
@@ -277,7 +285,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     usage: dict = {}
     if call_type in ["ocr", "aocr"]:
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
-    else:
+    elif not is_unbilled_non_inference_call(call_type, metadata, response_obj_dict):
         # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
         _usage: Final = response_obj_dict.get("usage", None) or {}
         if isinstance(_usage, litellm.Usage):
@@ -355,6 +363,16 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         ),
         batch_models=(
             standard_logging_payload.get("hidden_params", {}).get("batch_models", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        batch_successful_requests=(
+            standard_logging_payload.get("hidden_params", {}).get("batch_successful_requests", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        batch_failed_requests=(
+            standard_logging_payload.get("hidden_params", {}).get("batch_failed_requests", None)
             if standard_logging_payload is not None
             else None
         ),

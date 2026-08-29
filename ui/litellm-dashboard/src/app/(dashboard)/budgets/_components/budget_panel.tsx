@@ -9,8 +9,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
-import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
-import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -79,34 +78,37 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   };
 
   return (
-    <div className="flex h-full flex-col gap-6 p-8">
-      <LegacyPageHeader
-        icon={<Wallet className="size-5" />}
-        title="Budgets"
-        subtitle="Spend, TPM and RPM limits you can assign to customers."
-      />
-      <Tabs defaultValue="budgets" className="min-h-0 flex-1 gap-0">
-        <div className="flex items-center gap-4 border-b border-border">
-          {canModify && (
-            <>
+    <main className="flex h-full flex-col p-8">
+      <Tabs defaultValue="budgets" className="min-h-0 flex-1 gap-6">
+        <PageHeader
+          icon={<Wallet />}
+          title="Budgets"
+          subtitle="Spend, TPM and RPM limits you can assign to customers."
+          primaryAction={
+            canModify ? (
               <Button onClick={() => setIsCreateModelVisible(true)}>
                 <Plus className="size-4" />
                 Create Budget
               </Button>
-              <ToolbarSeparator className="h-6" />
-            </>
+            ) : undefined
+          }
+          tabs={({ leadingControls }) => (
+            <TabsList
+              variant="line"
+              className="gap-0 p-0 [&>[data-slot=tabs-trigger]+[data-slot=tabs-trigger]]:ml-[22px]"
+            >
+              {leadingControls}
+              <TabsTrigger value="budgets" className="flex-none px-0 py-[7px] data-active:font-semibold">
+                Budgets
+              </TabsTrigger>
+              <TabsTrigger value="examples" className="flex-none px-0 py-[7px] data-active:font-semibold">
+                Examples
+              </TabsTrigger>
+            </TabsList>
           )}
-          <TabsList variant="line">
-            <TabsTrigger value="budgets" className="flex-none px-4">
-              Budgets
-            </TabsTrigger>
-            <TabsTrigger value="examples" className="flex-none px-4">
-              Examples
-            </TabsTrigger>
-          </TabsList>
-        </div>
+        />
         <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
-          <div className="flex min-h-0 flex-1 flex-col pt-6">
+          <div className="flex min-h-0 flex-1 flex-col">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
             {selectedBudget && (
               <EditBudgetModal
@@ -172,7 +174,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
           </div>
         </TabsContent>
       </Tabs>
-    </div>
+    </main>
   );
 };
 

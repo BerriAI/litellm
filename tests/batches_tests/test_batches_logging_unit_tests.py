@@ -133,12 +133,12 @@ def test_get_file_content_as_dictionary(sample_file_content):
 
 def test_get_batch_job_total_usage_from_file_content(sample_file_content_dict):
     with patch("litellm.completion_cost", return_value=0.0):
-        _, usage, _ = _aggregate_batch_cost_usage_models(
+        result = _aggregate_batch_cost_usage_models(
             entries=sample_file_content_dict, custom_llm_provider="openai"
         )
-    assert usage.total_tokens == 62  # 30 + 32
-    assert usage.prompt_tokens == 42  # 20 + 22
-    assert usage.completion_tokens == 20  # 10 + 10
+    assert result.usage.total_tokens == 62  # 30 + 32
+    assert result.usage.prompt_tokens == 42  # 20 + 22
+    assert result.usage.completion_tokens == 20  # 10 + 10
 
 
 @pytest.mark.asyncio
@@ -151,11 +151,11 @@ async def test_batch_cost_calculator(sample_file_content_dict):
     so we expect the cost to be 0.5 * 2 = 1.0
     """
     with patch("litellm.completion_cost", return_value=0.5):
-        cost, _, _ = _aggregate_batch_cost_usage_models(
+        result = _aggregate_batch_cost_usage_models(
             entries=sample_file_content_dict,
             custom_llm_provider="openai",
         )
-        assert cost == 1.0  # 0.5 * 2 successful responses
+        assert result.cost == 1.0  # 0.5 * 2 successful responses
 
 
 def test_get_response_from_batch_job_output_file(sample_file_content_dict):
@@ -221,6 +221,8 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
     logging_obj.custom_llm_provider = "openai"
 
     # Mock _handle_completed_batch to return cost data
+    from litellm.batches.batch_utils import BatchCostUsageResult
+
     expected_cost = 0.05
     expected_usage = litellm.Usage(
         prompt_tokens=100,
@@ -231,7 +233,15 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
 
     with patch(
         "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
-        new=AsyncMock(return_value=(expected_cost, expected_usage, expected_models)),
+        new=AsyncMock(
+            return_value=BatchCostUsageResult(
+                cost=expected_cost,
+                usage=expected_usage,
+                models=expected_models,
+                successful_requests=10,
+                failed_requests=0,
+            )
+        ),
     ) as mock_handle_batch:
         # Call async_success_handler
         await logging_obj.async_success_handler(
@@ -246,6 +256,8 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
         # Verify cost and usage were set on the batch result
         assert mock_batch._hidden_params["response_cost"] == expected_cost
         assert mock_batch._hidden_params["batch_models"] == expected_models
+        assert mock_batch._hidden_params["batch_successful_requests"] == 10
+        assert mock_batch._hidden_params["batch_failed_requests"] == 0
         assert mock_batch.usage == expected_usage
 
 
@@ -279,7 +291,7 @@ async def test_handle_completed_batch_computes_real_cost_from_output_file(
         "litellm.batches.batch_utils._fetch_batch_output_file_content",
         new=AsyncMock(return_value=sample_file_content_bytes),
     ):
-        cost, usage, models = await _handle_completed_batch(
+        result = await _handle_completed_batch(
             batch=batch, custom_llm_provider="openai"
         )
 
@@ -289,16 +301,18 @@ async def test_handle_completed_batch_computes_real_cost_from_output_file(
         + 20 * pricing["output_cost_per_token_batches"]
     )
 
-    assert cost == pytest.approx(expected_cost)
-    assert cost > 0
+    assert result.cost == pytest.approx(expected_cost)
+    assert result.cost > 0
     assert (
-        cost
+        result.cost
         < 42 * pricing["input_cost_per_token"] + 20 * pricing["output_cost_per_token"]
     )
-    assert usage.prompt_tokens == 42
-    assert usage.completion_tokens == 20
-    assert usage.total_tokens == 62
-    assert models == ["gpt-4o-mini-2024-07-18", "gpt-4o-mini-2024-07-18"]
+    assert result.usage.prompt_tokens == 42
+    assert result.usage.completion_tokens == 20
+    assert result.usage.total_tokens == 62
+    assert result.models == ["gpt-4o-mini-2024-07-18", "gpt-4o-mini-2024-07-18"]
+    assert result.successful_requests == 2
+    assert result.failed_requests == 0
 
 
 @pytest.mark.asyncio
@@ -537,9 +551,19 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
     )
     expected_models = ["gpt-5-mini"]
 
+    from litellm.batches.batch_utils import BatchCostUsageResult
+
     with patch(
         "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
-        new=AsyncMock(return_value=(expected_cost, expected_usage, expected_models)),
+        new=AsyncMock(
+            return_value=BatchCostUsageResult(
+                cost=expected_cost,
+                usage=expected_usage,
+                models=expected_models,
+                successful_requests=8,
+                failed_requests=0,
+            )
+        ),
     ) as mock_handle_batch:
         # Call async_success_handler with partial explicit data
         await logging_obj.async_success_handler(
@@ -555,4 +579,6 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
         # Verify computed cost data was used (not partial explicit data)
         assert mock_batch._hidden_params["response_cost"] == expected_cost
         assert mock_batch._hidden_params["batch_models"] == expected_models
+        assert mock_batch._hidden_params["batch_successful_requests"] == 8
+        assert mock_batch._hidden_params["batch_failed_requests"] == 0
         assert mock_batch.usage == expected_usage

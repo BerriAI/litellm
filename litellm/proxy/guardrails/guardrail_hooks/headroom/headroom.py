@@ -37,8 +37,12 @@ from litellm.proxy.guardrails.guardrail_hooks.content_text import (
 from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.integrations.custom_logger import (
+    HEADROOM_CONVERTED_STREAM_KEY,
+    AgenticLoopPlan,
+    AgenticLoopRequestPatch,
+)
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -713,6 +717,25 @@ class HeadroomGuardrail(CustomGuardrail):
 
         return {**inputs, "structured_messages": compressed, "tools": merged_tools}  # pyright: ignore[reportReturnType]
 
+    async def async_pre_call_deployment_hook(
+        self,
+        kwargs: dict[str, Any],
+        call_type: CallTypes | None,
+    ) -> dict[str, Any] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
+        base_result: Final = await super().async_pre_call_deployment_hook(kwargs, call_type)
+        effective: Final = base_result if base_result is not None else kwargs
+        if call_type not in (CallTypes.completion, CallTypes.acompletion):
+            return base_result
+        if not effective.get("stream"):
+            return base_result
+        if not has_headroom_retrieve_tool(effective.get("tools")):
+            return base_result
+        return {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
+            **effective,
+            "stream": False,
+            HEADROOM_CONVERTED_STREAM_KEY: True,
+        }
+
     async def async_should_run_agentic_loop(
         self,
         response: Any,
@@ -740,7 +763,7 @@ class HeadroomGuardrail(CustomGuardrail):
         response: Any,
         anthropic_messages_provider_config: Any,
         anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj | None,
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:

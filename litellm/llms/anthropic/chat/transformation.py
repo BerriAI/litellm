@@ -92,6 +92,8 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
@@ -2279,6 +2281,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             str | None,
             _usage.get("service_tier"),
         )
+        raw_speed: Final = _usage.get("speed")
+        resolved_speed: Final = raw_speed if isinstance(raw_speed, str) else speed
 
         iterations: Final[list[Any] | None] = _usage.get("iterations")
         if iterations:
@@ -2353,7 +2357,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 else None
             ),
             inference_geo=inference_geo,
-            speed=speed,
+            speed=resolved_speed,
             service_tier=service_tier,
         )
         return usage
@@ -2573,7 +2577,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
