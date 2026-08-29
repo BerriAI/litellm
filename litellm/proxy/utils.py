@@ -139,6 +139,7 @@ from litellm.proxy.db.token_auth import (
 )
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
+    resolve_endpoint_translation,
 )
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
@@ -486,9 +487,17 @@ def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, obje
         _merge_pipeline_metadata_bucket(data, bucket_key, modified_data.get(bucket_key))
 
 
-def _pipeline_step_supports_streaming(guardrail_name: str) -> bool:
+def _pipeline_step_supports_unified_streaming(guardrail_name: str) -> bool:
     callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
     return callback is not None and PipelineExecutor.supports_unified_execution(callback)
+
+
+def _pipeline_step_rewrites_streamed_content(guardrail_name: str) -> bool:
+    callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
+    if callback is None:
+        return False
+    transform_mode: Final = unified_guardrail.resolve_streaming_flag(callback, "streaming_transform_mode", "block_only")
+    return callback.mask_response_content or transform_mode == "incremental_diff"
 
 
 class _PipelineErrorBody(TypedDict):
@@ -502,17 +511,20 @@ class _PipelineErrorDetail(TypedDict):
     error: ReadOnly[_PipelineErrorBody]
 
 
-def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object]) -> None:
+def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:
     """
     Reject up front the requests whose post_call pipelines could never run.
 
     Background responses skip the post_call hooks entirely, so a pipeline
     governing one would silently never execute. Streaming responses execute
     pipelines against the buffered stream through the endpoint guardrail
-    translations, which requires every step's guardrail to support the unified
-    apply_guardrail interface; steps that cannot (native-lifecycle guardrails,
-    or guardrails not registered at all) keep the 400 rather than letting
-    ungoverned output stream through.
+    translation of the request route, releasing the buffered chunks verbatim
+    on allow. That needs every step's guardrail to support the unified
+    apply_guardrail interface and to only allow or block (a step that rewrites
+    streamed content, via mask_response_content or
+    streaming_transform_mode=incremental_diff, would have its rewrite silently
+    dropped), and needs the route to have a translation at all; anything else
+    keeps the 400 rather than letting ungoverned output stream through.
     """
     is_stream: Final = data.get("stream") is True
     is_background: Final = data.get("background") is True
@@ -536,30 +548,61 @@ def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object]) -> None
             }
         }
         raise HTTPException(status_code=400, detail=background_detail)
-    unsupported_guardrails: Final = tuple(
-        dict.fromkeys(
-            step.guardrail
-            for _policy_name, pipeline in post_call_pipelines
-            for step in pipeline.steps
-            if not _pipeline_step_supports_streaming(step.guardrail)
-        )
+    step_guardrails: Final = tuple(
+        dict.fromkeys(step.guardrail for _policy_name, pipeline in post_call_pipelines for step in pipeline.steps)
     )
-    if not unsupported_guardrails:
+    unsupported_guardrails: Final = tuple(
+        guardrail for guardrail in step_guardrails if not _pipeline_step_supports_unified_streaming(guardrail)
+    )
+    if unsupported_guardrails:
+        unsupported_detail: Final[_PipelineErrorDetail] = {
+            "error": {
+                "message": (
+                    "Policies with post_call guardrail pipelines cannot govern streaming responses "
+                    "because these pipeline guardrails do not support the unified apply_guardrail "
+                    f"interface: {', '.join(unsupported_guardrails)}. Retry with stream=false, or drop "
+                    "them from the pipeline steps so guardrails.add scans them on streamed output."
+                ),
+                "type": "guardrail_pipeline_error",
+                "policies": post_call_policies,
+                "guardrails": unsupported_guardrails,
+            }
+        }
+        raise HTTPException(status_code=400, detail=unsupported_detail)
+    rewriting_guardrails: Final = tuple(
+        guardrail for guardrail in step_guardrails if _pipeline_step_rewrites_streamed_content(guardrail)
+    )
+    if rewriting_guardrails:
+        rewriting_detail: Final[_PipelineErrorDetail] = {
+            "error": {
+                "message": (
+                    "Policies with post_call guardrail pipelines cannot govern streaming responses "
+                    "because these pipeline guardrails rewrite streamed content (mask_response_content "
+                    "or streaming_transform_mode=incremental_diff), which pipeline steps would release "
+                    f"unmodified: {', '.join(rewriting_guardrails)}. Retry with stream=false, or drop "
+                    "them from the pipeline steps so guardrails.add applies them to streamed output."
+                ),
+                "type": "guardrail_pipeline_error",
+                "policies": post_call_policies,
+                "guardrails": rewriting_guardrails,
+            }
+        }
+        raise HTTPException(status_code=400, detail=rewriting_detail)
+    route: Final = user_api_key_dict.request_route
+    if not route or resolve_endpoint_translation(user_api_key_dict, None) is not None:
         return
-    unsupported_detail: Final[_PipelineErrorDetail] = {
+    route_detail: Final[_PipelineErrorDetail] = {
         "error": {
             "message": (
-                "Policies with post_call guardrail pipelines cannot govern streaming responses "
-                "because these pipeline guardrails do not support the unified apply_guardrail "
-                f"interface: {', '.join(unsupported_guardrails)}. Retry with stream=false, or move "
-                "them from pipeline steps to guardrails.add, which scans streamed output."
+                "Policies with post_call guardrail pipelines cannot govern streaming responses on "
+                f"route {route} because it has no endpoint guardrail translation to scan the stream "
+                f"through: {', '.join(post_call_policies)}. Retry with stream=false."
             ),
             "type": "guardrail_pipeline_error",
             "policies": post_call_policies,
-            "guardrails": unsupported_guardrails,
         }
     }
-    raise HTTPException(status_code=400, detail=unsupported_detail)
+    raise HTTPException(status_code=400, detail=route_detail)
 
 
 def _prompt_block_text(block: object) -> str:
@@ -1915,7 +1958,7 @@ class ProxyLogging:
         )
 
         try:
-            _raise_for_streaming_post_call_pipelines(data)
+            _raise_for_streaming_post_call_pipelines(data, user_api_key_dict)
 
             # Execute guardrail pipelines before the normal callback loop
             data, _ = await self._maybe_execute_pipelines(
@@ -3431,10 +3474,6 @@ class ProxyLogging:
         releases the buffered chunks verbatim; a block or modify_response
         terminates with the translation's block chunks or the raised error.
         """
-        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-            resolve_endpoint_translation,
-        )
-
         buffered: Final[list[object]] = []  # mutable-ok: accumulates the stream before the pipeline verdict
         async for item in response:
             buffered.append(item)
@@ -3444,17 +3483,15 @@ class ProxyLogging:
         resolved: Final = resolve_endpoint_translation(user_api_key_dict, buffered[0])
         if resolved is None:
             policy_names: Final = tuple(policy_name for policy_name, _pipeline in pipelines)
-            unresolvable_detail: Final[_PipelineErrorDetail] = {
-                "error": {
-                    "message": (
-                        "Policy pipelines could not govern this streaming response shape; "
-                        f"the response was withheld: {', '.join(policy_names)}."
-                    ),
-                    "type": "guardrail_pipeline_error",
-                    "policies": policy_names,
-                }
-            }
-            raise HTTPException(status_code=500, detail=unresolvable_detail)
+            raise ProxyException(
+                message=(
+                    "Policy pipelines could not govern this streaming response shape; "
+                    f"the response was withheld: {', '.join(policy_names)}."
+                ),
+                type="guardrail_pipeline_error",
+                param=None,
+                code=500,
+            )
         call_type, endpoint_translation = resolved
 
         for policy_name, pipeline in pipelines:

@@ -876,6 +876,14 @@ class UnifiedLLMGuardrails(CustomLogger):
         choices: Final = _chunk_choices(item)
         return any(getattr(choice, "finish_reason", None) is not None for choice in choices)
 
+    def resolve_streaming_flag(self, guardrail_to_apply: CustomGuardrail | None, name: str, default: object) -> object:
+        """Streaming flag resolution order (later wins): default < guardrail
+        attribute < guardrail_config dict < this callback's optional_params."""
+        attribute_value: Final = default if guardrail_to_apply is None else getattr(guardrail_to_apply, name, default)
+        config: Final = None if guardrail_to_apply is None else getattr(guardrail_to_apply, "guardrail_config", None)
+        config_value: Final = config.get(name, attribute_value) if isinstance(config, dict) else attribute_value
+        return self.optional_params.get(name, config_value)
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -906,17 +914,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         if guardrail_to_apply is None:
             guardrail_to_apply = request_data.pop("guardrail_to_apply", None)
 
-        # Get streaming configuration. Resolution order (later wins): default
-        # < guardrail attribute < guardrail_config dict < this callback's
-        # optional_params.
         def _streaming_flag(name: str, default: object) -> Any:
-            value = default
-            if guardrail_to_apply is not None:
-                value = getattr(guardrail_to_apply, name, value)
-                config: Final[Mapping[str, object]] = getattr(guardrail_to_apply, "guardrail_config", {})
-                if isinstance(config, dict):
-                    value = config.get(name, value)
-            return self.optional_params.get(name, value)
+            return self.resolve_streaming_flag(guardrail_to_apply, name, default)
 
         sampling_rate: Final[int] = _streaming_flag("streaming_sampling_rate", 5)
         # Only apply the guardrail at end of stream (not per chunk).
