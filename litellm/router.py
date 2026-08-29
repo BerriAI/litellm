@@ -217,6 +217,7 @@ from litellm.types.router import (
     RoutingStrategy,
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
+    holds_secret_pointer,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -8757,7 +8758,7 @@ class Router:
             ## check if litellm params in os.environ
             if isinstance(_litellm_params, dict):
                 for k, v in _litellm_params.items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
+                    if isinstance(v, str) and v.startswith("os.environ/") and not holds_secret_pointer(k):
                         _litellm_params[k] = get_secret(v)
 
             _model_info: dict = model.pop("model_info", {})

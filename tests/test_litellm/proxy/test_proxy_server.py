@@ -11756,3 +11756,54 @@ async def test_load_config_router_authorizes_fallback_targets_against_the_callin
     router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     assert router.fallback_access_check is router_fallback_access_check
+
+
+def test_resolve_db_litellm_param_keeps_wif_secret_pointers(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("WIF_TEST_KC_SECRET", "kc-secret")
+    proxy_config = ProxyConfig()
+
+    pointer = proxy_config._resolve_db_litellm_param(
+        "anthropic_keycloak_client_secret_ref", "os.environ/WIF_TEST_KC_SECRET"
+    )
+    dereferenced = proxy_config._resolve_db_litellm_param("api_key", "os.environ/WIF_TEST_KC_SECRET")
+
+    assert pointer == "os.environ/WIF_TEST_KC_SECRET"
+    assert dereferenced == "kc-secret"
+
+
+@pytest.mark.asyncio
+async def test_load_config_keeps_wif_secret_pointers_on_config_models(tmp_path, monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("WIF_TEST_SIGNING_KEY", "-----BEGIN PRIVATE KEY-----")
+    monkeypatch.setenv("WIF_TEST_FDRL", "fdrl_from_env")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [
+                    {
+                        "model_name": "claude-wif",
+                        "litellm_params": {
+                            "model": "anthropic/claude-haiku-4-5",
+                            "anthropic_federation_rule_id": "os.environ/WIF_TEST_FDRL",
+                            "anthropic_identity_source": "internal_issuer",
+                            "anthropic_issuer_url": "https://litellm.example",
+                            "anthropic_issuer_audience": "https://api.anthropic.com",
+                            "anthropic_issuer_signing_key_ref": "os.environ/WIF_TEST_SIGNING_KEY",
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    _router, model_list, _general_settings = await ProxyConfig().load_config(
+        router=None, config_file_path=str(config_file)
+    )
+
+    litellm_params = model_list[0]["litellm_params"]
+    assert litellm_params["anthropic_federation_rule_id"] == "fdrl_from_env"
+    assert litellm_params["anthropic_issuer_signing_key_ref"] == "os.environ/WIF_TEST_SIGNING_KEY"

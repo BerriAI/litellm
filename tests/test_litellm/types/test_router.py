@@ -8,6 +8,7 @@ from litellm.types.router import (
     ModelInfo,
     anthropic_wif_fields_named,
     anthropic_wif_fields_present,
+    holds_secret_pointer,
 )
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -146,3 +147,13 @@ def test_anthropic_wif_fields_named_reports_keys_whatever_their_value():
 
 def test_anthropic_wif_fields_named_is_derived_from_the_shared_list():
     assert set(anthropic_wif_fields_named(frozenset(anthropic_wif_litellm_params))) == set(anthropic_wif_litellm_params)
+
+
+@pytest.mark.parametrize("param_name", ["anthropic_issuer_signing_key_ref", "anthropic_keycloak_client_secret_ref"])
+def test_wif_ref_fields_hold_secret_pointers(param_name: str):
+    assert holds_secret_pointer(param_name)
+
+
+@pytest.mark.parametrize("param_name", ["api_key", "anthropic_federation_rule_id", "anthropic_identity_token"])
+def test_dereferenced_fields_do_not_hold_secret_pointers(param_name: str):
+    assert not holds_secret_pointer(param_name)

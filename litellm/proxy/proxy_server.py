@@ -698,6 +698,7 @@ from litellm.types.router import (
     RouterGeneralSettings,
     RoutingPlugin,
     SearchToolTypedDict,
+    holds_secret_pointer,
     updateDeployment,
 )
 from litellm.types.router import ModelInfo as RouterModelInfo
@@ -4497,7 +4498,7 @@ class ProxyConfig:
                     if isinstance(item, dict):
                         item = self._check_for_os_environ_vars(config=item, depth=depth + 1, max_depth=max_depth)
             # if the value is a string and starts with "os.environ/" - then it's an environment variable
-            elif isinstance(value, str) and value.startswith("os.environ/"):
+            elif isinstance(value, str) and value.startswith("os.environ/") and not holds_secret_pointer(key):
                 resolved = get_secret(value)
                 if resolved is None and secret_manager_would_be_consulted(value):
                     verbose_proxy_logger.warning("%s is absent from the configured secret manager", value)
@@ -5530,7 +5531,7 @@ class ProxyConfig:
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
                 for k, v in model["litellm_params"].items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
+                    if isinstance(v, str) and v.startswith("os.environ/") and not holds_secret_pointer(k):
                         model["litellm_params"][k] = get_secret(v)
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
@@ -5926,7 +5927,7 @@ class ProxyConfig:
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
                 for k, v in model["litellm_params"].items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
+                    if isinstance(v, str) and v.startswith("os.environ/") and not holds_secret_pointer(k):
                         model["litellm_params"][k] = get_secret(v)
 
                 ## check if they have model-id's ##
@@ -5954,7 +5955,11 @@ class ProxyConfig:
             return value
 
         decrypted_value: Final = decrypt_value_helper(value=value, key=key, return_original_value=True)
-        if isinstance(decrypted_value, str) and decrypted_value.startswith("os.environ/"):
+        if (
+            isinstance(decrypted_value, str)
+            and decrypted_value.startswith("os.environ/")
+            and not holds_secret_pointer(key)
+        ):
             return get_secret(decrypted_value)
         return decrypted_value
 

@@ -329,6 +329,17 @@ def anthropic_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
     return tuple(name for name in _anthropic_wif_litellm_params if name in keys)
 
 
+_ANTHROPIC_WIF_POINTER_FIELDS: Final = frozenset(
+    name for name in _anthropic_wif_litellm_params if name.endswith("_ref")
+)
+
+
+def holds_secret_pointer(param_name: str) -> bool:
+    """A ``*_ref`` federation field is a secret POINTER the identity source dereferences at use
+    time, so a loader expanding ``os.environ/`` values must leave it as written."""
+    return param_name in _ANTHROPIC_WIF_POINTER_FIELDS
+
+
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 

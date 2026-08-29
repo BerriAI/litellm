@@ -11564,3 +11564,28 @@ class TestTierParamsTheTargetAccepts:
         accepted = router._tier_params_the_target_accepts("no-such-group", {"reasoning_effort": "max"}, {})
 
         assert accepted == {"reasoning_effort": "max"}
+
+
+def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
+    monkeypatch.setenv("WIF_TEST_KC_SECRET", "kc-secret")
+    monkeypatch.setenv("WIF_TEST_FDRL", "fdrl_from_env")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-wif",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "anthropic_federation_rule_id": "os.environ/WIF_TEST_FDRL",
+                    "anthropic_identity_source": "keycloak",
+                    "anthropic_keycloak_token_url": "https://keycloak.example/token",
+                    "anthropic_keycloak_client_id": "litellm",
+                    "anthropic_keycloak_client_secret_ref": "os.environ/WIF_TEST_KC_SECRET",
+                },
+            }
+        ]
+    )
+
+    litellm_params = router.get_model_list()[0]["litellm_params"]
+
+    assert litellm_params["anthropic_federation_rule_id"] == "fdrl_from_env"
+    assert litellm_params["anthropic_keycloak_client_secret_ref"] == "os.environ/WIF_TEST_KC_SECRET"
