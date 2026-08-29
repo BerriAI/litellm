@@ -65,8 +65,9 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     SessionRefreshOpened,
+    SessionSigningConfigError,
+    active_session_signing_keys,
     open_session_refresh_bearer,
-    session_keys_from_master_key,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     SESSION_ISSUER,
@@ -74,8 +75,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     MintedSessionToken,
     OpenedSessionToken,
     SessionAudience,
-    SessionKeys,
     SessionPrincipal,
+    SessionSigningKeys,
     is_session_refresh_token,
     is_session_token,
     mint_session_refresh_token,
@@ -908,7 +909,7 @@ class _SingleUseGuard:
         return "unclaimed" if local is None else "claimed"
 
 
-def _session_token_pair(principal: SessionPrincipal, keys: SessionKeys, now: datetime) -> Response:
+def _session_token_pair(principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime) -> Response:
     access: Final = mint_session_token(principal, keys, now)
     refresh: Final = mint_session_refresh_token(principal, keys, now)
     if not isinstance(access, MintedSessionToken) or not isinstance(refresh, MintedSessionToken):
@@ -935,7 +936,7 @@ class _ProxyCredentialTokenResponse(TypedDict):
 
 
 def _proxy_credential_response(
-    minted: MintedProxyCredential, principal: SessionPrincipal, keys: SessionKeys, now: datetime
+    minted: MintedProxyCredential, principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime
 ) -> Response:
     """The proxy-API token response: the access token is the very credential ``lite
     login`` stores (accepted on every proxy route with user and team attribution), and
@@ -1021,7 +1022,10 @@ async def aggregate_token(
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr token grant rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys: Final = session_keys_from_master_key(master_key)
+    keys: Final = active_session_signing_keys(master_key)
+    if isinstance(keys, SessionSigningConfigError):
+        verbose_logger.error("mcp_gateway_dcr token grant rejected: %s", keys.detail)
+        return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     now: Final = datetime.now(timezone.utc)
     issue: Final = _GrantIssuer(
         request=request,
@@ -1066,7 +1070,7 @@ class _GrantIssuer:
         self,
         request: Request,
         resource: str | None,
-        keys: SessionKeys,
+        keys: SessionSigningKeys,
         now: datetime,
         reload_user: ReloadUser,
         mint_proxy_credential: MintProxyCredential,
@@ -1169,7 +1173,7 @@ async def _refresh_token_grant(
     refresh_token: str | None,
     client_id: str,
     resource: str | None,
-    keys: SessionKeys,
+    keys: SessionSigningKeys,
     now: datetime,
     issue: _GrantIssuer,
 ) -> Response:
@@ -1205,7 +1209,10 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr revoke rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys: Final = session_keys_from_master_key(master_key)
+    keys: Final = active_session_signing_keys(master_key)
+    if isinstance(keys, SessionSigningConfigError):
+        verbose_logger.error("mcp_gateway_dcr revoke rejected: %s", keys.detail)
+        return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     now: Final = datetime.now(timezone.utc)
     opened: Final = open_session_refresh_bearer(token, keys, now, expected_client_id=client_id)
     if isinstance(opened, SessionRefreshOpened):
@@ -1263,14 +1270,17 @@ async def introspect_gateway_token(
     (Kong, an API management layer) can validate a LiteLLM-issued MCP session credential
     without holding the signing secret. The caller is already authenticated by the route
     (section 2.1). Active means everything admission itself would require: valid signature
-    under the master-key-derived session key, unexpired, not a revoked or rotated refresh
+    under the configured session signing keys, unexpired, not a revoked or rotated refresh
     token, and a litellm user that is still live, so a deactivated user's outstanding
     tokens introspect as inactive immediately. A shared-backend or DB outage answers 503
     rather than guessing in either direction."""
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr introspect rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys: Final = session_keys_from_master_key(master_key)
+    keys: Final = active_session_signing_keys(master_key)
+    if isinstance(keys, SessionSigningConfigError):
+        verbose_logger.error("mcp_gateway_dcr introspect rejected: %s", keys.detail)
+        return _oauth_error(500, "server_error", keys.detail)
     now: Final = datetime.now(timezone.utc)
     if is_session_token(token):
         opened = open_session_token(token, keys, now)
