@@ -182,3 +182,102 @@ func TestTeamReadClearsSoftBudgetWhenProxyReturnsNull(t *testing.T) {
 		t.Fatalf("soft_budget = %v, want cleared after the proxy returned null", got)
 	}
 }
+
+func newTeamResourceData(t *testing.T, raw map[string]interface{}) *schema.ResourceData {
+	t.Helper()
+	return schema.TestResourceDataRaw(t, ResourceLiteLLMTeam().Schema, raw)
+}
+
+func TestBuildTeamDataIncludesNewFields(t *testing.T) {
+	d := newTeamResourceData(t, map[string]interface{}{
+		"team_alias":                  "eng",
+		"model_aliases":               map[string]interface{}{"gpt": "gpt-5.2"},
+		"guardrails":                  []interface{}{"pii-mask"},
+		"prompts":                     []interface{}{"prompt-1"},
+		"team_member_budget":          5.0,
+		"team_member_budget_duration": "30d",
+		"team_member_rpm_limit":       10,
+		"team_member_tpm_limit":       1000,
+		"team_member_key_duration":    "7d",
+		"allowed_passthrough_routes":  []interface{}{"/vertex-ai"},
+	})
+
+	data := buildTeamData(d, "team-1")
+
+	for _, k := range []string{
+		"model_aliases", "guardrails", "prompts", "team_member_budget",
+		"team_member_budget_duration", "team_member_rpm_limit", "team_member_tpm_limit",
+		"team_member_key_duration", "allowed_passthrough_routes",
+	} {
+		if _, ok := data[k]; !ok {
+			t.Errorf("buildTeamData missing %s", k)
+		}
+	}
+	if data["team_id"] != "team-1" || data["team_alias"] != "eng" {
+		t.Errorf("identity fields wrong: %v", data)
+	}
+}
+
+func TestTeamReadMapsNewFields(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{
+		"team_id": "team-1",
+		"team_info": {
+			"team_id": "team-1",
+			"team_alias": "eng",
+			"guardrails": ["pii-mask"],
+			"team_member_budget": 5.0,
+			"team_member_rpm_limit": 10
+		}
+	}`)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newTeamResourceData(t, map[string]interface{}{"team_alias": "config-alias"})
+	d.SetId("team-1")
+
+	if err := resourceLiteLLMTeamRead(d, client); err != nil {
+		t.Fatalf("read returned error: %v", err)
+	}
+	if got := d.Get("guardrails").([]interface{}); len(got) != 1 || got[0] != "pii-mask" {
+		t.Errorf("guardrails = %v, want [pii-mask]", got)
+	}
+	if got := d.Get("team_member_budget").(float64); got != 5.0 {
+		t.Errorf("team_member_budget = %v, want 5.0", got)
+	}
+	if got := d.Get("team_member_rpm_limit").(int); got != 10 {
+		t.Errorf("team_member_rpm_limit = %v, want 10", got)
+	}
+}
+
+// rpm_limit_type / tpm_limit_type are accepted by /team/new but not
+// /team/update, so create must send them and update must not.
+func TestTeamLimitTypesSentOnCreateOnly(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id": "x", "team_info": {"team_alias": "eng"}}`)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newTeamResourceData(t, map[string]interface{}{
+		"team_alias":     "eng",
+		"rpm_limit_type": "guaranteed_throughput",
+		"tpm_limit_type": "best_effort_throughput",
+	})
+
+	if err := resourceLiteLLMTeamCreate(d, client); err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if captured["rpm_limit_type"] != "guaranteed_throughput" || captured["tpm_limit_type"] != "best_effort_throughput" {
+		t.Errorf("create payload missing limit types: %v", captured)
+	}
+
+	captured = nil
+	if err := resourceLiteLLMTeamUpdate(d, client); err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	for _, k := range []string{"rpm_limit_type", "tpm_limit_type"} {
+		if _, present := captured[k]; present {
+			t.Errorf("update payload unexpectedly contains %s", k)
+		}
+	}
+}
