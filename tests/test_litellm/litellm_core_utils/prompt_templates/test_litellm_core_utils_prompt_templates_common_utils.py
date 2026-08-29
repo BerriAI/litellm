@@ -1027,3 +1027,70 @@ def test_update_messages_xlitellm_decode_does_not_override_mapping():
     updated = update_messages_with_model_file_ids(messages, "model-A", mapping)
 
     assert updated[0]["content"][0]["file"]["file_id"] == "provider-explicit-id"
+
+
+def test_drop_tool_reference_parts_keeps_text_parts():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        drop_tool_reference_parts_from_tool_messages,
+    )
+
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg(
+            [
+                {"type": "text", "text": "WebFetch tool loaded successfully."},
+                {"type": "tool_reference", "tool_name": "WebFetch"},
+            ]
+        ),
+    ]
+
+    result = drop_tool_reference_parts_from_tool_messages(messages)
+
+    assert result[1]["content"] == [{"type": "text", "text": "WebFetch tool loaded successfully."}]
+    assert result[1]["tool_call_id"] == "call_1"
+
+
+def test_drop_tool_reference_parts_reference_only_becomes_empty_text():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        drop_tool_reference_parts_from_tool_messages,
+    )
+
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg([{"type": "tool_reference", "tool_name": "WebFetch"}]),
+    ]
+
+    result = drop_tool_reference_parts_from_tool_messages(messages)
+
+    assert result[1] == {"role": "tool", "tool_call_id": "call_1", "content": ""}
+
+
+def test_drop_tool_reference_parts_without_references_passes_through():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        drop_tool_reference_parts_from_tool_messages,
+    )
+
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg([{"type": "text", "text": "plain result"}]),
+    ]
+
+    assert drop_tool_reference_parts_from_tool_messages(messages) is messages
+
+
+def test_drop_tool_reference_parts_leaves_non_tool_messages_alone():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        drop_tool_reference_parts_from_tool_messages,
+    )
+
+    user_message = {"role": "user", "content": [{"type": "tool_reference", "tool_name": "WebFetch"}]}
+    messages = [
+        user_message,
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg([{"type": "tool_reference", "tool_name": "WebFetch"}]),
+    ]
+
+    result = drop_tool_reference_parts_from_tool_messages(messages)
+
+    assert result[0] == user_message
+    assert result[2]["content"] == ""

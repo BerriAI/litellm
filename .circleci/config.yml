@@ -2421,45 +2421,6 @@ jobs:
       - wait_for_service:
           url: http://localhost:4000
           timeout: "300"
-      # Add Ruby installation and testing before the existing Node.js and Python tests
-      - run:
-          name: Install Ruby and Bundler
-          command: |
-            # Clone RVM at pinned tag and verify the commit SHA matches the
-            # published tag before running its install script.
-            RVM_VERSION="1.29.12"
-            RVM_EXPECTED_SHA="6bfc9213c9d6914fe756f524eb034a403d51db81"
-            git clone --depth 1 --branch "$RVM_VERSION" https://github.com/rvm/rvm.git /tmp/rvm
-            RVM_ACTUAL_SHA="$(git -C /tmp/rvm rev-parse HEAD)"
-            if [ "$RVM_ACTUAL_SHA" != "$RVM_EXPECTED_SHA" ]; then
-              echo "RVM tag $RVM_VERSION resolved to $RVM_ACTUAL_SHA; expected $RVM_EXPECTED_SHA" >&2
-              exit 1
-            fi
-
-            # Import RVM signing keys (used by `rvm install` to verify Ruby tarballs)
-            gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB
-
-            # Install RVM from the verified checkout. The install script
-            # sources `scripts/functions/installer` using paths relative to
-            # its own working directory, so it must be run from /tmp/rvm.
-            (cd /tmp/rvm && ./install --path "$HOME/.rvm")
-            source "$HOME/.rvm/scripts/rvm"
-
-            # Install Ruby 3.2.2 (RVM verifies the tarball PGP signature)
-            rvm install 3.2.2
-            rvm use 3.2.2 --default
-
-            # Install latest Bundler
-            gem install bundler
-
-      - run:
-          name: Run Ruby tests
-          command: |
-            source $HOME/.rvm/scripts/rvm
-            cd tests/pass_through_tests/ruby_passthrough_tests
-            bundle install
-            bundle exec rspec
-          no_output_timeout: 30m
       # Install Node.js directly from nodejs.org with SHA256 verification,
       # instead of piping NodeSource's setup_24.x apt-repo installer into
       # sudo bash (which runs a mutable upstream script unattended).

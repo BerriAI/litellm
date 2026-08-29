@@ -22,6 +22,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
 )
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.semconv import Metric
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -1643,7 +1644,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         if self._operation_duration_histogram:
             self._operation_duration_histogram.record(duration_s, attributes=common_attrs)
-            if response_obj and (usage := response_obj.get("usage")) and self._token_usage_histogram:
+            if (
+                self._token_usage_histogram
+                and response_obj
+                and not is_unbilled_non_inference_call_from_params(kwargs.get("call_type"), params, response_obj)
+                and (usage := response_obj.get("usage"))
+            ):
                 in_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
                 out_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "output"}
                 self._token_usage_histogram.record(usage.get("prompt_tokens", 0), attributes=in_attrs)
@@ -1717,6 +1723,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         - For non-streaming: uses end_time - api_call_start_time (total generation time)
         """
         if not self._time_per_output_token_histogram:
+            return
+
+        if is_unbilled_non_inference_call_from_params(
+            kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj
+        ):
             return
 
         # Get completion tokens from response_obj
@@ -2048,6 +2059,26 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 # OTel sequence attributes must be homogeneous primitives;
                 # serialise to JSON once so set_attribute never coerces.
                 guardrail_span.set_attribute("guardrail_violation_categories", safe_dumps(violation_categories))
+
+            # Billable usage counters and USD cost stamped by the provider hook
+            # (e.g. Azure Prompt Shield text records, Bedrock policy units).
+            guardrail_usage = guardrail_information.get("guardrail_usage")
+            if guardrail_usage is not None:
+                guardrail_span.set_attribute("guardrail_usage", safe_dumps(guardrail_usage))
+            guardrail_cost = guardrail_information.get("guardrail_cost")
+            if guardrail_cost is not None:
+                self.safe_set_attribute(
+                    span=guardrail_span,
+                    key="guardrail_cost",
+                    value=guardrail_cost,
+                )
+            guardrail_cost_in_spend = guardrail_information.get("guardrail_cost_in_spend")
+            if isinstance(guardrail_cost_in_spend, bool):
+                self.safe_set_attribute(
+                    span=guardrail_span,
+                    key="guardrail_cost_in_spend",
+                    value=guardrail_cost_in_spend,
+                )
 
             self._set_team_attributes_from_kwargs(guardrail_span, kwargs)
 
@@ -2468,7 +2499,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             self._set_service_tier_attributes(span=span, standard_logging_payload=standard_logging_payload)
 
-            usage: Final = response_obj and response_obj.get("usage")
+            usage: Final = (
+                response_obj.get("usage")
+                if response_obj
+                and not is_unbilled_non_inference_call_from_params(
+                    kwargs.get("call_type"), litellm_params, response_obj
+                )
+                else None
+            )
             if usage:
                 self.safe_set_attribute(
                     span=span,

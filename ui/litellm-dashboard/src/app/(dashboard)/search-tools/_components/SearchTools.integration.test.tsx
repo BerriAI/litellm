@@ -95,9 +95,6 @@ describe("SearchTools edit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-test-key",
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
       },
       search_tool_info: { description: "Test description" },
     });
@@ -136,9 +133,6 @@ describe("SearchTools edit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-test-key",
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
       },
       search_tool_info: undefined,
     });
@@ -181,9 +175,6 @@ describe("SearchTools edit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: null,
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
       },
       search_tool_info: undefined,
     });

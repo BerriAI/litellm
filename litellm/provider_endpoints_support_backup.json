@@ -1180,7 +1180,8 @@
         "files": true,
         "rerank": true,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "video_generations": true
       }
     },
     "huggingface": {

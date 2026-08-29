@@ -201,6 +201,36 @@ def test_time_to_first_token_is_streaming_only():
     assert names == set(ALL_METRICS) - {TIME_TO_FIRST_TOKEN}
 
 
+def test_response_read_does_not_replay_the_generation_usage():
+    """A responses-management read returns the ORIGINAL generation's usage on the
+    object it fetches. Recording it would add those tokens again on every poll, so
+    the two usage-derived instruments are skipped while the duration ones, which
+    describe the read itself, still fire."""
+    metrics = _drive_success(InMemoryMetricReader(), call_type="aget_responses")
+
+    assert TOKEN_USAGE not in metrics
+    assert TIME_PER_OUTPUT_TOKEN not in metrics
+    assert OPERATION_DURATION in metrics
+    assert RESPONSE_DURATION in metrics
+
+
+def test_background_response_read_still_records_usage():
+    """A background=true create returns no usage, so its completed read is the only
+    place the generation's tokens are ever seen. Skipping it would lose them
+    entirely rather than deduplicate them."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call(call_type="aget_responses")
+    response_obj["background"] = True
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    metrics = _metrics_by_name(reader)
+    by_type = {dp.attributes[TOKEN_TYPE]: dp for dp in metrics[TOKEN_USAGE]}
+    assert by_type["input"].sum == PROMPT_TOKENS
+    assert by_type["output"].sum == COMPLETION_TOKENS
+    assert TIME_PER_OUTPUT_TOKEN in metrics
+
+
 def test_metrics_disabled_records_nothing():
     """enable_metrics=False: the recorder is never built, so the injected reader
     sees no gen_ai.client.* series even though the success hook runs."""

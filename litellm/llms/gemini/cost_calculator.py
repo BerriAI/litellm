@@ -39,28 +39,35 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     ``model_info`` when available, falling back to $0.035 for models not
     yet updated in the pricing JSON.
     """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        get_web_search_requests_from_usage,
+    )
     from litellm.types.utils import PromptTokensDetailsWrapper
 
     _DEFAULT_COST: Final = 35e-3
     search_costs: Final = model_info.get("search_context_cost_per_query") or {}
     _cost: Final = search_costs.get("search_context_size_medium", _DEFAULT_COST)
 
-    number_of_web_search_requests = 0
-    if (
-        usage is not None
-        and usage.prompt_tokens_details is not None
-        and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
-        and hasattr(usage.prompt_tokens_details, "web_search_requests")
-        and usage.prompt_tokens_details.web_search_requests is not None
-    ):
-        number_of_web_search_requests = usage.prompt_tokens_details.web_search_requests
+    requests_from_prompt_details: Final = (
+        usage.prompt_tokens_details.web_search_requests
+        if (
+            usage is not None
+            and usage.prompt_tokens_details is not None
+            and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+            and hasattr(usage.prompt_tokens_details, "web_search_requests")
+            and usage.prompt_tokens_details.web_search_requests is not None
+        )
+        else None
+    )
+    requests_from_server_tool_use: Final = get_web_search_requests_from_usage(usage)
+    number_of_web_search_requests: Final = requests_from_prompt_details or requests_from_server_tool_use or 0
 
-    # per_prompt billing: clamp to 1 (flat fee per grounded API call)
     billing_mode: Final = model_info.get("web_search_billing_unit") or "per_prompt"
-    if number_of_web_search_requests > 0 and billing_mode == "per_prompt":
-        number_of_web_search_requests = 1
+    billable_requests: Final = (
+        1 if (number_of_web_search_requests > 0 and billing_mode == "per_prompt") else number_of_web_search_requests
+    )
 
-    return _cost * number_of_web_search_requests
+    return _cost * billable_requests
 
 
 GOOGLE_MAPS_GROUNDING_DEFAULT_COST_PER_QUERY: Final = 14e-3

@@ -7,7 +7,7 @@ litellm_content_retrieve tool calls server-side via the typed agentic loop plan.
 
 import time
 import uuid
-from typing import Any, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.compression import compress
@@ -21,6 +21,9 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopRequestPatch,
 )
 from litellm.types.utils import CallTypes
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 LITELLM_CONTENT_RETRIEVE_TOOL_NAME: Final = "litellm_content_retrieve"
 _CACHE_TTL_SECONDS: Final = 15 * 60
@@ -222,7 +225,7 @@ class CompressionInterceptionLogger(CustomLogger):
         response: Any,
         anthropic_messages_provider_config: Any,
         anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:

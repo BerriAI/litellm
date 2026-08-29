@@ -12,6 +12,7 @@ export interface SpendMetrics {
   compression_saved_tokens?: number;
   compression_savings_spend?: number;
   prompt_caching_savings_spend?: number;
+  gateway_injected_caching_savings_spend?: number;
   autorouter_savings_spend?: number;
 }
 
