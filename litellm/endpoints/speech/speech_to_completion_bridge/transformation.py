@@ -1,10 +1,14 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 
 if TYPE_CHECKING:
     from litellm import Logging as LiteLLMLoggingObj
-    from litellm.types.llms.openai import HttpxBinaryResponseContent
+    from litellm.types.llms.openai import ChatCompletionUserMessage, HttpxBinaryResponseContent
     from litellm.types.utils import ModelResponse
 
 
@@ -16,7 +20,42 @@ def _completion_response_cost(model_response: "ModelResponse") -> float | None:
     return response_cost if isinstance(response_cost, float) else None
 
 
+GEMINI_TTS_CHAT_AUDIO_FORMAT: Final = "pcm16"
+
+
+class ChatAudioParam(TypedDict):
+    voice: ReadOnly[str]
+    format: ReadOnly[NotRequired[str]]
+
+
 class SpeechToCompletionBridgeTransformationHandler:
+    def _chat_completion_params(self, optional_params: Mapping[str, object]) -> Mapping[str, object]:
+        return MappingProxyType(
+            {
+                param: value
+                for param, value in optional_params.items()
+                if param in OPENAI_CHAT_COMPLETION_PARAMS and param != "response_format"
+            }
+        )
+
+    def _chat_audio_format(self, model: str, optional_params: Mapping[str, object]) -> str | None:
+        if self._is_gemini_tts_model(model):
+            return GEMINI_TTS_CHAT_AUDIO_FORMAT
+        response_format: Final = optional_params.get("response_format")
+        return response_format if isinstance(response_format, str) else None
+
+    def _chat_audio_param(
+        self, model: str, voice: str | dict | None, optional_params: Mapping[str, object]
+    ) -> ChatAudioParam | None:
+        if not isinstance(voice, str):
+            return None
+        audio_format: Final = self._chat_audio_format(model, optional_params)
+        if audio_format is None:
+            voice_only: Final[ChatAudioParam] = {"voice": voice}
+            return voice_only
+        audio: Final[ChatAudioParam] = {"voice": voice, "format": audio_format}
+        return audio
+
     def transform_request(
         self,
         model: str,
@@ -28,36 +67,19 @@ class SpeechToCompletionBridgeTransformationHandler:
         litellm_logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
     ) -> dict:
-        passed_optional_params: Final = {}
-        for op in optional_params:
-            if op in OPENAI_CHAT_COMPLETION_PARAMS:
-                passed_optional_params[op] = optional_params[op]
-
-        if voice is not None:
-            if isinstance(voice, str):
-                passed_optional_params["audio"] = {"voice": voice}
-                if "response_format" in optional_params:
-                    passed_optional_params["audio"]["format"] = optional_params["response_format"]
-
-        return_kwargs = {
+        user_message: Final[ChatCompletionUserMessage] = {"role": "user", "content": input}
+        return_kwargs: Final = {
             "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": input,
-                }
-            ],
+            "messages": [user_message],
             "modalities": ["audio"],
-            **passed_optional_params,
+            **self._chat_completion_params(optional_params),
+            "audio": self._chat_audio_param(model, voice, optional_params),
             **litellm_params,
             "headers": headers,
             "litellm_logging_obj": litellm_logging_obj,
             "custom_llm_provider": custom_llm_provider,
         }
-
-        # filter out None values
-        return_kwargs = {k: v for k, v in return_kwargs.items() if v is not None}
-        return return_kwargs
+        return {k: v for k, v in return_kwargs.items() if v is not None}
 
     def _convert_pcm16_to_wav(self, pcm_data: bytes, sample_rate: int = 24000, channels: int = 1) -> bytes:
         """
