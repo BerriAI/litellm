@@ -1,9 +1,8 @@
 use serde_json::Value;
 
 use crate::error::{CoreError, CoreResult};
-use crate::http_utils::{map_send_error, upstream_http};
+use crate::http_utils::{http_client, map_send_error, upstream_http};
 
-use super::client::http_client;
 use super::transformation::ChatCompletionsAuth;
 use super::types::{
     ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,

@@ -1,6 +1,5 @@
 //! The OCR call, the Rust equivalent of Python's `litellm.ocr()`.
 
-mod client;
 mod document_fetch;
 mod handler;
 mod hooks;

@@ -7,7 +7,6 @@
 //! is the streaming variant; it hands the raw upstream response back so a host
 //! can splice the event stream to its own caller.
 
-mod client;
 mod common_utils;
 mod handler;
 mod prepare;

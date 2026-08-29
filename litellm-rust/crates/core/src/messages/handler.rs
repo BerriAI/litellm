@@ -1,8 +1,7 @@
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::{CoreError, CoreResult};
-use crate::http_utils::{map_send_error, upstream_http};
+use crate::http_utils::{http_client, map_send_error, upstream_http};
 
-use super::client::http_client;
 use super::types::{AnthropicMessagesResponse, ProviderMessagesRequest};
 
 pub(super) async fn execute_messages_provider_call(

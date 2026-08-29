@@ -1,9 +1,25 @@
 //! Header and upstream-body helpers shared by every route module.
 
+use std::sync::OnceLock;
+use std::time::Duration;
+
 use serde_json::{Map, Value};
 
-use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;
+use crate::constants::{
+    HTTP_CLIENT_CONNECT_TIMEOUT_SECS, HTTP_CLIENT_TIMEOUT_SECS, UPSTREAM_ERROR_BODY_MAX_CHARS,
+};
 use crate::error::{CoreError, CoreResult, json_type_name};
+
+pub fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(HTTP_CLIENT_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(HTTP_CLIENT_CONNECT_TIMEOUT_SECS))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
 
 /// Bound an upstream error body before it crosses a host boundary, so provider
 /// bodies stay data-minimized.

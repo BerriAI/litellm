@@ -6,7 +6,6 @@
 //! credentials, and it resolves the provider, translates the conversation,
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
-mod client;
 mod common_utils;
 pub mod conversation;
 pub(crate) mod handler;

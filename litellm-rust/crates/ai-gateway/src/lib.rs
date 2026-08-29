@@ -14,7 +14,6 @@
 //!   for the load-time config reader.
 
 pub mod audio_transcription;
-mod client;
 pub mod io;
 
 /// GIL-activity tracking. Pure (atomics only); shared by the `server` routes and

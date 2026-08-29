@@ -1,11 +1,10 @@
 use crate::CoreResult;
 use crate::error::CoreError;
-use crate::http_utils::{map_send_error, upstream_http};
+use crate::http_utils::{http_client, map_send_error, upstream_http};
 use crate::ocr::transformation::OcrResponseHandling;
 use crate::providers::azure_ai::ocr::poll_document_intelligence;
 use serde_json::Value;
 
-use super::client::http_client;
 use super::types::ProviderOcrRequest;
 
 pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> CoreResult<Value> {
