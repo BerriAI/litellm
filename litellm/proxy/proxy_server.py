@@ -6769,7 +6769,8 @@ class ProxyConfig:
         model write just committed, and reading it through a lagging read replica
         makes the write-triggered reload report its own durable write as missing
         (#38556). It also keeps a stale replica snapshot from evicting a deployment
-        another pod just added.
+        another pod just added. While the writer is degraded the pin yields to the
+        replica so reader-only mode keeps loading DB-backed models.
         """
         try:
             new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(
