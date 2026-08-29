@@ -108,6 +108,8 @@ def test_together_glm_52_pricing(cost_map: CostMap):
     info = cost_map["together_ai/zai-org/GLM-5.2"]
     assert info["input_cost_per_token"] == 1.4e-06
     assert info["output_cost_per_token"] == 4.4e-06
+    assert info["max_input_tokens"] == 1048575
+    assert info["max_output_tokens"] == 128000
     assert info["supports_function_calling"] is True
     assert info["supports_reasoning"] is True
 
@@ -118,7 +120,7 @@ def test_together_glm_53_flash_pricing_and_capabilities(cost_map: CostMap):
     assert info["output_cost_per_token"] == 5e-07
     assert info["cache_read_input_token_cost"] == 3e-08
     assert info["max_input_tokens"] == 1048575
-    assert info["max_output_tokens"] == 1048575
+    assert info["max_output_tokens"] == 128000
     assert info["supports_function_calling"] is True
     assert info["supports_parallel_function_calling"] is True
     assert info["supports_prompt_caching"] is True
@@ -126,6 +128,18 @@ def test_together_glm_53_flash_pricing_and_capabilities(cost_map: CostMap):
     assert info["supports_response_schema"] is True
     assert info["supports_vision"] is True
     assert info["supports_reasoning"] is True
+
+
+def test_together_chat_entries_never_carry_context_length_as_output_ceiling(cost_map: CostMap):
+    inflated = sorted(
+        model
+        for model, info in cost_map.items()
+        if info.get("litellm_provider") == "together_ai"
+        and info.get("mode") == "chat"
+        and "max_output_tokens" in info
+        and info["max_output_tokens"] == info.get("max_input_tokens")
+    )
+    assert inflated == []
 
 
 def test_together_multilingual_e5_embedding_entry(cost_map: CostMap):
