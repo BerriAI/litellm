@@ -4,7 +4,7 @@ use std::time::Duration;
 use reqwest::Client;
 
 use crate::auth::circuit_breaker::CircuitBreakerRegistry;
-use crate::hardening::GlobalRateLimiter;
+use crate::hardening::{AuditLogShipper, GlobalRateLimiter, SecretRotator};
 use crate::io::realtime_pool::RealtimePool;
 use crate::metrics::GatewayMetrics;
 use litellm_core::auth::KeyCache;
@@ -84,6 +84,10 @@ pub struct AppState {
     pub config: GatewayConfig,
     /// Global rate limiter (in addition to per-key limits).
     pub global_rate_limiter: Arc<GlobalRateLimiter>,
+    /// Secret rotation support for file-based secrets.
+    pub secret_rotator: Option<Arc<SecretRotator>>,
+    /// Audit log shipper for external log delivery.
+    pub audit_log_shipper: Option<Arc<AuditLogShipper>>,
 }
 
 impl AppState {

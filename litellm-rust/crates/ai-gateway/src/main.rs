@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use litellm_ai_gateway::auth::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry};
-use litellm_ai_gateway::hardening::GlobalRateLimiter;
+use litellm_ai_gateway::hardening::{AuditLogShipper, GlobalRateLimiter, SecretRotator};
 use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
 use litellm_ai_gateway::metrics::GatewayMetrics;
 use litellm_ai_gateway::routes;
@@ -167,6 +167,13 @@ async fn main() {
                 .unwrap_or(10_000),
             60, // 60-second window
         )),
+        secret_rotator: std::env::var("SECRET_FILE")
+            .ok()
+            .and_then(|path| SecretRotator::new(&path).ok())
+            .map(Arc::new),
+        audit_log_shipper: std::env::var("AUDIT_LOG_ENDPOINT")
+            .ok()
+            .map(|endpoint| Arc::new(AuditLogShipper::new(&endpoint, 100))),
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
