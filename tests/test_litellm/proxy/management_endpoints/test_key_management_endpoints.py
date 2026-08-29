@@ -5151,6 +5151,42 @@ async def test_delete_key_fn_persists_deleted_keys(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_delete_key_fn_404_not_found(monkeypatch):
+    """Test that deleting a non-existent key raises a 404 cleanly."""
+    from litellm.proxy._types import KeyRequest, ProxyException
+    from litellm.proxy.management_endpoints.key_management_endpoints import delete_key_fn
+    from fastapi import HTTPException
+    
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin-user",
+        api_key="sk-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+    )
+    
+    # Mock find_many to return an empty list, simulating a key that isn't found
+    mock_prisma_client.verificationtoken.find_many.return_value = []
+    
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    )
+
+    data = KeyRequest(keys=["sk-nonexistent-key"])
+
+    with pytest.raises(ProxyException) as excinfo:
+        await delete_key_fn(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by="admin-user",
+        )
+    
+    assert "No keys found" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
 async def test_can_delete_verification_token_proxy_admin_team_key(monkeypatch):
     """Test that team admin can delete team keys from their own team."""
     key_info = LiteLLM_VerificationToken(
