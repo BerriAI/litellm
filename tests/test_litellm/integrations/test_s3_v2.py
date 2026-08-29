@@ -1856,3 +1856,32 @@ async def test_download_percent_encodes_reserved_characters_in_object_key(s3_obj
         body=None,
         headers=call.kwargs["headers"],
     )
+
+
+def _s3_logger_for_region(region_name: str) -> S3Logger:
+    logger = S3Logger.__new__(S3Logger)
+    logger.s3_endpoint_url = None
+    logger.s3_bucket_name = "my-litellm-audit"
+    logger.s3_region_name = region_name
+    return logger
+
+
+@pytest.mark.parametrize(
+    "region_name,expected_url",
+    [
+        (
+            "cn-northwest-1",
+            "https://my-litellm-audit.s3.cn-northwest-1.amazonaws.com.cn/2025-01-01/key.json",
+        ),
+        (
+            "us-gov-west-1",
+            "https://my-litellm-audit.s3.us-gov-west-1.amazonaws.com/2025-01-01/key.json",
+        ),
+        (
+            "us-east-1",
+            "https://my-litellm-audit.s3.us-east-1.amazonaws.com/2025-01-01/key.json",
+        ),
+    ],
+)
+def test_build_object_url_uses_partition_dns_suffix(region_name: str, expected_url: str) -> None:
+    assert _s3_logger_for_region(region_name)._build_object_url("2025-01-01/key.json") == expected_url
