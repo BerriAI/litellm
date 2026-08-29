@@ -55,6 +55,23 @@ _HEADER_VALUE_ALLOWLIST: Final = frozenset(
 # Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
 _HEADER_PRESENT_PLACEHOLDER: Final = "[present]"
 
+# Credential headers: never forward values to third-party guardrails, even when matched
+# by an allowlist glob (e.g. x-litellm-* includes x-litellm-api-key).
+_HEADER_VALUE_DENYLIST: Final = frozenset(
+    {
+        "authorization",
+        "x-litellm-api-key",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+    }
+)
+
+
+def _header_value_denied(header_name: str) -> bool:
+    """Return True if this header's value must never be forwarded."""
+    return header_name.lower() in _HEADER_VALUE_DENYLIST
+
 
 def _header_value_allowed(
     header_name: str,
@@ -91,7 +108,9 @@ def _sanitize_inbound_headers(
         if k is None:
             continue
         key = str(k)
-        if _header_value_allowed(key, extra_allowlist=extra_allowlist):
+        if _header_value_denied(key):
+            sanitized[key] = _HEADER_PRESENT_PLACEHOLDER
+        elif _header_value_allowed(key, extra_allowlist=extra_allowlist):
             try:
                 sanitized[key] = str(v)
             except Exception:

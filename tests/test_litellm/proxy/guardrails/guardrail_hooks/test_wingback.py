@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.exceptions import GuardrailRaisedException
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
+    _HEADER_PRESENT_PLACEHOLDER,
+)
 from litellm.proxy.guardrails.guardrail_hooks.wingback import (
     guardrail_class_registry,
     guardrail_initializer_registry,
@@ -114,6 +117,50 @@ class TestWingbackGuardrail:
         assert result["texts"] == ["Hello"]
         mock_post.assert_awaited_once()
         assert mock_post.await_args.kwargs["url"] == "http://localhost:8101/beta/litellm_basic_guardrail_api"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_redacts_litellm_virtual_key_header(self):
+        guardrail = WingbackGuardrail(
+            api_base="http://localhost:8101",
+            api_key="wbk_eg_test",
+            guardrail_name="wingback-runtime-security",
+            event_hook="pre_call",
+            default_on=True,
+        )
+
+        inputs = GenericGuardrailAPIInputs(texts=["Hello"])
+        request_data = {
+            "proxy_server_request": {
+                "messages": [{"role": "user", "content": "Hello"}],
+                "model": "gpt-4o-mini",
+                "headers": {
+                    "x-litellm-api-key": "sk-virtual-key-must-not-leak",
+                    "User-Agent": "OpenAI/Python 2.17.0",
+                },
+            }
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"action": "NONE"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            new=AsyncMock(return_value=mock_response),
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+        json_payload = mock_post.await_args.kwargs["json"]
+        request_headers = json_payload.get("request_headers") or {}
+        assert request_headers.get("x-litellm-api-key") == _HEADER_PRESENT_PLACEHOLDER
+        assert request_headers.get("User-Agent") == "OpenAI/Python 2.17.0"
+        assert "sk-virtual-key-must-not-leak" not in str(json_payload)
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_blocks_request(self):
