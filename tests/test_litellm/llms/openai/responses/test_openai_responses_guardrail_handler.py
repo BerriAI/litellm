@@ -1229,3 +1229,99 @@ class TestOpenAIResponsesHandlerToolInjection:
         names = [t.get("name") for t in result["tools"]]
         assert "get_weather" in names
         assert "injected_tool" in names
+
+
+COMPRESSED_MARKER = "[compressed document; retrieve the full text with hash=b573993006976af767214fac]"
+
+
+class StructuredRewriteGuardrail(CustomGuardrail):
+    """Guardrail that rewrites whole messages via structured_messages and leaves
+    texts untouched, the way message-compressing guardrails do."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        first_user = next(i for i, m in enumerate(messages) if m.get("role") == "user")
+        rewritten = [
+            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
+        ]
+        return {**inputs, "structured_messages": rewritten}
+
+
+def _texts(item: dict) -> list[str]:
+    content = item.get("content")
+    if isinstance(content, str):
+        return [content]
+    return [part["text"] for part in content]
+
+
+class TestStructuredMessagesWriteBack:
+    """A guardrail's structured_messages rewrite must land in the Responses request,
+    not only the per-text mapping the chat handler shares with it."""
+
+    @pytest.mark.asyncio
+    async def test_list_input_gets_rewritten_messages_and_keeps_instructions(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Answer from the memo only.",
+            "input": [
+                {"role": "user", "content": "memo " * 400},
+                {"role": "assistant", "content": "Understood."},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert result["instructions"] == "Answer from the memo only."
+        user_items = [item for item in result["input"] if item.get("role") == "user"]
+        assert [_texts(item) for item in user_items] == [[COMPRESSED_MARKER], ["What is the codename?"]]
+        assert not any(item.get("role") == "system" for item in result["input"])
+        assert _texts(next(item for item in result["input"] if item.get("role") == "assistant")) == ["Understood."]
+
+    @pytest.mark.asyncio
+    async def test_string_input_becomes_rewritten_message_list(self):
+        handler = OpenAIResponsesHandler()
+        data = {"model": "gpt-5.6", "input": "memo " * 400}
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert [_texts(item) for item in result["input"]] == [[COMPRESSED_MARKER]]
+        assert "instructions" not in result
+
+    @pytest.mark.asyncio
+    async def test_developer_item_survives_write_back_as_input_text(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                {"role": "developer", "content": "Always answer in French."},
+                {"role": "user", "content": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        developer = next(item for item in result["input"] if item.get("role") == "developer")
+        assert developer["content"] == [{"type": "input_text", "text": "Always answer in French."}]
+
+    @pytest.mark.asyncio
+    async def test_same_inputs_object_back_keeps_the_text_mapping(self):
+        handler = OpenAIResponsesHandler()
+        original_input = [
+            {"role": "user", "content": "Hello"},
+            {"role": "user", "content": [{"type": "input_text", "text": "Again"}]},
+        ]
+        data = {"model": "gpt-5.6", "input": original_input}
+
+        result = await handler.process_input_messages(data, MockGuardrail())
+
+        assert result["input"] is original_input
+        assert [_texts(item) for item in result["input"]] == [["Hello [GUARDRAILED]"], ["Again [GUARDRAILED]"]]
