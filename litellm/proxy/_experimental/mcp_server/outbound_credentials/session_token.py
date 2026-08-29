@@ -34,6 +34,7 @@ injected ``now``); the strict pydantic claims model is the sole, total type gate
 from __future__ import annotations
 
 import secrets
+from collections import Counter
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
@@ -42,7 +43,7 @@ import jwt
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
 
 SESSION_TOKEN_PREFIX: Final = "llm_session_"
 """Marker prefix on every serialized session ACCESS token so the admission edge can cheaply
@@ -149,6 +150,8 @@ class SessionRotatedPublicKey(BaseModel):
             raise ValueError(f"public_key_pem is not a loadable PEM public key: {exc}") from exc
         if not isinstance(loaded, rsa.RSAPublicKey):
             raise ValueError("public_key_pem must be an RSA public key in PEM format")  # noqa: TRY004  # pydantic validators must raise ValueError
+        if loaded.key_size < _MIN_RSA_KEY_BITS:
+            raise ValueError(f"public_key_pem must be an RSA key of at least {_MIN_RSA_KEY_BITS} bits")
         return value
 
 
@@ -176,6 +179,16 @@ class AsymmetricSessionKeys(BaseModel):
         if loaded.key_size < _MIN_RSA_KEY_BITS:
             raise ValueError(f"private_key_pem must be an RSA key of at least {_MIN_RSA_KEY_BITS} bits")
         return value
+
+    @model_validator(mode="after")
+    def _kids_are_unique(self) -> AsymmetricSessionKeys:
+        kids: Final = (self.kid, *(previous.kid for previous in self.previous_public_keys))
+        duplicates: Final = tuple(kid for kid, count in Counter(kids).items() if count > 1)
+        if duplicates:
+            raise ValueError(
+                f"every kid must be unique across the current and previous keys; duplicated: {', '.join(duplicates)}"
+            )
+        return self
 
 
 SessionSigningKeys: TypeAlias = SessionKeys | AsymmetricSessionKeys

@@ -428,5 +428,26 @@ def test_weak_or_garbage_private_key_pem_rejected_at_construction():
         SessionRotatedPublicKey(kid="private-half", public_key_pem=_RSA_PEM_A)
 
 
+def test_weak_rotated_public_key_rejected_at_construction():
+    weak_public = (
+        serialization.load_pem_private_key(_rsa_private_pem(bits=1024).encode(), password=None)
+        .public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
+    with pytest.raises(ValidationError):
+        SessionRotatedPublicKey(kid="2024-01", public_key_pem=weak_public)
+
+
+def test_duplicate_kids_rejected_at_construction():
+    previous = SessionRotatedPublicKey(kid="2025-06", public_key_pem=session_public_key_pem(OTHER_RSA_KEYS))
+    with pytest.raises(ValidationError):
+        AsymmetricSessionKeys(private_key_pem=SecretStr(_RSA_PEM_A), kid="2025-06", previous_public_keys=(previous,))
+    with pytest.raises(ValidationError):
+        AsymmetricSessionKeys(
+            private_key_pem=SecretStr(_RSA_PEM_A), kid="2026-01", previous_public_keys=(previous, previous)
+        )
+
+
 def test_asymmetric_keys_repr_never_leaks_the_private_key():
     assert _RSA_PEM_A not in repr(RSA_KEYS)
