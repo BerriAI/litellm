@@ -16,6 +16,9 @@ import {
 import { cn } from "@/lib/cva.config";
 import { ModelAccessGroup } from "@/app/(dashboard)/hooks/modelAccessGroups/useModelAccessGroups";
 
+const budgetDecimals = (maxBudget: number | null | undefined): number =>
+  maxBudget != null && maxBudget > 0 && maxBudget < 0.01 ? 5 : 2;
+
 interface AccessGroupRowActionsProps {
   accessGroup: ModelAccessGroup;
   onSetBudget: (accessGroup: ModelAccessGroup) => void;
@@ -101,7 +104,11 @@ export const getAccessGroupBudgetColumns = ({
     size: 180,
     enableSorting: true,
     cell: ({ row }) => (
-      <SpendBudgetCell spend={row.original.spend} maxBudget={row.original.budget?.max_budget} budgetDecimals={2} />
+      <SpendBudgetCell
+        spend={row.original.spend}
+        maxBudget={row.original.budget?.max_budget}
+        budgetDecimals={budgetDecimals(row.original.budget?.max_budget)}
+      />
     ),
   },
   {
