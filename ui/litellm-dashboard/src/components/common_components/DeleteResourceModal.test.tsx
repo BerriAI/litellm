@@ -134,6 +134,12 @@ describe("DeleteResourceModal", () => {
     expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
   });
 
+  it("should enable delete when the stored name itself has surrounding whitespace", () => {
+    renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="  prod-key  " />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "prod-key" } });
+    expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
+  });
+
   it("should reset requiredConfirmation input when modal opens", async () => {
     const user = userEvent.setup();
     const { rerender } = renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="DELETE" />);

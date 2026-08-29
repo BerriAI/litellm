@@ -102,7 +102,8 @@ export default function DeleteResourceModal({
             variant="destructive"
             onClick={onOk}
             disabled={
-              (!!requiredConfirmation && requiredConfirmationInput.trim() !== requiredConfirmation) || confirmLoading
+              (!!requiredConfirmation && requiredConfirmationInput.trim() !== requiredConfirmation.trim()) ||
+              confirmLoading
             }
           >
             {confirmLoading ? "Deleting..." : "Delete"}
