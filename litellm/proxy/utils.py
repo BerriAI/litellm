@@ -2825,6 +2825,7 @@ class ProxyLogging:
         if pipeline_response is not None:
             response = pipeline_response  # rebind-ok: adopt the pipeline's replacement response, same contract as the callback loops below
 
+        pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
         guardrail_callbacks: Final[list[CustomGuardrail]] = []
         other_callbacks: Final[list[CustomLogger]] = []
         try:
@@ -2849,11 +2850,17 @@ class ProxyLogging:
             guardrail_data: Final = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = tuple(
-                callback for callback in guardrail_callbacks if getattr(callback, "run_in_parallel", False)
+                callback
+                for callback in guardrail_callbacks
+                if getattr(callback, "run_in_parallel", False)
+                and not (callback.guardrail_name and callback.guardrail_name in pipeline_managed)
             )
 
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
+
+                if callback.guardrail_name and callback.guardrail_name in pipeline_managed:
+                    continue
 
                 if getattr(callback, "run_in_parallel", False):
                     continue
