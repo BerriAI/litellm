@@ -2040,6 +2040,16 @@ def _map_azure_exception(
             response=getattr(original_exception, "response", None),
             body=getattr(original_exception, "body", None),
         )
+    elif ExceptionCheckers.is_error_str_rate_limit(
+        error_str, status_code=getattr(original_exception, "status_code", None)
+    ):
+        raise RateLimitError(
+            message=f"AzureException RateLimitError - {message}",
+            llm_provider="azure",
+            model=model,
+            litellm_debug_info=extra_information,
+            response=getattr(original_exception, "response", None),
+        )
     elif "invalid_request_error" in error_str and getattr(original_exception, "status_code", None) in (None, 400):
         raise BadRequestError(
             message=f"AzureException BadRequestError - {message}",

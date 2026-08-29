@@ -1083,6 +1083,30 @@ class _UpstreamErrorWithMessage(_UpstreamHTTPError):
         )
 
 
+@pytest.mark.parametrize(
+    ("provider", "error_message"),
+    [
+        ("gemini", "GeminiException - resource has been exhausted (e.g. check quota)"),
+        ("vertex_ai", "VertexAIException - resource_exhausted: quota exceeded for default tier"),
+        ("bedrock", "BedrockException - provisioned throughput exceeded for model"),
+        ("azure", "AzureException - request_rate_too_large"),
+        ("anthropic", "AnthropicException - capacity temporarily exceeded"),
+    ],
+)
+def test_provider_rate_limit_phrases_reach_dispatch_boundary(
+    provider, error_message, quiet_exception_mapping
+):
+    """Vendor quota messages must reach the provider mapper as RateLimitError."""
+    with pytest.raises(litellm.RateLimitError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(error_message, 400),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.llm_provider == provider
+
+
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
 def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(
     provider, quiet_exception_mapping
