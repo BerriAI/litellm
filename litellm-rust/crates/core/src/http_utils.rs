@@ -5,6 +5,8 @@ use serde_json::{Map, Value};
 use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;
 use crate::error::{CoreError, CoreResult, json_type_name};
 
+pub mod safe_fetch;
+
 /// Bound an upstream error body before it crosses a host boundary, so provider
 /// bodies stay data-minimized.
 pub fn truncate_error_body(body: &str) -> String {

@@ -14,6 +14,12 @@ pub(crate) const MESSAGES_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// before truncation, so provider bodies are bounded and data-minimized.
 pub(crate) const UPSTREAM_ERROR_BODY_MAX_CHARS: usize = 256;
 
+/// Defaults for bounded fetches of user-controlled public URLs. Callers must
+/// still supply a route-appropriate response byte limit.
+pub(crate) const SAFE_FETCH_CONNECT_TIMEOUT_SECS: u64 = 10;
+pub(crate) const SAFE_FETCH_TIMEOUT_SECS: u64 = 60;
+pub(crate) const SAFE_FETCH_MAX_REDIRECTS: usize = 10;
+
 /// Provider name used for Anthropic Messages when a deployment's provider model
 /// does not carry an explicit provider prefix.
 pub const ANTHROPIC_MESSAGES_PROVIDER: &str = "anthropic";
