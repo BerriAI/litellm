@@ -1388,6 +1388,8 @@ class TestCheckBatchCost:
         import httpx
         import respx
 
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
@@ -1456,9 +1458,9 @@ class TestCheckBatchCost:
 
         with (
             respx.mock(assert_all_called=True) as provider,
-            patch(  # test-quality-ok: the poller builds Logging inline, the only seam to its handler kwargs
-                "litellm.litellm_core_utils.litellm_logging.Logging"
-            ) as mock_logging_cls,
+            patch.object(  # test-quality-ok: the poller builds Logging inline, the only seam to its handler kwargs
+                Logging, "async_success_handler", new_callable=AsyncMock
+            ) as success_handler,
         ):
             provider.get("https://api.openai.com/v1/files/file-output-123/content").mock(
                 return_value=httpx.Response(200, content=f"{succeeded_line}\n{rejected_line}\n".encode())
@@ -1466,14 +1468,11 @@ class TestCheckBatchCost:
             provider.get("https://api.openai.com/v1/files/file-error-456/content").mock(
                 return_value=httpx.Response(200, content=f"{error_file_lines}\n\n".encode())
             )
-            mock_logging_obj = MagicMock()
-            mock_logging_obj.async_success_handler = AsyncMock()
-            mock_logging_cls.return_value = mock_logging_obj
-
             await check_batch_cost_instance.check_batch_cost()
 
-        mock_logging_obj.async_success_handler.assert_awaited_once()
-        handler_kwargs = mock_logging_obj.async_success_handler.await_args.kwargs
+        spend_log_calls = [call.kwargs for call in success_handler.await_args_list if "batch_cost" in call.kwargs]
+        assert len(spend_log_calls) == 1
+        handler_kwargs = spend_log_calls[0]
         assert handler_kwargs["batch_successful_requests"] == 1
         assert handler_kwargs["batch_failed_requests"] == 3, (
             "2 error-file lines must add to the output file's 1 rejected request"
