@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Check, ChevronLeft, ChevronRight, Copy, Sparkles, Wrench } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LogEntry } from "../columns";
@@ -30,7 +29,6 @@ export interface LogDetailsDrawerProps {
 }
 
 const SIDEBAR_WIDTH_PX = 224;
-const SIDEBAR_RAIL_WIDTH_PX = 40;
 
 // Session logs are fetched page-by-page from the paginated backend and
 // accumulated so the drawer can show the whole session. page_size is the
@@ -314,24 +312,10 @@ export function LogDetailsDrawer({
           {logEntry?.request_id ? `Request ${logEntry.request_id} details` : "Request details"}
         </SheetTitle>
         <div style={{ height: "100%" }} className="flex">
-          <div
-            className="border-r border-border bg-muted flex flex-col shrink-0"
-            style={{ width: isSidebarCollapsed ? SIDEBAR_RAIL_WIDTH_PX : SIDEBAR_WIDTH_PX }}
-          >
-            <div
-              className={`flex items-start gap-1 py-2 pl-1 border-b border-border bg-card ${isSidebarCollapsed ? "pr-1" : "pr-3"}`}
-            >
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
-                className="shrink-0 border! border-border! rounded-md!"
-                aria-label={isSidebarCollapsed ? "Expand trace sidebar" : "Collapse trace sidebar"}
-              >
-                {isSidebarCollapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
-              </Button>
-              {!isSidebarCollapsed && (
-                <div className="min-w-0 flex-1">
+          {!isSidebarCollapsed && (
+            <div className="border-r border-border bg-muted flex flex-col shrink-0" style={{ width: SIDEBAR_WIDTH_PX }}>
+              <div className="px-3 py-2 border-b border-border bg-card">
+                <div className="min-w-0">
                   <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                     {isSessionMode ? "Session" : "Trace"}
                   </div>
@@ -407,10 +391,8 @@ export function LogDetailsDrawer({
                     </Tabs>
                   )}
                 </div>
-              )}
-            </div>
+              </div>
 
-            {!isSidebarCollapsed && (
               <div className="flex-1 overflow-y-auto">
                 {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
                   <div className="px-3 pt-2">
@@ -454,13 +436,15 @@ export function LogDetailsDrawer({
                   </div>
                 )}
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           <div className="flex-1 flex flex-col overflow-hidden">
             <DrawerHeader
               log={currentLog}
               onClose={onClose}
+              isSidebarCollapsed={isSidebarCollapsed}
+              onToggleSidebar={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
               onPrevious={selectPreviousLog}
               onNext={selectNextLog}
               statusLabel={statusLabel}
