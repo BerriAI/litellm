@@ -339,6 +339,7 @@ def _build_responses_followup_items(
 
 class HeadroomGuardrail(CustomGuardrail):
     records_own_guardrail_information: ClassVar[bool] = True
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({HEADROOM_RETRIEVE_TOOL_NAME})
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -739,7 +740,7 @@ class HeadroomGuardrail(CustomGuardrail):
         response: Any,
         anthropic_messages_provider_config: Any,
         anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj | None,
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:

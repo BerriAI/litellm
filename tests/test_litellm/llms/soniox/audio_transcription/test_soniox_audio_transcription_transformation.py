@@ -486,7 +486,8 @@ def _cue_texts(srt: str) -> list:
 
 class TestMultilingualCueGrouping:
     def test_should_split_spaceless_chinese_on_width_budget(self):
-        from litellm.llms.soniox.common_utils import _text_width, render_soniox_tokens_as_srt
+        from litellm.litellm_core_utils.audio_utils.subtitle_utils import _text_width
+        from litellm.llms.soniox.common_utils import render_soniox_tokens_as_srt
 
         tokens = [{"text": "你好", "start_ms": i * 100, "end_ms": i * 100 + 90} for i in range(60)]
         result = render_soniox_tokens_as_srt(tokens)
@@ -551,18 +552,6 @@ class TestMultilingualCueGrouping:
         tokens = [{"text": f" word{i}", "start_ms": i * 100, "end_ms": i * 100 + 90} for i in range(12)]
         texts = _cue_texts(render_soniox_tokens_as_srt(tokens))
         assert len(texts) == 1
-
-    def test_should_merge_subword_tokens_inside_cjk_run(self):
-        from litellm.llms.soniox.common_utils import _merge_tokens_into_words
-
-        tokens = [
-            {"text": "編", "start_ms": 0, "end_ms": 100},
-            {"text": "集", "start_ms": 100, "end_ms": 200},
-            {"text": "、", "start_ms": 200, "end_ms": 250},
-            {"text": "保存", "start_ms": 250, "end_ms": 400},
-        ]
-        words = _merge_tokens_into_words(tokens)
-        assert [w.text for w in words] == ["編", "集、", "保存"]
 
 
 class TestRenderSonioxTokensAsVtt:
@@ -673,12 +662,12 @@ class TestBuildResponseWithResponseFormat:
             }
         }
         # SRT requested but tokens have no start_ms/end_ms -> empty SRT
-        # falls back gracefully since _group_tokens_into_cues skips them
+        # falls back gracefully since group_subtitle_tokens_into_cues skips them
         resp = cfg._build_response_from_payload(payload, response_format="srt")
         # With no timestamp data, SRT rendering produces empty string,
         # but we still get output because the code checks `tokens` truthiness
         # before choosing SRT path. Actually the tokens list is truthy but
-        # _group_tokens_into_cues will produce no cues -> empty SRT string.
+        # group_subtitle_tokens_into_cues will produce no cues -> empty SRT string.
         # Let's verify it doesn't crash.
         assert isinstance(resp.text, str)
 

@@ -5,6 +5,7 @@ import httpx
 
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
+    RealtimeInputAudioTranscriptionUsage,
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
@@ -68,6 +69,9 @@ class BaseRealtimeConfig(ABC):
         return False
 
     def session_configuration_request(self, model: str) -> str | None:  # message sent to setup the realtime session
+        return None
+
+    def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return None
 
     def transform_session_created_event(

@@ -4,20 +4,45 @@ import datetime
 import json
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch as patch_ctx
 
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import LiteLLM_ProxyModelTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_ProxyModelTable,
+    LitellmUserRoles,
+    ReconcileOutcome,
+    UserAPIKeyAuth,
+)
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy.management_endpoints.model_management_endpoints import (
+    _PTU_ZEROED_PRICING_FIELDS,
+    _SEARCH_CONTEXT_SIZES,
+    _is_nonzero_price,
     _merged_ptu_model_info,
+    _update_team_model_in_db,
+    _ptu_priced_deployment,
+    _ptu_zeroed_pricing,
     _raise_if_ptu_cost_attribution_disabled,
     _validate_ptu_model_info,
     add_new_model,
     update_db_model,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
+from litellm.types.utils import PromptTokensDetailsWrapper
+from litellm.router import Router
+from litellm.types.router import (
+    SPECIAL_MODEL_INFO_PARAMS,
+    Deployment,
+    LiteLLM_Params,
+    ModelInfo,
+    updateDeployment,
+    updateLiteLLMParams,
+)
+from litellm.types.utils import Usage
 
 
 def test_model_info_accepts_valid_ptu_fields():
@@ -33,7 +58,7 @@ def test_model_info_accepts_valid_ptu_fields():
 
 
 def test_model_info_rejects_non_positive_count():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='value_error, input_value'):
         ModelInfo(
             id="x",
             team_id="t",
@@ -44,7 +69,7 @@ def test_model_info_rejects_non_positive_count():
 
 
 def test_model_info_rejects_negative_rate():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='value_error, input_value'):
         ModelInfo(
             id="x",
             team_id="t",
@@ -57,7 +82,7 @@ def test_model_info_rejects_negative_rate():
 def test_model_info_rejects_a_count_beyond_the_cap():
     """flat cost multiplies the count by a float, and an unbounded int overflows that
     conversion, which aborted the rollup for every team rather than skipping one model."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", team_id="t", ptu_count=10**400, cost_per_ptu_per_hour=2.0)
 
 
@@ -70,12 +95,12 @@ def test_model_info_accepts_a_count_at_the_cap():
 def test_model_info_rejects_a_non_finite_rate(rate):
     """NaN compares False against every bound, so a bare `< 0` check let it through and the
     deployment then accrued a flat cost of nan."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='value_error, input_value'):
         ModelInfo(id="x", team_id="t", ptu_count=5, cost_per_ptu_per_hour=rate)
 
 
 def test_model_info_rejects_a_rate_beyond_the_cap():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", team_id="t", ptu_count=5, cost_per_ptu_per_hour=ModelInfo.MAX_COST_PER_PTU_PER_HOUR * 2)
 
 
@@ -123,7 +148,7 @@ def test_validate_helper_passes_full_config():
 def test_model_info_rejects_effective_to_before_from():
     import datetime
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(
             id="x",
             team_id="t",
@@ -161,7 +186,7 @@ def test_model_info_compares_mixed_naive_and_aware_timestamps():
     )
     assert info.ptu_effective_to is not None
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(
             id="x",
             team_id="t",
@@ -623,7 +648,12 @@ class TestAddNewModelPtuGate:
         add_team_model_to_db = AsyncMock(return_value=db_row)
 
         mock_proxy_config = MagicMock()
-        mock_proxy_config.add_deployment = AsyncMock(return_value=None)
+        # Both fields None: no reconcile state was captured, so the serving verdict
+        # falls back to reading the router live -- which is what mock_router below
+        # drives. These tests are about the PTU gate, not the reload verdict.
+        mock_proxy_config.add_deployment = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=None, live_after=None)
+        )
 
         mock_router = MagicMock()
         mock_router.get_model_ids.return_value = [model_id]
@@ -668,7 +698,7 @@ class TestAddNewModelPtuGate:
         with ExitStack() as stack:
             for active_patch in patches:
                 stack.enter_context(active_patch)
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(Exception, match='PTU cost attribution is disabled, so ptu_count') as exc:
                 await add_new_model(model_params=self._ptu_deployment("ptu-gate-model"), user_api_key_dict=admin)
 
         assert PTU_COST_ATTRIBUTION_ENV_VAR in str(exc.value)
@@ -707,3 +737,544 @@ class TestAddNewModelPtuGate:
 
         assert result.model_id == "ptu-gate-model"
         add_team_model_to_db.assert_called_once()
+
+
+
+class TestPtuDeploymentsAreNotBilledPerToken:
+    """Reserved capacity is billed by the flat cost the rollup writes, so a PTU deployment must
+    not also bill the traffic that capacity serves."""
+
+    PTU = {"ptu_count": 15, "cost_per_ptu_per_hour": 2.0}
+
+    @pytest.fixture(autouse=True)
+    def _flag_on(self, monkeypatch):
+        monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+        # update_db_model encrypts every litellm_params value it is handed, and the salt falls
+        # back to the master key the proxy sets at boot, which no unit test has.
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+
+    @staticmethod
+    def _zeroed(model_info=None, litellm_params=None, supplied=None):
+        return _ptu_zeroed_pricing(
+            model_info=model_info if model_info is not None else {},
+            litellm_params=litellm_params if litellm_params is not None else {},
+            supplied=supplied if supplied is not None else {},
+        )
+
+    def test_a_deployment_without_ptu_config_keeps_its_pricing(self):
+        assert self._zeroed(model_info={"team_id": "t"}, litellm_params={"input_cost_per_token": 5e-07}) == {}
+
+    def test_a_half_set_pair_is_not_treated_as_ptu(self):
+        assert self._zeroed(model_info={"ptu_count": 15}) == {}
+
+    def test_every_field_the_cost_map_could_fill_is_zeroed(self):
+        assert self._zeroed(model_info=self.PTU) == {
+            **dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0),
+            "tiered_pricing": (),
+            "search_context_cost_per_query": dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0),
+        }
+
+    def test_nothing_is_zeroed_while_the_feature_is_disabled(self, monkeypatch):
+        monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+        assert self._zeroed(model_info=self.PTU) == {}
+
+    @pytest.mark.parametrize("field", ["input_cost_per_token", "cache_read_input_token_cost", "input_cost_per_second"])
+    def test_a_price_the_caller_supplies_is_refused(self, field):
+        """Every custom-pricing field, not only the mirrored ones: per-second pricing bills a
+        PTU deployment just as surely as per-token pricing does."""
+        with pytest.raises(HTTPException) as exc:
+            self._zeroed(model_info=self.PTU, supplied={field: 5e-07})
+        assert exc.value.status_code == 400
+        assert field in str(exc.value.detail)
+
+    def test_a_tiered_price_the_caller_supplies_is_refused(self):
+        """Tier rates bill the traffic per token just as surely as a flat rate does."""
+        with pytest.raises(HTTPException) as exc:
+            self._zeroed(model_info=self.PTU, supplied={"tiered_pricing": [{"range": [0, 100], "input_cost_per_token": 1e-06}]})
+        assert exc.value.status_code == 400
+        assert "tiered_pricing" in str(exc.value.detail)
+
+    def test_a_search_context_price_the_caller_supplies_is_refused(self):
+        """The rates sit in a table keyed by context size, so a guard that only reads numbers
+        lets a per-request charge onto a deployment its reserved capacity already pays for."""
+        with pytest.raises(HTTPException) as exc:
+            self._zeroed(model_info=self.PTU, supplied={"search_context_cost_per_query": {"search_context_size_medium": 0.05}})
+        assert exc.value.status_code == 400
+        assert "search_context_cost_per_query" in str(exc.value.detail)
+
+    def test_search_context_already_on_the_row_is_zeroed_in_place(self):
+        """An absent table means the provider's own default rate rather than free, so emptying or
+        dropping this one would start a charge instead of stopping it."""
+        stored = {"search_context_cost_per_query": {"search_context_size_medium": 0.05}}
+        override = self._zeroed(model_info=self.PTU, litellm_params=stored)
+        assert override["search_context_cost_per_query"] == dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)
+        assert cost_per_web_search_request(usage=self._grounded_usage(), model_info={**stored, **override}) == 0
+        assert cost_per_web_search_request(usage=self._grounded_usage(), model_info={}) > 0
+
+    def test_an_all_zero_search_context_table_is_not_a_price(self):
+        """An all-zero table is how an operator expresses free, so refusing it would block the save
+        and replacing it would restore the provider default."""
+        free = dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)
+        assert self._zeroed(model_info=self.PTU, supplied={"search_context_cost_per_query": free})
+        assert cost_per_web_search_request(usage=self._grounded_usage(), model_info={"search_context_cost_per_query": free}) == 0
+
+    @staticmethod
+    def _grounded_usage():
+        return Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+        )
+
+    def test_tiered_pricing_already_on_the_row_is_emptied_not_zeroed(self):
+        """tiered_pricing is a table of ranges, so the zero the other fields store would not even
+        validate. Dropping it instead would fall back to the cost map's tiers, whose rates outrank
+        the zeros written beside them, so it is stored empty."""
+        tiers = [{"range": [0, 128000], "input_cost_per_token": 3e-06}]
+        priced = _ptu_priced_deployment(
+            Deployment(
+                model_name="tiered",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+                model_info=ModelInfo(
+                    id="dep-tiered",
+                    team_id="t",
+                    tiered_pricing=tiers,
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                ),
+            )
+        )
+        assert priced.litellm_params.tiered_pricing == []
+        assert priced.model_info.tiered_pricing == []
+
+        written = update_db_model(
+            db_model=Deployment(
+                model_name="tiered",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o", tiered_pricing=tiers),
+                model_info=ModelInfo(id="dep-tiered", team_id="t"),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-tiered",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                )
+            ),
+        )
+        for blob in ("model_info", "litellm_params"):
+            stored = json.loads(written[blob])
+            assert stored["tiered_pricing"] == [], blob
+            assert stored["input_cost_per_token"] == 0, blob
+
+    def test_a_price_the_caller_supplies_as_zero_is_accepted(self):
+        assert self._zeroed(model_info={**self.PTU, "input_cost_per_token": 0}, supplied={"input_cost_per_token": 0})[
+            "input_cost_per_token"
+        ] == 0
+
+    def test_a_price_already_on_the_row_is_zeroed_rather_than_refused(self):
+        """A row priced through a path this rule does not cover must heal on its next save. The
+        alternative refuses every later edit of a field that has nothing to do with pricing."""
+        zeroed = self._zeroed(model_info={**self.PTU, "input_cost_per_second": 3.0}, litellm_params={})
+        assert zeroed["input_cost_per_second"] == 0
+        assert zeroed["input_cost_per_token"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_refused_price_does_not_leave_the_team_changed(self):
+        """The team ACL write autocommits, so the refusal has to run before it. Otherwise a
+        rejected edit grants the team a model whose settings were never saved."""
+        db_model = Deployment(
+            model_name="gpt-4o",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+            model_info=ModelInfo(
+                id="dep-0",
+                team_id="team-1",
+                ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                **self.PTU,
+            ),
+        )
+        patch = updateDeployment(
+            litellm_params=updateLiteLLMParams(model="openai/gpt-4o", input_cost_per_token=5e-07),
+            model_info=ModelInfo(id="dep-0", team_id="team-2"),
+        )
+        endpoints = "litellm.proxy.management_endpoints.model_management_endpoints"
+        setup_new = AsyncMock()
+        update_existing = AsyncMock()
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch_ctx(f"{endpoints}.ModelManagementAuthChecks.allow_team_model_action", AsyncMock(return_value=True))
+            )
+            stack.enter_context(patch_ctx(f"{endpoints}._setup_new_team_model_assignment", setup_new))
+            stack.enter_context(patch_ctx(f"{endpoints}._update_existing_team_model_assignment", update_existing))
+            stack.enter_context(patch_ctx("litellm.proxy.proxy_server.premium_user", True))
+            with pytest.raises(HTTPException) as exc:
+                await _update_team_model_in_db(
+                    db_model=db_model,
+                    patch_data=patch,
+                    user_api_key_dict=UserAPIKeyAuth(user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN),
+                    prisma_client=MagicMock(),
+                )
+
+        assert exc.value.status_code == 400
+        setup_new.assert_not_called()
+        update_existing.assert_not_called()
+
+    def test_a_setting_that_is_not_a_charge_is_left_alone(self):
+        """CustomPricingLiteLLMParams also carries an embedding's output vector size and the
+        regional uplift multipliers. Zeroing one of those destroys the deployment's config, and
+        refusing it answers with a message calling a setting a charge."""
+        priced = _ptu_priced_deployment(
+            Deployment(
+                model_name="embeddings",
+                litellm_params=LiteLLM_Params(
+                    model="azure/text-embedding-3-large",
+                    output_vector_size=1536,
+                    regional_processing_uplift_multiplier_eu=1.15,
+                ),
+                model_info=ModelInfo(
+                    id="dep-emb",
+                    team_id="team-1",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                ),
+            )
+        )
+        assert priced.litellm_params.get("output_vector_size") == 1536
+        assert priced.litellm_params.get("regional_processing_uplift_multiplier_eu") == 1.15
+        assert priced.litellm_params.get("input_cost_per_token") == 0
+
+    def test_removing_ptu_config_releases_every_rate_it_zeroed(self):
+        """The zeroing covers any stored rate, so a release that only spans the mirrored fields
+        leaves a per-second deployment billing nothing for that dimension forever."""
+        on = update_db_model(
+            db_model=Deployment(
+                model_name="audio",
+                litellm_params=LiteLLM_Params(model="azure/whisper", input_cost_per_second=0.006),
+                model_info=ModelInfo(id="dep-audio", team_id="t"),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-audio",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                )
+            ),
+        )
+        assert json.loads(on["litellm_params"])["input_cost_per_second"] == 0
+
+        off = update_db_model(
+            db_model=Deployment(
+                model_name="audio",
+                litellm_params=LiteLLM_Params(**json.loads(on["litellm_params"])),
+                model_info=ModelInfo(**json.loads(on["model_info"])),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-audio", ptu_count=None, cost_per_ptu_per_hour=None)
+            ),
+        )
+        assert "input_cost_per_second" not in json.loads(off["litellm_params"])
+
+    def test_removing_ptu_config_releases_a_zeroed_search_context_table(self):
+        """The all-zero table exists only to stop the double charge, so a deployment taken off PTU
+        has to give it up or it keeps serving grounded requests for free forever."""
+        on = update_db_model(
+            db_model=Deployment(
+                model_name="grounded",
+                litellm_params=LiteLLM_Params(
+                    model="gemini/gemini-2.5-pro",
+                    search_context_cost_per_query={"search_context_size_medium": 0.05},
+                ),
+                model_info=ModelInfo(id="dep-ground", team_id="t"),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-ground",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                )
+            ),
+        )
+        assert json.loads(on["litellm_params"])["search_context_cost_per_query"] == dict.fromkeys(
+            _SEARCH_CONTEXT_SIZES, 0.0
+        )
+
+        off = update_db_model(
+            db_model=Deployment(
+                model_name="grounded",
+                litellm_params=LiteLLM_Params(**json.loads(on["litellm_params"])),
+                model_info=ModelInfo(**json.loads(on["model_info"])),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-ground", ptu_count=None, cost_per_ptu_per_hour=None)
+            ),
+        )
+        assert "search_context_cost_per_query" not in json.loads(off["litellm_params"])
+
+    @pytest.mark.parametrize(
+        "backend", ["azure/gpt-4o", "anthropic/claude-sonnet-4-5", "bedrock/anthropic.claude-sonnet-4-20250514-v1:0"]
+    )
+    def test_the_cost_map_contributes_no_price_to_a_priced_ptu_deployment(self, backend):
+        """The acceptance criterion, read off the entry the router registers for the deployment.
+
+        Zeroing only the per-token pair leaves the cache-tier fields unset, which is exactly what
+        Router._inherit_builtin_cache_pricing back-fills from the public cost map, so a cached
+        prompt would still be billed at the public rate."""
+        priced = _ptu_priced_deployment(
+            Deployment(
+                model_name="ptu-deployment",
+                litellm_params=LiteLLM_Params(model=backend, api_key="fake-key"),
+                model_info=ModelInfo(
+                    id="dep-ptu",
+                    team_id="team-1",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                ),
+            )
+        )
+        registered = Router._deployment_model_cost_payload(priced)
+        charged = {
+            k: v
+            for k, v in registered.items()
+            if "cost" in k and k != "cost_per_ptu_per_hour" and _is_nonzero_price(v)
+        }
+        assert charged == {}
+
+    def test_the_cost_map_tiers_contribute_no_price_to_a_priced_ptu_deployment(self):
+        """A tier table outranks the zeroed flat rates wherever cost is read, so leaving the
+        deployment's own table unset bills the reserved capacity's traffic at the map's tiers."""
+        priced = _ptu_priced_deployment(
+            Deployment(
+                model_name="ptu-deployment",
+                litellm_params=LiteLLM_Params(model="dashscope/qwen-flash", api_key="fake-key"),
+                model_info=ModelInfo(
+                    id="dep-ptu",
+                    team_id="team-1",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                ),
+            )
+        )
+        router = Router(model_list=[priced.to_json(exclude_none=True)])
+        registered = router.get_deployment_model_info(model_id="dep-ptu", model_name="dashscope/qwen-flash")
+        assert registered is not None
+        assert registered["tiered_pricing"] == []
+        assert generic_cost_per_token(
+            model="dashscope/qwen-flash",
+            usage=Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            custom_llm_provider="dashscope",
+            model_info=registered,
+        ) == (0.0, 0.0)
+
+    def test_the_zeroed_pricing_does_not_waive_budget_enforcement(self):
+        """A zero price otherwise tells auth the model is free and skips every budget check."""
+        priced = _ptu_priced_deployment(
+            Deployment(
+                model_name="model_name_team-1_dep-ptu",
+                litellm_params=LiteLLM_Params(model="gemini/gemini-2.5-flash", api_key="fake-key"),
+                model_info=ModelInfo(
+                    id="dep-ptu",
+                    team_id="team-1",
+                    team_public_model_name="ptu-model",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                ),
+            )
+        )
+        router = Router(model_list=[priced.to_json(exclude_none=True)])
+        assert _is_model_cost_zero(model="model_name_team-1_dep-ptu", llm_router=router) is False
+        assert _is_model_cost_zero(model="ptu-model", llm_router=router) is False
+
+    def test_an_unrelated_patch_heals_a_deployment_stored_before_this_rule(self):
+        """Both blobs, because litellm_params wins over model_info wherever the two are merged."""
+        written = update_db_model(
+            db_model=_deployment_with_stored_ptu(),
+            updated_patch=updateDeployment(model_name="gpt-4o-renamed"),
+        )
+        for blob in ("model_info", "litellm_params"):
+            stored = json.loads(written[blob])
+            assert all(stored[field] == 0 for field in _PTU_ZEROED_PRICING_FIELDS), blob
+
+    def test_an_unrelated_patch_of_a_ptu_row_that_carries_a_price_is_not_refused(self):
+        """The pause toggle and the credential-rotation modal send no pricing at all. Refusing
+        them because the stored row is mispriced blocks flows that cannot fix it."""
+        priced_ptu = Deployment(
+            model_name="gpt-4o",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", input_cost_per_token=5e-07),
+            model_info=ModelInfo(
+                id="dep-0",
+                team_id="t",
+                ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                **self.PTU,
+            ),
+        )
+        written = update_db_model(db_model=priced_ptu, updated_patch=updateDeployment(model_name="renamed"))
+        assert written["model_name"] == "renamed"
+        assert json.loads(written["litellm_params"])["input_cost_per_token"] == 0
+
+    def test_removing_ptu_config_hands_per_token_billing_back(self):
+        """Left behind, the zeros this rule wrote would serve the deployment for free forever."""
+        zeros = dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0)
+        written = update_db_model(
+            db_model=Deployment(
+                model_name="gpt-4o",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o", **zeros),
+                model_info=ModelInfo(
+                    id="dep-0",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                    **zeros,
+                ),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-0", ptu_count=None, cost_per_ptu_per_hour=None)
+            ),
+        )
+        for blob in ("model_info", "litellm_params"):
+            stored = json.loads(written[blob])
+            assert not any(field in stored for field in _PTU_ZEROED_PRICING_FIELDS), blob
+
+    def test_the_dashboard_clear_releases_the_zeros_it_echoes_back(self):
+        """The edit form re-sends the whole stored model_info on every save, so the clearing
+        patch carries the zeros this rule wrote. Treating those as a rate the operator chose
+        left the deployment serving free and reading as a free model to the budget checks."""
+        zeros = dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0)
+        written = update_db_model(
+            db_model=Deployment(
+                model_name="gpt-4o",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o", **zeros),
+                model_info=ModelInfo(
+                    id="dep-0",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                    **zeros,
+                ),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-0", ptu_count=None, cost_per_ptu_per_hour=None, **zeros)
+            ),
+        )
+        stored = json.loads(written["model_info"])
+        assert not any(field in stored for field in _PTU_ZEROED_PRICING_FIELDS)
+
+    def test_a_deployment_that_never_had_ptu_keeps_a_price_its_operator_set_to_zero(self):
+        """The dashboard sends both PTU keys as null on every save while the feature is on, so a
+        release keyed on the patch alone would strip a deliberate zero rate from any model."""
+        free = Deployment(
+            model_name="free-model",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", input_cost_per_token=0.0),
+            model_info=ModelInfo(id="dep-free", team_id="t", input_cost_per_token=0.0),
+        )
+        written = update_db_model(
+            db_model=free,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-free", ptu_count=None, cost_per_ptu_per_hour=None)
+            ),
+        )
+        for blob in ("model_info", "litellm_params"):
+            assert json.loads(written[blob])["input_cost_per_token"] == 0, blob
+
+    def test_a_patch_pricing_a_ptu_deployment_is_refused(self):
+        with pytest.raises(HTTPException) as exc:
+            update_db_model(
+                db_model=_deployment_with_stored_ptu(),
+                updated_patch=updateDeployment(
+                    litellm_params=updateLiteLLMParams(model="openai/gpt-4o", input_cost_per_token=5e-07)
+                ),
+            )
+        assert exc.value.status_code == 400
+
+    def test_a_price_the_client_only_echoes_back_is_not_read_as_an_attempt_to_charge(self):
+        """/model/info fills missing rates from the public cost map and the edit form re-sends the
+        whole blob, so a model_info price is one the server wrote. Reading it as the operator's
+        refused every attempt to put an existing deployment on PTU from the dashboard."""
+        written = update_db_model(
+            db_model=_deployment_without_ptu(),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-0",
+                    team_id="t",
+                    input_cost_per_token=3e-07,
+                    output_cost_per_token=2.5e-06,
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                )
+            ),
+        )
+        stored = json.loads(written["model_info"])
+        assert stored["ptu_count"] == 15
+        assert stored["input_cost_per_token"] == 0
+        assert stored["output_cost_per_token"] == 0
+
+    def test_adding_ptu_config_to_an_already_priced_deployment_is_refused(self):
+        priced = Deployment(
+            model_name="gpt-4o",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+            model_info=ModelInfo(id="dep-0", team_id="t"),
+        )
+        with pytest.raises(HTTPException) as exc:
+            update_db_model(
+                db_model=priced,
+                updated_patch=updateDeployment(
+                    litellm_params=updateLiteLLMParams(model="openai/gpt-4o", input_cost_per_token=5e-07),
+                    model_info=ModelInfo(
+                        id="dep-0",
+                        team_id="t",
+                        ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                        **self.PTU,
+                    ),
+                ),
+            )
+        assert exc.value.status_code == 400
+
+    def test_a_deployment_without_ptu_config_keeps_its_pricing_through_a_patch(self):
+        priced = Deployment(
+            model_name="gpt-4o",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+            model_info=ModelInfo(id="dep-0", team_id="t", input_cost_per_token=5e-07),
+        )
+        stored = json.loads(
+            update_db_model(db_model=priced, updated_patch=updateDeployment(model_name="renamed"))["model_info"]
+        )
+        assert stored["input_cost_per_token"] == 5e-07
+
+    @pytest.mark.asyncio
+    async def test_model_new_stores_zero_pricing_on_both_blobs(self):
+        (_, add_team_model_to_db), patches = TestAddNewModelPtuGate._patched_proxy("ptu-priced-model")
+        admin = UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with ExitStack() as stack:
+            for active_patch in patches:
+                stack.enter_context(active_patch)
+            await add_new_model(
+                model_params=TestAddNewModelPtuGate._ptu_deployment("ptu-priced-model"),
+                user_api_key_dict=admin,
+            )
+
+        written = add_team_model_to_db.call_args.kwargs["model_params"]
+        assert all(getattr(written.model_info, field, None) == 0 for field in SPECIAL_MODEL_INFO_PARAMS if field != "tiered_pricing")
+        assert written.model_info.tiered_pricing == []
+        assert all(written.litellm_params.get(field) == 0 for field in _PTU_ZEROED_PRICING_FIELDS)
+        assert written.litellm_params.tiered_pricing == []
+
+    @pytest.mark.asyncio
+    async def test_model_new_refuses_a_priced_ptu_deployment(self):
+        (_, add_team_model_to_db), patches = TestAddNewModelPtuGate._patched_proxy("ptu-priced-model")
+        admin = UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        base = TestAddNewModelPtuGate._ptu_deployment("ptu-priced-model")
+        deployment = base.model_copy(
+            update={"litellm_params": base.litellm_params.model_copy(update={"input_cost_per_token": 5e-07})}
+        )
+
+        with ExitStack() as stack:
+            for active_patch in patches:
+                stack.enter_context(active_patch)
+            with pytest.raises(Exception, match='A PTU deployment bills by reserved capacity, so') as exc:
+                await add_new_model(model_params=deployment, user_api_key_dict=admin)
+
+        assert "input_cost_per_token" in str(exc.value)
+        add_team_model_to_db.assert_not_called()

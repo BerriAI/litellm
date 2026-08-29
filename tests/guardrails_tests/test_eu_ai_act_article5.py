@@ -8,11 +8,9 @@ Tests 40 different sentences to validate the conditional matching logic:
 - identifier or block word alone should ALLOW
 """
 
-import sys
 import os
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
@@ -20,6 +18,7 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_fil
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from fastapi import HTTPException
 
 
 # Test cases: (sentence, expected_result, reason)
@@ -161,7 +160,6 @@ def content_filter_guardrail():
     """Initialize content filter guardrail with EU AI Act Article 5 template."""
 
     # Get absolute path to the policy template
-    import os
 
     content_filter_dir = os.path.join(
         os.path.dirname(__file__),
@@ -210,7 +208,7 @@ class TestEUAIActArticle5ConditionalMatching:
         # Apply guardrail
         if expected == "BLOCK":
             # Should raise an exception or return modified response indicating block
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Content blocked: eu_ai_act_article') as exc_info:
                 await content_filter_guardrail.apply_guardrail(
                     inputs={"texts": [sentence]},
                     request_data=request_data,
@@ -275,7 +273,7 @@ class TestEUAIActEdgeCases:
         for sentence in sentences:
             request_data = {"messages": [{"role": "user", "content": sentence}]}
 
-            with pytest.raises(Exception):
+            with pytest.raises(HTTPException):
                 await content_filter_guardrail.apply_guardrail(
                     inputs={"texts": [sentence]},
                     request_data=request_data,
@@ -289,7 +287,7 @@ class TestEUAIActEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should block (contains multiple violations)
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,

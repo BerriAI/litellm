@@ -3,7 +3,6 @@ Unit tests for Bedrock Guardrails
 """
 
 import json
-import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,10 +10,10 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.exceptions import ModifyResponseException
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -2112,7 +2111,7 @@ async def test_make_bedrock_api_request_forwards_guardrail_action():
     ):
         mock_post.return_value = mock_bedrock_response
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="blocked"):
             await guardrail.make_bedrock_api_request(
                 source="INPUT",
                 messages=request_data["messages"],
@@ -2844,6 +2843,292 @@ async def test_apply_guardrail_propagates_modify_response_on_block():
             )
 
     assert exc_info.value.message == "Sorry, the model cannot answer this question."
+
+
+_ANTHROPIC_SSE_CHUNKS = (
+    b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message",'
+    b'"role":"assistant","model":"claude","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+    b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+    b'"content_block":{"type":"text","text":""}}\n\n',
+    b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"text_delta","text":"my ssn is 123-45-6789"}}\n\n',
+    b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+    b'"usage":{"output_tokens":9}}\n\n',
+    b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+)
+
+
+async def _anthropic_sse_stream():
+    for chunk in _ANTHROPIC_SSE_CHUNKS:
+        yield chunk
+
+
+async def _drain_streaming_hook(
+    guardrail: BedrockGuardrail, request_data: dict[str, object] | None = None
+) -> list[object]:
+    return [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_anthropic_sse_stream(),
+            request_data=request_data
+            if request_data is not None
+            else {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "what is my ssn"}]},
+        )
+    ]
+
+
+def _sse_guardrail(**kwargs: object) -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrail_name="bedrock-sse",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
+    """A /v1/messages stream arrives as raw SSE frames and must be assembled, then scanned.
+
+    Regression for `500 Error building chunks for logging/streaming usage calculation`:
+    stream_chunk_builder subscripts each chunk, which raises TypeError on bytes.
+    """
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {"action": "NONE"}
+        delivered = await _drain_streaming_hook(guardrail)
+
+    mock_api.assert_called_once()
+    kwargs = mock_api.call_args.kwargs
+    assert kwargs["source"] == "OUTPUT"
+    assert "my ssn is 123-45-6789" in str(kwargs["response"].choices[0].message.content)
+    assert kwargs["messages"] == [{"role": "user", "content": "what is my ssn"}]
+    assert tuple(delivered) == _ANTHROPIC_SSE_CHUNKS
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_emits_masked_text_for_raw_anthropic_sse():
+    """Masking must reach the client on /v1/messages, with mask_response_content unset.
+
+    The assembled path masks regardless of the flag, so forwarding the original frames here
+    would ship exactly the text the guardrail redacted.
+    """
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "outputs": [{"text": "my ssn is {SSN}"}],
+        }
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered)
+    assert b"{SSN}" in body
+    assert b"123-45-6789" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_block_stream_keeps_upstream_identity():
+    """A blocked stream must carry the same id and model as the mask path, not the proxy alias."""
+    guardrail = _sse_guardrail(disable_exception_on_block=True)
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = ModifyResponseException(
+            message="Sorry, the model cannot answer this question.",
+            model="my-proxy-alias",
+            request_data={},
+        )
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered)
+    # the shared block builder mints a new message id: the block is not the upstream message
+    assert b'"id": "msg_' in body
+    assert b'"model": "claude"' in body
+    assert b"my-proxy-alias" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_reraises_guardrail_service_failures():
+    """A Bedrock outage must keep its status, not be reported to the caller as a guardrail decision.
+
+    A policy block is the only 400 detailing a Mapping.
+    """
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = HTTPException(
+            status_code=500, detail="Bedrock guardrail throttle retries exhausted"
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _drain_streaming_hook(guardrail)
+
+    assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_frames_a_service_failure_once_a_keepalive_ping_flushed_the_headers():
+    """Past the ping the status line is already on the wire, so a raise reaches the client as nothing.
+
+    The failure has to travel as a frame instead, carrying its real status in the message.
+    """
+    guardrail = _sse_guardrail()
+
+    with (
+        patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api,
+        patch.object(litellm, "anthropic_sse_ping_interval_seconds", 0.0001),
+    ):
+        mock_api.side_effect = HTTPException(status_code=503, detail="Bedrock is unavailable")
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered).decode()
+    frame = next(line for line in body.splitlines() if line.startswith("data: "))
+    message = json.loads(frame[6:])["error"]["message"]
+    assert message == "503: Bedrock is unavailable"
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_reraises_a_service_failure_that_details_a_mapping():
+    """InvokeGuardrailChecks details a Mapping on its 500, so detail shape alone cannot mean "block"."""
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = HTTPException(
+            status_code=500,
+            detail={"error": "Bedrock InvokeGuardrailChecks returned an unexpected response shape"},
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _drain_streaming_hook(guardrail)
+
+    assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_streaming_block_error_frame_message_is_a_string():
+    """AnthropicErrorDetail.message is typed str, built by the proxy's own detail serializer."""
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = HTTPException(
+            status_code=400, detail={"error": "Violated guardrail policy", "guardrailIdentifier": "gid"}
+        )
+        delivered = await _drain_streaming_hook(guardrail)
+
+    frame = next(line for line in b"".join(delivered).decode().splitlines() if line.startswith("data: "))
+    message = json.loads(frame[6:])["error"]["message"]
+    # AnthropicErrorDetail.message is typed str, and the proxy's own serializer produces the
+    # readable message rather than a repr of the detail dict
+    assert isinstance(message, str)
+    assert message == "Violated guardrail policy"
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_fails_closed_when_raw_sse_cannot_be_assembled():
+    """An unscannable stream must not be delivered: forwarding it silently disables the guardrail."""
+    guardrail = _sse_guardrail()
+
+    async def _unparseable_stream():
+        yield b'data: {"type":"content_block_delta"}\n\n'
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        delivered = [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_unparseable_stream(),
+                request_data={"model": "claude-sonnet-4-5"},
+            )
+        ]
+
+    mock_api.assert_not_called()
+    body = b"".join(delivered)
+    # a raise cannot reach the client once a keepalive ping has flushed the headers
+    assert b"event: error" in body
+    assert b"could not be assembled" in body
+    assert b"content_block_delta" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_fails_closed_when_assembler_raises_api_error():
+    """stream_chunk_builder re-raises assembly failures as litellm.APIError; it must not escape.
+
+    That exception message is the exact 500 this fix exists to remove.
+    """
+    guardrail = _sse_guardrail()
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers."
+        "anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler."
+        "_build_complete_streaming_response",
+        side_effect=litellm.APIError(
+            status_code=500,
+            message="Error building chunks for logging/streaming usage calculation",
+            llm_provider="",
+            model="",
+        ),
+    ):
+        delivered = await _drain_streaming_hook(guardrail)
+
+    assert b"event: error" in b"".join(delivered)
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_preserves_message_id_and_model_when_re_emitting():
+    """A rewritten stream must still look like the upstream Anthropic response."""
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "outputs": [{"text": "my ssn is {SSN}"}],
+        }
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered)
+    assert b'"id": "msg_1"' in body
+    assert b"unknown-model" not in body
+    assert b'"model": "claude"' in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_blocks_raw_anthropic_sse_on_violation():
+    """A block on the extracted text must stop the stream rather than deliver it."""
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered)
+    # a keepalive ping may already have flushed the headers, so the block has to travel as a frame
+    assert b"event: error" in body
+    assert b"Violated guardrail policy" in body
+    assert b"123-45-6789" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_yields_synthetic_block_stream_for_raw_anthropic_sse():
+    """disable_exception_on_block must keep behaving as a stream, not an SSE 500 frame."""
+    guardrail = _sse_guardrail(disable_exception_on_block=True)
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = ModifyResponseException(
+            message="Sorry, the model cannot answer this question.",
+            model="claude",
+            request_data={},
+        )
+        delivered = await _drain_streaming_hook(guardrail)
+
+    body = b"".join(delivered)
+    assert b"Sorry, the model cannot answer this question." in body
+    assert b"123-45-6789" not in body
+    # the upstream call was already paid for, so the block frame must still report its usage
+    assert b'"input_tokens": 5' in body
+    assert b'"output_tokens": 9' in body
 
 
 @pytest.mark.asyncio
@@ -4790,3 +5075,273 @@ async def test_apply_guardrail_failure_logs_a_dict_not_a_bare_string():
     logged = mock_log.call_args.kwargs["guardrail_json_response"]
     assert isinstance(logged, dict), f"expected a dict, got {type(logged).__name__}"
     assert "error" in logged
+
+
+def test_build_tracing_detail_surfaces_usage_counters_and_cost(monkeypatch):
+    """LIT-5650/LIT-5651: AWS-billed usage must land as guardrail_usage priced into guardrail_cost."""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "bedrock/guardrails": {
+                "guardrail_cost_per_unit": {
+                    "topicPolicyUnits": 0.00015,
+                    "contentPolicyUnits": 0.00015,
+                    "wordPolicyUnits": 0.0,
+                }
+            }
+        },
+    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    detail = guardrail._build_tracing_detail(
+        {
+            "action": "GUARDRAIL_INTERVENED",
+            "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0, "oddball": "not-an-int"},
+        },
+        aws_region_name="us-east-1",
+    )
+
+    assert detail["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0}
+    assert detail["guardrail_cost"] == pytest.approx(0.00045)
+
+
+def test_build_tracing_detail_omits_guardrail_usage_when_bedrock_reports_none():
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    for detail in (
+        guardrail._build_tracing_detail({"action": "NONE"}, aws_region_name="us-east-1"),
+        guardrail._build_tracing_detail({"action": "NONE", "usage": {}}, aws_region_name="us-east-1"),
+    ):
+        assert "guardrail_usage" not in detail
+        assert "guardrail_cost" not in detail
+
+
+@pytest.mark.asyncio
+async def test_blocked_chunk_logs_usage_and_cost_of_prior_passed_chunks(monkeypatch):
+    """LIT-5651 regression: a block on a later chunk must still bill the chunks AWS already processed."""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "bedrock/guardrails": {
+                "guardrail_cost_per_unit": {
+                    "contentPolicyUnits": 0.00015,
+                    "wordPolicyUnits": 0.0,
+                }
+            }
+        },
+    )
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        chunk_budget_chars=40,
+    )
+
+    too_large_response = MagicMock()
+    too_large_response.status_code = 429
+    too_large_response.json.return_value = {
+        "message": "Input text size (60 text units) exceeds the maximum allowed (1 text units) for the content filter policy"
+    }
+
+    passed_chunk_response = MagicMock()
+    passed_chunk_response.status_code = 200
+    passed_chunk_response.json.return_value = {
+        "action": "NONE",
+        "outputs": [],
+        "assessments": [],
+        "usage": {"contentPolicyUnits": 2, "wordPolicyUnits": 1},
+    }
+
+    blocked_chunk_response = MagicMock()
+    blocked_chunk_response.status_code = 200
+    blocked_chunk_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"contentPolicy": {"filters": [{"type": "HATE", "confidence": "HIGH", "action": "BLOCKED"}]}}],
+        "outputs": [{"text": "Content blocked"}],
+        "usage": {"contentPolicyUnits": 3},
+    }
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "a" * 30},
+            {"role": "user", "content": "b" * 30},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = [too_large_response, passed_chunk_response, blocked_chunk_response]
+
+        with pytest.raises(HTTPException):
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+    assert mock_post.call_count == 3
+    logged_entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert len(logged_entries) == 1
+    logged = logged_entries[0]
+    assert logged["guardrail_usage"] == {"contentPolicyUnits": 5, "wordPolicyUnits": 1}
+    assert logged["guardrail_cost"] == pytest.approx(0.00075)
+    assert logged["guardrail_response"]["usage"] == {"contentPolicyUnits": 5, "wordPolicyUnits": 1}
+
+
+@pytest.mark.asyncio
+async def test_terminal_failure_logs_usage_and_cost_of_prior_passed_chunks(monkeypatch):
+    """LIT-5651 regression: a terminal failure on a later chunk must still bill the chunks AWS already processed."""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "bedrock/guardrails": {
+                "guardrail_cost_per_unit": {
+                    "contentPolicyUnits": 0.00015,
+                    "wordPolicyUnits": 0.0,
+                }
+            }
+        },
+    )
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        chunk_budget_chars=40,
+    )
+
+    too_large_response = MagicMock()
+    too_large_response.status_code = 429
+    too_large_response.json.return_value = {
+        "message": "Input text size (60 text units) exceeds the maximum allowed (1 text units) for the content filter policy"
+    }
+
+    passed_chunk_response = MagicMock()
+    passed_chunk_response.status_code = 200
+    passed_chunk_response.json.return_value = {
+        "action": "NONE",
+        "outputs": [],
+        "assessments": [],
+        "usage": {"contentPolicyUnits": 2, "wordPolicyUnits": 1},
+    }
+
+    failed_chunk_response = MagicMock()
+    failed_chunk_response.status_code = 400
+    failed_chunk_response.json.return_value = {"message": "ValidationException: guardrail is in a failed state"}
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "a" * 30},
+            {"role": "user", "content": "b" * 30},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = [too_large_response, passed_chunk_response, failed_chunk_response]
+
+        with pytest.raises(HTTPException):
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+    assert mock_post.call_count == 3
+    logged_entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert len(logged_entries) == 1
+    logged = logged_entries[0]
+    assert logged["guardrail_status"] == "guardrail_failed_to_respond"
+    assert logged["guardrail_usage"] == {"contentPolicyUnits": 2, "wordPolicyUnits": 1}
+    assert logged["guardrail_cost"] == pytest.approx(0.0003)
+    assert logged["guardrail_response"]["usage"] == {"contentPolicyUnits": 2, "wordPolicyUnits": 1}
+    assert "error" in logged["guardrail_response"]
+
+
+def test_load_credentials_assumes_role_with_external_id():
+    """A trust policy requiring sts:ExternalId must be satisfied by the guardrail's aws_external_id."""
+    import datetime
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    class FakeSTSClient:
+        """STS that mirrors a cross-account role whose trust policy requires an ExternalId."""
+
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-123":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAASSUMEDROLEKEY",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-external-id",
+        event_hook=GuardrailEventHooks.pre_call,
+        guardrailIdentifier="gr-1",
+        guardrailVersion="DRAFT",
+        aws_region_name="us-east-1",
+        aws_access_key_id="AKIAPODCALLERKEY",
+        aws_secret_access_key="pod-caller-secret",
+        aws_role_name="arn:aws:iam::999999999999:role/litellm-guardrail-role",
+        aws_session_name="litellm-session",
+        aws_external_id="external-id-123",
+    )
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        credentials, aws_region_name = guardrail._load_credentials()
+
+    assert credentials.access_key == "ASIAASSUMEDROLEKEY"
+    assert credentials.token == "assumed-session-token"
+    assert aws_region_name == "us-east-1"
+
+
+def test_initialize_bedrock_forwards_aws_external_id():
+    """aws_external_id configured on the guardrail must survive LitellmParams and the initializer."""
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_bedrock
+    from litellm.types.guardrails import LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="bedrock",
+        mode="pre_call",
+        guardrailIdentifier="gr-1",
+        guardrailVersion="DRAFT",
+        aws_region_name="us-east-1",
+        aws_role_name="arn:aws:iam::999999999999:role/litellm-guardrail-role",
+        aws_external_id="external-id-123",
+    )
+
+    guardrail = initialize_bedrock(litellm_params, {"guardrail_name": "bedrock-external-id"})
+    try:
+        assert guardrail.optional_params["aws_external_id"] == "external-id-123"
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, guardrail)
