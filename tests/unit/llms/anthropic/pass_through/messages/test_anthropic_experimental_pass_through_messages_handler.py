@@ -1684,6 +1684,8 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
     assert "anthropic_beta" not in captured["body"]
     assert captured["anthropic-beta"].split(",").count("dangerous-tool-use-2026-09-03") == 1
     assert response["safeguard_results"] == safeguard_results
+
+
 @pytest.mark.asyncio
 async def test_anthropic_pass_through_drop_params(monkeypatch):
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
