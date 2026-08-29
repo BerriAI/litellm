@@ -253,6 +253,17 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
 
 
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
+PROVIDER_SCOPED_RESOURCE_FUNCTION_NAMES: Final = frozenset(
+    {
+        "_acreate_batch",
+        "_acancel_batch",
+        "acreate_fine_tuning_job",
+        "acancel_fine_tuning_job",
+        "aretrieve_fine_tuning_job",
+        "afile_content",
+        "afile_delete",
+    }
+)
 PROVIDER_SCOPED_CREATION_FUNCTION_NAMES: Final = frozenset({"_acreate_file"})
 
 
@@ -284,13 +295,23 @@ async def _is_fallback_target_authorized(
 
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     """
-    True when the request names a file, batch, or fine-tuning job that only exists under
-    one provider's credentials.
+    True when a file, batch, or fine-tuning job operation names an id that only exists
+    under one provider's credentials.
 
     Each of those ids lives in the account of the deployment that issued it. Handing it to
     a different model group asks a provider about an id it never issued, which costs an
-    extra round trip that can only answer not-found.
+    extra round trip that can only answer not-found. Generic calls dispatched through
+    `Router._ageneric_api_call_with_fallbacks` carry the real handler in
+    `original_generic_function`, so both slots are checked. Gating on the handler name
+    keeps completion-style requests eligible for cross-group fallback even when a caller
+    passes a stray extra body field that happens to share one of these key names.
     """
+    handler_names: Final = tuple(
+        getattr(kwargs.get(function_key), "__name__", None)
+        for function_key in ("original_function", "original_generic_function")
+    )
+    if all(name not in PROVIDER_SCOPED_RESOURCE_FUNCTION_NAMES for name in handler_names):
+        return False
     return any(kwargs.get(key) for key in PROVIDER_SCOPED_RESOURCE_KEYS)
 
 
