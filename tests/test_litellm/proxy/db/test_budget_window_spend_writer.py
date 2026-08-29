@@ -1,11 +1,7 @@
 import math
-import os
-import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import pytest
 
@@ -134,7 +130,9 @@ def _batch(request_ids: tuple[str, ...], spend: float, started_at: datetime | No
         "window_start": "2026-08-01T00:00:00.000000",
         "spend": spend,
         "request_ids": request_ids,
-        "started_at": None if started_at is None else started_at.replace(tzinfo=None).isoformat(timespec="microseconds"),
+        "started_at": None
+        if started_at is None
+        else started_at.replace(tzinfo=None).isoformat(timespec="microseconds"),
     }
 
 
@@ -171,7 +169,7 @@ async def test_missing_row_is_seeded_from_spend_logs_once():
     assert aggregate.calls[0]["entity_id"] == "k1"
     assert aggregate.calls[0]["window_start"] == WINDOW_A
 
-    (_, params), = db.batcher.calls
+    ((_, params),) = db.batcher.calls
     assert params[ENTITY_TYPE] == "key"
     assert params[ENTITY_ID] == "k1"
     assert params[WINDOW_DURATION] == "30d"
@@ -194,7 +192,7 @@ async def test_existing_row_is_never_reseeded():
     )
 
     assert aggregate.calls == []
-    (_, params), = db.batcher.calls
+    ((_, params),) = db.batcher.calls
     assert params[INSERT_SPEND] == pytest.approx(1.0)
     assert params[INCREMENT] == pytest.approx(1.0)
 
@@ -233,7 +231,7 @@ async def test_insert_spend_and_increment_differ_only_when_a_row_is_seeded():
         spend_logs_aggregate=aggregate,
     )
 
-    (_, params), = db.batcher.calls
+    ((_, params),) = db.batcher.calls
     assert params[INSERT_SPEND] == pytest.approx(9.25)
     assert params[INCREMENT] == pytest.approx(0.25)
 
@@ -249,7 +247,7 @@ async def test_upsert_sql_adds_for_a_current_window_and_replaces_for_a_newer_one
         transactions=(build_window_spend_transaction("key", "k1", "30d", WINDOW_A, 1.0),),
     )
 
-    (query, _), = db.batcher.calls
+    ((query, _),) = db.batcher.calls
     normalized = " ".join(query.split())
     assert (
         'spend = CASE WHEN "LiteLLM_BudgetWindowSpend".window_start >= EXCLUDED.window_start '
@@ -270,7 +268,7 @@ async def test_upsert_never_interpolates_values_into_the_sql():
         spend_logs_aggregate=aggregate,
     )
 
-    (query, params), = db.batcher.calls
+    ((query, params),) = db.batcher.calls
     assert "DROP TABLE" not in query
     assert params[ENTITY_ID] == "'; DROP TABLE x; --"
 
@@ -293,7 +291,10 @@ async def test_upserts_are_ordered_by_primary_key_then_window_start():
         spend_logs_aggregate=aggregate,
     )
 
-    ordered = [(params[ENTITY_TYPE], params[ENTITY_ID], params[WINDOW_DURATION], params[WINDOW_START]) for _, params in db.batcher.calls]
+    ordered = [
+        (params[ENTITY_TYPE], params[ENTITY_ID], params[WINDOW_DURATION], params[WINDOW_START])
+        for _, params in db.batcher.calls
+    ]
     assert ordered == [
         ("key", "k1", "7d", datetime(2026, 8, 1)),
         ("key", "k2", "30d", datetime(2026, 8, 1)),
@@ -316,7 +317,7 @@ async def test_existing_row_lookup_sends_every_primary_key_as_array_params():
         spend_logs_aggregate=aggregate,
     )
 
-    (query, params), = db.query_raw_calls
+    ((query, params),) = db.query_raw_calls
     assert "unnest($1::text[], $2::text[], $3::text[])" in query
     assert params == (("key", "team"), ("k1", "t1"), ("30d", "7d"))
 
@@ -354,7 +355,7 @@ async def test_unknown_entity_type_contributes_no_seed():
         spend_logs_aggregate=no_such_column,
     )
 
-    (_, params), = db.batcher.calls
+    ((_, params),) = db.batcher.calls
     assert params[INSERT_SPEND] == pytest.approx(1.0)
 
 
@@ -371,7 +372,7 @@ async def test_unavailable_spend_logs_aggregate_seeds_zero_rather_than_failing()
         spend_logs_aggregate=unavailable,
     )
 
-    (_, params), = db.batcher.calls
+    ((_, params),) = db.batcher.calls
     assert params[INSERT_SPEND] == pytest.approx(1.0)
 
 
@@ -389,7 +390,7 @@ async def test_roll_window_spend_row_is_conditional_on_the_stored_window_being_o
         new_window_start=WINDOW_B,
     )
 
-    (query, params), = db.execute_raw_calls
+    ((query, params),) = db.execute_raw_calls
     normalized = " ".join(query.split())
     assert "SET window_start = ($4::timestamptz AT TIME ZONE 'UTC'), spend = 0" in normalized
     assert "WHERE entity_type = $1 AND entity_id = $2 AND window_duration = $3" in normalized
@@ -447,7 +448,7 @@ async def test_new_row_is_not_double_counted_when_the_batch_logs_already_flushed
         spend_logs_aggregate=already_flushed,
     )
 
-    (_, params), = db.batcher.calls
+    ((_, params),) = db.batcher.calls
     assert params[INSERT_SPEND] == pytest.approx(0.000141)
 
 
@@ -463,7 +464,7 @@ async def test_new_row_still_covers_spend_that_predates_the_batch():
         spend_logs_aggregate=spend_logs,
     )
 
-    (_, params), = db.batcher.calls
+    ((_, params),) = db.batcher.calls
     assert params[INSERT_SPEND] == pytest.approx(0.500047)
 
 
@@ -482,7 +483,7 @@ async def test_replayed_request_id_cannot_erase_historical_spend_from_the_seed()
         spend_logs_aggregate=spend_logs,
     )
 
-    (_, params), = db.batcher.calls
+    ((_, params),) = db.batcher.calls
     assert params[INSERT_SPEND] == pytest.approx(0.500047)
 
 
@@ -499,7 +500,7 @@ async def test_new_row_is_correct_when_the_batch_logs_have_not_flushed_yet():
         spend_logs_aggregate=nothing_flushed,
     )
 
-    (_, params), = db.batcher.calls
+    ((_, params),) = db.batcher.calls
     assert params[INSERT_SPEND] == pytest.approx(0.000141)
 
 
@@ -523,7 +524,7 @@ async def test_seed_aggregate_sql_excludes_the_request_ids_only_within_the_batch
     )
 
     assert total == pytest.approx(1.25)
-    (query, params), = db.query_raw_calls
+    ((query, params),) = db.query_raw_calls
     normalized = " ".join(query.split())
     assert expected_column in normalized
     assert "NOT (request_id = ANY($3::text[]) AND \"startTime\" >= ($4::timestamptz AT TIME ZONE 'UTC'))" in normalized
@@ -557,7 +558,7 @@ async def test_seed_aggregate_excludes_nothing_without_both_ids_and_a_start_boun
     )
 
     assert total == pytest.approx(1.25)
-    (query, params), = db.query_raw_calls
+    ((query, params),) = db.query_raw_calls
     assert "request_id" not in query
     assert params == ("e1", WINDOW_A)
 
