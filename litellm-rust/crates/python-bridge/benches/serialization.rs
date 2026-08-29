@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Value, json};
@@ -45,7 +45,6 @@ fn pythonize_to_py(py: Python<'_>, value: &Value) -> Py<PyAny> {
 fn serialization(c: &mut Criterion) {
     Python::initialize();
     Python::attach(|py| {
-        let mut inbound = c.benchmark_group("python_to_rust_payload");
         for &(label, payload_bytes) in PAYLOAD_SIZES {
             let data_uri = format!("data:image/png;base64,{}", "A".repeat(payload_bytes));
             let document = PyDict::new(py);
@@ -53,28 +52,8 @@ fn serialization(c: &mut Criterion) {
                 .set_item("type", "image_url")
                 .expect("document type should be set");
             document
-                .set_item("image_url", data_uri)
+                .set_item("image_url", &data_uri)
                 .expect("document URL should be set");
-
-            inbound.throughput(Throughput::Bytes(payload_bytes as u64));
-            inbound.bench_with_input(
-                BenchmarkId::new("former_json_roundtrip", label),
-                &document,
-                |b, document| {
-                    b.iter(|| former_json_roundtrip_from_py(py, black_box(document.as_any())))
-                },
-            );
-            inbound.bench_with_input(
-                BenchmarkId::new("pythonize", label),
-                &document,
-                |b, document| b.iter(|| pythonize_from_py(black_box(document.as_any()))),
-            );
-        }
-        inbound.finish();
-
-        let mut outbound = c.benchmark_group("rust_to_python_payload");
-        for &(label, payload_bytes) in PAYLOAD_SIZES {
-            let data_uri = format!("data:image/png;base64,{}", "A".repeat(payload_bytes));
             let response = json!({
                 "pages": [{
                     "index": 0,
@@ -87,19 +66,29 @@ fn serialization(c: &mut Criterion) {
                 "object": "ocr",
             });
 
-            outbound.throughput(Throughput::Bytes(payload_bytes as u64));
-            outbound.bench_with_input(
-                BenchmarkId::new("former_json_roundtrip", label),
+            c.bench_with_input(
+                BenchmarkId::new("python_to_rust_json", label),
+                &document,
+                |b, document| {
+                    b.iter(|| former_json_roundtrip_from_py(py, black_box(document.as_any())))
+                },
+            );
+            c.bench_with_input(
+                BenchmarkId::new("python_to_rust_pythonize", label),
+                &document,
+                |b, document| b.iter(|| pythonize_from_py(black_box(document.as_any()))),
+            );
+            c.bench_with_input(
+                BenchmarkId::new("rust_to_python_json", label),
                 &response,
                 |b, response| b.iter(|| former_json_roundtrip_to_py(py, black_box(response))),
             );
-            outbound.bench_with_input(
-                BenchmarkId::new("pythonize", label),
+            c.bench_with_input(
+                BenchmarkId::new("rust_to_python_pythonize", label),
                 &response,
                 |b, response| b.iter(|| pythonize_to_py(py, black_box(response))),
             );
         }
-        outbound.finish();
     });
 }
 

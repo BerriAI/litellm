@@ -12,25 +12,31 @@ fn source_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-fn rust_sources(directory: &Path, sources: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(directory).expect("bridge source directory should be readable") {
-        let entry = entry.expect("bridge source entry should be readable");
-        let path = entry.path();
-        if path.is_dir() {
-            rust_sources(&path, sources);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            sources.push(path);
-        }
-    }
+fn rust_sources(directory: &Path) -> Vec<PathBuf> {
+    fs::read_dir(directory)
+        .expect("bridge source directory should be readable")
+        .map(|entry| {
+            entry
+                .expect("bridge source entry should be readable")
+                .path()
+        })
+        .flat_map(|path| {
+            if path.is_dir() {
+                rust_sources(&path)
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                vec![path]
+            } else {
+                Vec::new()
+            }
+        })
+        .collect()
 }
 
 #[test]
 fn serialization_is_centralized_in_marshal_module() {
     let root = source_root();
-    let mut sources = Vec::new();
-    rust_sources(&root, &mut sources);
 
-    for path in sources {
+    for path in rust_sources(&root) {
         if path == root.join("marshal.rs") {
             continue;
         }
