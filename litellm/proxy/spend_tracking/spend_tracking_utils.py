@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -135,9 +136,12 @@ def _get_spend_logs_metadata(
             litellm_overhead_time_ms=None,
             attempted_retries=None,
             max_retries=None,
+            attempted_fallbacks=None,
+            original_model_group=None,
             cost_breakdown=None,
             compression_savings=None,
             autorouter_savings=autorouter_savings,
+            litellm_gateway_injected_cache=None,
             litellm_call_id=litellm_call_id,
         )
     verbose_proxy_logger.debug(
@@ -281,7 +285,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     usage: dict = {}
     if call_type in ["ocr", "aocr"]:
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
-    else:
+    elif not is_unbilled_non_inference_call(call_type, metadata, response_obj_dict):
         # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
         _usage: Final = response_obj_dict.get("usage", None) or {}
         if isinstance(_usage, litellm.Usage):
@@ -460,7 +464,9 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         or None
     )
     raw_model: Final = cast(str, kwargs.get("model") or "")
-    model_name: Final = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+    model_name: Final = (
+        standard_logging_payload.get("model") if standard_logging_payload is not None else None
+    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: Final[SpendLogsPayload] = SpendLogsPayload(

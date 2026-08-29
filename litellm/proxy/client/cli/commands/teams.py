@@ -1,13 +1,32 @@
 """Team management commands for LiteLLM CLI."""
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import click
 import requests
 from rich.console import Console
 from rich.table import Table
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy.client import Client
+
+from ._cli_context import cli_context_values
+
+
+class _TeamRow(TypedDict):
+    team_alias: ReadOnly[str | None]
+    team_id: ReadOnly[str | None]
+    models: ReadOnly[Sequence[str]]
+    max_budget: ReadOnly[object]
+
+
+class _TeamModelsView(TypedDict):
+    models: ReadOnly[Sequence[str]]
+
+
+class _ErrorBodyView(TypedDict):
+    body: ReadOnly[Mapping[str, object]]
 
 
 @click.group()
@@ -32,10 +51,14 @@ def display_teams_table(teams: list[dict[str, Any]]) -> None:
     table.add_column("Role", style="red")
 
     for i, team in enumerate(teams):
-        team_alias = team.get("team_alias") or "N/A"
-        team_id = team.get("team_id", "N/A")
-        models = team.get("models", [])
-        max_budget = team.get("max_budget")
+        row: _TeamRow = {
+            "team_alias": team.get("team_alias") or "N/A",
+            "team_id": team.get("team_id", "N/A"),
+            "models": team.get("models", []),
+            "max_budget": team.get("max_budget"),
+        }
+        models = row["models"]
+        max_budget = row["max_budget"]
 
         # Format models list
         if models:
@@ -55,7 +78,7 @@ def display_teams_table(teams: list[dict[str, Any]]) -> None:
             # This would need to be implemented based on actual API response structure
             pass
 
-        table.add_row(str(i + 1), team_alias, team_id, models_str, budget_str, role)
+        table.add_row(str(i + 1), row["team_alias"], row["team_id"], models_str, budget_str, role)
 
     console.print(table)
 
@@ -64,7 +87,8 @@ def display_teams_table(teams: list[dict[str, Any]]) -> None:
 @click.pass_context
 def list(ctx: click.Context):
     """List teams that you belong to"""
-    client: Final = Client(ctx.obj["base_url"], ctx.obj["api_key"])
+    context: Final = cli_context_values(ctx)
+    client: Final = Client(context["base_url"], context["api_key"])
 
     try:
         # Use list() for simpler response structure (returns array directly)
@@ -72,8 +96,8 @@ def list(ctx: click.Context):
         display_teams_table(teams)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        error_body: Final = e.response.json()
-        click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
+        error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
+        click.echo(f"Details: {error_body['body'].get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -84,7 +108,8 @@ def list(ctx: click.Context):
 @click.pass_context
 def available(ctx: click.Context):
     """List teams that are available to join"""
-    client: Final = Client(ctx.obj["base_url"], ctx.obj["api_key"])
+    context: Final = cli_context_values(ctx)
+    client: Final = Client(context["base_url"], context["api_key"])
 
     try:
         teams: Final = client.teams.get_available()
@@ -96,8 +121,8 @@ def available(ctx: click.Context):
             click.echo("No available teams to join.")
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        error_body: Final = e.response.json()
-        click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
+        error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
+        click.echo(f"Details: {error_body['body'].get('detail', 'Unknown error')}", err=True)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         raise click.Abort()
@@ -108,8 +133,9 @@ def available(ctx: click.Context):
 @click.pass_context
 def assign_key(ctx: click.Context, team_id: str | None):
     """Assign your current CLI key to a team"""
-    client: Final = Client(ctx.obj["base_url"], ctx.obj["api_key"])
-    api_key: Final = ctx.obj["api_key"]
+    context: Final = cli_context_values(ctx)
+    client: Final = Client(context["base_url"], context["api_key"])
+    api_key: Final = context["api_key"]
 
     if not api_key:
         click.echo("No API key found. Please login first using 'litellm login'")
@@ -145,17 +171,17 @@ def assign_key(ctx: click.Context, team_id: str | None):
             teams = client.teams.list()
             for team in teams:
                 if team.get("team_id") == team_id:
-                    models = team.get("models", [])
-                    if models:
-                        click.echo(f"You can now access models: {', '.join(models)}")
+                    team_models: _TeamModelsView = {"models": team.get("models", [])}
+                    if team_models["models"]:
+                        click.echo(f"You can now access models: {', '.join(team_models['models'])}")
                     else:
                         click.echo("You can now access all available models")
                     break
 
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        error_body: Final = e.response.json()
-        click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
+        error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
+        click.echo(f"Details: {error_body['body'].get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
         click.echo(f"Error: {e}", err=True)

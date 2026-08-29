@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import unittest
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
@@ -1585,10 +1585,16 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
 
-        # Test 5: None/unknown values return None
-        result_unknown = handler._map_reasoning_effort("unknown_value")
-        assert result_unknown is None
-        print("✓ Unknown reasoning_effort values return None")
+        # Test 5: every REASONING_EFFORT level reaches the provider, and anything else (a typo, an
+        # unshipped level, "default") is dropped so the request still succeeds at the provider default
+        from litellm.types.llms.openai import Reasoning
+
+        for effort in ("max", "xhigh", "none"):
+            result_passthrough = handler._map_reasoning_effort(effort)
+            assert result_passthrough == Reasoning(effort=effort)
+        for dropped in ("ultra", "hgih", "unknown_value", "", "default"):
+            assert handler._map_reasoning_effort(dropped) is None
+        print("✓ Enumerated levels pass through and unknown ones are dropped")
 
         print(
             "✓ All reasoning_effort behaviors work correctly with flag/env var control"
@@ -2436,6 +2442,32 @@ def test_map_optional_params_preserves_reasoning_summary():
     }
     assert responses_api_request["reasoning"]["effort"] == "high"
     assert responses_api_request["reasoning"]["summary"] == "detailed"
+
+
+@pytest.mark.parametrize("reasoning_effort", ["max", "high"])
+def test_transform_request_bedrock_mantle_tools_keeps_reasoning_effort(monkeypatch, reasoning_effort):
+    """Regression for reasoning_effort=max being dropped on the chat -> Responses bridge (issue #38084)."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    result: Final = handler.transform_request(
+        model="openai.gpt-5.6-sol",
+        messages=[{"role": "user", "content": "Say pong"}],
+        optional_params={
+            "reasoning_effort": reasoning_effort,
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        },
+        litellm_params={"custom_llm_provider": "bedrock_mantle"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert result["reasoning"] == {"effort": reasoning_effort}
 
 
 def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
@@ -3871,3 +3903,39 @@ def test_stored_reasoning_items_win_over_thinking_blocks():
     reasoning_items = [item for item in input_items if item.get("type") == "reasoning"]
     assert len(reasoning_items) == 1
     assert reasoning_items[0]["id"] == "rs_real"
+
+
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool_reference():
+    """Tool-search tool_reference blocks have no Responses API equivalent: skip them, never stringify them."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {"name": "ToolSearch", "arguments": '{"query": "web"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": [
+                {"type": "tool_reference", "tool_name": "WebFetch"},
+                {"type": "text", "text": "1 tool found"},
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    function_call_output = next(item for item in response if item.get("type") == "function_call_output")
+    assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]

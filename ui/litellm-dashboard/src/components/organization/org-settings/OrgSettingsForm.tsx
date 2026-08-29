@@ -153,7 +153,7 @@ export const OrgSettingsForm = ({
         </FormField>
       </FieldGroup>
 
-      <div className="sticky z-10 bg-card p-4 border-t border-border -bottom-6 -inset-x-6 mt-6">
+      <div className="sticky z-chrome bg-card p-4 border-t border-border -bottom-6 -inset-x-6 mt-6">
         <div className="flex justify-end items-center gap-2">
           <Button type="button" variant="outline" onClick={onCancel} disabled={mutation.isPending}>
             Cancel

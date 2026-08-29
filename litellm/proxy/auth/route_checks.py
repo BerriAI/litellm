@@ -181,7 +181,7 @@ class RouteChecks:
 
         # check if wildcard pattern is allowed
         for allowed_route in valid_token.allowed_routes:
-            if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
+            if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                 return True
 
         if denied_auth_enforced_pass_through_route:
@@ -329,7 +329,7 @@ class RouteChecks:
                     route_allowed = True
                     break
 
-                if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
+                if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                     route_allowed = True
                     break
 
@@ -397,7 +397,7 @@ class RouteChecks:
                     return True
             # Check for wildcard patterns like "/containers/*"
             if RouteChecks._is_wildcard_pattern(pattern=openai_route):
-                if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=openai_route):
+                if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=openai_route):
                     return True
 
         # Check for Google routes with placeholders like "/v1beta/models/{model_name}:generateContent"
@@ -517,7 +517,7 @@ class RouteChecks:
         return pattern.endswith("*")
 
     @staticmethod
-    def _route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
+    def route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
         """
         Check if route matches the wildcard pattern
 
@@ -594,7 +594,7 @@ class RouteChecks:
         # e.g calling /anthropic/v1/messages is allowed if allowed_routes has /anthropic/*
         #########################################################
         if any(
-            RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route)
+            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
             for allowed_route in allowed_routes
             if RouteChecks._is_wildcard_pattern(pattern=allowed_route)
         ):

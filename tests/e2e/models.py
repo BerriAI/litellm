@@ -217,9 +217,36 @@ class McpChatTool(BaseModel):
     allowed_tools: list[str] | None = None
 
 
+class ToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ToolCall(BaseModel):
+    id: str | None = None
+    type: str | None = None
+    function: ToolCallFunction = ToolCallFunction()
+
+
+class ChatAssistantTurn(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: str | None = None
+    reasoning_content: str | None = None
+    tool_calls: list[ToolCall] | None = None
+
+
+class ChatToolResultTurn(BaseModel):
+    role: Literal["tool"] = "tool"
+    tool_call_id: str
+    content: str
+
+
+type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
+
+
 class ChatBody(BaseModel):
     model: str
-    messages: list[ChatMessage]
+    messages: Sequence[ChatTurn]
     stream: bool = False
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
@@ -229,10 +256,12 @@ class ChatBody(BaseModel):
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
+    prompt_cache_key: str | None = None
     tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
     response_format: dict[str, object] | None = None
+    chat_template_kwargs: dict[str, bool] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
@@ -257,15 +286,6 @@ class ReliabilityChatBody(ChatBody):
     exclude_none so an absent override never leaks into the request."""
 
     router_settings_override: RouterSettingsOverride | None = None
-
-
-class ToolCallFunction(BaseModel):
-    name: str | None = None
-    arguments: str | None = None
-
-
-class ToolCall(BaseModel):
-    function: ToolCallFunction = ToolCallFunction()
 
 
 class McpToolFunctionRef(BaseModel):
@@ -400,6 +420,8 @@ class AnthropicContentBlock(BaseModel):
     type: str | None = None
     text: str | None = None
     id: str | None = None
+    name: str | None = None
+    input: dict[str, object] | None = None
 
 
 class AnthropicToolResultBlock(BaseModel):
@@ -689,6 +711,23 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class CostMapEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    litellm_provider: str | None = None
+    mode: str | None = None
+    deprecation_date: str | None = None
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
+    cache_read_input_token_cost: float | None = None
+    supports_function_calling: bool | None = None
+    supports_reasoning: bool | None = None
+    supports_response_schema: bool | None = None
+
+
+class CostMap(RootModel[dict[str, CostMapEntry]]):
+    pass
+
+
 class FileEntry(BaseModel):
     id: str
 
@@ -820,6 +859,26 @@ class ModelDeleteBody(BaseModel):
     id: str
 
 
+class ConnectionTestBody(BaseModel):
+    """POST /health/test_connection body, the API behind the Admin UI's Test
+    Connection button: the deployment params as typed into the add-model form and
+    the health-check mode picking which endpoint the probe calls. The endpoint
+    rejects `os.environ/` references, so credentials are either literal values or
+    omitted to fall through to the proxy's own environment."""
+
+    litellm_params: LiteLLMParamsBody
+    mode: Literal["chat", "completion", "embedding", "responses"]
+
+
+class ConnectionTestResult(BaseModel):
+    error: str | None = None
+
+
+class ConnectionTestResponse(BaseModel):
+    status: Literal["success", "error"]
+    result: ConnectionTestResult | None = None
+
+
 class CredentialCreateBody(BaseModel):
     credential_name: str
     credential_values: dict[str, str]
@@ -835,7 +894,10 @@ class CredentialCreateResponse(BaseModel):
 
 class KeyUpdateBody(BaseModel):
     key: str
-    models: list[str]
+    models: list[str] | None = None
+    key_alias: str | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
 
 
 class KeyBlockBody(BaseModel):
@@ -848,6 +910,27 @@ class KeyListParams(BaseModel):
 
 class KeyListResponse(BaseModel):
     total_count: int
+
+
+# ---------- admin UI session ----------
+
+
+class UiLoginBody(BaseModel):
+    username: str
+    password: str
+
+
+class UiLoginResponse(BaseModel):
+    token: str
+    redirect_url: str
+
+
+class UiSessionClaims(BaseModel):
+    user_id: str
+    key: str
+    user_role: str
+    login_method: Literal["sso", "username_password"]
+    exp: int
 
 
 class TeamMemberEntry(BaseModel):

@@ -38,6 +38,11 @@ class ClassificationRubric(str, Enum):
 # routers get the calibrated rubric without changing what is already running.
 DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubric.LEGACY
 
+# The classifier_type values that can call classifier_llm_config.model. Every consumer asking
+# "is the classifier model a real dependency of this router" resolves it here, including the ones
+# that only hold the raw config mapping and cannot reach ComplexityRouterConfig.uses_llm_classifier.
+LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "heuristic_first"})
+
 
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
@@ -49,7 +54,7 @@ TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
 DEFAULT_TIER_DISTANCE_PENALTY: Final[float] = 0.5
 
 DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: Final[int] = 3
-DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: Final[int] = 200
+DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS: Final[int] = 8000
 
 
 class KeywordTierRule(BaseModel):
@@ -92,6 +97,23 @@ MAX_TIER_DEFINITIONS: Final[int] = 8
 MAX_TIER_NAME_CHARS: Final[int] = 64
 MAX_TIER_DESCRIPTION_CHARS: Final[int] = 500
 MAX_CLASSIFICATION_PROMPT_CHARS: Final[int] = 2000
+
+
+def normalize_classification_prompt(value: str | None) -> str | None:
+    """Strip, reject blank, and cap an operator-written classifier preamble.
+
+    The single owner of the rule, so the dashboard's prompt preview normalizes exactly what the
+    write gate stores: previewing the raw value would render leading whitespace the router strips,
+    or an over-long prompt the write then rejects.
+    """
+    if value is None:
+        return None
+    stripped: Final = value.strip()
+    if not stripped:
+        raise ValueError("must be non-empty; omit the field instead")
+    if len(stripped) > MAX_CLASSIFICATION_PROMPT_CHARS:
+        raise ValueError(f"classification_prompt exceeds {MAX_CLASSIFICATION_PROMPT_CHARS} characters")
+    return stripped
 
 
 class TierDefinition(BaseModel):
@@ -316,6 +338,18 @@ PLAN_MODE_TAIL_SENTINELS: Final[tuple[str, ...]] = (
     "Plan mode still active",
 )
 PLAN_MODE_SYSTEM_SENTINELS: Final[tuple[str, ...]] = ('You are currently running in "Plan" mode.',)
+
+# Taken verbatim from classifier payloads captured on a live gateway, 789 calls over one day: the
+# first appears on 17 of them and the second on 2. A coding agent names the conversation by quoting
+# the session and asking for a title, so the ask carries the session's engineering vocabulary while
+# the task is the cheapest one the client performs. Only wording observed on the wire belongs here,
+# never a paraphrase: a sentinel that matches nothing costs a substring scan per request and reads
+# as coverage the router does not have. These are client-owned strings that drift with client
+# releases, so operators extend coverage via housekeeping_patterns rather than editing these.
+HOUSEKEEPING_ASK_SENTINELS: Final[tuple[str, ...]] = (
+    "Write the title in the predominant language of the session",
+    "You are coming up with a succinct title for a coding session",
+)
 PLAN_MODE_TOOL_NAME: Final[str] = "exit_plan_mode"
 
 
@@ -591,13 +625,30 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "llm", "custom"] = Field(
+    classifier_type: Literal["heuristic", "llm", "custom", "heuristic_first"] = Field(
         default="heuristic",
-        description="Classification strategy: local regex/keyword scoring, an LLM call, or a custom classifier plugin",
+        description=(
+            "Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier "
+            "plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier "
+            "when the local scorer does not confidently land a cheap tier"
+        ),
     )
     classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
-        description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
+        description="Configuration for the LLM classifier; required when classifier_type is 'llm' or 'heuristic_first'",
+    )
+    heuristic_first_max_tier: str | None = Field(
+        default=None,
+        description=(
+            "The highest tier the local scorer may decide on its own; required when classifier_type is "
+            "'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this "
+            "one skips the LLM classifier and routes straight to that heuristic tier, so the classifier "
+            "call is only paid for on traffic the scorer could not place cheaply. The scorer must also "
+            "have produced at least one signal: a prompt where no dimension fired scores 0.0 and would "
+            "otherwise land SIMPLE by default rather than by evidence, which is how a chained router "
+            "would silently send unclassified traffic to the cheapest model. Names a built-in tier, and "
+            "may not name the highest one, since that would make the LLM classifier unreachable."
+        ),
     )
     classifier_plugin: ClassifierPlugin | None = Field(
         default=None,
@@ -626,7 +677,7 @@ class ComplexityRouterConfig(BaseModel):
             "which is what a classifier on some other taxonomy wants: a prompt that grades data "
             "sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to "
             "what the operator configured. Requires default_model when set to 'default_model'. Only "
-            "applies when classifier_type is 'llm' or 'custom'."
+            "applies when classifier_type is 'llm', 'custom', or 'heuristic_first'."
         ),
     )
 
@@ -645,12 +696,30 @@ class ComplexityRouterConfig(BaseModel):
             "classifier_type is 'llm'."
         ),
     )
-    classifier_context_per_turn_chars: int = Field(
-        default=DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+    classifier_context_budget_chars: int = Field(
+        default=DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
+        ge=0,
+        description=(
+            "Maximum characters of prior-turn text quoted to the LLM classifier, across the whole "
+            "context window, per classification call. Turns are taken newest first and quoted whole "
+            "while they fit, so a conversation small enough to quote entirely is never cut; once the "
+            "budget runs out the older turns are dropped whole and only the turn straddling the "
+            "boundary is truncated, into whatever space is left. The current ask and the caller's "
+            "system prompt sit outside this budget and are always sent in full, as does the numbering "
+            "each quoted turn carries. A budget under 120 leaves no room to quote a turn and "
+            "suppresses the block; set classifier_context_window_size to 0 to turn context off "
+            "deliberately. Only applies when classifier_type is 'llm'."
+        ),
+    )
+    classifier_context_per_turn_chars: int | None = Field(
+        default=None,
         gt=0,
         description=(
-            "Maximum character length for each prior turn's text in the classifier context window. "
-            "Turns exceeding this are truncated. Only applies when classifier_type is 'llm'."
+            "Optional cap on each individual prior turn's text, applied before "
+            "classifier_context_budget_chars bounds the block. Unset by default, so one long turn may "
+            "spend the whole budget, which is usually what a follow-up needs; set it when no single "
+            "turn should dominate the context the classifier sees. A capped turn keeps its opening "
+            "and its ending with the middle elided. Only applies when classifier_type is 'llm'."
         ),
     )
     classifier_context_include_assistant_turns: bool = Field(
@@ -662,9 +731,9 @@ class ComplexityRouterConfig(BaseModel):
             "word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the "
             "conversation across both roles rather than the last N user turns, and assistant text is "
             "sent to the classifier model, which may be a different deployment or provider than the "
-            "routed completion model. Assistant replies share classifier_context_per_turn_chars with "
-            "user turns, so raise it if replies are truncated before the part that carries the "
-            "difficulty. Off by default because enabling it shifts tier decisions, and therefore "
+            "routed completion model. Assistant replies spend classifier_context_budget_chars "
+            "alongside user turns, so raise it if the oldest turns stop being quoted once replies "
+            "join the window. Off by default because enabling it shifts tier decisions, and therefore "
             "spend, for an already-deployed router. Only applies when classifier_type is 'llm'."
         ),
     )
@@ -727,6 +796,29 @@ class ComplexityRouterConfig(BaseModel):
         description=(
             "Additional case-sensitive literal sentinels that mark a request as plan mode, on "
             "top of the built-in Claude Code and Copilot ones. For clients whose plan-mode "
+            "wording the built-ins don't cover, or after a client release changes its strings."
+        ),
+    )
+    route_housekeeping_to_cheapest_tier: bool = Field(
+        default=True,
+        description=(
+            "Route a coding agent's own housekeeping calls to the cheapest configured tier "
+            "without classifying them. A client names the conversation by quoting the whole "
+            "session and asking for a title, so the ask reads as the session's engineering work "
+            "and lands on the most expensive tier, which is the reverse of what the call is "
+            "worth. Detection is a literal match against client-owned sentinels on the newest "
+            "ask only, so it cannot fire on an earlier turn, and it never lowers what anyone "
+            "else asked for: a keyword_tier_rule or a session pin still decides instead, and an "
+            "escalation keyword or the plan-mode floor still raises the tier from here. Only the "
+            "classifier is displaced, and its call is skipped, so a matched request costs "
+            "nothing to route. Set false to classify these calls like any other."
+        ),
+    )
+    housekeeping_patterns: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Additional case-sensitive literal sentinels that mark a request as client "
+            "housekeeping, on top of the built-in conversation-title ones. For clients whose "
             "wording the built-ins don't cover, or after a client release changes its strings."
         ),
     )
@@ -899,6 +991,15 @@ class ComplexityRouterConfig(BaseModel):
             return None
         return tuple(stripped for pattern in value if (stripped := pattern.strip()))
 
+    @field_validator("housekeeping_patterns")
+    @classmethod
+    def _normalize_housekeeping_patterns(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Blank patterns are dropped: an empty string substring-matches every request, which would
+        silently route all traffic to the cheapest tier."""
+        if value is None:
+            return None
+        return tuple(stripped for pattern in value if (stripped := pattern.strip()))
+
     @model_validator(mode="after")
     def _validate_plan_mode_min_tier(self) -> "ComplexityRouterConfig":
         if self.plan_mode_min_tier is None:
@@ -918,8 +1019,8 @@ class ComplexityRouterConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_classifier_config(self) -> "ComplexityRouterConfig":
-        if self.classifier_type == "llm" and self.classifier_llm_config is None:
-            raise ValueError("classifier_llm_config is required when classifier_type is 'llm'")
+        if self.uses_llm_classifier and self.classifier_llm_config is None:
+            raise ValueError(f"classifier_llm_config is required when classifier_type is {self.classifier_type!r}")
         if self.classifier_type == "custom" and self.classifier_plugin is None:
             raise ValueError("classifier_plugin is required when classifier_type is 'custom'")
         if self.classifier_plugin is not None and self.classifier_type != "custom":
@@ -929,7 +1030,50 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
-    @field_validator("fallback_tier", "classification_prompt")
+    @field_validator("heuristic_first_max_tier", mode="before")
+    @classmethod
+    def _coerce_heuristic_first_max_tier(cls, value: object) -> object:
+        if isinstance(value, ComplexityTier):
+            return value.value
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @model_validator(mode="after")
+    def _validate_heuristic_first_max_tier(self) -> "ComplexityRouterConfig":
+        if self.classifier_type != "heuristic_first":
+            if self.heuristic_first_max_tier is not None:
+                raise ValueError(
+                    f"heuristic_first_max_tier is set but classifier_type is {self.classifier_type!r}; "
+                    "the local scorer would never gate the classifier. Set classifier_type "
+                    "'heuristic_first' or remove heuristic_first_max_tier"
+                )
+            return self
+        threshold: Final = self.heuristic_first_max_tier
+        if threshold is None:
+            raise ValueError(
+                "heuristic_first_max_tier is required when classifier_type is 'heuristic_first': without a "
+                "threshold there is nothing to decide whether a request escalates to the LLM classifier"
+            )
+        names: Final = self.tier_names()
+        if threshold not in names:
+            raise ValueError(
+                f"heuristic_first_max_tier {threshold!r} is not an active tier: it must name one of {', '.join(names)}"
+            )
+        if threshold == names[-1]:
+            raise ValueError(
+                f"heuristic_first_max_tier {threshold} is the highest tier, so every request would short-circuit "
+                "and the LLM classifier would never run; name a lower tier or use classifier_type 'heuristic'"
+            )
+        if threshold not in self.tiers:
+            raise ValueError(
+                f"heuristic_first_max_tier {threshold} has no model configured in tiers; a threshold pointing at "
+                "an unconfigured tier would route short-circuited requests to the default fallback instead of the "
+                "pool the operator intended"
+            )
+        return self
+
+    @field_validator("fallback_tier")
     @classmethod
     def _reject_blank_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -941,15 +1085,21 @@ class ComplexityRouterConfig(BaseModel):
 
     @field_validator("classification_prompt")
     @classmethod
-    def _cap_classification_prompt(cls, value: str | None) -> str | None:
-        if value is not None and len(value) > MAX_CLASSIFICATION_PROMPT_CHARS:
-            raise ValueError(f"classification_prompt exceeds {MAX_CLASSIFICATION_PROMPT_CHARS} characters")
-        return value
+    def _normalize_classification_prompt_field(cls, value: str | None) -> str | None:
+        return normalize_classification_prompt(value)
 
     @property
     def has_custom_tiers(self) -> bool:
         """True when the operator replaced the built-in tier set via tier_definitions."""
         return self.tier_definitions is not None
+
+    @property
+    def uses_llm_classifier(self) -> bool:
+        """True when this router can call classifier_llm_config.model, so the model is a real
+        dependency: authorized against the caller's key, counted in the health graph, and given a
+        prebuilt rubric. 'heuristic_first' only calls it for traffic the local scorer escalates,
+        which still makes it a dependency on every one of those requests."""
+        return self.classifier_type in LLM_CLASSIFIER_TYPES
 
     def tier_names(self) -> tuple[str, ...]:
         """The active tier names: the defined names, or the built-in set in severity order."""
@@ -1045,7 +1195,7 @@ class ComplexityRouterConfig(BaseModel):
         )
         if duplicated:
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
-        if self.classifier_type == "heuristic":
+        if self.classifier_type in ("heuristic", "heuristic_first"):
             raise ValueError(
                 "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
                 "produces the built-in tiers"
@@ -1155,6 +1305,28 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_tier_param_placement(self) -> "ComplexityRouterConfig":
+        """Reject a router setting written into a tier entry's request params.
+
+        A tier entry's ``litellm_params`` are request params for that deployment: the
+        pre-routing hook spreads them onto the outbound call, so a config key placed
+        there configures nothing and reaches the provider as an unknown body field.
+        """
+        misplaced: Final = tuple(
+            f"{tier}.{key}"
+            for tier, entries in self.tier_model_configs.items()
+            for entry in entries
+            for key in sorted(frozenset(entry.litellm_params) & COMPLEXITY_ROUTER_CONFIG_KEYS)
+        )
+        if misplaced:
+            raise ValueError(
+                "tier entries carry complexity_router_config settings in their litellm_params, where the "
+                "router never reads them and the outbound request forwards them to the provider as unknown "
+                f"body fields: {', '.join(misplaced)}. Set these on complexity_router_config itself"
+            )
+        return self
+
     def tier_label(self, tier: ComplexityTier) -> str:
         """Operator-facing display name for a tier, falling back to its canonical name."""
         return self.tier_labels.get(tier, "").strip() or tier.value
@@ -1171,6 +1343,15 @@ class ComplexityRouterConfig(BaseModel):
             (tier for tier, tier_label in labeled if tier_label.casefold() == folded),
             next((tier for tier in TIER_SEVERITY_ORDER if tier.value.casefold() == folded), None),
         )
+
+
+COMPLEXITY_ROUTER_CONFIG_KEYS: Final[frozenset[str]] = frozenset(ComplexityRouterConfig.model_fields)
+"""Every setting name this config owns, derived from the model so a field added later is covered.
+
+These names are disjoint from the OpenAI request params, from ``all_litellm_params``, and from the
+``LiteLLM_Params`` fields, so one of them appearing where a request param belongs is always a
+misplaced setting rather than a parameter the caller meant to send.
+"""
 
 
 # Combined default config

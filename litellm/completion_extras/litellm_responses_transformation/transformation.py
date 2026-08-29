@@ -5,7 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
 
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
@@ -35,6 +35,7 @@ from litellm.responses.sse_output_recovery import (
 )
 from litellm.responses.utils import normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
+    REASONING_EFFORT,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionToolCallChunk,
@@ -58,9 +59,11 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import (
         ALL_RESPONSES_API_TOOL_PARAMS,
         AllMessageValues,
+        ChatCompletionFileObject,
         ChatCompletionImageObject,
         ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
+        ChatCompletionToolReferenceObject,
         OpenAIMessageContentListBlock,
     )
     from litellm.types.utils import Choices
@@ -172,6 +175,16 @@ def _map_incomplete_reason_to_finish_reason(incomplete_reason: str | None) -> Li
     if incomplete_reason == "content_filter":
         return "content_filter"
     return "length"
+
+
+def _input_file_from_file_value(file_value: object) -> dict[str, object]:
+    if not isinstance(file_value, dict):
+        return {"type": "input_file"}
+    file_dict: Final = cast("dict[str, object]", file_value)  # cast-ok: runtime dict checked
+    return {
+        "type": "input_file",
+        **{key: file_dict[key] for key in ("file_id", "file_data", "filename") if key in file_dict},
+    }
 
 
 def _incomplete_reason_from_response_payload(response_payload: object) -> str | None:
@@ -956,7 +969,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         content: str
         | list[object]
         | Iterable[
-            Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]
+            Union[
+                "OpenAIMessageContentListBlock",
+                "ChatCompletionThinkingBlock",
+                "ChatCompletionRedactedThinkingBlock",
+                "ChatCompletionToolReferenceObject",
+            ]
         ]
         | None,
         role: str,
@@ -1005,17 +1023,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   image -> %s", converted)
                         elif item_type == "file":
-                            # Map Chat Completion file to Responses API input_file
-                            # {"type": "file", "file": {"file_data": "...", "filename": "..."}}
-                            # -> {"type": "input_file", "file_data": "...", "filename": "..."}
-                            file_data = item.get("file", {})
-                            converted = {"type": "input_file"}
-                            if isinstance(file_data, dict):
-                                for key in ["file_id", "file_data", "filename"]:
-                                    if key in file_data:
-                                        converted[key] = file_data[key]
+                            converted = _input_file_from_file_value(
+                                cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                            )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
+                        elif item_type == "tool_reference":
+                            verbose_logger.debug(
+                                "Chat provider:   tool_reference has no responses API equivalent; skipped"
+                            )
                         elif item_type in [
                             "input_text",
                             "input_image",
@@ -1113,22 +1129,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
 
-        # If string is passed, map with optional summary based on flag/env var
-        if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")
-        elif reasoning_effort == "high":
-            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
-        elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")
-        elif reasoning_effort == "medium":
+        if reasoning_effort in get_args(REASONING_EFFORT):
             return (
-                Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
-            )
-        elif reasoning_effort == "low":
-            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
-        elif reasoning_effort == "minimal":
-            return (
-                Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
+                Reasoning(effort=reasoning_effort, summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort=reasoning_effort)
             )
         return None
 

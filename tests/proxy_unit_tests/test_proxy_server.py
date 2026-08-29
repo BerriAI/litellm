@@ -1169,6 +1169,22 @@ async def test_create_user_default_budget(prisma_client, user_role):  # noqa: F8
             assert mock_client.call_args.kwargs["data"]["budget_duration"] is None
 
 
+def _member_add_tx_cm(team_table):
+    """Transaction whose member writes land on whatever tables are mocked on `prisma_client.db`"""
+
+    class _Tx:
+        query_raw = AsyncMock(return_value=[{"members_with_roles": []}])
+        litellm_teamtable = team_table
+
+        def __getattr__(self, table_name):
+            return getattr(litellm.proxy.proxy_server.prisma_client.db, table_name)
+
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=_Tx())
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    return tx_cm
+
+
 @pytest.mark.parametrize("new_member_method", ["user_id", "user_email"])
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
@@ -1230,7 +1246,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):  # noqa
             )
         )
         mock_litellm_usertable.upsert = mock_client
-        mock_litellm_usertable.find_many = AsyncMock(return_value=None)
+        mock_litellm_usertable.find_many = AsyncMock(return_value=[])
         # Mock find_first for user_email validation (returns None for new users)
         mock_litellm_usertable.find_first = AsyncMock(return_value=None)
         # Mock find_unique for user_id validation (returns None for new users)
@@ -1245,12 +1261,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):  # noqa
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
 
-        tx_mock = AsyncMock()
-        tx_mock.query_raw = AsyncMock(return_value=[{"members_with_roles": []}])
-        tx_mock.litellm_teamtable = team_mock_client
-        tx_cm = MagicMock()
-        tx_cm.__aenter__ = AsyncMock(return_value=tx_mock)
-        tx_cm.__aexit__ = AsyncMock(return_value=None)
+        tx_cm = _member_add_tx_cm(team_mock_client)
         original_tx = litellm.proxy.proxy_server.prisma_client.tx
         litellm.proxy.proxy_server.prisma_client.tx = MagicMock(
             return_value=tx_cm
@@ -1432,7 +1443,7 @@ async def test_create_team_member_add_team_admin(
             )
         )
         mock_litellm_usertable.upsert = mock_client
-        mock_litellm_usertable.find_many = AsyncMock(return_value=None)
+        mock_litellm_usertable.find_many = AsyncMock(return_value=[])
         # Mock find_first for user_email validation (returns None for new users)
         mock_litellm_usertable.find_first = AsyncMock(return_value=None)
         # Mock find_unique for user_id validation (returns None for new users)
@@ -1443,12 +1454,7 @@ async def test_create_team_member_add_team_admin(
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
 
-        tx_mock = AsyncMock()
-        tx_mock.query_raw = AsyncMock(return_value=[{"members_with_roles": []}])
-        tx_mock.litellm_teamtable = team_mock_client
-        tx_cm = MagicMock()
-        tx_cm.__aenter__ = AsyncMock(return_value=tx_mock)
-        tx_cm.__aexit__ = AsyncMock(return_value=None)
+        tx_cm = _member_add_tx_cm(team_mock_client)
 
         with (
             patch.object(
@@ -2647,6 +2653,35 @@ async def test_run_direct_health_check_with_instrumentation_accepts_filter_only(
     )
     assert len(seen) == 1
     assert seen[0] is False
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_drops_only_the_rejected_kwarg(monkeypatch):
+    """A callee that predates `router` must still get the skip-disabled filter: dropping the
+    rejected argument alongside working ones would probe deployments the operator opted out."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    seen: list[tuple[dict[str, str] | None, bool]] = []
+
+    async def fake_perform_health_check(
+        model_list,
+        details,
+        max_concurrency=None,
+        instrumentation_context=None,
+        health_check_skip_disabled_background_models=False,
+    ):
+        seen.append((instrumentation_context, health_check_skip_disabled_background_models))
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"health_check_skip_disabled_background_models": True},
+    )
+    await proxy_server._run_direct_health_check_with_instrumentation([], True, 1, {"cycle_id": "c3"})
+
+    assert seen == [({"cycle_id": "c3"}, True)]
 
 
 @pytest.mark.asyncio
