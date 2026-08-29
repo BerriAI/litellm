@@ -5345,3 +5345,80 @@ def test_initialize_bedrock_forwards_aws_external_id():
         assert guardrail.optional_params["aws_external_id"] == "external-id-123"
     finally:
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, guardrail)
+
+
+def _responses_stream_events() -> list:
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    deltas = [
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_lit6457",
+            output_index=0,
+            content_index=0,
+            delta=part,
+        )
+        for part in ("Hello", " world")
+    ]
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_lit6457",
+            created_at=1234567890,
+            model="gpt-4o",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_lit6457",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello world"}],
+                }
+            ],
+        ),
+    )
+    return [*deltas, completed]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_stream_scans_output_and_replays_buffered_events():
+    """Streamed /v1/responses events must be scanned via the unified translation
+    layer, not fed to stream_chunk_builder (which raises APIError on them)."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-responses-stream",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    stream_events = _responses_stream_events()
+    order = []
+    yielded = []
+
+    async def record_scan(*args, **kwargs):
+        order.append("scan")
+        return {"action": "NONE", "assessments": [], "outputs": []}
+
+    async def mock_stream():
+        for event in stream_events:
+            yield event
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),
+            response=mock_stream(),
+            request_data={"model": "gpt-4o", "input": "hi"},
+        ):
+            order.append("chunk")
+            yielded.append(chunk)
+
+    assert order == ["scan", "chunk", "chunk", "chunk"]
+    assert len(yielded) == len(stream_events)
+    assert all(emitted is original for emitted, original in zip(yielded, stream_events))
