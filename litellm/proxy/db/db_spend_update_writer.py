@@ -12,7 +12,7 @@ import os
 import random
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 
@@ -24,6 +24,7 @@ from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
+from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
@@ -91,6 +92,7 @@ class _SpendBatch(Protocol):
     litellm_organizationtable: BatchTable
     litellm_tagtable: BatchTable
     litellm_agentstable: BatchTable
+    litellm_modelaccessgroupbudgettable: BatchTable
 
 
 class _SpendBatchManager(Protocol):
@@ -114,7 +116,7 @@ def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
     return tx
 
 
-def _get_llm_router():
+def get_llm_router():
     """The proxy's router, or None outside a running proxy.
 
     Injected rather than imported where it is used, so the savings computation stays
@@ -126,6 +128,52 @@ def _get_llm_router():
         return llm_router
     except Exception:  # noqa: BLE001  # no proxy in scope; savings degrade to zero
         return None
+
+
+class _DeploymentLookup(Protocol):
+    def get_model_info(self, id: str) -> Mapping[str, object] | None: ...
+
+
+def _served_model_access_groups(
+    router: _DeploymentLookup | None,
+    served_model_id: str | None,
+) -> frozenset[str] | None:
+    """Access groups declared by the deployment that actually served the request.
+
+    None when the served deployment cannot be identified, in which case the set
+    attributed at auth time stands unchanged.
+    """
+    if router is None or not served_model_id:
+        return None
+    deployment: Final = router.get_model_info(id=served_model_id)
+    if deployment is None:
+        return None
+    model_info: Final = deployment.get("model_info")
+    if not isinstance(model_info, Mapping):
+        return None
+    declared: Final = model_info.get("access_groups")
+    if not isinstance(declared, (list, tuple)):
+        return frozenset()
+    return frozenset(group for group in declared if isinstance(group, str))
+
+
+def debitable_model_access_groups(
+    attributed: Sequence[str] | None,
+    served_model_id: str | None,
+    router: _DeploymentLookup | None,
+) -> tuple[str, ...]:
+    """Groups to debit: the set attributed at auth time, narrowed to those the served model belongs to.
+
+    The router may fall back to a model outside the pool auth reserved against, so the
+    attributed set is the hard upper bound: a group absent from it is never debited.
+    """
+    ordered: Final = coerce_model_access_groups(attributed)
+    if not ordered:
+        return ()
+    served: Final = _served_model_access_groups(router=router, served_model_id=served_model_id)
+    if served is None:
+        return ordered
+    return tuple(group for group in ordered if group in served)
 
 
 class DBSpendUpdateWriter:
@@ -197,6 +245,7 @@ class DBSpendUpdateWriter:
             ## CREATE SPEND LOG PAYLOAD ##
             from litellm.proxy.spend_tracking.spend_tracking_utils import (
                 get_logging_payload,
+                get_request_model_access_groups,
             )
 
             payload: Final = get_logging_payload(
@@ -249,6 +298,7 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
+                    request_model_access_groups=get_request_model_access_groups(kwargs),
                 )
             )
 
@@ -332,7 +382,7 @@ class DBSpendUpdateWriter:
                 routing_decision=metadata.get("routing_decision"),
                 usage_object=usage_object_raw if isinstance(usage_object_raw, dict) else None,
                 model_id=payload.get("model_id"),
-                llm_router=_get_llm_router,
+                llm_router=get_llm_router,
                 cost_breakdown=metadata.get("cost_breakdown"),
                 recorded_autorouter_savings=metadata.get("autorouter_savings"),
             )
@@ -443,9 +493,10 @@ class DBSpendUpdateWriter:
         prisma_client: PrismaClient | None,
         litellm_proxy_budget_name: str | None,
         payload: SpendLogsPayload,
+        request_model_access_groups: Sequence[str] = (),
     ):
         """
-        Runs all 11 spend-update helpers sequentially inside a single asyncio task.
+        Runs all 13 spend-update helpers sequentially inside a single asyncio task.
 
         Each helper is wrapped in try/except so one failure doesn't prevent the others.
 
@@ -516,6 +567,14 @@ class DBSpendUpdateWriter:
                 "_batch_database_updates: _update_tag_db failed: %s",
                 traceback.format_exc(),
             )
+
+        await self._update_model_access_group_db(
+            response_cost=response_cost,
+            request_model_access_groups=request_model_access_groups,
+            served_model_id=payload_copy.get("model_id"),
+            prisma_client=prisma_client,
+            router=get_llm_router(),
+        )
 
         _agent_id_for_spend: Final = payload_copy.get("agent_id")
         try:
@@ -826,6 +885,50 @@ class DBSpendUpdateWriter:
             )
             raise e
 
+    async def _update_model_access_group_db(
+        self,
+        response_cost: float | None,
+        request_model_access_groups: Sequence[str] | None,
+        served_model_id: str | None,
+        prisma_client: PrismaClient | None,
+        router: _DeploymentLookup | None = None,
+    ) -> None:
+        """
+        Update spend for every model access group this request is billed against.
+
+        Args:
+            response_cost: Cost of the request, charged in full to each group
+            request_model_access_groups: Groups attributed at auth time, the upper bound on what may be debited
+            served_model_id: Deployment id actually served, used to narrow the attributed set
+            prisma_client: Prisma client instance
+            router: Deployment lookup used to re-resolve groups after a fallback
+        """
+        try:
+            if prisma_client is None:
+                return
+
+            for model_access_group in debitable_model_access_groups(
+                attributed=request_model_access_groups,
+                served_model_id=served_model_id,
+                router=router,
+            ):
+                await self.spend_update_queue.add_update(
+                    update=SpendUpdateQueueItem(
+                        entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP,
+                        entity_id=model_access_group,
+                        response_cost=response_cost,
+                    )
+                )
+        except Exception as e:  # noqa: BLE001  # isolation: a helper failure must not stop the batch
+            spend_log_error(
+                "Spend tracking - failed to enqueue model access group spend update. "
+                "model_access_groups=%s, response_cost=%s - %s",
+                request_model_access_groups,
+                response_cost,
+                str(e),
+                exc=e,
+            )
+
     async def _insert_spend_log_to_db(
         self,
         payload: dict | SpendLogsPayload,
@@ -942,7 +1045,8 @@ class DBSpendUpdateWriter:
                 if db_spend_update_transactions is not None:
                     verbose_proxy_logger.info(
                         "Spend tracking - committing spend updates from Redis to DB: "
-                        "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, tags=%d, agents=%d",
+                        "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, tags=%d, agents=%d, "
+                        "model_access_groups=%d",
                         len(db_spend_update_transactions.get("key_list_transactions") or {}),
                         len(db_spend_update_transactions.get("user_list_transactions") or {}),
                         len(db_spend_update_transactions.get("team_list_transactions") or {}),
@@ -951,6 +1055,7 @@ class DBSpendUpdateWriter:
                         len(db_spend_update_transactions.get("team_member_list_transactions") or {}),
                         len(db_spend_update_transactions.get("tag_list_transactions") or {}),
                         len(db_spend_update_transactions.get("agent_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("model_access_group_list_transactions") or {}),
                     )
                     await self._commit_spend_updates_to_db(
                         prisma_client=prisma_client,
@@ -1497,6 +1602,20 @@ class DBSpendUpdateWriter:
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        ### UPDATE MODEL ACCESS GROUP TABLE ###
+        model_access_group_list_transactions: Final = db_spend_update_transactions.get(
+            "model_access_group_list_transactions"
+        )
+        await DBSpendUpdateWriter._update_entity_spend_in_db(
+            entity_name="Model access group",
+            transactions=model_access_group_list_transactions,
+            table_accessor="litellm_modelaccessgroupbudgettable",
+            where_field="access_group_name",
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
         ### UPDATE AGENT TABLE ###
         agent_list_transactions: Final = db_spend_update_transactions["agent_list_transactions"]
         await DBSpendUpdateWriter._update_entity_spend_in_db(
@@ -1513,7 +1632,7 @@ class DBSpendUpdateWriter:
     async def _update_entity_spend_in_db(
         entity_name: str,
         transactions: dict[str, float] | None,
-        table_accessor: Literal["litellm_tagtable", "litellm_agentstable"],
+        table_accessor: Literal["litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable"],
         where_field: str,
         n_retry_times: int,
         prisma_client: PrismaClient,
@@ -1948,7 +2067,7 @@ class DBSpendUpdateWriter:
                 gateway_injected_cache=marks_gateway_injection(_metadata, payload.get("model_id")),
                 routing_decision=_metadata.get("routing_decision"),
                 model_id=payload.get("model_id"),
-                llm_router=_get_llm_router,
+                llm_router=get_llm_router,
                 usage_object=usage_obj,
                 cost_breakdown=_metadata.get("cost_breakdown"),
                 recorded_autorouter_savings=_metadata.get("autorouter_savings"),
