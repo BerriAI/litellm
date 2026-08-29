@@ -148,6 +148,32 @@ test.describe("Logs page", () => {
     });
   });
 
+  test("the trace sidebar collapses and expands again", async ({ page, request }) => {
+    const prompt = `logs-sidebar-prompt-${uniqueSuffix()}`;
+    const requestId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt,
+    });
+    await waitForSpendLog(request, requestId);
+
+    const row = await openLogsForRequest(page, requestId);
+    await row.click();
+
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
+
+    const toggle = drawer.getByLabel("Collapse trace sidebar");
+    await expect(toggle).toBeVisible({ timeout: 10_000 });
+    await toggle.click();
+
+    const expandToggle = drawer.getByLabel("Expand trace sidebar");
+    await expect(expandToggle).toBeVisible({ timeout: 10_000 });
+    await expandToggle.click({ timeout: 10_000 });
+
+    await expect(drawer.getByLabel("Collapse trace sidebar")).toBeVisible({ timeout: 10_000 });
+    await expect(drawer.getByText(prompt, { exact: false })).toBeVisible({ timeout: 10_000 });
+  });
+
   test("the JSON view exposes Request and Response tabs", async ({ page, request }) => {
     const prompt = `logs-json-prompt-${uniqueSuffix()}`;
     const requestId = await sendChatCompletion(request, {
