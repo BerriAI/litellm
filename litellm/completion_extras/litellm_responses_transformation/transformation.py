@@ -931,7 +931,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return OpenAiResponsesToChatCompletionStreamIterator(streaming_response, sync_stream, json_mode)
 
     def _convert_content_str_to_input_text(self, content: str, role: str) -> dict[str, object]:
-        if role == "user" or role == "system" or role == "tool":
+        if role in ("user", "system", "developer", "tool"):
             return {"type": "input_text", "text": content}
         else:
             return {"type": "output_text", "text": content}

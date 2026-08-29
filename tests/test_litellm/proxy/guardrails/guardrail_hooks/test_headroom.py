@@ -955,6 +955,40 @@ async def test_passthrough_handler_does_not_log_headroom_as_run(
 
 
 @pytest.mark.asyncio
+async def test_responses_request_sends_compressed_input_and_retrieve_tool_upstream(
+    guardrail: HeadroomGuardrail,
+):
+    """Regression for LIT-6494: on /v1/responses the compressed messages must be
+    written back into `input`, not only the retrieve tool into `tools`, or the
+    model keeps reading the full document and never calls headroom_retrieve."""
+    from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+
+    data = {
+        "model": "gpt-5.6",
+        "instructions": ORIGINAL_MESSAGES[0]["content"],
+        "input": [{"role": m["role"], "content": m["content"]} for m in ORIGINAL_MESSAGES[1:]],
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}],
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH),
+    ):
+        result = await OpenAIResponsesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert result["instructions"] == ORIGINAL_MESSAGES[0]["content"]
+    assert [item["content"][0]["text"] for item in result["input"]] == [
+        COMPRESSED_MESSAGES_WITH_HASH[0]["content"],
+        ORIGINAL_MESSAGES[2]["content"],
+        ORIGINAL_MESSAGES[3]["content"],
+    ]
+    assert "A" * 5000 not in json.dumps(result["input"])
+    assert [tool["name"] for tool in result["tools"]] == ["get_weather", HEADROOM_RETRIEVE_TOOL_NAME]
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_http_error_raises():
     guardrail = _make_guardrail()
     mock_response = _make_compress_response([], status=500)

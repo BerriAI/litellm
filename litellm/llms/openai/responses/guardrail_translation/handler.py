@@ -38,6 +38,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
     OpenAiResponsesToChatCompletionStreamIterator,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -149,8 +150,15 @@ class OpenAIResponsesHandler(BaseTranslation):
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
-            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
+            guardrailed_structured_messages = guardrailed_inputs.get("structured_messages")
+            if (
+                guardrailed_structured_messages is not None
+                and guardrailed_structured_messages is not structured_messages
+            ):
+                self._write_back_structured_messages(data, guardrailed_structured_messages)
+            else:
+                guardrailed_texts = guardrailed_inputs.get("texts", [])
+                data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
             self._apply_guardrailed_tools_to_data(data, original_tools, guardrailed_inputs.get("tools"))
             verbose_proxy_logger.debug("OpenAI Responses API: Processed string input")
             return data
@@ -198,23 +206,42 @@ class OpenAIResponsesHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
 
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
             self._apply_guardrailed_tools_to_data(
                 data,
                 original_tools_list,
                 guardrailed_inputs.get("tools"),
             )
 
-            # Step 3: Map guardrail responses back to original input structure
-            await self._apply_guardrail_responses_to_input(
-                messages=input_data,
-                responses=guardrailed_texts,
-                task_mappings=task_mappings,
-            )
+            guardrailed_structured_messages = guardrailed_inputs.get("structured_messages")
+            if (
+                guardrailed_structured_messages is not None
+                and guardrailed_structured_messages is not structured_messages
+            ):
+                self._write_back_structured_messages(data, guardrailed_structured_messages)
+            else:
+                # Step 3: Map guardrail responses back to original input structure
+                await self._apply_guardrail_responses_to_input(
+                    messages=input_data,
+                    responses=guardrailed_inputs.get("texts", []),
+                    task_mappings=task_mappings,
+                )
 
-        verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", input_data)
+        verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", data.get("input"))
 
         return data
+
+    @staticmethod
+    def _write_back_structured_messages(data: dict, structured_messages: Sequence[AllMessageValues]) -> None:
+        input_items, instructions = (
+            LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+                list(structured_messages)
+            )
+        )
+        data["input"] = input_items
+        if instructions is None:
+            data.pop("instructions", None)
+            return
+        data["instructions"] = instructions
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
