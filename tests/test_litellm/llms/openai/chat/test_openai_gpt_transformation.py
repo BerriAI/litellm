@@ -975,3 +975,121 @@ class TestOpenAIPromptCacheBreakpointChatPath:
         assert request["messages"][1]["content"] == [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert request["extra_body"] == {"prompt_cache_options": self.EXPLICIT}
         assert "prompt_cache_options" not in request
+
+
+class TestToolSchemaCombinatorFlatteningForOpenAI:
+    """
+    Regression tests for LIT-6488: OpenAI's chat completions validator rejects
+    tool parameters carrying a top-level anyOf/oneOf/allOf for every model
+    family (GPT-5 included, unlike the Responses API), so requests bound for
+    api.openai.com get those combinators flattened into one object schema,
+    while OpenAI-compatible backends on a custom api_base and other providers
+    keep the caller's schema untouched.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    @pytest.fixture(autouse=True)
+    def _clean_openai_base_env(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None, raising=False)
+
+    @staticmethod
+    def _anyof_tool():
+        return {
+            "type": "function",
+            "function": {
+                "name": "automation_update",
+                "description": "Update an automation",
+                "parameters": {
+                    "type": "object",
+                    "anyOf": [
+                        {
+                            "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
+                            "required": ["id", "enabled"],
+                        },
+                        {
+                            "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
+                            "required": ["id", "schedule"],
+                        },
+                    ],
+                    "properties": {"id": {"type": "string"}},
+                    "required": ["id"],
+                },
+            },
+        }
+
+    def _transform(self, config, model, litellm_params, tools):
+        return config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"tools": tools},
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+    def test_flattens_top_level_anyof_for_hosted_openai(self):
+        request = self._transform(
+            self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": None}, [self._anyof_tool()]
+        )
+        parameters = request["tools"][0]["function"]["parameters"]
+        assert "anyOf" not in parameters
+        assert parameters["type"] == "object"
+        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+        assert parameters["required"] == ["id"]
+        assert request["tools"][0]["function"]["name"] == "automation_update"
+
+    def test_gpt5_family_flattens_on_chat_completions(self):
+        request = self._transform(
+            OpenAIGPT5Config(), "gpt-5.6", {"custom_llm_provider": "openai", "api_base": None}, [self._anyof_tool()]
+        )
+        assert "anyOf" not in request["tools"][0]["function"]["parameters"]
+
+    def test_custom_api_base_keeps_union(self):
+        tool = self._anyof_tool()
+        request = self._transform(
+            self.config,
+            "gpt-4o",
+            {"custom_llm_provider": "openai", "api_base": "http://localhost:8000/v1"},
+            [tool],
+        )
+        assert request["tools"][0]["function"]["parameters"] == self._anyof_tool()["function"]["parameters"]
+
+    def test_non_openai_provider_keeps_union(self):
+        request = self._transform(
+            self.config, "some-oss-model", {"custom_llm_provider": "groq", "api_base": None}, [self._anyof_tool()]
+        )
+        assert request["tools"][0]["function"]["parameters"] == self._anyof_tool()["function"]["parameters"]
+
+    def test_caller_tool_dict_is_not_mutated(self):
+        tool = self._anyof_tool()
+        self._transform(self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": None}, [tool])
+        assert tool == self._anyof_tool()
+
+    def test_clean_object_schema_passes_through_as_same_object(self):
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+            },
+        }
+        request = self._transform(
+            self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": None}, [tool]
+        )
+        assert request["tools"][0] is tool
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_flattens_for_hosted_openai(self):
+        request = await self.config.async_transform_request(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"tools": [self._anyof_tool()]},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+        parameters = request["tools"][0]["function"]["parameters"]
+        assert "anyOf" not in parameters
+        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
