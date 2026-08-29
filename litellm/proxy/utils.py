@@ -6305,17 +6305,14 @@ async def update_spend_logs_job(
     logs_to_process: Final = await dequeue_spend_logs(prisma_client, MAX_LOGS_PER_INTERVAL)
 
     try:
-        update_spend_logs = ProxyUpdateSpend.update_spend_logs(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            db_writer_client=db_writer_client,
-            logs_to_process=logs_to_process,
-        )
-        if timeout is None:
-            await update_spend_logs
-        else:
-            await asyncio.wait_for(update_spend_logs, timeout=timeout)
+        async with asyncio.timeout(timeout):
+            await ProxyUpdateSpend.update_spend_logs(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                db_writer_client=db_writer_client,
+                logs_to_process=logs_to_process,
+            )
     except asyncio.CancelledError:
         await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
         verbose_proxy_logger.warning(
@@ -6323,7 +6320,7 @@ async def update_spend_logs_job(
             len(logs_to_process),
         )
         raise
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
         verbose_proxy_logger.warning(
             "Spend tracking - spend log write timed out after %.2f seconds; requeued %d rows",
