@@ -11,9 +11,13 @@ Seeding a row that does not exist yet reads LiteLLM_SpendLogs once, excluding
 the requests whose increments are in the same batch so neither source counts
 them twice. One gap survives that exclusion: without the Redis transaction
 buffer every pod flushes its own increments, so a row seeded by one pod can
-miss increments still queued on another. That is bounded by a single flush
-interval, happens at most once per window row, and errs toward under-counting
-for that interval only.
+include spend logs whose increments are still queued on another pod, and those
+increments are added again when that pod flushes. That is bounded by a single
+flush interval, happens at most once per window row, and only ever over-counts:
+the seed never omits spend, because every increment not yet in the row still
+reaches it on its own pod's next flush. A row therefore lags real spend by at
+most one flush interval of queued increments, the same lag the SpendLogs
+aggregate it replaces (and every other spend column) already has.
 """
 
 from collections.abc import Sequence
