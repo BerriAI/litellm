@@ -32,6 +32,8 @@ vi.mock("@/components/shared/charts", () => ({
   DonutChart: () => <div />,
   BarChart: () => <div />,
   CustomLegend: () => <div />,
+  chartColorValue: (color: string) => color,
+  DEFAULT_COLOR_CYCLE: ["blue", "cyan", "sky", "indigo", "violet", "purple", "fuchsia", "slate"],
   SEQUENTIAL_COLOR_RAMP: ["indigo"],
 }));
 

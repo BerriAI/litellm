@@ -84,6 +84,65 @@ def test_no_usage_details():
     assert cost == 0.0
 
 
+def _make_server_tool_use_usage(web_search_requests: int) -> Usage:
+    from litellm.types.utils import ServerToolUse
+
+    return Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        server_tool_use=ServerToolUse(web_search_requests=web_search_requests),
+    )
+
+
+def test_server_tool_use_fallback_per_query_billing():
+    """Usage reconstructed from an Anthropic-format response carries the count in
+    server_tool_use, not prompt_tokens_details; per_query billing prices each request."""
+    model_info = {
+        "key": "gemini/gemini-3-flash-preview",
+        "web_search_billing_unit": "per_query",
+        "search_context_cost_per_query": {
+            "search_context_size_medium": 0.014,
+        },
+    }
+    cost = cost_per_web_search_request(usage=_make_server_tool_use_usage(3), model_info=model_info)
+    assert cost == pytest.approx(0.014 * 3)
+
+
+def test_server_tool_use_fallback_per_prompt_clamps_to_one():
+    """per_prompt billing clamps the server_tool_use count to one grounded prompt."""
+    model_info = {
+        "key": "gemini/gemini-2.5-flash",
+        "search_context_cost_per_query": {
+            "search_context_size_medium": 0.035,
+        },
+    }
+    cost = cost_per_web_search_request(usage=_make_server_tool_use_usage(4), model_info=model_info)
+    assert cost == pytest.approx(0.035 * 1)
+
+
+def test_prompt_tokens_details_take_precedence_over_server_tool_use():
+    """The native Gemini field wins when both counts are present."""
+    from litellm.types.utils import ServerToolUse
+
+    model_info = {
+        "key": "gemini/gemini-3-flash-preview",
+        "web_search_billing_unit": "per_query",
+        "search_context_cost_per_query": {
+            "search_context_size_medium": 0.014,
+        },
+    }
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=2),
+        server_tool_use=ServerToolUse(web_search_requests=5),
+    )
+    cost = cost_per_web_search_request(usage=usage, model_info=model_info)
+    assert cost == pytest.approx(0.014 * 2)
+
+
 def _make_maps_usage(google_maps_grounding_requests: int) -> Usage:
     return Usage(
         prompt_tokens=100,

@@ -477,12 +477,12 @@ class TestBuildResponseWithResponseFormat:
             }
         }
         # SRT requested but tokens have no start_ms/end_ms -> empty SRT
-        # falls back gracefully since _group_tokens_into_cues skips them
+        # falls back gracefully since group_subtitle_tokens_into_cues skips them
         resp = cfg._build_response_from_payload(payload, response_format="srt")
         # With no timestamp data, SRT rendering produces empty string,
         # but we still get output because the code checks `tokens` truthiness
         # before choosing SRT path. Actually the tokens list is truthy but
-        # _group_tokens_into_cues will produce no cues -> empty SRT string.
+        # group_subtitle_tokens_into_cues will produce no cues -> empty SRT string.
         # Let's verify it doesn't crash.
         assert isinstance(resp.text, str)
 

@@ -104,8 +104,8 @@ def _convert_entry(name: str, entry: MCPConnectorEntry) -> ConvertedConnector | 
                 approval_status=MCPApprovalStatus.active,
                 transport=MCPTransport.stdio,
                 command=entry.command,
-                args=entry.args,
-                env=entry.env,
+                args=list(entry.args),
+                env=dict(entry.env),
             )
         except ValidationError as e:
             return ConnectorConversionError(name=name, error=_first_validation_message(e))
@@ -130,7 +130,7 @@ def _convert_entry(name: str, entry: MCPConnectorEntry) -> ConvertedConnector | 
             url=entry.url,
             auth_type=MCPAuth.bearer_token if entry.authorization_token else MCPAuth.none,
             credentials=credentials,
-            static_headers=entry.headers,
+            static_headers=dict(entry.headers) if entry.headers is not None else None,
         )
     except ValidationError as e:
         return ConnectorConversionError(name=name, error=_first_validation_message(e))

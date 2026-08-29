@@ -215,6 +215,7 @@ if MCP_AVAILABLE:
         MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
         MCPAuth,
         MCPCredentials,
+        normalize_upstream_header_name,
     )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -250,9 +251,26 @@ if MCP_AVAILABLE:
                 detail={"error": error_messages_text},
             )
 
+    def _validate_upstream_token_header(payload: McpServerPayloadLike) -> None:
+        credentials: Final = getattr(payload, "credentials", None)
+        raw: Final = credentials.get("upstream_token_header") if isinstance(credentials, dict) else None
+        if not isinstance(raw, str) or raw == "":
+            return
+        if normalize_upstream_header_name(raw) is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        f"Invalid upstream_token_header {raw!r}: must be a valid HTTP header name "
+                        "(RFC 7230 token, e.g. 'esb-oauth')"
+                    )
+                },
+            )
+
     def validate_and_normalize_mcp_server_payload(payload: McpServerPayloadLike) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
+        _validate_upstream_token_header(payload)
 
     def stamp_omitted_oauth2_flow(payload: NewMCPServerRequest) -> None:
         """Fallback only: fill in oauth2_flow when an oauth2 create omits it.
@@ -750,6 +768,7 @@ if MCP_AVAILABLE:
         ("aws_region_name", "aws_region_name"),
         ("aws_service_name", "aws_service_name"),
         ("upstream_resource", "upstream_resource"),
+        ("upstream_token_header", "upstream_token_header"),
     )
 
     def _has_non_admin_config_credentials(credentials: "MCPCredentials | None") -> bool:
