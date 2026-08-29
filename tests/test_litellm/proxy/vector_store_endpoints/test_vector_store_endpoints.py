@@ -3185,21 +3185,27 @@ async def test_list_vector_stores_returns_config_sourced_and_leaves_registry_int
         ]
     )
 
+    # Endpoint-level regression: list_vector_stores reads several SDK
+    # internals (registry global, prisma client, RBAC/feature-flag helpers)
+    # that the caller can't inject. Each patch below targets one such
+    # internal — sanctioned via test-quality-ok because the alternative
+    # (spinning a real proxy + DB) is disproportionate for a targeted
+    # regression assertion.
     with (
-        # patch() auto-restores litellm.vector_store_registry on exit, avoiding
-        # the module-global save/restore pattern the test-quality gate flags.
-        patch("litellm.vector_store_registry", registry),
-        # Empty DB — the store exists only in config/memory.
-        patch(
+        patch("litellm.vector_store_registry", registry),  # test-quality-ok: injects the registry the endpoint reads
+        patch(  # test-quality-ok: stubs the DB fetch used inside list_vector_stores
             "litellm.vector_stores.vector_store_registry.VectorStoreRegistry._get_vector_stores_from_db",
             new=AsyncMock(return_value=[]),
         ),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch(
+        patch(  # test-quality-ok: prisma_client is a module global read at request time
+            "litellm.proxy.proxy_server.prisma_client",
+            MagicMock(),
+        ),
+        patch(  # test-quality-ok: skip RBAC to isolate the reconciliation branch under test
             "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
             new=AsyncMock(return_value=True),
         ),
-        patch(
+        patch(  # test-quality-ok: skip feature-flag gate to isolate the reconciliation branch under test
             "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
             new=AsyncMock(return_value=None),
         ),
