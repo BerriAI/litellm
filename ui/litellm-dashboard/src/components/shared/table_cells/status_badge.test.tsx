@@ -48,7 +48,7 @@ describe("StatusBadge", () => {
     render(<StatusBadge tone="info" label="gpt-4.1" href="/models-and-endpoints?model_group=gpt-4.1" />);
     const link = screen.getByRole("link", { name: "gpt-4.1" });
     expect(link).toHaveAttribute("href", "/models-and-endpoints?model_group=gpt-4.1");
-    expect(link.className).toContain("text-info");
+    expect(link).toHaveClass("text-info");
     await user.click(link);
     expect(push).toHaveBeenCalledWith("/models-and-endpoints?model_group=gpt-4.1");
   });
