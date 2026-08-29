@@ -8,7 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::provider_config::ocr_provider_config;
-use super::{OcrRequest, ocr};
+use super::{OcrDocument, OcrRequest, ocr};
 use crate::callbacks::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
@@ -17,6 +17,13 @@ use crate::callbacks::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
 use crate::callbacks::types::RequestMetadata;
+
+fn document_url() -> OcrDocument {
+    OcrDocument::DocumentUrl {
+        document_url: "https://example.com/doc.pdf".to_string(),
+        extra: Default::default(),
+    }
+}
 
 async fn read_http_headers(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
@@ -251,10 +258,7 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
     ]));
     let response = ocr(OcrRequest {
         model: "mistral-ocr-latest",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
+        document: document_url(),
         api_key: Some("sk-test"),
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("mistral"),
@@ -319,10 +323,7 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     let logger = Arc::new(RecordingOcrLogger::default());
     let err = ocr(OcrRequest {
         model: "mistral-ocr-latest",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
+        document: document_url(),
         api_key: Some("sk-test"),
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("mistral"),
@@ -363,10 +364,7 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
 
     let err = ocr(OcrRequest {
         model: "mistral-ocr-latest",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
+        document: document_url(),
         api_key: Some("sk-test"),
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("mistral"),
@@ -433,10 +431,7 @@ async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
 
     let response = ocr(OcrRequest {
         model: "mistral-ocr-latest",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
+        document: document_url(),
         api_key: Some("sk-for-rust-fallback"),
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("mistral"),
@@ -502,10 +497,7 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
 
     let response = ocr(OcrRequest {
         model: "doc-intelligence/prebuilt-read",
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
+        document: document_url(),
         api_key: Some("di-key"),
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai"),

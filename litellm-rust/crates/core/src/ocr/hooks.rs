@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 
 use super::document_fetch::convert_document_url_to_data_uri;
 use super::provider_config::ocr_provider_config;
-use super::types::{PreparedOcrRequest, ProviderOcrRequest};
+use super::types::{OcrDocument, PreparedOcrRequest, ProviderOcrRequest};
 use crate::callbacks::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
@@ -95,6 +95,8 @@ impl OcrLifecycleHooks {
         } else {
             request.document
         };
+        let document = serde_json::to_value(document)
+            .map_err(|error| CoreError::InvalidRequest(format!("invalid OCR document: {error}")))?;
         let body = config
             .transform_ocr_request(&request.model, document, filtered_params)?
             .data;
@@ -276,7 +278,7 @@ fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
 
 fn parse_ocr_pre_call_guardrail_request(
     request: GuardrailRequest,
-) -> CoreResult<(Value, Map<String, Value>)> {
+) -> CoreResult<(OcrDocument, Map<String, Value>)> {
     let Value::Object(mut data) = request.data else {
         return Err(CoreError::InvalidRequest(
             "OCR pre_call guardrail must return an object".to_string(),
@@ -294,6 +296,8 @@ fn parse_ocr_pre_call_guardrail_request(
         }
         None => Map::new(),
     };
+    let document = serde_json::from_value::<OcrDocument>(document)
+        .map_err(|error| CoreError::InvalidRequest(format!("invalid OCR document: {error}")))?;
     Ok((document, optional_params))
 }
 

@@ -12,7 +12,7 @@ use litellm_core::chat_completions::{
 use litellm_core::error::CoreError;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
-use litellm_core::ocr::{OcrRequest, ocr as run_ocr};
+use litellm_core::ocr::{OcrDocument, OcrRequest, ocr as run_ocr};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
@@ -35,7 +35,7 @@ pyo3::create_exception!(
 );
 
 type MarshaledOcrInputs = (
-    Value,
+    OcrDocument,
     Option<Map<String, Value>>,
     Map<String, Value>,
     Option<Duration>,
@@ -212,6 +212,8 @@ fn marshal_inputs(
     timeout_seconds: Option<f64>,
 ) -> PyResult<MarshaledOcrInputs> {
     let document = py_to_json(py, document.bind(py))?;
+    let document = serde_json::from_value::<OcrDocument>(document)
+        .map_err(|error| PyValueError::new_err(format!("invalid OCR document: {error}")))?;
     let extra_headers = match extra_headers {
         Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
         None => None,

@@ -1,28 +1,16 @@
 use std::net::IpAddr;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use reqwest::Url;
-use serde_json::Value;
-
 use crate::CoreResult;
 use crate::error::CoreError;
 use crate::http_utils::truncate_error_body;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use reqwest::Url;
 
 const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
 const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
 
-fn document_url_field(document: &Value) -> Option<(&str, &str)> {
-    let object = document.as_object()?;
-    let doc_type = object.get("type").and_then(Value::as_str)?;
-    let field = match doc_type {
-        "document_url" => "document_url",
-        "image_url" => "image_url",
-        _ => return None,
-    };
-    let url = object.get(field).and_then(Value::as_str)?;
-    Some((field, url))
-}
+use super::types::OcrDocument;
 
 fn is_url_requiring_fetch(url: &str) -> bool {
     !url.starts_with("data:") && (url.starts_with("http://") || url.starts_with("https://"))
@@ -181,10 +169,10 @@ async fn read_response_with_limit(
     Ok(bytes)
 }
 
-pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreResult<Value> {
-    let Some((field, url)) = document_url_field(&document) else {
-        return Ok(document);
-    };
+pub(super) async fn convert_document_url_to_data_uri(
+    document: OcrDocument,
+) -> CoreResult<OcrDocument> {
+    let (_, url) = document.url_field();
     if !is_url_requiring_fetch(url) {
         return Ok(document);
     }
@@ -213,18 +201,21 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
         BASE64_STANDARD.encode(bytes)
     );
 
-    let mut transformed = document
-        .as_object()
-        .cloned()
-        .ok_or_else(|| CoreError::InvalidRequest("OCR document must be an object".to_string()))?;
-    transformed.insert(field.to_string(), Value::String(data_uri));
-    Ok(Value::Object(transformed))
+    Ok(match document {
+        OcrDocument::DocumentUrl { extra, .. } => OcrDocument::DocumentUrl {
+            document_url: data_uri,
+            extra,
+        },
+        OcrDocument::ImageUrl { extra, .. } => OcrDocument::ImageUrl {
+            image_url: data_uri,
+            extra,
+        },
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn blocks_private_and_metadata_ips() {
@@ -242,10 +233,10 @@ mod tests {
 
     #[tokio::test]
     async fn convert_document_url_rejects_loopback_fetch() {
-        let error = convert_document_url_to_data_uri(json!({
-            "type": "image_url",
-            "image_url": "http://127.0.0.1/image.png"
-        }))
+        let error = convert_document_url_to_data_uri(OcrDocument::ImageUrl {
+            image_url: "http://127.0.0.1/image.png".to_string(),
+            extra: Default::default(),
+        })
         .await
         .unwrap_err();
 
@@ -258,10 +249,10 @@ mod tests {
 
     #[tokio::test]
     async fn convert_document_url_leaves_data_uri_untouched() {
-        let document = json!({
-            "type": "image_url",
-            "image_url": "data:image/png;base64,abcd"
-        });
+        let document = OcrDocument::ImageUrl {
+            image_url: "data:image/png;base64,abcd".to_string(),
+            extra: Default::default(),
+        };
 
         let transformed = convert_document_url_to_data_uri(document.clone())
             .await
