@@ -2401,6 +2401,7 @@ async def increment_spend_counters(
     end_user_id: str | None = None,
     tags: list[str] | None = None,
     request_id: str | None = None,
+    request_started_at: datetime | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2474,6 +2475,7 @@ async def increment_spend_counters(
                 window_start=key_window_start,
                 increment=cost,
                 request_id=request_id,
+                request_started_at=request_started_at,
             )
 
     async def _team_scope(scope_team_id: str) -> None:
@@ -2517,6 +2519,7 @@ async def increment_spend_counters(
                 window_start=team_window_start,
                 increment=cost,
                 request_id=request_id,
+                request_started_at=request_started_at,
             )
 
     async def _team_member_scope(scope_user_id: str, scope_team_id: str) -> None:
@@ -2710,14 +2713,15 @@ async def _enqueue_window_spend_row_update(
     window_start: datetime | None,
     increment: float,
     request_id: str | None,
+    request_started_at: datetime | None,
 ) -> None:
     """Queue this request's cost against the LiteLLM_BudgetWindowSpend row for
     the window, so enforcement can read a maintained total instead of
     aggregating LiteLLM_SpendLogs.
 
-    request_id is the LiteLLM_SpendLogs id this cost was recorded under; the
-    flush uses it to keep the one-time seed from counting a request that its
-    increment already covers.
+    request_id is the LiteLLM_SpendLogs id this cost was recorded under and
+    request_started_at its startTime; the flush uses them to keep the one-time
+    seed from counting a request that its increment already covers.
 
     Enqueued even when the cache increment was skipped for a reserved counter:
     the reservation only pre-charged the counter, and the row still owes the
@@ -2739,6 +2743,7 @@ async def _enqueue_window_spend_row_update(
                 window_start=window_start,
                 spend=increment,
                 request_id=request_id,
+                started_at=request_started_at,
             )
         )
     except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback

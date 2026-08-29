@@ -442,6 +442,7 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(
             window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
             spend=1.25,
             request_id="req-1",
+            started_at=datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc),
         )
     )
 
@@ -466,6 +467,7 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(
         "window_start": "2026-08-01T00:00:00.000000",
         "spend": 1.25,
         "request_ids": ["req-1"],
+        "started_at": "2026-08-10T12:00:00.000000",
     }]
 
 
