@@ -15,6 +15,7 @@ COST_MAP_ADAPTER: Final = TypeAdapter(CostMap)
 SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/moonshotai/Kimi-K3",
     "together_ai/zai-org/GLM-5.2",
+    "together_ai/zai-org/GLM-5.3",
     "together_ai/zai-org/GLM-5.3-Flash",
     "together_ai/deepseek-ai/DeepSeek-V4-Pro-0813",
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731",

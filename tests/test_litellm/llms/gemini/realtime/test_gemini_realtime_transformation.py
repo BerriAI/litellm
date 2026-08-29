@@ -1813,7 +1813,6 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
         "gemini-2.5-flash-native-audio-latest",
         "gemini/gemini-2.5-flash-native-audio-latest",
         "gemini-live-2.5-flash-native-audio",
-        "gemini/gemini-live-2.5-flash-native-audio",
     ]
     flash_live_models = [
         "gemini-3.1-flash-live-preview",
@@ -1837,7 +1836,6 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
         ("gemini-2.5-flash-native-audio-latest", True),
         ("gemini/gemini-2.5-flash-native-audio-latest", True),
         ("gemini-live-2.5-flash-native-audio", True),
-        ("gemini/gemini-live-2.5-flash-native-audio", True),
         ("vertex_ai/gemini-live-2.5-flash-native-audio", True),
         ("gemini-2.0-flash", False),
         ("gemini-2.5-flash", False),
@@ -1847,16 +1845,17 @@ def test_is_audio_only_live_model_uses_cost_map(model, expected, patch_gemini_au
     assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
 
 
-def test_gemini_live_native_audio_entries_in_catalog():
+def test_gemini_live_native_audio_entry_is_vertex_only():
     import json
     from pathlib import Path
     from typing import Final
 
     catalog_path: Final = Path(__file__).parents[5] / "model_prices_and_context_window.json"
     catalog: Final = json.loads(catalog_path.read_text())
-    for key in ("gemini-live-2.5-flash-native-audio", "gemini/gemini-live-2.5-flash-native-audio"):
-        assert key in catalog, f"{key} missing from model_prices_and_context_window.json"
-        assert catalog[key].get("gemini_native_audio") is True, f"{key}: gemini_native_audio must be true"
+    vertex_key: Final = "gemini-live-2.5-flash-native-audio"
+    assert catalog[vertex_key]["litellm_provider"] == "vertex_ai-language-models"
+    assert catalog[vertex_key].get("gemini_native_audio") is True
+    assert "gemini/gemini-live-2.5-flash-native-audio" not in catalog, "the Gemini API does not serve this model"
 
 
 def test_is_setup_message_and_is_content_message():

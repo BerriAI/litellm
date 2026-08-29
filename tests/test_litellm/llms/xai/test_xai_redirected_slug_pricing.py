@@ -2,8 +2,9 @@
 xAI retired eight slugs on 2026-05-15 but kept them resolvable: chat slugs redirect to
 grok-4.3 and bill at grok-4.3's rates, while the grok-code-fast slugs are aliases of
 grok-build-0.1 and bill at its rates, so the registry must price them that way or spend
-tracking is wrong.
-
+tracking is wrong. The grok-3-beta, grok-3-fast, grok-3-mini, and grok-4-1-fast slugs
+are absent from /v1/language-models and resolve to grok-4.3 the same way (the chat
+response names grok-4.3 as the served model), so they carry grok-4.3's rates too.
 https://docs.x.ai/developers/migration/may-15-retirement
 https://docs.x.ai/developers/models/grok-build-0.1
 """
@@ -21,11 +22,24 @@ BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_ba
 MAP_PATHS = (PRICES_PATH, BACKUP_PRICES_PATH)
 
 REDIRECT_TARGET = "xai/grok-4.3"
+GROK_3_MINI_SLUGS = (
+    "xai/grok-3-mini",
+    "xai/grok-3-mini-beta",
+    "xai/grok-3-mini-fast",
+    "xai/grok-3-mini-fast-beta",
+    "xai/grok-3-mini-fast-latest",
+    "xai/grok-3-mini-latest",
+)
 REDIRECTED_SLUGS = (
     "xai/grok-3",
+    "xai/grok-3-beta",
+    "xai/grok-3-fast-beta",
+    "xai/grok-3-fast-latest",
     "xai/grok-3-latest",
+    *GROK_3_MINI_SLUGS,
     "xai/grok-4",
     "xai/grok-4-0709",
+    "xai/grok-4-1-fast",
     "xai/grok-4-1-fast-non-reasoning",
     "xai/grok-4-1-fast-non-reasoning-latest",
     "xai/grok-4-1-fast-reasoning",
@@ -41,6 +55,7 @@ CODE_SLUGS = (
     "xai/grok-code-fast-1-0825",
 )
 RETIREMENT_DATE = "2026-05-15"
+GROK_3_MINI_RETIREMENT_DATE = "2026-02-28"
 
 BASE_COST_FIELDS = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
 TIER_COST_FIELDS = (
@@ -53,6 +68,10 @@ STALE_TIER_FIELDS = (
     "output_cost_per_token_above_128k_tokens",
     "cache_read_input_token_cost_above_128k_tokens",
 )
+
+
+def expected_retirement_date(slug: str) -> str:
+    return GROK_3_MINI_RETIREMENT_DATE if slug in GROK_3_MINI_SLUGS else RETIREMENT_DATE
 
 
 @pytest.fixture(scope="module", params=[p.name for p in MAP_PATHS])
@@ -80,7 +99,7 @@ def test_code_slug_bills_at_grok_build_rate(cost_map: dict, slug: str):
 
 @pytest.mark.parametrize("slug", (*REDIRECTED_SLUGS, *CODE_SLUGS))
 def test_redirected_slug_keeps_its_retirement_date(cost_map: dict, slug: str):
-    assert cost_map[slug]["deprecation_date"] == RETIREMENT_DATE
+    assert cost_map[slug]["deprecation_date"] == expected_retirement_date(slug)
 
 
 @pytest.mark.parametrize("slug", REDIRECTED_SLUGS)
@@ -113,21 +132,13 @@ def test_both_cost_maps_agree_on_the_redirected_slugs():
 
 
 def test_every_retired_chat_slug_is_covered(cost_map: dict):
-    """The list above must stay in step with what the registry marks retired."""
+    """The lists above must stay in step with what the registry marks retired."""
     marked = {
         key
         for key, entry in cost_map.items()
         if isinstance(entry, dict)
         and entry.get("litellm_provider") == "xai"
-        and entry.get("deprecation_date") == RETIREMENT_DATE
+        and "deprecation_date" in entry
         and entry.get("mode") == "chat"
     }
     assert marked == {*REDIRECTED_SLUGS, *CODE_SLUGS}
-
-
-def test_a_live_tiered_model_keeps_its_own_rates(cost_map: dict):
-    """grok-4-1-fast is not retired, so it must keep its 128k tier and its own prices."""
-    entry = cost_map["xai/grok-4-1-fast"]
-    assert "deprecation_date" not in entry
-    assert entry["input_cost_per_token_above_128k_tokens"] == 4e-07
-    assert entry["input_cost_per_token"] == 2e-07
