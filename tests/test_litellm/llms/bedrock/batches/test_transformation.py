@@ -787,7 +787,7 @@ class TestBedrockBatchesContract(BatchesConfigContractTests):
     expected_retrieve_status = "completed"
 
 
-def test_get_complete_batch_url_cn_partition(config):
+def test_get_complete_batch_url_cn_partition(config: BedrockBatchesConfig) -> None:
     url = config.get_complete_batch_url(
         api_base=None,
         api_key=None,
@@ -812,7 +812,7 @@ def test_get_complete_batch_url_cn_partition(config):
         ),
     ],
 )
-def test_retrieve_request_accepts_partition_arns(config, arn, expected_prefix):
+def test_retrieve_request_accepts_partition_arns(config: BedrockBatchesConfig, arn: str, expected_prefix: str) -> None:
     with patch.object(config.common_utils, "sign_aws_request") as mock_sign:
         mock_sign.return_value = ({"Authorization": "signed"}, b"")
         result = config.transform_retrieve_batch_request(

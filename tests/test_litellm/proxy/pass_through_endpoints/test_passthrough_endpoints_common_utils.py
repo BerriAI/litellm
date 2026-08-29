@@ -94,7 +94,7 @@ def test_encode_bedrock_runtime_modelid_arn_edge_cases():
     assert result == expected
 
 
-def test_encode_bedrock_runtime_modelid_arn_partition_arns():
+def test_encode_bedrock_runtime_modelid_arn_partition_arns() -> None:
     endpoint = "model/arn:aws-cn:bedrock:cn-north-1:123456789012:application-inference-profile/r742sbn2zckd/converse"
     expected = "model/arn:aws-cn:bedrock:cn-north-1:123456789012:application-inference-profile%2Fr742sbn2zckd/converse"
     assert CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint) == expected

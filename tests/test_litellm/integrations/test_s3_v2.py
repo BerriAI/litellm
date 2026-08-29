@@ -1883,5 +1883,5 @@ def _s3_logger_for_region(region_name: str) -> S3Logger:
         ),
     ],
 )
-def test_build_object_url_uses_partition_dns_suffix(region_name, expected_url):
+def test_build_object_url_uses_partition_dns_suffix(region_name: str, expected_url: str) -> None:
     assert _s3_logger_for_region(region_name)._build_object_url("2025-01-01/key.json") == expected_url

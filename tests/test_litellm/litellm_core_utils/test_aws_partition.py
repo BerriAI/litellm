@@ -43,7 +43,7 @@ from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
         ("", "aws", "amazonaws.com"),
     ],
 )
-def test_partition_lookup(region, partition, dns_suffix):
+def test_partition_lookup(region: str | None, partition: str, dns_suffix: str) -> None:
     assert get_aws_partition(region) == AwsPartition(partition=partition, dns_suffix=dns_suffix)
     assert get_aws_dns_suffix(region) == dns_suffix
     assert get_aws_arn_prefix(region) == f"arn:{partition}:"
@@ -61,7 +61,7 @@ def test_partition_lookup(region, partition, dns_suffix):
         ("arn:aws:iam::123456789012:role/foo", False),
     ],
 )
-def test_contains_bedrock_arn(value, expected):
+def test_contains_bedrock_arn(value: str, expected: bool) -> None:
     assert contains_bedrock_arn(value) is expected
 
 
@@ -76,7 +76,7 @@ def test_contains_bedrock_arn(value, expected):
         ("arn:aws:iam::123456789012:role/foo", False),
     ],
 )
-def test_is_bedrock_arn(value, expected):
+def test_is_bedrock_arn(value: str, expected: bool) -> None:
     assert is_bedrock_arn(value) is expected
 
 
@@ -90,7 +90,7 @@ def test_is_bedrock_arn(value, expected):
         ("arnaws:bedrock", False),
     ],
 )
-def test_contains_aws_arn(value, expected):
+def test_contains_aws_arn(value: str, expected: bool) -> None:
     assert contains_aws_arn(value) is expected
 
 
@@ -157,14 +157,14 @@ ENDPOINT_BUILDERS: Final = {
 
 
 @pytest.fixture(autouse=True)
-def _clear_aws_env(monkeypatch):
+def _clear_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for env_var in ("AWS_BEDROCK_RUNTIME_ENDPOINT", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_REGION_NAME"):
         monkeypatch.delenv(env_var, raising=False)
 
 
 @pytest.mark.parametrize("region", ["cn-north-1", "cn-northwest-1"])
 @pytest.mark.parametrize("builder_name", sorted(ENDPOINT_BUILDERS))
-def test_every_endpoint_builder_respects_cn_partition(builder_name, region):
+def test_every_endpoint_builder_respects_cn_partition(builder_name: str, region: str) -> None:
     url = ENDPOINT_BUILDERS[builder_name](region)
     hostname = urlparse(url).hostname
     assert hostname is not None
@@ -175,7 +175,7 @@ def test_every_endpoint_builder_respects_cn_partition(builder_name, region):
 
 @pytest.mark.parametrize("region", ["us-east-1", "us-gov-west-1"])
 @pytest.mark.parametrize("builder_name", sorted(ENDPOINT_BUILDERS))
-def test_every_endpoint_builder_keeps_amazonaws_com_outside_cn(builder_name, region):
+def test_every_endpoint_builder_keeps_amazonaws_com_outside_cn(builder_name: str, region: str) -> None:
     url = ENDPOINT_BUILDERS[builder_name](region)
     hostname = urlparse(url).hostname
     assert hostname is not None
@@ -194,9 +194,9 @@ def _fstring_literal_offenders(needle: str) -> list[str]:
     ]
 
 
-def test_no_fstring_hardcodes_the_commercial_dns_suffix():
+def test_no_fstring_hardcodes_the_commercial_dns_suffix() -> None:
     assert _fstring_literal_offenders("amazonaws.com") == []
 
 
-def test_no_fstring_hardcodes_the_commercial_arn_prefix():
+def test_no_fstring_hardcodes_the_commercial_arn_prefix() -> None:
     assert _fstring_literal_offenders("arn:aws:") == []

@@ -1436,8 +1436,11 @@ def test_build_sts_client_kwargs(env, aws_sts_endpoint, ssl_verify, expected):
     ],
 )
 def test_resolve_sts_region_configured_region_fallback(
-    env, aws_sts_endpoint, aws_region_name, expected_region
-):
+    env: dict[str, str],
+    aws_sts_endpoint: str | None,
+    aws_region_name: str | None,
+    expected_region: str | None,
+) -> None:
     with patch.dict(os.environ, env, clear=True):
         assert (
             BaseAWSLLM._resolve_sts_region(
@@ -1448,7 +1451,7 @@ def test_resolve_sts_region_configured_region_fallback(
         )
 
 
-def test_build_sts_client_kwargs_configured_region_fallback():
+def test_build_sts_client_kwargs_configured_region_fallback() -> None:
     base_aws_llm = BaseAWSLLM()
     with patch.dict(os.environ, {}, clear=True):
         assert base_aws_llm._build_sts_client_kwargs(aws_region_name="cn-north-1") == {
@@ -1462,7 +1465,7 @@ def test_build_sts_client_kwargs_configured_region_fallback():
         }
 
 
-def test_assume_role_sts_client_uses_configured_cn_region():
+def test_assume_role_sts_client_uses_configured_cn_region() -> None:
     """arn:aws-cn roles must resolve against a cn STS endpoint, not the commercial default."""
     base_aws_llm = BaseAWSLLM()
     mock_expiry = MagicMock()
@@ -1519,7 +1522,7 @@ def test_assume_role_sts_client_uses_configured_cn_region():
         ("anthropic.claude-3", None),
     ],
 )
-def test_get_aws_region_from_model_arn_partition_arns(model, expected_region):
+def test_get_aws_region_from_model_arn_partition_arns(model: str, expected_region: str | None) -> None:
     assert BaseAWSLLM()._get_aws_region_from_model_arn(model) == expected_region
 
 
@@ -1535,7 +1538,7 @@ def test_get_aws_region_from_model_arn_partition_arns(model, expected_region):
         ("runtime", "us-gov-west-1", "https://bedrock-runtime.us-gov-west-1.amazonaws.com"),
     ],
 )
-def test_select_default_endpoint_url_partitions(endpoint_type, region, expected):
+def test_select_default_endpoint_url_partitions(endpoint_type: str, region: str, expected: str) -> None:
     assert (
         BaseAWSLLM()._select_default_endpoint_url(
             endpoint_type=endpoint_type, aws_region_name=region
