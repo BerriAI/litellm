@@ -42,7 +42,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_request_processing import _serialize_http_exception_detail
+from litellm.proxy.common_request_processing import serialize_http_exception_detail
 from litellm.proxy.common_utils.sse_keepalive import keepalive_ping_has_fired
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
@@ -2760,7 +2760,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
                 if not raw_sse or (not is_block and not headers_flushed):
                     raise
-                block_message, _ = _serialize_http_exception_detail(block_detail)
+                block_message, _ = serialize_http_exception_detail(block_detail)
                 for error_frame in anthropic_sse_error_frames(
                     block_message if is_block else f"{block_exc.status_code}: {block_message}"
                 ):

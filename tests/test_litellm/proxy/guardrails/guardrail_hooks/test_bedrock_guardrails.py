@@ -5517,3 +5517,76 @@ async def test_masking_keeps_buffered_path_even_when_unbuffered_configured():
     assert guardrail._streams_incrementally() is False
     events = await _run_streaming_hook_recording_order(guardrail)
     assert events[0] == "scan"
+
+
+@pytest.mark.asyncio
+async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_truncating():
+    """Regression for PR #38722: a topicPolicy DENY caught by the end-of-stream
+    scan used to raise after SSE headers were flushed, so the client saw a
+    silently truncated stream. The unified hook must emit the chat in-stream
+    error frame instead."""
+    from litellm.llms import load_guardrail_translation_mappings
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
+        unified_guardrail as unified_module,
+    )
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+        UnifiedLLMGuardrails,
+    )
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        streaming_end_of_stream_only=True,
+        streaming_buffer_until_moderated=False,
+        guardrail_name="bedrock-eos",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    blocked_response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "actionReason": "Guardrail blocked.",
+        "outputs": [{"text": "Sorry, the model cannot answer this question."}],
+        "assessments": [
+            {"topicPolicy": {"topics": [{"name": "Forbidden topic", "type": "DENY", "action": "BLOCKED"}]}}
+        ],
+    }
+
+    def _chunk(content, finish_reason=None):
+        return ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta={"content": content, "role": "assistant"},
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
+
+    async def _mock_stream():
+        yield _chunk("the forbidden ")
+        yield _chunk("topic answer", finish_reason="stop")
+
+    unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
+    try:
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.side_effect = guardrail._get_http_exception_for_blocked_guardrail(blocked_response)
+
+            out = []
+            async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
+                response=_mock_stream(),
+                request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
+            ):
+                out.append(item)
+    finally:
+        unified_module.endpoint_guardrail_translation_mappings = None
+
+    assert len(out) == 3
+    assert isinstance(out[0], ModelResponseStream)
+    frame = out[-1]
+    assert isinstance(frame, bytes)
+    payload = json.loads(frame.decode()[len("data: ") :])
+    assert payload["error"]["message"] == "Violated guardrail policy"
+    assert payload["error"]["code"] == "400"
+    assert payload["error"]["provider_specific_fields"]["guardrailIdentifier"] == "test-guardrail"

@@ -1656,32 +1656,32 @@ class TestCommonRequestProcessingHelpers:
         assert payload["error"]["message"] == "MCP request blocked: no rewritable argument field present"
         assert payload["error"]["provider_specific_fields"]["error"]["code"] == "panw_prisma_airs_blocked"
 
-    async def test_serialize_http_exception_detail_helper(self):
+    async def testserialize_http_exception_detail_helper(self):
         """Direct unit coverage for the L1 helper across all branches."""
         from litellm.proxy.common_request_processing import (
-            _serialize_http_exception_detail,
+            serialize_http_exception_detail,
         )
         import json as _json
 
-        assert _serialize_http_exception_detail("plain") == ("plain", None)
+        assert serialize_http_exception_detail("plain") == ("plain", None)
 
-        msg, fields = _serialize_http_exception_detail({"error": "Violated", "extra": "x"})
+        msg, fields = serialize_http_exception_detail({"error": "Violated", "extra": "x"})
         assert msg == "Violated"
         assert fields == {"error": "Violated", "extra": "x"}
 
-        msg, fields = _serialize_http_exception_detail({"error": {"message": "blocked", "code": "x"}})
+        msg, fields = serialize_http_exception_detail({"error": {"message": "blocked", "code": "x"}})
         assert msg == "blocked"
         assert fields == {"error": {"message": "blocked", "code": "x"}}
 
-        msg, fields = _serialize_http_exception_detail({"message": "top-level"})
+        msg, fields = serialize_http_exception_detail({"message": "top-level"})
         assert msg == "top-level"
         assert fields == {"message": "top-level"}
 
-        msg, fields = _serialize_http_exception_detail({"weird": ["a", "b"]})
+        msg, fields = serialize_http_exception_detail({"weird": ["a", "b"]})
         assert msg == _json.dumps({"weird": ["a", "b"]})
         assert fields == {"weird": ["a", "b"]}
 
-        assert _serialize_http_exception_detail(42) == ("42", None)
+        assert serialize_http_exception_detail(42) == ("42", None)
 
     async def test_create_streaming_response_first_chunk_error_string_code(self):
         """
