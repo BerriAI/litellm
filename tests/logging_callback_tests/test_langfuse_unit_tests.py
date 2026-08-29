@@ -123,16 +123,12 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(
     assert result.secret_key == "test_secret"
     assert result.langfuse_host == "https://test.langfuse.com"
 
-    # Check if the logger is cached
-    cached_logger = dynamic_logging_cache.get_cache(
-        credentials={
-            "langfuse_public_key": "test_public_key",
-            "langfuse_secret": "test_secret",
-            "langfuse_host": "https://test.langfuse.com",
-        },
-        service_name="langfuse",
+    logger_for_identical_repeat_request = LangFuseHandler.get_langfuse_logger_for_request(
+        standard_callback_dynamic_params=standard_params,
+        in_memory_dynamic_logger_cache=dynamic_logging_cache,
+        globalLangfuseLogger=globalLangfuseLogger,
     )
-    assert cached_logger is result
+    assert logger_for_identical_repeat_request is result
 
 
 @pytest.mark.parametrize("globalLangfuseLogger", [None, global_langfuse_logger])

@@ -50,6 +50,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientCredentialsConfig,
     CredError,
+    HeaderCarrier,
 )
 
 
@@ -328,14 +329,21 @@ class ClientCredentialsBearerAuth(httpx.Auth):
     refetch fails, or the retried request 401s again, the upstream's response stands.
     """
 
-    def __init__(self, access_token: str, refetch: Callable[[str], Awaitable[str | None]]) -> None:
-        self.header_name = "Authorization"
+    def __init__(
+        self,
+        access_token: str,
+        refetch: Callable[[str], Awaitable[str | None]],
+        carrier: HeaderCarrier,
+    ) -> None:
+        self._carrier = carrier
+        self.header_name = carrier.header_name
         self._access_token = SecretStr(access_token)
         self._refetch = refetch
 
     async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
         token: Final = self._access_token.get_secret_value()
-        request.headers[self.header_name] = f"Bearer {token}"
+        name, value = self._carrier.header(token)
+        request.headers[name] = value
         response: Final = yield request
         if response.status_code != 401:
             return
@@ -343,7 +351,8 @@ class ClientCredentialsBearerAuth(httpx.Auth):
         if fresh is None:
             return
         self._access_token = SecretStr(fresh)
-        request.headers[self.header_name] = f"Bearer {fresh}"
+        fresh_name, fresh_value = self._carrier.header(fresh)
+        request.headers[fresh_name] = fresh_value
         yield request
 
     def sync_auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:

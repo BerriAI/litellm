@@ -888,6 +888,22 @@ class PrismaManager:
         ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
 
     @staticmethod
+    def _raise_if_partitioned_spend_logs() -> None:
+        """`prisma db push` rewrites a doc-partitioned LiteLLM_SpendLogs
+        primary key back to ("request_id"), which Postgres rejects. Fail fast
+        with guidance instead of retrying into that raw error. No-op when
+        litellm-proxy-extras is absent."""
+        try:
+            from litellm_proxy_extras.utils import (
+                PARTITIONED_SPEND_LOGS_PUSH_ERROR,
+                ProxyExtrasDBManager,
+            )
+        except ImportError:
+            return
+        if ProxyExtrasDBManager.spend_logs_is_partitioned():
+            raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
+
+    @staticmethod
     def setup_database(use_migrate: bool = False, use_v2_resolver: bool = False) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
@@ -921,6 +937,7 @@ class PrismaManager:
                         use_v2_resolver=use_v2_resolver,
                     )
                 else:
+                    PrismaManager._raise_if_partitioned_spend_logs()
                     # Use prisma db push with increased timeout
                     subprocess.run(
                         [
