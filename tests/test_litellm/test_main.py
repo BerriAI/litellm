@@ -3181,4 +3181,3 @@ def test_stream_chunk_builder_defers_cost_to_logging_obj_when_usage_cost_absent(
 
     assert response is not None
     assert response._hidden_params.get("response_cost") is None
-
