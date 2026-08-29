@@ -5207,7 +5207,9 @@ class Router:
             wrapper.adopt_fallback_source(fallback_response)
             if hasattr(fallback_response, "__aiter__"):
                 fallback_stream: Final = await self._aanthropic_messages_streaming_iterator(
-                    response=cast("AsyncIterator[bytes]", fallback_response),
+                    response=cast(  # cast-ok: __aiter__ check established the streaming fallback shape
+                        "AsyncIterator[bytes]", fallback_response
+                    ),
                     initial_kwargs=initial_kwargs,
                     allow_fallback=False,
                 )
