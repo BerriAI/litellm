@@ -69,6 +69,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
+    HF_CONFIG_FETCH_TIMEOUT_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
     MAX_RETRY_DELAY,
@@ -5168,7 +5169,7 @@ def get_max_tokens(model: str) -> int | None:
         config_url: Final = f"https://huggingface.co/{model_name}/raw/main/config.json"
         try:
             # Make the HTTP request to get the raw JSON file
-            response: Final = litellm.module_level_client.get(config_url)
+            response: Final = litellm.module_level_client.get(config_url, timeout=HF_CONFIG_FETCH_TIMEOUT_SECONDS)
             response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
             # Parse the JSON response
@@ -5522,7 +5523,7 @@ def _get_max_position_embeddings(model_name: str) -> int | None:
 
     try:
         # Make the HTTP request to get the raw JSON file
-        response: Final = litellm.module_level_client.get(config_url)
+        response: Final = litellm.module_level_client.get(config_url, timeout=HF_CONFIG_FETCH_TIMEOUT_SECONDS)
         response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
         # Parse the JSON response
