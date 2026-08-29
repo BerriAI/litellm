@@ -295,8 +295,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     renderLlmModal();
 
     await user.click(await screen.findByText("Advanced: Classification Method"));
-    const windowSizeSection = (await screen.findByText("Context Window Size")).closest("div") as HTMLElement;
-    const input = within(windowSizeSection).getByRole("spinbutton");
+    const input = await screen.findByLabelText("Context Window Size");
     fireEvent.change(input, { target: { value: "8" } });
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
