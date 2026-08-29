@@ -535,3 +535,77 @@ def test_assert_same_origin_error_message_does_not_leak_hostnames():
     detail = str(exc.value)
     assert "attacker.example.com" not in detail
     assert "api.internal-corp.example" not in detail
+
+
+class TestAsyncSafeGetDoesNotBlockEventLoop:
+    """``validate_url`` calls the blocking ``socket.getaddrinfo``.
+
+    Every ``async_safe_get`` caller fetches a URL that came from the request
+    body (``image_url``/``file_url`` on a chat completion, an A2A agent-card
+    URL, an OpenAPI spec URL for an MCP server, a RAG ingestion file URL), so
+    an unprivileged caller picks the hostname that gets resolved. If that
+    resolution runs on the event loop, one caller pointing at a stalling
+    authoritative nameserver freezes every other in-flight request on the
+    worker for the resolver timeout.
+    """
+
+    @staticmethod
+    def _fake_response():
+        class _Resp:
+            is_redirect = False
+            status_code = 200
+
+        return _Resp()
+
+    class _FakeAsyncClient:
+        async def get(self, url, **kwargs):
+            return TestAsyncSafeGetDoesNotBlockEventLoop._fake_response()
+
+    async def test_event_loop_stays_responsive_during_dns_resolution(
+        self, monkeypatch
+    ):
+        import asyncio
+        import time
+
+        dns_delay = 0.5
+
+        def slow_getaddrinfo(host, port, *args, **kwargs):
+            time.sleep(dns_delay)
+            return [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    6,
+                    "",
+                    ("93.184.216.34", port or 443),
+                )
+            ]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", slow_getaddrinfo)
+
+        ticks = 0
+        stop = False
+
+        async def heartbeat():
+            nonlocal ticks
+            while not stop:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        beat = asyncio.create_task(heartbeat())
+        try:
+            response = await url_utils.async_safe_get(
+                self._FakeAsyncClient(), "https://images.example.com/cat.png"
+            )
+        finally:
+            stop = True
+            await beat
+
+        assert response.status_code == 200
+        # ~50 ticks are due while DNS is in flight; require a fraction of
+        # that so the assertion is not timing-fragile, but 0-1 ticks (the
+        # loop pinned for the whole resolution) still fails.
+        assert ticks >= 10, (
+            f"event loop was blocked during DNS resolution: only {ticks} "
+            "heartbeat ticks fired while validate_url resolved the hostname"
+        )
