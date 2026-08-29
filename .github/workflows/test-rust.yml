@@ -59,13 +59,13 @@ jobs:
         run: cargo fmt --check
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --features litellm-ai-gateway/server --locked -- -D warnings
 
       - name: Run Clippy with Bedrock auth
         run: cargo clippy -p litellm-core --all-targets --features bedrock-auth --locked -- -D warnings
 
       - name: Run Rust tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --features litellm-ai-gateway/server --locked
 
       - name: Run core tests with Bedrock auth
         run: cargo test -p litellm-core --features bedrock-auth --locked

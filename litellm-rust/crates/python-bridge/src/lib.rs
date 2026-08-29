@@ -20,6 +20,10 @@ use serde_json::{Map, Value};
 
 mod gil;
 
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 pyo3::create_exception!(
     _native,
     RustBridgeDeclined,
@@ -630,6 +634,7 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
 
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    install_rustls_crypto_provider();
     let py = module.py();
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;

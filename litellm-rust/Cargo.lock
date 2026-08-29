@@ -1260,6 +1260,7 @@ dependencies = [
  "litellm-core",
  "pyo3",
  "pyo3-async-runtimes",
+ "rustls 0.23.42",
  "serde_json",
  "tokio",
 ]
