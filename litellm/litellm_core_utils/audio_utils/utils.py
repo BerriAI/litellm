@@ -11,6 +11,7 @@ from litellm.types.files import (
     AUDIO_FILE_TYPES,
     FILE_EXTENSIONS,
     FILE_MIME_TYPES,
+    FileType,
     get_file_mime_type_from_extension,
 )
 from litellm.types.utils import FileTypes
@@ -351,3 +352,24 @@ def resolve_speech_media_type(upstream_content_type: str | None, response_format
         None if response_format is None else _speech_media_type_for_response_format(response_format)
     )
     return requested_media_type or DEFAULT_SPEECH_MEDIA_TYPE
+
+
+_OGG_OPUS_HEAD_WINDOW: Final = 64
+_MPEG_FRAME_SYNC_MASK: Final = 0xE0
+_MPEG_FRAME_LAYER_MASK: Final = 0x06
+
+
+def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
+    if audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
+        return FILE_MIME_TYPES[FileType.WAV]
+    if audio[:4] == b"fLaC":
+        return FILE_MIME_TYPES[FileType.FLAC]
+    if audio[:4] == b"OggS":
+        is_opus: Final = b"OpusHead" in audio[:_OGG_OPUS_HEAD_WINDOW]
+        return FILE_MIME_TYPES[FileType.OPUS if is_opus else FileType.OGG]
+    if audio[:3] == b"ID3":
+        return FILE_MIME_TYPES[FileType.MP3]
+    if len(audio) < 2 or audio[0] != 0xFF or (audio[1] & _MPEG_FRAME_SYNC_MASK) != _MPEG_FRAME_SYNC_MASK:
+        return None
+    is_adts_aac: Final = (audio[1] & _MPEG_FRAME_LAYER_MASK) == 0
+    return FILE_MIME_TYPES[FileType.AAC if is_adts_aac else FileType.MP3]
