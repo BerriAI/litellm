@@ -9408,6 +9408,12 @@ class ProviderConfigManager:
             )
 
             return MinimaxTextToSpeechConfig()
+        elif litellm.LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.audio_speech.transformation import (
+                MistralTextToSpeechConfig,
+            )
+
+            return MistralTextToSpeechConfig()
         elif litellm.LlmProviders.AWS_POLLY == provider:
             from litellm.llms.aws_polly.text_to_speech.transformation import (
                 AWSPollyTextToSpeechConfig,
