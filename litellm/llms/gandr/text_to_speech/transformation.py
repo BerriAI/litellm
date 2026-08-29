@@ -9,12 +9,11 @@ Audio Speech request shape and returns raw audio bytes, so the same
 OpenAI SDK works here unchanged.
 """
 
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final  # noqa: TID251  # Any matches the base interface
 
 import httpx
-from httpx import Headers
-
 import litellm
+from httpx import Headers
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -245,6 +244,4 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         base_url = api_base or get_secret_str("GANDR_API_BASE") or self.TTS_BASE_URL
         base_url = base_url.rstrip("/")
 
-        url = f"{base_url}{self.TTS_ENDPOINT_PATH}"
-
-        return url
+        return f"{base_url}{self.TTS_ENDPOINT_PATH}"
