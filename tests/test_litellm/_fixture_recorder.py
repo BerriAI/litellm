@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import queue
 import threading
 from collections.abc import Callable, Generator, Iterable
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Final, Generic, Protocol, TypeVar, cast
 
 import httpx
+import pytest
 from hypothesis import given, settings
 from hypothesis.strategies import SearchStrategy
 from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
@@ -293,3 +295,45 @@ def fixture_id(case_input: FixtureInput, prefix: str) -> str:
     input_json: Final = canonical_json(case_input.canonical_input())
     digest: Final = hashlib.sha256(input_json.encode("utf-8")).hexdigest()[:8]
     return f"{prefix}-{digest}"
+
+
+def parametrize_recorded_fixtures(
+    metafunc: pytest.Metafunc,
+    *,
+    fixture_name: str,
+    case_type: type[CaseT],
+    env_var: str,
+    default_directory: Path,
+    regeneration_command: str,
+    id_builder: Callable[[CaseT], str],
+) -> None:
+    if fixture_name not in metafunc.fixturenames:
+        return
+    configured: Final = os.environ.get(env_var)
+    if configured == "":
+        raise pytest.UsageError(f"{env_var} is set but empty")
+    directory: Final = Path(configured).expanduser() if configured is not None else default_directory
+    try:
+        fixtures: Final = recorded_fixtures(directory, case_type)
+    except (ValidationError, ValueError) as error:
+        raise pytest.UsageError(
+            f"Invalid parity fixture bundle at {directory}. "
+            "Each fixture must use the current versioned envelope. "
+            f"Record fresh fixtures in an empty directory with: `{regeneration_command}`. "
+            f"Validation details: {error}"
+        ) from error
+    if fixtures:
+        metafunc.parametrize(fixture_name, fixtures, ids=tuple(id_builder(fixture) for fixture in fixtures))
+        return
+    if configured is not None:
+        raise pytest.UsageError(f"no recorded fixtures in {directory}")
+    metafunc.parametrize(
+        fixture_name,
+        (
+            pytest.param(
+                None,
+                marks=pytest.mark.skip(reason=f"no recorded fixtures in {directory}"),
+                id="no-recorded-fixtures",
+            ),
+        ),
+    )

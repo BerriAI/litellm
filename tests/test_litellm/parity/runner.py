@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import sys
 from collections import deque
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ class PythonScriptRunner:
     entrypoint: Path
     rust_env_var: str
     python_user_agent: str
+    route_label: str
 
     def command(self, provider_url: str) -> tuple[str, ...]:
         return (
@@ -53,6 +55,7 @@ class PythonScriptWorker:
             "PYTHONPATH": os.pathsep.join(path for path in (project_root, existing_pythonpath) if path),
         }
         self.mode: Final = "Rust" if rust_enabled else "Python"
+        self.route_label: Final = runner.route_label
         self.provider: Final = provider
         self.process: Final = subprocess.Popen(
             runner.command(provider.url),
@@ -74,7 +77,7 @@ class PythonScriptWorker:
     ) -> Execution:
         stdin: Final = self.process.stdin
         if stdin is None or self.process.poll() is not None:
-            raise AssertionError(f"{self.mode} OCR worker exited before processing {case_file}")
+            raise AssertionError(f"{self.mode} {self.route_label} worker exited before processing {case_file}")
         self.provider.enqueue_response(response)
         command: Final = SDKCommand(case_file=str(case_file), route=route)
         try:
@@ -84,7 +87,9 @@ class PythonScriptWorker:
         except TimeoutError as error:
             self.provider.reset()
             self.close()
-            raise AssertionError(f"{self.mode} OCR worker timed out after 60s while processing {case_file}") from error
+            raise AssertionError(
+                f"{self.mode} {self.route_label} worker timed out after 60s while processing {case_file}"
+            ) from error
         except AssertionError:
             self.provider.reset()
             raise
@@ -93,7 +98,9 @@ class PythonScriptWorker:
             raise AssertionError(self._failure_message(f"worker pipe failed while processing {case_file}")) from error
         if isinstance(result, WorkerFailure):
             self.provider.reset()
-            raise AssertionError(f"{self.mode} OCR worker failed while processing {case_file}:\n{result.error}")
+            raise AssertionError(
+                f"{self.mode} {self.route_label} worker failed while processing {case_file}:\n{result.error}"
+            )
         assert isinstance(result, WorkerSuccess)
         try:
             return Execution(request=self.provider.take_request(), report=result.report)
@@ -121,7 +128,8 @@ class PythonScriptWorker:
 
     def _failure_message(self, message: str) -> str:
         output: Final = "\n".join(self.recent_output)
-        return f"{self.mode} OCR {message}" if not output else f"{self.mode} OCR {message}\noutput:\n{output}"
+        prefix: Final = f"{self.mode} {self.route_label}"
+        return f"{prefix} {message}" if not output else f"{prefix} {message}\noutput:\n{output}"
 
     def close(self) -> None:
         stdin: Final = self.process.stdin
@@ -155,3 +163,27 @@ def run_execution(
     response: RecordedResponse,
 ) -> Execution:
     return worker.execute(case_file, route, response)
+
+
+@contextmanager
+def execution_worker_pair(
+    runner: PythonScriptRunner,
+) -> Generator[tuple[PythonScriptWorker, PythonScriptWorker]]:
+    with execution_worker(runner, rust_enabled=False) as python_worker:
+        with execution_worker(runner, rust_enabled=True) as accelerated_worker:
+            yield python_worker, accelerated_worker
+
+
+def parity_worker_main(
+    execute_command: Callable[[str, str, asyncio.AbstractEventLoop], WorkerResult],
+    mock_url: str,
+) -> None:
+    event_loop: Final = asyncio.new_event_loop()
+    try:
+        for line in sys.stdin:
+            sys.stdout.write(
+                f"{WORKER_RESULT_PREFIX}{execute_command(line, mock_url, event_loop).model_dump_json()}\n"
+            )
+            sys.stdout.flush()
+    finally:
+        event_loop.close()

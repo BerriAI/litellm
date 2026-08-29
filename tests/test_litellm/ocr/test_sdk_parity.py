@@ -15,10 +15,10 @@ from tests.test_litellm.ocr.fixture_models import MistralOcrSdkInput, OcrParityC
 from tests.test_litellm.parity.compare import assert_parity
 from tests.test_litellm.parity.models import SDKCommand, SDKReport, WorkerFailure, WorkerResult, WorkerSuccess
 from tests.test_litellm.parity.runner import (
-    WORKER_RESULT_PREFIX,
     PythonScriptRunner,
     PythonScriptWorker,
-    execution_worker,
+    execution_worker_pair,
+    parity_worker_main,
     run_execution,
 )
 
@@ -36,7 +36,7 @@ def _call_kwargs(sdk_input: MistralOcrSdkInput, mock_url: str, route: SDKRoute) 
         **sdk_input.as_sdk_kwargs(),
         "api_base": mock_url,
         "api_key": API_KEY,
-        "extra_headers": {"x-ocr-parity-route": route.value},
+        "extra_headers": {"x-litellm-parity-route": route.value},
     }
 
 
@@ -52,10 +52,10 @@ def _execute_sdk_case(
     if route is SDKRoute.OCR:
         sync_route: Final = cast(Callable[..., OCRResponse], litellm.ocr)
         response: Final = sync_route(**call_kwargs)
-        return SDKReport(response=response)
+        return SDKReport(response=response.model_dump(mode="json"))
     async_route: Final = cast(Callable[..., Coroutine[object, object, OCRResponse]], litellm.aocr)
     async_response: Final = event_loop.run_until_complete(async_route(**call_kwargs))
-    return SDKReport(response=async_response)
+    return SDKReport(response=async_response.model_dump(mode="json"))
 
 
 @pytest.fixture(scope="module")
@@ -64,10 +64,10 @@ def sdk_workers() -> Generator[tuple[PythonScriptWorker, PythonScriptWorker]]:
         entrypoint=Path(__file__),
         rust_env_var="LITELLM_USE_RUST_OCR",
         python_user_agent=PYTHON_HTTP_SENTINEL,
+        route_label="OCR",
     )
-    with execution_worker(runner, rust_enabled=False) as python_worker:
-        with execution_worker(runner, rust_enabled=True) as rust_worker:
-            yield python_worker, rust_worker
+    with execution_worker_pair(runner) as workers:
+        yield workers
 
 
 @pytest.mark.parametrize("route", tuple(SDKRoute), ids=tuple(route.value for route in SDKRoute))
@@ -112,19 +112,7 @@ def _execute_worker_command(
         return WorkerFailure(error=traceback.format_exc())
 
 
-def _worker_main(mock_url: str) -> None:
-    event_loop: Final = asyncio.new_event_loop()
-    try:
-        for line in sys.stdin:
-            sys.stdout.write(
-                f"{WORKER_RESULT_PREFIX}{_execute_worker_command(line, mock_url, event_loop).model_dump_json()}\n"
-            )
-            sys.stdout.flush()
-    finally:
-        event_loop.close()
-
-
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] != "--parity-worker":
         raise SystemExit("usage: test_sdk_parity.py --parity-worker MOCK_URL")
-    _worker_main(sys.argv[2])
+    parity_worker_main(_execute_worker_command, sys.argv[2])
