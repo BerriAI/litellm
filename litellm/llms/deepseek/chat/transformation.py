@@ -51,13 +51,28 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value: Final = optional_params.pop("thinking", None)
         reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
 
+        thinking_enabled = False
         # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
         if isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
             optional_params["thinking"] = {"type": thinking_value["type"]}
+            thinking_enabled = thinking_value["type"] == "enabled"
 
         # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
         elif reasoning_effort is not None:
             optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
+            thinking_enabled = reasoning_effort != "none"
+        else:
+            thinking_enabled = True  # DeepSeek thinking mode is on by default
+
+        # reasoning_effort is a real DeepSeek top-level param (default "high"; valid
+        # values low/medium/high/xhigh/max). The branch above only used it as an on/off
+        # toggle and DROPPED the value, so DeepSeek always ran default HIGH effort — which
+        # can run away, exhausting max_tokens during reasoning and returning empty content
+        # (finish_reason="length", content:null). Preserve the value into the request body
+        # when thinking is on so callers can bound effort (e.g. reasoning_effort="low").
+        # See https://api-docs.deepseek.com/guides/thinking_mode
+        if thinking_enabled and reasoning_effort is not None:
+            optional_params["reasoning_effort"] = reasoning_effort
 
         return optional_params
 
