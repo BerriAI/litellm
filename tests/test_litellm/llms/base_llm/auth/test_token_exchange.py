@@ -840,6 +840,7 @@ class TestAssertionGuards:
         [
             (OidcPathNotAllowedError("path outside allowed credential directories"), "disallowed_path"),
             (ValueError("Environment variable ANTHROPIC_IDENTITY_TOKEN not found"), "unreadable"),
+            (ImportError("needs PyJWT and cryptography: pip install 'litellm[proxy]'"), "unreadable"),
             (OSError("permission denied"), "unreadable"),
         ],
     )
@@ -865,6 +866,18 @@ class TestAssertionGuards:
 
         assert isinstance(result, AssertionSourceError)
         assert result.detail == "Keycloak token endpoint returned invalid_client"
+
+    def test_import_error_message_is_captured_as_detail(self):
+        poster = ScriptedPoster([token_response()])
+
+        def reader(ref: str) -> str | None:
+            raise ImportError("the internal_issuer identity source needs PyJWT and cryptography: pip install 'litellm[proxy]'")
+
+        result = make_engine(poster, reader=reader).get_token(make_spec())
+
+        assert isinstance(result, AssertionSourceError)
+        assert result.detail is not None
+        assert "litellm[proxy]" in result.detail
 
     @pytest.mark.parametrize(
         "raised",

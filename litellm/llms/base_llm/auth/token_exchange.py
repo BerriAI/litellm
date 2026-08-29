@@ -305,7 +305,7 @@ def _read_assertion(fetch: AssertionSource, ref: str) -> SecretStr | AssertionSo
         raw: Final = fetch()
     except OidcPathNotAllowedError:
         return AssertionSourceError(kind="disallowed_path", source_ref=ref)
-    except ValueError as e:
+    except (ValueError, ImportError) as e:
         return AssertionSourceError(kind="unreadable", source_ref=ref, detail=str(e)[:_REDACTION_CAP])
     except Exception:  # noqa: BLE001  # injected readers (secret managers) raise arbitrarily; all failures become values
         return AssertionSourceError(kind="unreadable", source_ref=ref)

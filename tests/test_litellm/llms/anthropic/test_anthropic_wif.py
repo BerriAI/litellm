@@ -436,6 +436,55 @@ class TestResolutionMatrix:
         assert params is not None
         assert params.assertion_ref == "oidc/file//var/run/secrets/env-tok"
 
+    def test_param_token_ref_beats_env_identity_source(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_SOURCE", "internal_issuer")
+        params = resolve_anthropic_wif_params(
+            {
+                "anthropic_federation_rule_id": "fdrl_1",
+                "anthropic_organization_id": "org-1",
+                "anthropic_identity_token_file": "/var/run/secrets/dep-tok",
+            }
+        )
+        assert params is not None
+        assert params.assertion_ref == "oidc/file//var/run/secrets/dep-tok"
+        assert params.assertion_source is None
+
+    def test_param_inline_token_beats_env_identity_source(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_SOURCE", "internal_issuer")
+        params = resolve_anthropic_wif_params(
+            {
+                "anthropic_federation_rule_id": "fdrl_1",
+                "anthropic_organization_id": "org-1",
+                "anthropic_identity_token": "oidc/env/OTHER",
+            }
+        )
+        assert params is not None
+        assert params.assertion_ref == "oidc/env/OTHER"
+        assert params.assertion_source is None
+
+    def test_env_identity_source_beats_env_token_refs(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_SOURCE", "internal_issuer")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN_FILE", "/var/run/secrets/env-tok")
+        with pytest.raises(litellm.AuthenticationError):
+            resolve_anthropic_wif_params(
+                {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"}
+            )
+
+    def test_env_identity_source_dispatches_param_issuer_fields(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_SOURCE", "internal_issuer")
+        params = resolve_anthropic_wif_params(
+            {
+                "anthropic_federation_rule_id": "fdrl_1",
+                "anthropic_organization_id": "org-1",
+                "anthropic_issuer_url": "https://issuer.internal.example",
+                "anthropic_issuer_subject": "workload-a",
+                "anthropic_issuer_signing_key_ref": ISSUER_SIGNING_KEY_REF,
+            }
+        )
+        assert params is not None
+        assert params.assertion_ref.startswith("oidc/internal_issuer/")
+        assert params.assertion_source is not None
+
     def test_empty_workspace_env_coerced_to_none(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "")
         params = resolve_anthropic_wif_params(

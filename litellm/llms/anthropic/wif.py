@@ -54,6 +54,8 @@ _DEFAULT_TRUSTED_EXCHANGE_HOST: Final = "api.anthropic.com"
 _REJECTED_REF_PREFIX: Final = "oidc/env_path/"
 _IDENTITY_SOURCE_PARAM: Final = "anthropic_identity_source"
 _IDENTITY_SOURCE_ENV: Final = "ANTHROPIC_IDENTITY_SOURCE"
+_IDENTITY_TOKEN_FILE_PARAM: Final = "anthropic_identity_token_file"
+_IDENTITY_TOKEN_PARAM: Final = "anthropic_identity_token"
 
 # litellm_params key -> InternalIssuerSource/KeycloakSource field name. Every key here must
 # also be listed in ANTHROPIC_WIF_KWARGS_KEYS (get_litellm_params.py), which is what makes it
@@ -136,8 +138,10 @@ def _resolve_identity_source(
     frozen config, hashes it into the ``oidc/<kind>/<hash>`` cache-key ref (``identity_source_ref``),
     and closes the source's fetch/mint function over it. An unset-but-invalid config (unknown
     kind, a missing required field, or a field from the other variant) fails closed here rather
-    than silently falling back to token_file."""
-    source_kind: Final = _config_value(litellm_params, _IDENTITY_SOURCE_PARAM, _IDENTITY_SOURCE_ENV)
+    than silently falling back to token_file. A deployment whose params carry a legacy token or
+    token_file ref stays on legacy resolution even when ``ANTHROPIC_IDENTITY_SOURCE`` names a
+    fleet-wide kind: the env kind only governs deployments that set no identity params of their own."""
+    source_kind: Final = _resolve_source_kind(litellm_params)
     if source_kind is None:
         legacy_ref: Final = _resolve_assertion_ref(litellm_params)
         return (legacy_ref, None) if legacy_ref is not None else None
@@ -164,6 +168,16 @@ def _resolve_identity_source(
                 llm_provider="anthropic",
                 model="",
             )
+
+
+def _resolve_source_kind(litellm_params: Mapping[str, object] | None) -> str | None:
+    param_kind: Final = _param_str(litellm_params, _IDENTITY_SOURCE_PARAM)
+    if param_kind is not None:
+        return param_kind
+    has_param_legacy_ref: Final = any(
+        _param_str(litellm_params, key) is not None for key in (_IDENTITY_TOKEN_FILE_PARAM, _IDENTITY_TOKEN_PARAM)
+    )
+    return None if has_param_legacy_ref else _env_str(_IDENTITY_SOURCE_ENV)
 
 
 def _reject_foreign_variant_fields(
@@ -360,10 +374,10 @@ def _env_str(name: str) -> str | None:
 
 
 def _resolve_assertion_ref(litellm_params: Mapping[str, object] | None) -> str | None:
-    file_param: Final = _param_str(litellm_params, "anthropic_identity_token_file")
+    file_param: Final = _param_str(litellm_params, _IDENTITY_TOKEN_FILE_PARAM)
     if file_param is not None:
         return f"oidc/file/{file_param}"
-    inline_param: Final = _param_str(litellm_params, "anthropic_identity_token")
+    inline_param: Final = _param_str(litellm_params, _IDENTITY_TOKEN_PARAM)
     if inline_param is not None:
         return _validated_inline_ref(inline_param)
     file_env: Final = _env_str("ANTHROPIC_IDENTITY_TOKEN_FILE")
