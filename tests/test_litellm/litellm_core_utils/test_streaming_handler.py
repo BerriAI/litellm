@@ -3469,6 +3469,21 @@ def test_record_partial_usage_for_failure_backfills_missing_cache_fields():
     assert stashed.prompt_tokens_details.cached_tokens == 0
 
 
+def test_record_partial_usage_for_failure_prices_corrected_model_not_chunk_model():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="claude-opus-5",
+        usage=Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45),
+        model="gpt-4o-mini",
+        custom_llm_provider="openai",
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    rates = litellm.model_cost["gpt-4o-mini"]
+    expected = 40 * rates["input_cost_per_token"] + 5 * rates["output_cost_per_token"]
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected)
+
+
 def test_record_partial_usage_for_failure_carries_up_openai_style_cached_tokens():
     recovered = Usage(
         prompt_tokens=1000,
@@ -4478,6 +4493,175 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
 
     assert result is not None
     assert result._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
+    assembled = litellm.stream_chunk_builder(chunks=[result])
+    assert assembled is not None
+    assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
+
+
+def test_chunk_creator_keeps_provider_model_private_across_stream():
+    from litellm.router_utils.add_retry_fallback_headers import (
+        get_hidden_params_dict,
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="requested-route",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+    selected_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="selected-model",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello"),
+            )
+        ],
+    )
+    terminal_chunk = ModelResponseStream(
+        id="chunk-1",
+        model=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(),
+            )
+        ],
+    )
+
+    first_result = wrapper.chunk_creator(chunk=selected_chunk)
+    terminal_result = wrapper.chunk_creator(chunk=terminal_chunk)
+
+    assert first_result is not None
+    assert terminal_result is not None
+    assert first_result.model == "requested-route"
+    assert terminal_result.model == "requested-route"
+    assert (
+        get_hidden_params_dict(first_result)["provider_response_model"]
+        == "selected-model"
+    )
+    assert (
+        get_hidden_params_dict(terminal_result)["provider_response_model"]
+        == "selected-model"
+    )
+
+    assembled = litellm.stream_chunk_builder(chunks=[first_result, terminal_result])
+    assert assembled is not None
+    assert assembled.model == "requested-route"
+    assert (
+        get_hidden_params_dict(assembled)["provider_response_model"]
+        == "selected-model"
+    )
+
+
+def test_assembled_stream_uses_later_provider_model_for_cost(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.router_utils.add_retry_fallback_headers import (
+        get_hidden_params_dict,
+    )
+
+    selected_model_info = {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000004,
+        "litellm_provider": "azure",
+    }
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/gpt-4.1-nano-2025-04-14",
+        selected_model_info,
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/azure-model-router",
+        {
+            "input_cost_per_token": 0.00002,
+            "output_cost_per_token": 0.00004,
+            "litellm_provider": "azure",
+        },
+    )
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"custom_llm_provider": "azure"}
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="azure-model-router",
+        logging_obj=logging_obj,
+        custom_llm_provider="azure",
+    )
+    router_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="azure-model-router",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello "),
+            )
+        ],
+    )
+    selected_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="gpt-4.1-nano-2025-04-14",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="world"),
+            )
+        ],
+    )
+    terminal_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="azure-model-router",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(),
+            )
+        ],
+    )
+
+    router_result = wrapper.chunk_creator(chunk=router_chunk)
+    selected_result = wrapper.chunk_creator(chunk=selected_chunk)
+    terminal_result = wrapper.chunk_creator(chunk=terminal_chunk)
+
+    assert router_result is not None
+    assert selected_result is not None
+    assert terminal_result is not None
+    assert (
+        get_hidden_params_dict(router_result)["provider_response_model"]
+        == "azure-model-router"
+    )
+    assert (
+        get_hidden_params_dict(selected_result)["provider_response_model"]
+        == "gpt-4.1-nano-2025-04-14"
+    )
+    assert (
+        get_hidden_params_dict(terminal_result)["provider_response_model"]
+        == "azure-model-router"
+    )
+
+    assembled = litellm.stream_chunk_builder(
+        chunks=[router_result, selected_result, terminal_result]
+    )
+    assert assembled is not None
+    assert assembled.model == "gpt-4.1-nano-2025-04-14"
+    assert (
+        get_hidden_params_dict(assembled)["provider_response_model"]
+        == "gpt-4.1-nano-2025-04-14"
+    )
+    assembled.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    assert litellm.completion_cost(
+        completion_response=assembled,
+        custom_llm_provider="azure",
+    ) == pytest.approx(
+        10 * selected_model_info["input_cost_per_token"]
+        + 5 * selected_model_info["output_cost_per_token"]
+    )
 
 
 @pytest.mark.asyncio

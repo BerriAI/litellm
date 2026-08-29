@@ -11772,3 +11772,18 @@ async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the
     assert real_spend_counter_cache.in_memory_cache.get_cache(key=marker_key) == 0.0, (
         "the in-flight DB read clobbered the post-reset floor marker with the stale pre-reset value"
     )
+
+
+@pytest.mark.asyncio
+async def test_load_config_router_authorizes_fallback_targets_against_the_calling_key(tmp_path):
+    from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"model_list": [{"model_name": "m", "litellm_params": {"model": "openai/m", "api_key": "k"}}]})
+    )
+
+    router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert router.fallback_access_check is router_fallback_access_check

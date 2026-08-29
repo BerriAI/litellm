@@ -347,6 +347,8 @@ function getUncachedInputTextTokens(metadata: Record<string, any>): number | und
 const RESPONSE_CACHE_TOOLTIP =
   "Whether this request was served from LiteLLM's response cache (e.g. Redis / in-memory), skipping the LLM provider call entirely. This is separate from provider prompt caching; a Miss here does not mean prompt caching failed.";
 const RESPONSE_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/proxy/caching";
+const CACHE_KEY_TOOLTIP =
+  "The key LiteLLM computed for this request in the response cache. Requests with the same cache key share a cached response; a different key means the request content did not match any cached entry.";
 const PROMPT_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/completion/prompt_caching";
 
 function MetricLabel({ label, tooltip, docsUrl }: { label: string; tooltip: string; docsUrl: string }) {
@@ -380,8 +382,9 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       : null;
 
   const responseCacheValue = String(logEntry.cache_hit ?? "").toLowerCase();
+  const responseCacheKey = logEntry.cache_key && logEntry.cache_key !== "Cache OFF" ? logEntry.cache_key : undefined;
   const isResponseCacheHit = responseCacheValue === "true";
-  const showResponseCache = isResponseCacheHit || responseCacheValue === "false";
+  const showResponseCache = isResponseCacheHit || responseCacheValue === "false" || responseCacheKey != null;
   const promptCacheReadTokens = Number(metadata?.additional_usage_values?.cache_read_input_tokens) || 0;
   const promptCacheCreationTokens = Number(metadata?.additional_usage_values?.cache_creation_input_tokens) || 0;
 
@@ -434,6 +437,13 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                 <Badge variant="secondary" className={isResponseCacheHit ? "bg-success/15 text-success" : undefined}>
                   {isResponseCacheHit ? "Hit" : "Miss"}
                 </Badge>
+              </DescriptionItem>
+            )}
+            {responseCacheKey && (
+              <DescriptionItem
+                label={<MetricLabel label="Cache Key" tooltip={CACHE_KEY_TOOLTIP} docsUrl={RESPONSE_CACHE_DOCS_URL} />}
+              >
+                <TruncatedValue value={responseCacheKey} />
               </DescriptionItem>
             )}
             {promptCacheReadTokens > 0 && (

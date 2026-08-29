@@ -6,10 +6,14 @@ otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 
 import os
 from collections.abc import Callable
-from typing import Any, Final
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
+
+if TYPE_CHECKING:
+    from prisma.types import HttpConfig
 
 # Per-model action methods that read from the database. These are routed to
 # the read replica when one is configured.
@@ -43,15 +47,15 @@ class _RoutedActions:
 
     def __init__(
         self,
-        writer_actions: Any,
-        reader_actions: Any,
+        writer_actions: object,
+        reader_actions: object,
         should_use_reader: Callable[[], bool],
     ):
         self._writer_actions = writer_actions
         self._reader_actions = reader_actions
         self._should_use_reader = should_use_reader
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         if name in _MODEL_READ_METHODS and self._should_use_reader():
             return getattr(self._reader_actions, name)
         return getattr(self._writer_actions, name)
@@ -150,21 +154,21 @@ class RoutingPrismaWrapper:
         return not self._reader_unavailable
 
     @staticmethod
-    async def _try_connect(client: PrismaWrapper, *args: Any, **kwargs: Any) -> Exception | None:
+    async def _try_connect(client: PrismaWrapper, timeout: int | timedelta | None = None) -> Exception | None:
         if client.is_connected() is True:
             return None
         try:
-            await client.connect(*args, **kwargs)
+            await client.connect(timeout)
             return None
         except Exception as e:
             return e
 
-    async def connect(self, *args: Any, **kwargs: Any) -> None:
-        writer_error: Final = await self._try_connect(self._writer, *args, **kwargs)
+    async def connect(self, timeout: int | timedelta | None = None) -> None:
+        writer_error: Final = await self._try_connect(self._writer, timeout)
         if writer_error is None:
             self._writer_unavailable = False
             verbose_proxy_logger.info("[writer] DB connected")
-        reader_error: Final = await self._try_connect(self._reader, *args, **kwargs)
+        reader_error: Final = await self._try_connect(self._reader, timeout)
         if reader_error is None:
             self._reader_unavailable = False
             verbose_proxy_logger.info("[reader] DB connected")
@@ -191,11 +195,11 @@ class RoutingPrismaWrapper:
             writer_error,
         )
 
-    async def disconnect(self, *args: Any, **kwargs: Any) -> None:
+    async def disconnect(self, timeout: float | timedelta | None = None) -> None:
         first_error: BaseException | None = None
         for client in (self._writer, self._reader):
             try:
-                await client.disconnect(*args, **kwargs)
+                await client.disconnect(timeout)
             except Exception as e:
                 if first_error is None:
                     first_error = e
@@ -221,7 +225,7 @@ class RoutingPrismaWrapper:
     async def recreate_prisma_client(
         self,
         new_db_url: str,
-        http_client: Any | None = None,
+        http_client: "HttpConfig | None" = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -260,7 +264,7 @@ class RoutingPrismaWrapper:
             )
         return True
 
-    async def _recreate_reader(self, http_client: Any | None = None) -> None:
+    async def _recreate_reader(self, http_client: "HttpConfig | None" = None) -> None:
         """Resolve the reader URL and recreate its Prisma client.
 
         Token-authenticated readers regenerate their token (host/port/user came
@@ -281,13 +285,13 @@ class RoutingPrismaWrapper:
     def __getattr__(self, name: str) -> Any:
         if name in _TOP_LEVEL_READ_METHODS:
             return getattr(self.read_target, name)
-        writer_attr: Final = getattr(self._writer, name)
+        writer_attr: Final[object] = getattr(self._writer, name)
         # Per-model action accessors are non-callable instances that expose
         # both `find_many` and `create`. Methods like execute_raw / batch_ /
         # tx are callables and stay on the writer untouched.
         if not callable(writer_attr) and hasattr(writer_attr, "find_many") and hasattr(writer_attr, "create"):
             try:
-                reader_attr: Final = getattr(self._reader, name)
+                reader_attr: Final[object] = getattr(self._reader, name)
             except AttributeError:
                 return writer_attr
             return _RoutedActions(writer_attr, reader_attr, self._should_use_reader)
