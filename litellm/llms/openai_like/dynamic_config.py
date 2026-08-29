@@ -26,7 +26,7 @@ def _resolve_api_key(provider: SimpleProviderConfig, api_base: str, api_key: str
         return env_key
 
     env_base: Final = get_secret_str(provider.api_base_env) if provider.api_base_env else None
-    trusted_bases: Final = {base.rstrip("/") for base in (provider.base_url, env_base) if base}
+    trusted_bases: Final = frozenset(base.rstrip("/") for base in (provider.base_url, env_base) if base)
     if api_base.rstrip("/") not in trusted_bases:
         raise ValueError(f"api_key is required for custom api_base on provider {provider.slug}")
     return env_key
