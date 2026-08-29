@@ -151,6 +151,7 @@ For full details on the <code>litellm_key</code> resource, see the [key resource
 - <code>litellm_mcp_server</code>: Manage MCP (Model Context Protocol) servers. [Documentation](docs/resources/mcp_server.md)
 - <code>litellm_credential</code>: Manage credentials for secure authentication. [Documentation](docs/resources/credential.md)
 - <code>litellm_vector_store</code>: Manage vector stores for embeddings and RAG. [Documentation](docs/resources/vector_store.md)
+- <code>litellm_jwt_key_mapping</code>: Map JWT claim values to virtual keys for per-client budgets and limits. [Documentation](docs/resources/jwt_key_mapping.md)
 
 ### Available Data Sources
 
