@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from litellm.integrations.custom_guardrail import (
+    DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
     log_guardrail_information,
 )
@@ -1158,6 +1159,152 @@ class TestCustomGuardrailPassthroughSupport:
         assert result is True
 
 
+class TestInjectAdvisoryMessage:
+    """
+    Tests for CustomGuardrail.inject_advisory_message: the shared, guardrail-agnostic
+    "advisory" flagged-content strategy (append a note, let the LLM decide) that sits
+    alongside raise_passthrough_exception (short-circuit with a canned message).
+    """
+
+    def test_appends_to_empty_messages_list(self):
+        guardrail = CustomGuardrail()
+        data = {"model": "gpt-5-mini"}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["messages"] == [{"role": "system", "content": "This looks suspicious."}]
+
+    def test_appends_to_existing_messages_list(self):
+        guardrail = CustomGuardrail()
+        original_messages = [{"role": "user", "content": "Hello"}]
+        data = {"model": "gpt-5-mini", "messages": list(original_messages)}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["messages"] == original_messages + [{"role": "system", "content": "This looks suspicious."}]
+
+    def test_does_not_mutate_other_data_keys(self):
+        guardrail = CustomGuardrail()
+        data = {"model": "gpt-5-mini", "metadata": {"user_id": "abc"}, "temperature": 0.5}
+
+        guardrail.inject_advisory_message(data, "Advisory note.")
+
+        assert data["model"] == "gpt-5-mini"
+        assert data["metadata"] == {"user_id": "abc"}
+        assert data["temperature"] == 0.5
+
+    def test_works_on_bare_customguardrail_not_just_lakera(self):
+        """Proves genericity: this is a CustomGuardrail method, not Lakera-specific."""
+
+        class SomeOtherGuardrail(CustomGuardrail):
+            pass
+
+        guardrail = SomeOtherGuardrail(guardrail_name="some_other_guardrail")
+        data = {"messages": [{"role": "user", "content": "hi"}]}
+
+        guardrail.inject_advisory_message(data, DEFAULT_ADVISORY_MESSAGE.format(reason="a content safety concern"))
+
+        assert len(data["messages"]) == 2
+
+    def test_appends_to_responses_api_input_string(self):
+        """
+        The Responses API stores its content in "input", not "messages". Appending
+        only to "messages" would leave the advisory unreachable for that endpoint,
+        since the Responses backend never reads a "messages" key.
+        """
+        guardrail = CustomGuardrail()
+        data = {"model": "gpt-5-mini", "input": "What's the weather today?"}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["input"] == "What's the weather today?\n\nThis looks suspicious."
+        assert "messages" not in data
+
+    def test_appends_to_both_messages_and_input_when_both_present(self):
+        guardrail = CustomGuardrail()
+        data = {"messages": [{"role": "user", "content": "hi"}], "input": "hi"}
+
+        guardrail.inject_advisory_message(data, "Advisory note.")
+
+        assert data["messages"][-1] == {"role": "system", "content": "Advisory note."}
+        assert data["input"] == "hi\n\nAdvisory note."
+
+    def test_prefers_instructions_over_input_for_responses_api(self):
+        """
+        Veria-ai finding on BerriAI/litellm#34940: "instructions" is the
+        privileged, developer-set Responses-API field; "input" is caller-
+        controlled and a caller could include text telling the model to
+        disregard a trailing warning appended there instead. The advisory
+        must land in "instructions" whenever it's present, not "input".
+        """
+        guardrail = CustomGuardrail()
+        data = {"instructions": "You are a helpful assistant.", "input": "hi"}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["instructions"] == "You are a helpful assistant.\n\nThis looks suspicious."
+        assert data["input"] == "hi"
+
+    def test_prefers_instructions_over_structured_input_for_responses_api(self):
+        guardrail = CustomGuardrail()
+        structured_input = [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        data = {"instructions": "You are a helpful assistant.", "input": list(structured_input)}
+
+        delivered = guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert delivered is True
+        assert data["instructions"] == "You are a helpful assistant.\n\nThis looks suspicious."
+        assert data["input"] == structured_input
+
+    def test_returns_true_when_delivered_to_messages_or_input(self):
+        guardrail = CustomGuardrail()
+        assert guardrail.inject_advisory_message({"messages": []}, "note") is True
+        assert guardrail.inject_advisory_message({"input": "hi"}, "note") is True
+        assert guardrail.inject_advisory_message({"model": "gpt-5-mini"}, "note") is True
+
+    def test_returns_false_and_does_not_mutate_structured_responses_api_input(self):
+        """
+        A structured Responses-API input (a list of input items, not a plain
+        string) with no "messages" key has no field this helper can safely
+        append into -- adding a "messages" key would be inert, since the
+        Responses backend reads only "input". The caller must be able to tell
+        this happened so it can degrade to blocking instead of silently
+        letting the flagged request through with no advisory delivered.
+        """
+        guardrail = CustomGuardrail()
+        structured_input = [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        data = {"model": "gpt-5-mini", "input": list(structured_input)}
+
+        delivered = guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert delivered is False
+        assert data["input"] == structured_input
+        assert "messages" not in data
+
+    def test_returns_false_and_does_not_mutate_when_messages_also_present_alongside_structured_input(self):
+        """
+        Bugbot finding on BerriAI/litellm#34940: a request can carry both a
+        "messages" list and a structured Responses-API "input" list at the
+        same time (the raw request body is passed through largely unvalidated).
+        The Responses backend reads only "input" in that shape, so a "messages"
+        list being present too must not make this return True -- appending
+        there is exactly as inert as when "messages" is absent, and previously
+        this returned True (and mutated "messages") purely because a
+        "messages" list happened to exist, silently letting a flagged request
+        through advisory mode believed it had delivered a note the model never saw.
+        """
+        guardrail = CustomGuardrail()
+        structured_input = [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        original_messages = [{"role": "user", "content": "hi"}]
+        data = {"model": "gpt-5-mini", "messages": list(original_messages), "input": list(structured_input)}
+
+        delivered = guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert delivered is False
+        assert data["input"] == structured_input
+        assert data["messages"] == original_messages
+
+
 class TestEventTypeLogging:
     """Tests for event_type logging in guardrail information."""
 
@@ -1667,6 +1814,47 @@ class TestGuardrailInterventionClassification:
             guardrail_name="pii-rail",
         )
         assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    @pytest.mark.parametrize("status_code", [400, 403, 422])
+    def test_block_signalling_http_exception_is_intervention(self, status_code):
+        from fastapi.exceptions import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="blocked by guardrail")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    @pytest.mark.parametrize("status_code", [300, 401, 408, 429, 451, 499, 500, 502, 503])
+    def test_non_block_http_exception_is_not_intervention(self, status_code):
+        from fastapi.exceptions import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="guardrail api error")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is False
+
+    @pytest.mark.asyncio
+    async def test_non_400_4xx_logged_as_intervened_not_failed(self):
+        from fastapi.exceptions import HTTPException
+
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class BlockingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-rail",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data, **kwargs):
+                raise HTTPException(status_code=403, detail="blocked by guardrail")
+
+        guardrail = BlockingGuardrail()
+        request_data: dict = {"metadata": {}}
+
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_hook(data=request_data)
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"
 
     @pytest.mark.asyncio
     async def test_routing_logged_as_intervened_not_failed(self):

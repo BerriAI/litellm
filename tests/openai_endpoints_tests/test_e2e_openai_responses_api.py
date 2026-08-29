@@ -1,5 +1,5 @@
 import httpx
-from openai import OpenAI, BadRequestError
+from openai import OpenAI, BadRequestError, APIStatusError
 import pytest
 
 
@@ -87,7 +87,7 @@ def test_basic_response():
     print("DELETE response=", delete_response)
 
     # expect an error when getting the response again since it was deleted
-    with pytest.raises(Exception):
+    with pytest.raises(APIStatusError):
         get_response = client.responses.retrieve(response.id)
 
 
@@ -115,9 +115,9 @@ def test_bad_request_error():
 def test_bad_request_bad_param_error():
     client = get_test_client()
     with pytest.raises(BadRequestError):
-        # Trigger error with invalid model name
+        # Out-of-range temperature on a non-reasoning model, so drop_params forwards it
         client.responses.create(
-            model="gpt-5.5", input="This should fail", temperature=2000
+            model="gpt-4.1", input="This should fail", temperature=2000
         )
 
 
@@ -195,6 +195,6 @@ def test_cancel_streaming_response():
 
 def test_cancel_invalid_response_id():
     client = get_test_client()
-    with pytest.raises(Exception):
+    with pytest.raises(APIStatusError):
         # Try to cancel a non-existent response ID
         client.responses.cancel("invalid_response_id_12345")

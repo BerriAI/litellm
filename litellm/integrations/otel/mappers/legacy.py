@@ -9,10 +9,15 @@ Like ``GenAIMapper``, each span kind declares its schema as a flat
 ``attribute key -> extractor`` table: one lambda per mapping operation.
 """
 
-from typing import Callable, Final
+from collections.abc import Callable
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
-from litellm.integrations.otel.mappers.utils import collect, drop_none
+from litellm.integrations.otel.mappers.utils import (
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
+    collect,
+    tool_definition_attrs,
+)
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     ServiceSpanData,
@@ -63,6 +68,9 @@ class LegacyMapper:
         _LEGACY_ERROR: lambda d: d.error.message if d.error is not None and d.error.message else None,
     }
 
+    def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
+        self._tool_attr_budget = tool_attr_budget
+
     def map(self, data: SpanData) -> AttributeMap:
         match data:
             case LLMCallSpanData():
@@ -72,22 +80,20 @@ class LegacyMapper:
             case _:
                 return {}
 
-    @classmethod
-    def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
-        attrs = collect(cls._LLM_CALL_ATTRS, data)
+    def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
+        attrs: Final = collect(self._LLM_CALL_ATTRS, data)
         attrs.update(
-            drop_none(
-                {
-                    f"llm.request.functions.{idx}.{suffix}": extract(tool)
-                    for idx, tool in enumerate(data.tools)
-                    for suffix, extract in cls._TOOL_ATTRS.items()
-                }
+            tool_definition_attrs(
+                lambda idx, suffix: f"llm.request.functions.{idx}.{suffix}",
+                data.tools,
+                self._TOOL_ATTRS,
+                self._tool_attr_budget,
             )
         )
         return attrs
 
     @classmethod
     def _service(cls, data: ServiceSpanData) -> AttributeMap:
-        attrs = collect(cls._SERVICE_ATTRS, data)
+        attrs: Final = collect(cls._SERVICE_ATTRS, data)
         attrs.update(dict(data.event_metadata))
         return attrs

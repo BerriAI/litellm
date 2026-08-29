@@ -32,49 +32,56 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 import jwt
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
-SESSION_TOKEN_PREFIX = "llm_session_"
+SESSION_TOKEN_PREFIX: Final = "llm_session_"
 """Marker prefix on every serialized session ACCESS token so the admission edge can cheaply
 tell a gateway session from a litellm key, JWT, or bridge envelope before doing any
 cryptography. Distinct from the ``llm_env_``/``llm_refresh_`` envelope prefixes."""
 
-SESSION_REFRESH_PREFIX = "llm_srefresh_"
+SESSION_REFRESH_PREFIX: Final = "llm_srefresh_"
 """Marker prefix on every serialized session REFRESH token. A distinct prefix keeps the two
 credentials routable without crypto and, together with the signed ``kind`` claim, stops one
 from being presented where the other is expected: the refresh token is only ever presented
 back to the token endpoint, never at the MCP edge."""
 
-SESSION_ISSUER = "litellm-mcp-gateway"
+SESSION_ISSUER: Final = "litellm-mcp-gateway"
 """``iss`` claim stamped into every session token and required back on open. Distinct from
 the envelope issuer so a token of one family can never validate in the other even under a
 hypothetical shared signing key."""
 
-SESSION_TTL_SECONDS = 3600
-"""Session ACCESS token lifetime (1h), matching the access-envelope and BYOK session bearer
-windows: a client-held credential never outlives a bounded window, and each refresh
-re-validates the live user before re-minting."""
+SESSION_TTL_SECONDS: Final = 3600
+"""Session ACCESS token lifetime (1h), matching the BYOK session bearer window: a
+client-held credential never outlives a bounded window, and each refresh re-validates
+the live user before re-minting."""
 
-SESSION_REFRESH_TTL_SECONDS = 1209600
+SESSION_REFRESH_TTL_SECONDS: Final = 1209600
 """Session REFRESH token lifetime (14 days), matching the refresh-envelope bound. Each
 renewal re-validates the sealed user against the live record (deactivation gates it) and
 rotates the refresh token, so the practical bound is idle time, not a fixed session."""
 
-MAX_SESSION_TOKEN_BYTES = 4096
+MAX_SESSION_TOKEN_BYTES: Final = 4096
 """Size cap on the serialized token (prefix + JWT, in bytes) and on any candidate accepted
 by the openers. Session claims are small; the only variable-length field is ``client_id``
 (a sealed DCR client record), and 4096 leaves ample headroom under common 8-16KB header
 limits while bounding hostile input before JWT parsing."""
 
-_SESSION_JWT_ALGORITHM = "HS256"
+_SESSION_JWT_ALGORITHM: Final = "HS256"
 
 SessionTokenKind = Literal["session", "session_refresh"]
 """Which credential a session token is. Stamped into the signed claims and required to match
 on open, so a signature-valid token of one kind cannot be replayed as the other even if its
 wire prefix is swapped (the prefix is not part of the signed payload; this claim is)."""
+
+SessionAudience = Literal["proxy_api"]
+"""The non-MCP audience a session REFRESH token can be minted for. ``None`` (the default and
+the only value ever on an MCP wire) means the aggregate MCP gateway; ``"proxy_api"`` means the
+refresh grant re-mints the proxy-API CLI credential instead of an MCP session pair. The audience
+is read only from the signed claims, never from the request, so a token of one audience can
+never be redeemed as the other."""
 
 
 class SessionPrincipal(BaseModel):
@@ -85,11 +92,20 @@ class SessionPrincipal(BaseModel):
     enforced at use time rather than frozen at mint time. ``client_id`` is the (stateless,
     gateway-sealed) DCR client identifier the token was issued to; the token endpoint
     requires it to match on the refresh grant.
+
+    ``resource_server_id`` is the single MCP server this session was authorized for when
+    the client requested a per-server RFC 8707 resource at authorize time, or ``None`` for
+    the aggregate scope. It is a RESTRICTION carried for admission to intersect against
+    the live grant resolution, never a grant by itself; the refresh grant re-mints from
+    this principal so the restriction survives rotation.
     """
 
     model_config = ConfigDict(frozen=True)
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
+    resource_server_id: str | None = None
+    audience: SessionAudience | None = None
+    team_id: str | None = None
 
 
 class SessionKeys(BaseModel):
@@ -186,6 +202,9 @@ class _SessionClaims(BaseModel):
     kind: SessionTokenKind
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
+    resource_server_id: str | None = None
+    audience: SessionAudience | None = None
+    team_id: str | None = None
 
 
 def is_session_token(candidate: str) -> bool:
@@ -278,7 +297,7 @@ def _mint(
 ) -> MintedSessionToken | SessionTokenTooLarge:
     """Sign the claims for either token kind and enforce the size cap. Shared by both mints
     so the JWT shape, issuer, and size guard cannot drift between access and refresh."""
-    claims = _SessionClaims(
+    claims: Final = _SessionClaims(
         iss=SESSION_ISSUER,
         iat=int(now.timestamp()),
         exp=int(expires_at.timestamp()),
@@ -286,11 +305,14 @@ def _mint(
         kind=kind,
         user_id=principal.user_id,
         client_id=principal.client_id,
+        resource_server_id=principal.resource_server_id,
+        audience=principal.audience,
+        team_id=principal.team_id,
     )
-    token = prefix + jwt.encode(
-        claims.model_dump(), keys.signing_key.get_secret_value(), algorithm=_SESSION_JWT_ALGORITHM
+    token: Final = prefix + jwt.encode(
+        claims.model_dump(exclude_none=True), keys.signing_key.get_secret_value(), algorithm=_SESSION_JWT_ALGORITHM
     )
-    size_bytes = len(token.encode("utf-8"))
+    size_bytes: Final = len(token.encode("utf-8"))
     if size_bytes > MAX_SESSION_TOKEN_BYTES:
         return SessionTokenTooLarge(size_bytes=size_bytes, max_bytes=MAX_SESSION_TOKEN_BYTES)
     return MintedSessionToken(token=SecretStr(token), expires_at=expires_at)
@@ -315,7 +337,7 @@ def _open(
         return SessionMalformed()
     if len(candidate.encode("utf-8", "surrogatepass")) > MAX_SESSION_TOKEN_BYTES:
         return SessionMalformed()
-    claims = _decode_claims(candidate.removeprefix(prefix), keys.signing_key)
+    claims: Final = _decode_claims(candidate.removeprefix(prefix), keys.signing_key)
     if not isinstance(claims, _SessionClaims):
         return claims
     if claims.kind != expected_kind:
@@ -323,7 +345,14 @@ def _open(
     if now.timestamp() >= claims.exp:
         return SessionExpired()
     return OpenedSessionToken(
-        principal=SessionPrincipal(user_id=claims.user_id, client_id=claims.client_id), jti=claims.jti
+        principal=SessionPrincipal(
+            user_id=claims.user_id,
+            client_id=claims.client_id,
+            resource_server_id=claims.resource_server_id,
+            audience=claims.audience,
+            team_id=claims.team_id,
+        ),
+        jti=claims.jti,
     )
 
 
@@ -343,7 +372,7 @@ def _decode_claims(
     token as an ``InvalidTokenError``. ``_SessionClaims`` is the total type gate.
     """
     try:
-        payload = jwt.decode(
+        payload: Final = jwt.decode(
             compact,
             signing_key.get_secret_value(),
             algorithms=[_SESSION_JWT_ALGORITHM],

@@ -1,7 +1,9 @@
 # ai-gateway — folder architecture
 
 The Axum server that fronts the Rust gateway. It owns transport + config + auth
-only; deployment selection lives in `core::router`, transforms in `core`/`providers`.
+only; deployment selection lives in `core::router`, and the LLM call itself
+(transforms, auth headers, provider HTTP) lives behind a `core` route entrypoint
+such as `litellm_core::messages::messages`. No provider handler lives here.
 
 ```
 src/
@@ -32,6 +34,11 @@ src/
   args; it runs during extraction. Never re-implement the check per route.
 - **Handlers are thin.** A handler validates and delegates to its `service`. No
   business logic, no provider calls, no transforms in handlers.
+- **Services call `core`, they don't reimplement it.** A `service` picks the
+  deployment and calls the `core` route entrypoint. Provider resolution, auth
+  headers, URL building, and the HTTP call are `core`'s job; a service that
+  builds a provider request itself is a bug (`routes/messages/service.rs` is
+  the reference).
 - **State is shared and cheap to clone.** Long-lived handles live behind `Arc` in
   `state.rs`; read env/config only in `main.rs` when building state.
 

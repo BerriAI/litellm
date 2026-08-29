@@ -539,6 +539,105 @@ async def test_populate_team_access_sets_direct_access_false_by_default(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_populate_team_access_gives_view_only_admin_full_admin_scope(monkeypatch):
+    """proxy_admin_viewer reads with admin scope - every team ("*") plus direct access
+    to all non-team models - instead of being narrowed to its own user row."""
+    team_row = _team_row()
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1"]
+
+    get_all_team_models = AsyncMock(return_value={"byok-id-1": ["team-abc-123"]})
+    monkeypatch.setattr(ps, "get_all_team_models", get_all_team_models)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="viewer", teams=[], models=[])
+    )
+
+    viewer = UserAPIKeyAuth(
+        user_id="viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        team_models=[],
+    )
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=viewer,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[team_row, global_row],
+    )
+
+    assert get_all_team_models.await_args.kwargs["user_teams"] == "*"
+    router.get_model_ids.assert_called_once_with(exclude_team_models=True)
+    prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
+
+    by_id = {m["model_info"]["id"]: m for m in result}
+    assert by_id["byok-id-1"]["model_info"]["access_via_team_ids"] == ["team-abc-123"]
+    assert by_id["global-id-1"]["model_info"]["direct_access"] is True
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_grants_config_access_group_model():
+    """LIT-4433: a team whose only model grant is a CONFIG-defined access group
+    (model_info.access_groups) must have that group's member deployments listed in
+    access_via_team_ids. Before the fix _add_team_models_to_all_models passed the
+    access-group name straight to get_model_list, which never matched, leaving the
+    team's /v2/model/info?include_team_models=true result empty."""
+    team_id = "team-access-group-only"
+    access_group_model = {
+        "model_name": "team-allowed-model-a",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {
+            "id": "model-a-id",
+            "access_groups": ["test-access-group"],
+            "db_model": False,
+        },
+    }
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["team-allowed-model-a"]
+    router.get_model_access_groups.return_value = {"test-access-group": ["team-allowed-model-a"]}
+    router.get_model_ids.return_value = []
+
+    def get_model_list(model_name=None, team_id=None):
+        if model_name == "team-allowed-model-a":
+            return [access_group_model]
+        return None
+
+    router.get_model_list.side_effect = get_model_list
+
+    team_db_object = MagicMock()
+    team_db_object.model_dump.return_value = {
+        "team_id": team_id,
+        "models": ["test-access-group"],
+        "access_group_ids": [],
+    }
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_db_object])
+
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=admin,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[
+            {
+                "model_name": "team-allowed-model-a",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "model-a-id", "access_groups": ["test-access-group"], "db_model": False},
+            }
+        ],
+    )
+
+    by_id = {m["model_info"]["id"]: m for m in result}
+    assert by_id["model-a-id"]["model_info"]["access_via_team_ids"] == [team_id]
+
+
+@pytest.mark.asyncio
 async def test_model_info_v1_team_id_without_db_fails_fast(monkeypatch):
     """`teamId` without a connected DB raises 500 before any enrichment work runs."""
     router = MagicMock()

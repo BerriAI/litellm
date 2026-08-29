@@ -6,7 +6,7 @@ import { getCallbacksCall } from "@/components/networking";
 import { useUpdateRetryPolicy } from "@/app/(dashboard)/hooks/routerSettings/useUpdateRetryPolicy";
 import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 interface RetryPolicyObject {
   [key: string]: { [retryPolicyKey: string]: number } | undefined;
@@ -69,7 +69,7 @@ export default function ModelRetrySettingsPanel() {
       { retry_policy: globalRetryPolicy, model_group_retry_policy: modelGroupRetryPolicy },
       {
         onSuccess: () => {
-          NotificationsManager.success("Retry settings saved successfully");
+          toast.success("Retry settings saved successfully");
           void fetchRetrySettings().then((routerSettings) => {
             if (routerSettings) {
               applyRetrySettings(routerSettings);
@@ -77,7 +77,7 @@ export default function ModelRetrySettingsPanel() {
           });
         },
         onError: () => {
-          NotificationsManager.fromBackend("Failed to save retry settings");
+          toast.fromError("Failed to save retry settings");
         },
       },
     );

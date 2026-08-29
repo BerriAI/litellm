@@ -1,18 +1,12 @@
 import json
-import os
-import sys
 from typing import Any, Dict, List, Optional, Set, Union
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import asyncio
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation

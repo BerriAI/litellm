@@ -3,7 +3,7 @@ import json
 import time
 import urllib.parse
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Final, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -98,16 +98,16 @@ class AssemblyAIPassthroughLoggingHandler:
         """
         from ..pass_through_endpoints import pass_through_endpoint_logging
 
-        model = response_body.get("speech_model", "")
+        model: Final = response_body.get("speech_model", "")
         verbose_proxy_logger.debug("response body %s", json.dumps(response_body, indent=4))
         kwargs["model"] = model
         kwargs["custom_llm_provider"] = "assemblyai"
-        response_cost: Optional[float] = None
+        response_cost: float | None = None
 
-        transcript_id = response_body.get("id")
+        transcript_id: Final = response_body.get("id")
         if transcript_id is None:
             raise ValueError("Transcript ID is required to log the cost of the transcription")
-        transcript_response = self._poll_assembly_for_transcript_response(
+        transcript_response: Final = self._poll_assembly_for_transcript_response(
             transcript_id=transcript_id, url_route=url_route
         )
         verbose_proxy_logger.debug(
@@ -115,14 +115,14 @@ class AssemblyAIPassthroughLoggingHandler:
             json.dumps(transcript_response, indent=4),
         )
         if transcript_response:
-            cost = self.get_cost_for_assembly_transcript(
+            cost: Final = self.get_cost_for_assembly_transcript(
                 speech_model=model,
                 transcript_response=transcript_response,
             )
             response_cost = cost
 
         # Make standard logging object for Vertex AI
-        standard_logging_object = get_standard_logging_object_payload(
+        standard_logging_object: Final = get_standard_logging_object_payload(
             kwargs=kwargs,
             init_response_obj=transcript_response,
             start_time=start_time,
@@ -131,8 +131,8 @@ class AssemblyAIPassthroughLoggingHandler:
             status="success",
         )
 
-        passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
-            kwargs.get("passthrough_logging_payload")
+        passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = kwargs.get(
+            "passthrough_logging_payload"
         )
 
         verbose_proxy_logger.debug(
@@ -158,9 +158,7 @@ class AssemblyAIPassthroughLoggingHandler:
             )
         )
 
-        pass
-
-    def _get_response_to_log(self, transcript_response: Optional[AssemblyAITranscriptResponse]) -> dict:
+    def _get_response_to_log(self, transcript_response: AssemblyAITranscriptResponse | None) -> dict:
         if transcript_response is None:
             return {}
         return dict(transcript_response)
@@ -168,8 +166,8 @@ class AssemblyAIPassthroughLoggingHandler:
     def _get_assembly_transcript(
         self,
         transcript_id: str,
-        request_region: Optional[Literal["eu"]] = None,
-    ) -> Optional[dict]:
+        request_region: Literal["eu"] | None = None,
+    ) -> dict | None:
         """
         Get the transcript details from AssemblyAI API
 
@@ -183,8 +181,8 @@ class AssemblyAIPassthroughLoggingHandler:
             passthrough_endpoint_router,
         )
 
-        _base_url = self.assembly_ai_eu_base_url if request_region == "eu" else self.assembly_ai_base_url
-        _api_key = passthrough_endpoint_router.get_credentials(
+        _base_url: Final = self.assembly_ai_eu_base_url if request_region == "eu" else self.assembly_ai_base_url
+        _api_key: Final = passthrough_endpoint_router.get_credentials(
             custom_llm_provider="assemblyai",
             region_name=request_region,
         )
@@ -192,29 +190,27 @@ class AssemblyAIPassthroughLoggingHandler:
             raise ValueError("AssemblyAI API key not found")
         if any(c in transcript_id for c in ("/", "\\", "#", "?")) or ".." in transcript_id:
             raise ValueError(f"Invalid transcript_id {transcript_id!r}: contains disallowed characters")
-        safe_transcript_id = urllib.parse.quote(transcript_id, safe="")
+        safe_transcript_id: Final = urllib.parse.quote(transcript_id, safe="")
         try:
-            url = f"{_base_url}/v2/transcript/{safe_transcript_id}"
-            headers = {
+            url: Final = f"{_base_url}/v2/transcript/{safe_transcript_id}"
+            headers: Final = {
                 "Authorization": f"Bearer {_api_key}",
                 "Content-Type": "application/json",
             }
 
-            response = httpx.get(url, headers=headers)
+            response: Final = httpx.get(url, headers=headers)
             response.raise_for_status()
 
             return response.json()
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"[Non blocking logging error] Error getting AssemblyAI transcript: {str(e)}"
-            )
+            verbose_proxy_logger.exception("[Non blocking logging error] Error getting AssemblyAI transcript: %s", e)
             return None
 
     def _poll_assembly_for_transcript_response(
         self,
         transcript_id: str,
-        url_route: Optional[str] = None,
-    ) -> Optional[AssemblyAITranscriptResponse]:
+        url_route: str | None = None,
+    ) -> AssemblyAITranscriptResponse | None:
         """
         Poll the status of the transcript until it is completed or timeout (30 minutes)
         """
@@ -234,14 +230,14 @@ class AssemblyAIPassthroughLoggingHandler:
     def get_cost_for_assembly_transcript(
         transcript_response: AssemblyAITranscriptResponse,
         speech_model: str,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Get the cost for the assembly transcript
         """
-        _audio_duration = transcript_response.get("audio_duration")
+        _audio_duration: Final = transcript_response.get("audio_duration")
         if _audio_duration is None:
             return None
-        _cost_per_second = AssemblyAIPassthroughLoggingHandler.get_cost_per_second_for_assembly_model(
+        _cost_per_second: Final = AssemblyAIPassthroughLoggingHandler.get_cost_per_second_for_assembly_model(
             speech_model=speech_model
         )
         if _cost_per_second is None:
@@ -249,7 +245,7 @@ class AssemblyAIPassthroughLoggingHandler:
         return _audio_duration * _cost_per_second
 
     @staticmethod
-    def get_cost_per_second_for_assembly_model(speech_model: str) -> Optional[float]:
+    def get_cost_per_second_for_assembly_model(speech_model: str) -> float | None:
         """
         Get the cost per second for the assembly model.
         Falls back to assemblyai/nano if the specific speech model info cannot be found.
@@ -279,9 +275,7 @@ class AssemblyAIPassthroughLoggingHandler:
 
             return None
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"[Non blocking logging error] Error getting AssemblyAI model info: {str(e)}"
-            )
+            verbose_proxy_logger.exception("[Non blocking logging error] Error getting AssemblyAI model info: %s", e)
             return None
 
     @staticmethod
@@ -292,7 +286,7 @@ class AssemblyAIPassthroughLoggingHandler:
         return request_method == "POST"
 
     @staticmethod
-    def _get_assembly_region_from_url(url: Optional[str]) -> Optional[Literal["eu"]]:
+    def _get_assembly_region_from_url(url: str | None) -> Literal["eu"] | None:
         """
         Get the region from the URL
         """
@@ -303,7 +297,7 @@ class AssemblyAIPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def _get_assembly_base_url_from_region(region: Optional[Literal["eu"]]) -> str:
+    def _get_assembly_base_url_from_region(region: Literal["eu"] | None) -> str:
         """
         Get the base URL for the AssemblyAI API
         if region == "eu", return "https://api.eu.assemblyai.com"

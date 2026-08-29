@@ -11,12 +11,9 @@ so the correct model ID is sent to the OpenRouter API.
 See: https://github.com/BerriAI/litellm/issues/16353
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 
