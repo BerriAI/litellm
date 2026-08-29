@@ -10,9 +10,12 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from typing import Any, Final, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final, TypedDict, cast
 
 from fastapi import Request, Response
+from fastapi.responses import StreamingResponse
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -20,25 +23,39 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 from litellm.types.llms.openai import ResponsesAPIStatus
 
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
+
+class _StreamContentPart(TypedDict, total=False):
+    text: ReadOnly[str]
+
+
+class _StreamOutputItem(TypedDict, total=False):
+    id: ReadOnly[str]
+    content: ReadOnly[Sequence[_StreamContentPart | None]]
+
 
 async def background_streaming_task(
     polling_id: str,
-    data: dict,
+    data,
     polling_handler: ResponsePollingHandler,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    general_settings: dict,
-    llm_router,
-    proxy_config,
-    proxy_logging_obj,
+    general_settings,
+    llm_router: "Router | None",
+    proxy_config: "ProxyConfig",
+    proxy_logging_obj: "ProxyLogging",
     select_data_generator,
     user_model,
-    user_temperature,
-    user_request_timeout,
-    user_max_tokens,
-    user_api_base,
-    version,
+    user_temperature: float | None,
+    user_request_timeout: float | None,
+    user_max_tokens: int | None,
+    user_api_base: str | None,
+    version: str | None,
 ):
     """
     Background task to stream response and update cache
@@ -69,7 +86,7 @@ async def background_streaming_task(
         # Make streaming request.
         # Pre-call checks (rate limits, guardrails, budget) were already run
         # before polling ID creation, so skip them here to avoid double-counting.
-        response: Final = await processor.base_process_llm_request(
+        response: Final[StreamingResponse] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -91,8 +108,9 @@ async def background_streaming_task(
 
         # Process streaming response following OpenAI events format
         # https://platform.openai.com/docs/api-reference/responses-streaming
-        output_items: Final[dict[str, dict[str, Any]]] = {}  # Track output items by ID
-        accumulated_text: Final = {}  # Track accumulated text deltas by (item_id, content_index)
+        output_items: Final[dict[str, _StreamOutputItem]] = {}  # Track output items by ID
+        # Track accumulated text deltas by (item_id, content_index)
+        accumulated_text: Final[dict[tuple[str, int], str]] = {}
 
         # ResponsesAPIResponse fields to extract from response.completed
         usage_data = None
@@ -181,16 +199,19 @@ async def background_streaming_task(
 
                             if item_id and item_id in output_items:
                                 # Update the output item with new content
-                                if "content" not in output_items[item_id]:
-                                    output_items[item_id]["content"] = []
-                                output_items[item_id]["content"].append(content_part)
+                                current_item = output_items[item_id]
+                                appended_item: _StreamOutputItem = {
+                                    **current_item,
+                                    "content": (*current_item.get("content", ()), content_part),
+                                }
+                                output_items[item_id] = appended_item
                                 state_dirty = True
 
                         elif event_type == "response.output_text.delta":
                             # Text delta - accumulate text content
                             # https://platform.openai.com/docs/api-reference/responses-streaming/response-text-delta
                             item_id = event.get("item_id")
-                            content_index = event.get("content_index", 0)
+                            content_index: int = event.get("content_index", 0)
                             delta = event.get("delta", "")
 
                             if item_id and item_id in output_items:
@@ -201,12 +222,24 @@ async def background_streaming_task(
                                 accumulated_text[key] += delta
 
                                 # Update the content in output_items
-                                if "content" in output_items[item_id]:
-                                    content_list = output_items[item_id]["content"]
-                                    if content_index < len(content_list):
-                                        # Update existing content part with accumulated text
-                                        if isinstance(content_list[content_index], dict):
-                                            content_list[content_index]["text"] = accumulated_text[key]
+                                current_item = output_items[item_id]
+                                content_list: Sequence[_StreamContentPart | None] = current_item.get("content", ())
+                                if content_index < len(content_list):
+                                    # Update existing content part with accumulated text
+                                    content_entry = content_list[content_index]
+                                    if isinstance(content_entry, dict):
+                                        delta_part: _StreamContentPart = {
+                                            **content_entry,
+                                            "text": accumulated_text[key],
+                                        }
+                                        delta_item: _StreamOutputItem = {
+                                            **current_item,
+                                            "content": tuple(
+                                                delta_part if index == content_index else entry
+                                                for index, entry in enumerate(content_list)
+                                            ),
+                                        }
+                                        output_items[item_id] = delta_item
                                 state_dirty = True
 
                         elif event_type == "response.content_part.done":
@@ -217,10 +250,17 @@ async def background_streaming_task(
 
                             if item_id and item_id in output_items:
                                 # Update with final content from event
-                                if "content" in output_items[item_id]:
-                                    content_list = output_items[item_id]["content"]
-                                    if content_index < len(content_list):
-                                        content_list[content_index] = content_part
+                                current_item = output_items[item_id]
+                                content_list = current_item.get("content", ())
+                                if content_index < len(content_list):
+                                    finalized_item: _StreamOutputItem = {
+                                        **current_item,
+                                        "content": tuple(
+                                            content_part if index == content_index else entry
+                                            for index, entry in enumerate(content_list)
+                                        ),
+                                    }
+                                    output_items[item_id] = finalized_item
                                 state_dirty = True
 
                         elif event_type == "response.output_item.done":

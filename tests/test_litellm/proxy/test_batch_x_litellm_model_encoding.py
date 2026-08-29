@@ -287,12 +287,14 @@ async def test_create_batch_with_x_litellm_model_encodes_output_and_error_file_i
 
 
 @pytest.mark.asyncio
-async def test_create_batch_without_x_litellm_model_returns_raw_ids():
+async def test_create_batch_without_x_litellm_model_returns_raw_ids(monkeypatch):
     """
     Without x-litellm-model header, create_batch should NOT encode batch IDs
     (falls through to Scenario 3 / custom_llm_provider fallback).
     """
     from litellm.proxy.batches_endpoints.endpoints import create_batch
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-openai")
 
     raw_batch_id = "batch_abc123"
     mock_response = _make_batch_response(batch_id=raw_batch_id)

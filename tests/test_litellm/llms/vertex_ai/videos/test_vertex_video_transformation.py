@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.vertex_ai.videos.transformation import (
     VertexAIVideoConfig,
     _convert_image_to_vertex_format,
@@ -93,22 +94,15 @@ class TestVertexAIVideoConfig:
         # Should NOT include endpoint
         assert not url.endswith(":predictLongRunning")
 
-    def test_get_complete_url_missing_project(self):
+    def test_get_complete_url_missing_project(self, monkeypatch):
         """Test that missing vertex_project raises error."""
-        litellm_params = {}
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.setattr(litellm, "vertex_project", None)
 
-        # Note: The method might not raise if vertex_project can be fetched from env
-        # This test verifies the behavior when completely missing
-        try:
-            url = self.config.get_complete_url(
-                model="veo-002", api_base=None, litellm_params=litellm_params
+        with pytest.raises(ValueError, match="vertex_project is required"):
+            self.config.get_complete_url(
+                model="veo-002", api_base=None, litellm_params={}
             )
-            # If no error is raised, vertex_project was obtained from environment
-            # In that case, just verify a URL was returned
-            assert url is not None
-        except ValueError as e:
-            # Expected behavior when vertex_project is truly missing
-            assert "vertex_project is required" in str(e)
 
     def test_get_complete_url_default_location(self):
         """Test URL construction with default location."""
@@ -485,7 +479,7 @@ class TestVertexAIVideoConfig:
             },
         }
 
-        url, data = self.config.transform_video_edit_request(
+        url, data, files = self.config.transform_video_edit_request(
             prompt="Make it brighter",
             video_id=operation_name,
             api_base=api_base,
@@ -494,6 +488,7 @@ class TestVertexAIVideoConfig:
             prefetched_source_data=prefetched,
         )
 
+        assert files is None
         assert url.endswith(":predictLongRunning")
         assert "veo-3.1-generate-001" in url
         instance = data["instances"][0]
@@ -513,7 +508,7 @@ class TestVertexAIVideoConfig:
             },
         }
 
-        _, data = self.config.transform_video_edit_request(
+        _, data, _ = self.config.transform_video_edit_request(
             prompt="Make it darker",
             video_id=operation_name,
             api_base=api_base,
