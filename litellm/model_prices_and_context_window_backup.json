@@ -3726,7 +3726,7 @@
         "output_cost_per_token": 0,
         "litellm_provider": "azure_ai",
         "mode": "chat",
-        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-services/",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/aoai/",
         "comment": "Flat cost of $0.14 per M input tokens for Azure AI Foundry Model Router infrastructure. Use pattern: azure_ai/model_router/<deployment-name> where deployment-name is your Azure deployment (e.g., azure-model-router)"
     },
     "azure/eu/gpt-4o-2024-08-06": {
@@ -5328,7 +5328,7 @@
         "input_cost_per_second": 0.0002833333333333333,
         "litellm_provider": "azure",
         "mode": "audio_transcription",
-        "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/gpt-realtime-whisper",
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/gpt-realtime-whisper",
         "supported_endpoints": [
             "/v1/realtime",
             "/v1/realtime/transcription_sessions"
@@ -9107,7 +9107,7 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0,
         "output_vector_size": 1024,
-        "source": "https://azuremarketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice",
+        "source": "https://marketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice",
         "supports_embedding_image_input": true
     },
     "azure_ai/Cohere-embed-v3-multilingual": {
@@ -9118,7 +9118,7 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0,
         "output_vector_size": 1024,
-        "source": "https://azuremarketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice",
+        "source": "https://marketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice",
         "supports_embedding_image_input": true
     },
     "azure_ai/FLUX-1.1-pro": {
@@ -9134,7 +9134,7 @@
         "litellm_provider": "azure_ai",
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
-        "source": "https://azuremarketplace.microsoft.com/pt-br/marketplace/apps/cohere.cohere-embed-4-offer?tab=PlansAndPrice",
+        "source": "https://marketplace.microsoft.com/pt-br/marketplace/apps/cohere.cohere-embed-4-offer?tab=PlansAndPrice",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
@@ -9467,7 +9467,7 @@
         "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 3.7e-07,
-        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-11b-vision-instruct-offer?tab=Overview",
+        "source": "https://marketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-11b-vision-instruct-offer?tab=Overview",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -9481,7 +9481,7 @@
         "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 2.04e-06,
-        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-90b-vision-instruct-offer?tab=Overview",
+        "source": "https://marketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-90b-vision-instruct-offer?tab=Overview",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -9494,7 +9494,7 @@
         "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 7.1e-07,
-        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.llama-3-3-70b-instruct-offer?tab=Overview",
+        "source": "https://marketplace.microsoft.com/en/marketplace/apps/metagenai.llama-3-3-70b-instruct-offer?tab=Overview",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -9543,7 +9543,7 @@
         "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 1.6e-05,
-        "source": "https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-405b-instruct-offer?tab=PlansAndPrice",
+        "source": "https://marketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-405b-instruct-offer?tab=PlansAndPrice",
         "supports_tool_choice": true
     },
     "azure_ai/Meta-Llama-3.1-70B-Instruct": {
@@ -9554,7 +9554,7 @@
         "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 3.54e-06,
-        "source": "https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-70b-instruct-offer?tab=PlansAndPrice",
+        "source": "https://marketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-70b-instruct-offer?tab=PlansAndPrice",
         "supports_tool_choice": true
     },
     "azure_ai/Meta-Llama-3.1-8B-Instruct": {
@@ -9566,7 +9566,7 @@
         "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 6.1e-07,
-        "source": "https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-8b-instruct-offer?tab=PlansAndPrice",
+        "source": "https://marketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-8b-instruct-offer?tab=PlansAndPrice",
         "supports_tool_choice": true
     },
     "azure_ai/Phi-3-medium-128k-instruct": {
@@ -9756,7 +9756,7 @@
         "supported_endpoints": [
             "/v1/ocr"
         ],
-        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/"
+        "source": "https://ai.azure.com/catalog/models/mistral-document-ai-2512"
     },
     "azure_ai/doc-intelligence/prebuilt-read": {
         "litellm_provider": "azure_ai",
@@ -9967,7 +9967,7 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0,
         "output_vector_size": 3072,
-        "source": "https://azuremarketplace.microsoft.com/pt-br/marketplace/apps/cohere.cohere-embed-4-offer?tab=PlansAndPrice",
+        "source": "https://marketplace.microsoft.com/pt-br/marketplace/apps/cohere.cohere-embed-4-offer?tab=PlansAndPrice",
         "supported_endpoints": [
             "/v1/embeddings"
         ],
@@ -10151,7 +10151,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 0.00971,
-        "source": "https://azure.microsoft.com/en-us/products/ai-services/ai-foundry/models/jais-30b-chat"
+        "source": "https://ai.azure.com/catalog/models/jais-30b-chat"
     },
     "azure_ai/jamba-instruct": {
         "input_cost_per_token": 5e-07,
@@ -10208,7 +10208,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 4e-08,
-        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.ministral-3b-2410-offer?tab=Overview",
+        "source": "https://marketplace.microsoft.com/en/marketplace/apps/000-000.ministral-3b-2410-offer?tab=Overview",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -10231,7 +10231,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
-        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
+        "source": "https://marketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -10243,7 +10243,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
-        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
+        "source": "https://marketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -10280,7 +10280,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
-        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-nemo-12b-2407?tab=PlansAndPrice",
+        "source": "https://marketplace.microsoft.com/en/marketplace/apps/000-000.mistral-nemo-12b-2407?tab=PlansAndPrice",
         "supports_function_calling": true
     },
     "azure_ai/mistral-small": {
@@ -22796,7 +22796,7 @@
         "output_cost_per_reasoning_token": 3e-06,
         "output_cost_per_token": 3e-06,
         "rpm": 2000,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -22850,7 +22850,7 @@
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "rpm": 2000,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -22915,7 +22915,7 @@
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
         "rpm": 2000,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -22974,7 +22974,7 @@
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
         "rpm": 2000,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -23178,7 +23178,7 @@
         "mode": "chat",
         "output_cost_per_reasoning_token": 3e-06,
         "output_cost_per_token": 3e-06,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -23262,7 +23262,7 @@
         "mode": "chat",
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -23325,7 +23325,7 @@
         "output_cost_per_token": 3.75e-06,
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -23382,7 +23382,7 @@
         "output_cost_per_token": 3.75e-06,
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -26982,7 +26982,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "source": "https://platform.openai.com/docs/models/gpt-5.6-cyber",
+        "source": "https://developers.openai.com/api/docs/models/gpt-5.6-cyber",
         "supports_computer_use": true,
         "supports_parallel_function_calling": true
     },
@@ -27021,7 +27021,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "source": "https://platform.openai.com/docs/models/daybreak-red-latest",
+        "source": "https://developers.openai.com/api/docs/models/daybreak-red-latest",
         "supports_computer_use": true,
         "supports_parallel_function_calling": true
     },
@@ -27061,7 +27061,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "source": "https://platform.openai.com/docs/models/daybreak-blue-latest",
+        "source": "https://developers.openai.com/api/docs/models/daybreak-blue-latest",
         "supports_parallel_function_calling": true
     },
     "chat-latest": {
@@ -27073,7 +27073,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-05,
-        "source": "https://platform.openai.com/docs/models/chat-latest",
+        "source": "https://developers.openai.com/api/docs/models/chat-latest",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -30368,7 +30368,7 @@
             "search_context_size_low": 0.0025,
             "search_context_size_medium": 0.0025
         },
-        "source": "https://dev.meta.ai/docs/getting-started/pricing-rate-limits",
+        "source": "https://ai.developer.meta.com/docs/pricing-rate-limits",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses",
@@ -30409,7 +30409,7 @@
             "search_context_size_low": 0.0025,
             "search_context_size_medium": 0.0025
         },
-        "source": "https://dev.meta.ai/docs/getting-started/pricing-rate-limits",
+        "source": "https://ai.developer.meta.com/docs/pricing-rate-limits",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses",
@@ -30450,7 +30450,7 @@
             "search_context_size_low": 0.0025,
             "search_context_size_medium": 0.0025
         },
-        "source": "https://dev.meta.ai/docs/getting-started/pricing-rate-limits",
+        "source": "https://ai.developer.meta.com/docs/pricing-rate-limits",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses",
@@ -30483,7 +30483,7 @@
         "max_output_tokens": 4028,
         "max_tokens": 4028,
         "mode": "chat",
-        "source": "https://llama.developer.meta.com/docs/models",
+        "source": "https://ai.developer.meta.com/docs/models",
         "supported_modalities": [
             "text"
         ],
@@ -30499,7 +30499,7 @@
         "max_output_tokens": 4028,
         "max_tokens": 4028,
         "mode": "chat",
-        "source": "https://llama.developer.meta.com/docs/models",
+        "source": "https://ai.developer.meta.com/docs/models",
         "supported_modalities": [
             "text"
         ],
@@ -30515,7 +30515,7 @@
         "max_output_tokens": 4028,
         "max_tokens": 4028,
         "mode": "chat",
-        "source": "https://llama.developer.meta.com/docs/models",
+        "source": "https://ai.developer.meta.com/docs/models",
         "supported_modalities": [
             "text",
             "image"
@@ -30532,7 +30532,7 @@
         "max_output_tokens": 4028,
         "max_tokens": 4028,
         "mode": "chat",
-        "source": "https://llama.developer.meta.com/docs/models",
+        "source": "https://ai.developer.meta.com/docs/models",
         "supported_modalities": [
             "text",
             "image"
@@ -32477,7 +32477,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/deepseek-ai/DeepSeek-R1-0528": {
         "max_tokens": 164000,
@@ -32489,7 +32489,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
         "max_tokens": 128000,
@@ -32500,7 +32500,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/deepseek-ai/DeepSeek-V3": {
         "max_tokens": 128000,
@@ -32511,7 +32511,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/deepseek-ai/DeepSeek-V3-0324": {
         "max_tokens": 128000,
@@ -32522,7 +32522,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/google/gemma-3-27b-it": {
         "max_tokens": 128000,
@@ -32534,7 +32534,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/meta-llama/Llama-3.3-70B-Instruct": {
         "max_tokens": 128000,
@@ -32545,7 +32545,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/meta-llama/Llama-Guard-3-8B": {
         "max_tokens": 128000,
@@ -32555,7 +32555,7 @@
         "output_cost_per_token": 6e-08,
         "litellm_provider": "nebius",
         "mode": "chat",
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/meta-llama/Meta-Llama-3.1-8B-Instruct": {
         "max_tokens": 128000,
@@ -32566,7 +32566,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/meta-llama/Meta-Llama-3.1-70B-Instruct": {
         "max_tokens": 128000,
@@ -32577,7 +32577,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/meta-llama/Meta-Llama-3.1-405B-Instruct": {
         "max_tokens": 128000,
@@ -32588,7 +32588,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/mistralai/Mistral-Nemo-Instruct-2407": {
         "max_tokens": 128000,
@@ -32599,7 +32599,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/NousResearch/Hermes-3-Llama-3.1-405B": {
         "max_tokens": 128000,
@@ -32610,7 +32610,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/nvidia/Llama-3.1-Nemotron-Ultra-253B-v1": {
         "max_tokens": 128000,
@@ -32621,7 +32621,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/nvidia/Llama-3.3-Nemotron-Super-49B-v1": {
         "max_tokens": 131072,
@@ -32632,7 +32632,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen3-235B-A22B": {
         "max_tokens": 262144,
@@ -32643,7 +32643,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen3-32B": {
         "max_tokens": 32768,
@@ -32654,7 +32654,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen3-30B-A3B": {
         "max_tokens": 32768,
@@ -32665,7 +32665,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen3-14B": {
         "max_tokens": 32768,
@@ -32676,7 +32676,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen3-4B": {
         "max_tokens": 32768,
@@ -32687,7 +32687,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/QwQ-32B": {
         "max_tokens": 32768,
@@ -32699,7 +32699,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen2.5-72B-Instruct": {
         "max_tokens": 128000,
@@ -32710,7 +32710,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen2.5-32B-Instruct": {
         "max_tokens": 128000,
@@ -32721,7 +32721,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen2.5-Coder-7B": {
         "max_tokens": 32768,
@@ -32732,7 +32732,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen2.5-VL-72B-Instruct": {
         "max_tokens": 131072,
@@ -32744,7 +32744,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen2-VL-72B-Instruct": {
         "max_tokens": 131072,
@@ -32756,7 +32756,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen2-VL-7B-Instruct": {
         "max_tokens": 131072,
@@ -32767,7 +32767,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_vision": true,
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/BAAI/bge-en-icl": {
         "max_tokens": 32768,
@@ -32776,7 +32776,7 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "nebius",
         "mode": "embedding",
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/BAAI/bge-multilingual-gemma2": {
         "max_tokens": 8192,
@@ -32785,7 +32785,7 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "nebius",
         "mode": "embedding",
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nebius/intfloat/e5-mistral-7b-instruct": {
         "max_tokens": 32768,
@@ -32794,7 +32794,7 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "nebius",
         "mode": "embedding",
-        "source": "https://nebius.com/prices-ai-studio"
+        "source": "https://nebius.com/prices"
     },
     "nvidia.nemotron-nano-12b-v2": {
         "input_cost_per_token": 2e-07,
@@ -33535,7 +33535,7 @@
         "max_tokens": 4000,
         "mode": "chat",
         "output_cost_per_token": 1.56e-06,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
+        "source": "https://www.oracle.com/artificial-intelligence/enterprise-ai/cost-estimator/",
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_native_streaming": true
@@ -33548,7 +33548,7 @@
         "max_tokens": 4000,
         "mode": "chat",
         "output_cost_per_token": 1.56e-06,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
+        "source": "https://www.oracle.com/artificial-intelligence/enterprise-ai/cost-estimator/",
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_native_streaming": true
@@ -33561,7 +33561,7 @@
         "max_tokens": 4000,
         "mode": "chat",
         "output_cost_per_token": 1.56e-06,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
+        "source": "https://www.oracle.com/artificial-intelligence/enterprise-ai/cost-estimator/",
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_native_streaming": true
@@ -33618,7 +33618,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.56e-06,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
+        "source": "https://www.oracle.com/artificial-intelligence/enterprise-ai/cost-estimator/",
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_native_streaming": true,
@@ -33632,7 +33632,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.56e-06,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
+        "source": "https://www.oracle.com/artificial-intelligence/enterprise-ai/cost-estimator/",
         "supports_function_calling": false,
         "supports_response_schema": false,
         "supports_native_streaming": true
@@ -33643,7 +33643,7 @@
         "max_input_tokens": 512,
         "mode": "embedding",
         "output_vector_size": 1024,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
+        "source": "https://www.oracle.com/artificial-intelligence/enterprise-ai/cost-estimator/",
         "supports_vision": true
     },
     "oci/cohere.command-a-reasoning-08-2025": {
@@ -34540,7 +34540,7 @@
         "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
-        "source": "https://openrouter.ai/api/v1/models/bytedance/ui-tars-1.5-7b",
+        "source": "https://openrouter.ai/bytedance/ui-tars-1.5-7b",
         "supports_tool_choice": true
     },
     "openrouter/deepseek/deepseek-chat": {
@@ -34775,7 +34775,7 @@
         "output_cost_per_reasoning_token": 3e-06,
         "output_cost_per_token": 3e-06,
         "rpm": 2000,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -34816,7 +34816,7 @@
         "output_cost_per_reasoning_token": 1.5e-06,
         "output_cost_per_token": 1.5e-06,
         "rpm": 2000,
-        "source": "https://ai.google.dev/pricing/gemini-3",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -35901,7 +35901,7 @@
         "max_tokens": 131000,
         "mode": "chat",
         "output_cost_per_token": 6.7e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/deepseek-r1-distill-llama-70b",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -35915,7 +35915,7 @@
         "max_tokens": 131000,
         "mode": "chat",
         "output_cost_per_token": 1e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/llama-3-1-8b-instruct",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
@@ -35928,7 +35928,7 @@
         "max_tokens": 131000,
         "mode": "chat",
         "output_cost_per_token": 6.7e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/meta-llama-3-1-70b-instruct",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": false,
         "supports_response_schema": false,
         "supports_tool_choice": false
@@ -35941,7 +35941,7 @@
         "max_tokens": 131000,
         "mode": "chat",
         "output_cost_per_token": 6.7e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/meta-llama-3-3-70b-instruct",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
@@ -35954,7 +35954,7 @@
         "max_tokens": 127000,
         "mode": "chat",
         "output_cost_per_token": 1e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/mistral-7b-instruct-v0-3",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
@@ -35967,7 +35967,7 @@
         "max_tokens": 118000,
         "mode": "chat",
         "output_cost_per_token": 1.3e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/mistral-nemo-instruct-2407",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
@@ -35980,7 +35980,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/mistral-small-3-2-24b-instruct-2506",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -35994,7 +35994,7 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 6.3e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/mixtral-8x7b-instruct-v0-1",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": false,
         "supports_response_schema": true,
         "supports_tool_choice": false
@@ -36007,7 +36007,7 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 8.7e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/qwen2-5-coder-32b-instruct",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": false,
         "supports_response_schema": true,
         "supports_tool_choice": false
@@ -36020,7 +36020,7 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 9.1e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/qwen2-5-vl-72b-instruct",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": false,
         "supports_response_schema": true,
         "supports_tool_choice": false,
@@ -36034,7 +36034,7 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 2.3e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/qwen3-32b",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -36048,7 +36048,7 @@
         "max_tokens": 131000,
         "mode": "chat",
         "output_cost_per_token": 4e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/gpt-oss-120b",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": false,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -36062,7 +36062,7 @@
         "max_tokens": 131000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/gpt-oss-20b",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": false,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -36076,7 +36076,7 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 2.9e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/llava-next-mistral-7b",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": false,
         "supports_response_schema": true,
         "supports_tool_choice": false,
@@ -36090,7 +36090,7 @@
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 1.9e-07,
-        "source": "https://endpoints.ai.cloud.ovh.net/models/mamba-codestral-7b-v0-1",
+        "source": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog/",
         "supports_function_calling": false,
         "supports_response_schema": true,
         "supports_tool_choice": false
@@ -38856,7 +38856,7 @@
         "max_input_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3.6e-06,
-        "source": "https://www.together.ai/models/Qwen/Qwen3.5-397B-A17B",
+        "source": "https://www.together.ai/models/qwen3-5-397b-a17b",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43097,7 +43097,7 @@
         "max_tokens": 2000000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-        "source": "https://docs.x.ai/docs/models (Vertex AI Model Garden)",
+        "source": "https://docs.x.ai/developers/models",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -43113,7 +43113,7 @@
         "max_tokens": 2000000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-        "source": "https://docs.x.ai/docs/models (Vertex AI Model Garden)",
+        "source": "https://docs.x.ai/developers/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -43130,7 +43130,7 @@
         "max_tokens": 2000000,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
-        "source": "https://docs.x.ai/docs/models (Vertex AI Model Garden)",
+        "source": "https://docs.x.ai/developers/models",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -43146,7 +43146,7 @@
         "max_tokens": 2000000,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
-        "source": "https://docs.x.ai/docs/models (Vertex AI Model Garden)",
+        "source": "https://docs.x.ai/developers/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -43266,7 +43266,7 @@
         "max_tokens": 1024,
         "mode": "video_generation",
         "output_cost_per_second": 0.4,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate",
         "supported_modalities": [
             "text"
         ],
@@ -43280,7 +43280,7 @@
         "max_tokens": 1024,
         "mode": "video_generation",
         "output_cost_per_second": 0.15,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate",
         "supported_modalities": [
             "text"
         ],
@@ -43295,7 +43295,7 @@
         "max_tokens": 1024,
         "mode": "video_generation",
         "output_cost_per_second": 0.4,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate",
         "supported_modalities": [
             "text"
         ],
@@ -43310,7 +43310,7 @@
         "max_tokens": 1024,
         "mode": "video_generation",
         "output_cost_per_second": 0.15,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate",
         "supported_modalities": [
             "text"
         ],
@@ -44946,7 +44946,7 @@
         "litellm_provider": "azure",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.1,
-        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "source": "https://ai.azure.com/catalog/models/sora-2",
         "supported_modalities": [
             "text"
         ],
@@ -44958,7 +44958,7 @@
         "litellm_provider": "azure",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.3,
-        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "source": "https://ai.azure.com/catalog/models/sora-2-pro",
         "supported_modalities": [
             "text"
         ],
@@ -44970,7 +44970,7 @@
         "litellm_provider": "azure",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.5,
-        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "source": "https://ai.azure.com/catalog/models/sora-2-pro",
         "supported_modalities": [
             "text"
         ],
@@ -49180,7 +49180,7 @@
         "input_cost_per_second": 0.0002833333333333333,
         "litellm_provider": "openai",
         "mode": "audio_transcription",
-        "source": "https://platform.openai.com/docs/models/gpt-realtime-whisper",
+        "source": "https://developers.openai.com/api/docs/models/gpt-realtime-whisper",
         "supported_endpoints": [
             "/v1/realtime",
             "/v1/realtime/transcription_sessions"
@@ -50432,7 +50432,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "source": "https://docs.volcengine.com/docs/82379/1330310",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
@@ -50470,7 +50470,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "source": "https://docs.volcengine.com/docs/82379/1330310",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
@@ -50508,7 +50508,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "source": "https://docs.volcengine.com/docs/82379/1330310",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
@@ -50546,7 +50546,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "source": "https://docs.volcengine.com/docs/82379/1330310",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
@@ -51295,7 +51295,7 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_reasoning": true,
-        "source": "https://pinstripes.io/pricing"
+        "source": "https://pinstripes.io/"
     },
     "pinstripes/ps/qwen3.6-35b-a3b": {
         "max_tokens": 131072,
@@ -51308,7 +51308,7 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_reasoning": true,
-        "source": "https://pinstripes.io/pricing"
+        "source": "https://pinstripes.io/"
     },
     "pinstripes/ps/qwen3-30b-a3b": {
         "max_tokens": 131072,
@@ -51321,7 +51321,7 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_reasoning": true,
-        "source": "https://pinstripes.io/pricing"
+        "source": "https://pinstripes.io/"
     },
     "pinstripes/ps/qwen3-coder-30b-a3b": {
         "max_tokens": 131072,
@@ -51334,7 +51334,7 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_reasoning": false,
-        "source": "https://pinstripes.io/pricing"
+        "source": "https://pinstripes.io/"
     },
     "pinstripes/ps/deepseek-v4-flash": {
         "max_tokens": 163840,
@@ -51347,7 +51347,7 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_reasoning": true,
-        "source": "https://pinstripes.io/pricing"
+        "source": "https://pinstripes.io/"
     },
     "pinstripes/ps/minimax-m2.7": {
         "max_tokens": 1000192,
@@ -51360,7 +51360,7 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_reasoning": false,
-        "source": "https://pinstripes.io/pricing"
+        "source": "https://pinstripes.io/"
     },
     "darkbloom/gemma-4-26b": {
         "input_cost_per_token": 3e-08,
@@ -51464,7 +51464,7 @@
         "input_cost_per_second": 7.5e-05,
         "litellm_provider": "openai",
         "mode": "audio_transcription",
-        "source": "https://platform.openai.com/docs/models/gpt-transcribe",
+        "source": "https://developers.openai.com/api/docs/models/gpt-transcribe",
         "supported_endpoints": [
             "/v1/audio/transcriptions",
             "/v1/realtime/transcription_sessions"
@@ -51482,7 +51482,7 @@
         "input_cost_per_second": 0.0002833333333333333,
         "litellm_provider": "openai",
         "mode": "audio_transcription",
-        "source": "https://platform.openai.com/docs/models/gpt-live-transcribe",
+        "source": "https://developers.openai.com/api/docs/models/gpt-live-transcribe",
         "supported_endpoints": [
             "/v1/realtime",
             "/v1/realtime/transcription_sessions"
@@ -51503,7 +51503,7 @@
         "max_output_tokens": 2000,
         "max_tokens": 2000,
         "mode": "realtime",
-        "source": "https://platform.openai.com/docs/models/gpt-realtime-translate",
+        "source": "https://developers.openai.com/api/docs/models/gpt-realtime-translate",
         "supported_modalities": [
             "audio"
         ],
@@ -51531,7 +51531,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://docs.claude.com/en/docs/about-claude/models/overview",
+        "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
         "supports_mid_conversation_system": true,
@@ -51570,7 +51570,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://docs.claude.com/en/docs/about-claude/models/overview",
+        "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
         "supports_assistant_prefill": false,
