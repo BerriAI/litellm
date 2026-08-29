@@ -34,7 +34,7 @@ export interface SweepConfig {
 }
 
 export type NoticeVerdict =
-  | { readonly kind: "pending"; readonly notice: Comment; readonly candidates: readonly number[] }
+  | { readonly kind: "pending"; readonly notices: readonly Comment[]; readonly candidates: readonly number[] }
   | { readonly kind: "skip"; readonly reason: string };
 
 export type CloseVerdict =
@@ -91,23 +91,24 @@ export function pendingNotice(
     return skip("was reopened after an automatic close");
   }
   const notices = comments.filter((comment) => comment.user.type === "Bot" && NOTICE_MARKER.test(comment.body));
-  const notice = notices[notices.length - 1];
-  if (notice === undefined) {
+  const first = notices[0];
+  const latest = notices[notices.length - 1];
+  if (first === undefined || latest === undefined) {
     return skip("carries no duplicate notice");
   }
-  const noticeAt = new Date(notice.created_at);
-  const ageDays = (config.now.getTime() - noticeAt.getTime()) / DAY_MS;
+  const ageDays = (config.now.getTime() - new Date(latest.created_at).getTime()) / DAY_MS;
   if (ageDays < config.graceDays) {
     return skip(`notice is ${ageDays.toFixed(1)} days old, grace period is ${config.graceDays}`);
   }
-  if (comments.some((comment) => comment.user.type !== "Bot" && new Date(comment.created_at) > noticeAt)) {
+  const firstNoticeAt = new Date(first.created_at);
+  if (comments.some((comment) => comment.user.type !== "Bot" && new Date(comment.created_at) > firstNoticeAt)) {
     return skip("someone replied after the notice");
   }
-  const candidates = candidateNumbers(notice.body, issue.number);
+  const candidates = candidateNumbers(latest.body, issue.number);
   if (candidates.length === 0) {
     return skip("no candidate is older than this issue");
   }
-  return { kind: "pending", notice, candidates };
+  return { kind: "pending", notices, candidates };
 }
 
 export function duplicateTarget(
@@ -197,7 +198,11 @@ export async function sweepIssue(api: GitHubApi, config: SweepConfig, issue: Iss
   if (pending.kind === "skip") {
     return pending;
   }
-  const reactions = await listAll<Reaction>(api, `/repos/${config.repo}/issues/comments/${pending.notice.id}/reactions`);
+  const reactions = (
+    await Promise.all(
+      pending.notices.map((notice) => listAll<Reaction>(api, `/repos/${config.repo}/issues/comments/${notice.id}/reactions`)),
+    )
+  ).flat();
   const candidates = await Promise.all(
     pending.candidates.map((candidate) => api.request<Issue>("GET", `/repos/${config.repo}/issues/${candidate}`)),
   );
