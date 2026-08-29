@@ -915,17 +915,29 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
         delta: Final = chunk.choices[0].delta
 
-        # Role-only chunks (no content / reasoning_content / tool_calls)
-        # must not decide the item type: defer message output_item.added
-        # until the first chunk carrying actual content. Reasoning
-        # providers commonly start with a role-only chunk; announcing the
-        # message item there breaks the native event order for reasoning
-        # streams. Pure text streams are unaffected (the first content
-        # chunk still takes the default branch, one chunk later).
+        # Role-only chunks (no content / reasoning_content / tool_calls /
+        # annotations) must not decide the item type: defer message
+        # output_item.added until the first chunk carrying actual content.
+        # Reasoning providers commonly start with a role-only chunk;
+        # announcing the message item there breaks the native event order
+        # for reasoning streams. Pure text streams are unaffected (the first
+        # content chunk still takes the default branch, one chunk later).
+        #
+        # Annotations count as content: an annotation event references the
+        # message item, and it is buffered until that item is announced, so
+        # deferring here would strand it -- an annotation-only stream would
+        # end with the item never announced and the buffer never drained.
         _chunk_has_reasoning: Final = hasattr(delta, "reasoning_content") and delta.reasoning_content
         _chunk_has_tool_calls: Final = hasattr(delta, "tool_calls") and delta.tool_calls
         _chunk_has_content: Final = hasattr(delta, "content") and delta.content
-        if not (_chunk_has_reasoning or _chunk_has_tool_calls or _chunk_has_content):
+        _chunk_has_annotations: Final = hasattr(delta, "annotations") and delta.annotations
+        if not (
+            _chunk_has_reasoning
+            or _chunk_has_tool_calls
+            or _chunk_has_content
+            or _chunk_has_annotations
+            or getattr(self, "_pending_annotation_events", None)
+        ):
             return
 
         self._sequence_number += 1

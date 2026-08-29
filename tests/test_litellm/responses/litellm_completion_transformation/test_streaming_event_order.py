@@ -21,6 +21,7 @@ sequences that violate the OpenAI Responses streaming contract:
    which strict consumers reject.
 """
 
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -316,3 +317,57 @@ async def test_annotation_events_wait_for_message_item_announcement():
     assert len(annotation_events) == 1
     message_added = events[message_added_idx]
     assert annotation_events[0].item_id == message_added.item.id
+
+
+URL_CITATION_ANNOTATION: Final = {
+    "type": "url_citation",
+    "url_citation": {
+        "start_index": 0,
+        "end_index": 6,
+        "url": "https://example.com/citation",
+        "title": "Example",
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_annotation_only_stream_still_delivers_the_annotation():
+    """
+    Regression: an annotation-only chunk carries no content, so deferring the
+    message item past it strands the annotation -- annotation events are
+    buffered until their item is announced, and the stream would reach
+    response.completed with the buffer never drained.
+    """
+    events = await _collect_events(
+        [
+            _chunk(annotations=[URL_CITATION_ANNOTATION]),
+            _chunk(finish_reason="stop"),
+        ]
+    )
+    types = [_event_type(event) for event in events]
+    annotation_added = str(ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED)
+    assert annotation_added in types, f"annotation-only stream dropped the annotation: types={types}"
+    assert types.index(annotation_added) > types.index(str(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED)), (
+        f"annotation.added must follow the message output_item.added: types={types}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_annotation_on_the_final_chunk_is_not_dropped():
+    """
+    The per-chunk emit path only runs while chunks are still arriving, so an
+    annotation queued from the final chunk has to be drained during
+    finalization or it never reaches the consumer.
+    """
+    events = await _collect_events(
+        [
+            _chunk(content="Answer with a citation"),
+            _chunk(annotations=[URL_CITATION_ANNOTATION], finish_reason="stop"),
+        ]
+    )
+    types = [_event_type(event) for event in events]
+    annotation_added = str(ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED)
+    assert annotation_added in types, f"annotation from the final chunk was dropped: types={types}"
+    assert types.index(annotation_added) < types.index(str(ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE)), (
+        f"annotation.added must precede output_text.done: types={types}"
+    )
