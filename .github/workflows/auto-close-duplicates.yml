@@ -1,19 +1,33 @@
 name: Auto-close duplicate issues
-description: Auto-closes issues that are duplicates of existing issues
+
 on:
   schedule:
     - cron: "0 9 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Log which issues would close without closing anything
+        type: boolean
+        default: true
+      grace_period_days:
+        description: Days a duplicate notice must go unanswered before the close
+        type: number
+        default: 3
+  pull_request:
+    paths:
+      - .github/workflows/auto-close-duplicates.yml
+      - scripts/auto-close-duplicates.ts
+      - scripts/auto-close-duplicates.test.ts
+
+permissions: {}
 
 jobs:
-  auto-close-duplicates:
-    if: github.repository == 'BerriAI/litellm'
+  test:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
       contents: read
-      issues: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -21,16 +35,35 @@ jobs:
           persist-credentials: false
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0 (sha-pinned)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          # Exact version, never latest: the next step holds an issues: write token,
-          # so a compromised Bun release would run privileged here. setup-bun exposes
-          # no checksum input, so pinning the action and the version is the ceiling.
           bun-version: "1.4.0"
 
-      - name: Auto-close duplicate issues
+      - name: Test the sweep
+        run: bun test scripts/auto-close-duplicates.test.ts
+
+  sweep:
+    if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # Exact version, never latest: the next step holds an issues: write token
+          bun-version: "1.4.0"
+
+      - name: Close unanswered duplicates, reopen ones the reporter answered
         run: bun run scripts/auto-close-duplicates.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
+          GRACE_PERIOD_DAYS: ${{ inputs.grace_period_days }}

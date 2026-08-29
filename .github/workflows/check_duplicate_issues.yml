@@ -1,17 +1,19 @@
 name: Check Duplicate Issues
 
-# Flags newly opened issues that look like existing ones. Flagging only: the actual
-# close happens 3 days later in "Close Stale Duplicate Issues", and only if nobody
-# replied to the comment posted here. The HTML marker below is the handshake between
-# the two workflows, so keep it in the template.
+# Flagging only. "Auto-close duplicate issues" closes a flagged issue 3 days later,
+# and only when its title is identical to an older open issue and nobody replied.
+# The HTML marker below is the handshake between the two, so keep it in the template.
 
 on:
   issues:
     types: [opened, edited]
 
+permissions: {}
+
 jobs:
   check-duplicate:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       issues: write
       contents: read
@@ -29,7 +31,7 @@ jobs:
 
             This looks similar to:
             {{#issues}}
-            - #{{number}} - {{title}} ({{accuracy}}% similar)
+            - #{{number}} - {{title}}
             {{/issues}}
 
-            This issue will close automatically in 3 days unless someone responds. If it is a duplicate, please 👍 the existing issue and follow along there. If it is not, comment here or 👎 this comment and it stays open.
+            If this is a duplicate, add a thumbs-up reaction to the existing issue and follow along there. When the title is identical to an older open issue, this issue closes automatically in 3 days unless someone responds. If it is not a duplicate, comment here or add a thumbs-down reaction to this comment and it stays open.
