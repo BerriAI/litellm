@@ -2,6 +2,7 @@ import asyncio
 import threading
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,15 +11,16 @@ from fastapi import HTTPException
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
-from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-    AnthropicMessagesStreamingResponse,
-)
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
+)
+from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    AnthropicMessagesStreamingResponse,
 )
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    Litellm_EntityType,
     LiteLLM_OrganizationTable,
     LiteLLM_TagTable,
     LiteLLM_TeamMembership,
@@ -27,9 +29,15 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.reset_budget_job import _model_access_group_counter_key
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    model_access_group_cache_key,
+)
 from litellm.proxy.spend_tracking.budget_reservation import (
     TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
     _approximate_input_size,
+    _get_model_access_group_budget_counters,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
@@ -2962,3 +2970,100 @@ async def test_small_prompt_is_tokenized_inline(spend_counter_state):
 
     assert reservation is not None
     assert threads == [threading.main_thread()]
+
+
+class _ModelAccessGroupBudgetPrisma:
+    """Serves ``LiteLLM_ModelAccessGroupBudgetTable`` rows, recording what reached the database."""
+
+    def __init__(self, **max_budget_by_group) -> None:
+        self.rows = {
+            group: SimpleNamespace(
+                access_group_name=group,
+                spend=7.0,
+                litellm_budget_table=None if max_budget is None else SimpleNamespace(max_budget=max_budget),
+            )
+            for group, max_budget in max_budget_by_group.items()
+        }
+        self.batches = []
+        self.db = SimpleNamespace(
+            litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many)
+        )
+
+    async def _find_many(self, **kwargs):
+        requested = list(kwargs["where"]["access_group_name"]["in"])
+        self.batches.append(requested)
+        return [self.rows[group] for group in requested if group in self.rows]
+
+
+async def _model_access_group_counters(matched, **max_budget_by_group):
+    return await _get_model_access_group_budget_counters(
+        valid_token=UserAPIKeyAuth(api_key="hashed", matched_model_access_groups=matched),
+        prisma_client=_ModelAccessGroupBudgetPrisma(**max_budget_by_group),
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_counter_key():
+    counters = await _model_access_group_counters(["premium"], premium=25.0)
+
+    assert len(counters) == 1
+    counter = counters[0]
+    assert counter.counter_key == _model_access_group_counter_key(SimpleNamespace(access_group_name="premium"))
+    assert counter.source_cache_key == model_access_group_cache_key("premium")
+    assert counter.max_budget == 25.0
+    assert counter.fallback_spend == 7.0
+    assert counter.entity_type == "Model access group"
+    assert counter.entity_id == "premium"
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_without_a_budget_reserves_nothing():
+    assert await _model_access_group_counters(["premium"], premium=None) == []
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_with_a_zero_budget_reserves_nothing():
+    """Zero is how a budget is cleared, not a ceiling that blocks every request."""
+    assert await _model_access_group_counters(["premium"], premium=0.0) == []
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_counters_come_from_the_auth_object():
+    """Auth already resolved which granted groups serve the model; re-deriving it here would drift."""
+    assert await _model_access_group_counters(None, premium=25.0) == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_model_access_group_reserves_once():
+    counters = await _model_access_group_counters(["premium", "premium"], premium=25.0)
+
+    assert [counter.entity_id for counter in counters] == ["premium"]
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_counter_blocks_a_request_over_the_group_budget(spend_counter_state):
+    """End to end through the reservation path, which is what runs when reservations are enabled."""
+    counter_cache, key_cache = spend_counter_state
+    prisma_client = _ModelAccessGroupBudgetPrisma(premium=1.0)
+    valid_token = UserAPIKeyAuth(api_key="hashed", token="tok", matched_model_access_groups=["premium"])
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.5,
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=prisma_client,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=key_cache),
+            )
+
+    assert exc_info.value.entity_id == "premium"
+    assert exc_info.value.entity_type == Litellm_EntityType.MODEL_ACCESS_GROUP.value

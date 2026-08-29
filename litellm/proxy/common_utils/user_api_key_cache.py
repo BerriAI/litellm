@@ -185,19 +185,29 @@ def tag_registry_cache_key() -> str:
     return "tag_registry"
 
 
-#: Cached under ``access_group_registry_cache_key`` when the table exceeds
-#: ``ACCESS_GROUP_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-group lookup.
-ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL: Final = "__access_group_registry_overflow__"
+#: Cached under ``model_access_group_registry_cache_key`` when the table exceeds
+#: ``MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-group lookup.
+MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL: Final = "__model_access_group_registry_overflow__"
 
 
-def access_group_cache_key(access_group_name: str) -> str:
+def model_access_group_cache_key(access_group_name: str) -> str:
     """Cache key one model access group budget row is stored under; shared so auth, spend tracking and the management endpoints cannot drift."""
-    return f"access_group:{access_group_name}"
+    return f"model_access_group:{access_group_name}"
 
 
-def access_group_registry_cache_key() -> str:
+def model_access_group_registry_cache_key() -> str:
     """Cache key for the set of model access group names that have a budget row."""
-    return "access_group_registry"
+    return "model_access_group_registry"
+
+
+def model_access_group_spend_counter_key(access_group_name: str) -> str:
+    """Spend counter key for one model access group; shared so its three owners cannot drift.
+
+    The reservation path writes it, auth reads it to enforce ``max_budget``, and the reset job
+    clears it on rollover. A copy that drifts in any one of them silently resets or reads a
+    counter nobody else touches, which shows up as a budget that never trips or never resets.
+    """
+    return f"spend:model_access_group:{access_group_name}"
 
 
 #: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds
