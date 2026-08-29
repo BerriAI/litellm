@@ -135,7 +135,7 @@ class UpdateRouterConfig(BaseModel):
     enable_pre_call_checks: bool | None = None
     disable_cooldowns: bool | None = None
     stream_timeout: float | None = None
-    default_max_parallel_requests: int | None = None
+    default_max_parallel_requests: int | None = Field(default=None, ge=1)
 
     model_config = ConfigDict(protected_namespaces=())
 

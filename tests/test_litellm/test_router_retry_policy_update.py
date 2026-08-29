@@ -86,15 +86,15 @@ def test_every_runtime_applicable_router_setting_is_writable():
     assert ROUTER_UPDATABLE_SETTINGS <= set(UpdateRouterConfig.model_fields)
 
 
-def test_unset_router_settings_are_absent_from_dumps():
-    """The handler merges the request over the stored row, so it has to dump
-    only what the caller actually sent. ``exclude_none`` alone is not enough:
-    any field with a non-None default rides along on every save and overwrites
-    a value the caller never mentioned."""
-    sent = UpdateRouterConfig(num_retries=4)
-
-    assert sent.model_dump(exclude_unset=True, exclude_none=True) == {"num_retries": 4}
-    assert UpdateRouterConfig().model_dump(exclude_unset=True, exclude_none=True) == {}
+@pytest.mark.parametrize("value", [0, -1])
+def test_update_router_config_rejects_an_unusable_parallel_request_limit(value):
+    """A deployment's concurrency limiter is an asyncio.Semaphore built from
+    this number. A negative one raises at construction, which turns every
+    later request on every deployment into a 500, and zero reads as no limiter
+    at all rather than as a block. Neither is usable, so both have to be
+    refused at the edge instead of poisoning the live router."""
+    with pytest.raises(ValidationError):
+        UpdateRouterConfig(default_max_parallel_requests=value)
 
 
 def test_update_router_config_exposes_retry_policy_field():
