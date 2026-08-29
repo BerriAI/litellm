@@ -353,6 +353,35 @@ async def test_annotation_only_stream_still_delivers_the_annotation():
 
 
 @pytest.mark.asyncio
+async def test_annotation_during_reasoning_is_drained_at_announcement():
+    """
+    An annotation arriving while the message item is still deferred (the
+    stream is inside the reasoning item) is buffered and flushed when the
+    message item is finally announced, so it still lands after that item's
+    output_item.added instead of being stranded in the buffer.
+    """
+    events = await _collect_events(
+        [
+            _chunk(reasoning_content="Thinking", annotations=[URL_CITATION_ANNOTATION]),
+            _chunk(content="Answer"),
+            _chunk(finish_reason="stop"),
+        ]
+    )
+    types = [_event_type(event) for event in events]
+    annotation_added = str(ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED)
+    assert annotation_added in types, f"buffered annotation was dropped: types={types}"
+
+    message_added_idx = next(
+        i
+        for i, event in enumerate(events)
+        if _event_type(event) == str(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED) and _item_type(event) == "message"
+    )
+    assert types.index(annotation_added) > message_added_idx, (
+        f"drained annotation must follow the message output_item.added: types={types}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_annotation_on_the_final_chunk_is_not_dropped():
     """
     The per-chunk emit path only runs while chunks are still arriving, so an
