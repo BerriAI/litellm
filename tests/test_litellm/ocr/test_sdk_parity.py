@@ -10,7 +10,7 @@ from typing import Final, Protocol, cast
 import pytest
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-from tests.test_litellm.ocr.fixture_models import OcrFixture, OcrFixtureResponse, ProviderWireRequest
+from tests.test_litellm._fixture_recorder import Fixture, FixtureResponse, ProviderWireRequest
 from tests.test_litellm.parity.compare import assert_parity
 from tests.test_litellm.parity.models import (
     CapturedRequest,
@@ -27,6 +27,7 @@ from tests.test_litellm.parity.runner import PythonScriptRunner, run_execution
 API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"
 GIL_STATS: Final = TypeAdapter(dict[str, int])
+SUPPORTED_BY_RUST_PROVIDERS: Final = frozenset({"mistral", "reducto"})
 
 
 class SDKRoute(str, Enum):
@@ -39,6 +40,7 @@ class SDKInput(BaseModel):
 
     route: SDKRoute
     kwargs: dict[str, object]
+    native_expected: bool
 
 
 class _NativeBridge(Protocol):
@@ -124,6 +126,9 @@ def _execute_sdk_case(sdk_input: SDKInput, mock_url: str) -> SDKReport:
         raise RuntimeError("LITELLM_USE_RUST_OCR=1 but the native bridge is unavailable")
     native_bridge: Final = cast(_NativeBridge, raw_native_bridge)
 
+    if not sdk_input.native_expected:
+        return _native_sdk_report(_capture_sdk_call(sdk_input, mock_url), native_handled_case=False)
+
     native_callable: Final = load_rust_ocr() if sdk_input.route is SDKRoute.OCR else load_rust_aocr()
     expected_native_callable: Final = native_bridge.ocr if sdk_input.route is SDKRoute.OCR else native_bridge.aocr
     if native_callable is None or native_callable is not expected_native_callable:
@@ -139,7 +144,7 @@ def _execute_sdk_case(sdk_input: SDKInput, mock_url: str) -> SDKReport:
     return _native_sdk_report(trace, native_handled_case=after_gil_releases == before_gil_releases + 1)
 
 
-def _replay_response(response: OcrFixtureResponse) -> ReplayResponse:
+def _replay_response(response: FixtureResponse) -> ReplayResponse:
     return ReplayResponse(status_code=response.status_code, headers=response.headers, body=response.body)
 
 
@@ -147,9 +152,22 @@ def _provider_wire_request(request: CapturedRequest) -> ProviderWireRequest:
     return ProviderWireRequest(method=request.method, path=request.path, body=request.body)
 
 
+def _native_expected(ocr_fixture: Fixture) -> bool:
+    provider: Final = ocr_fixture.request.provider
+    if provider != "reducto":
+        return provider in SUPPORTED_BY_RUST_PROVIDERS
+    model: Final = ocr_fixture.request.sdk_kwargs.get("model")
+    document: Final = ocr_fixture.request.sdk_kwargs.get("document")
+    if model != "reducto/parse-v3" or not isinstance(document, dict):
+        return False
+    source: Final = document.get("document_url") or document.get("image_url")
+    return isinstance(source, str) and source.startswith("reducto://")
+
+
 @pytest.mark.parametrize("route", tuple(SDKRoute), ids=tuple(route.value for route in SDKRoute))
-def test_recorded_ocr_sdk_parity(ocr_fixture: OcrFixture, route: SDKRoute, tmp_path: Path) -> None:
-    sdk_input: Final = SDKInput(route=route, kwargs=ocr_fixture.request.sdk_kwargs)
+def test_recorded_ocr_sdk_parity(ocr_fixture: Fixture, route: SDKRoute, tmp_path: Path) -> None:
+    native_expected: Final = _native_expected(ocr_fixture)
+    sdk_input: Final = SDKInput(route=route, kwargs=ocr_fixture.request.sdk_kwargs, native_expected=native_expected)
     case_file: Final = tmp_path / f"{ocr_fixture.request.provider}-{route.value}-sdk-input.json"
     case_file.write_text(sdk_input.model_dump_json(indent=2), encoding="utf-8")
     expected_request: Final = ocr_fixture.request.provider_request
@@ -178,7 +196,7 @@ def test_recorded_ocr_sdk_parity(ocr_fixture: OcrFixture, route: SDKRoute, tmp_p
             rust_enabled=True,
         )
 
-    assert_parity(python, rust, PYTHON_HTTP_SENTINEL)
+    assert_parity(python, rust, PYTHON_HTTP_SENTINEL, native_expected)
     assert tuple(_provider_wire_request(request) for request in python.requests) == (expected_request,)
     assert tuple(_provider_wire_request(request) for request in rust.requests) == (expected_request,)
 

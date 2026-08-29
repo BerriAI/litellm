@@ -1,7 +1,7 @@
 """Tests for the optional Rust-backed OCR path."""
 
-import importlib
 import builtins
+import importlib
 import types
 from typing import Any
 
@@ -471,9 +471,7 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(api_key=None, timeout=None),
-        resolve_api_key=lambda name: (
-            "sk-from-vault" if name == "MISTRAL_API_KEY" else None
-        ),
+        resolve_api_key=lambda name: "sk-from-vault" if name == "MISTRAL_API_KEY" else None,
     )
 
     assert bridge.calls[0]["api_key"] == "sk-from-vault"
@@ -580,9 +578,7 @@ def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
             api_base=None,
             timeout=None,
         ),
-        resolve_api_key=lambda name: (
-            "https://azure.example.com" if name == "AZURE_AI_API_BASE" else None
-        ),
+        resolve_api_key=lambda name: "https://azure.example.com" if name == "AZURE_AI_API_BASE" else None,
     )
 
     assert bridge.calls[0]["api_base"] == "https://azure.example.com"
@@ -600,9 +596,7 @@ def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
             timeout=None,
         ),
         resolve_api_key=lambda name: (
-            "https://document-intelligence.example.com"
-            if name == "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"
-            else None
+            "https://document-intelligence.example.com" if name == "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT" else None
         ),
     )
 
@@ -662,18 +656,67 @@ def test_ocr_routes_to_rust_when_enabled(fake_bridge):
     assert call["optional_params"].get("include_image_base64") is True
 
 
-def test_ocr_routes_azure_ai_to_rust_when_enabled(fake_bridge):
+def test_ocr_routes_reducto_parse_v3_file_id_to_rust(fake_bridge: RecordingBridge) -> None:
+    document: dict[str, object] = {
+        "type": "document_url",
+        "document_url": "reducto://fixture",
+    }
+
     response = litellm.ocr(
-        model="azure_ai/pixtral-12b-2409",
-        document=DOCUMENT,
+        model="reducto/parse-v3",
+        document=document,
         api_key="sk-test",
-        api_base="https://example.services.ai.azure.com",
     )
 
     assert isinstance(response, OCRResponse)
     assert len(fake_bridge.calls) == 1
-    assert fake_bridge.calls[0]["model"] == "pixtral-12b-2409"
-    assert fake_bridge.calls[0]["custom_llm_provider"] == "azure_ai"
+    call = fake_bridge.calls[0]
+    assert call["model"] == "parse-v3"
+    assert call["document"] == document
+    assert call["custom_llm_provider"] == "reducto"
+
+
+@pytest.mark.parametrize(
+    ("model", "document"),
+    (
+        ("azure_ai/pixtral-12b-2409", DOCUMENT),
+        ("vertex_ai/mistral-ocr-2505", DOCUMENT),
+        (
+            "reducto/parse-v3",
+            {
+                "type": "document_url",
+                "document_url": "data:application/pdf;base64,AA==",
+            },
+        ),
+        (
+            "reducto/parse-legacy",
+            {"type": "document_url", "document_url": "reducto://fixture"},
+        ),
+    ),
+)
+def test_ocr_falls_back_to_python_for_unsupported_rust_case(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_bridge: RecordingBridge,
+    model: str,
+    document: dict[str, object],
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_handler_ocr(**kwargs: object) -> OCRResponse:
+        captured.update(kwargs)
+        return OCRResponse(pages=[], model=model, object="ocr")
+
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", fake_handler_ocr)
+    response = litellm.ocr(
+        model=model,
+        document=document,
+        api_key="sk-test",
+        api_base="https://example.com",
+    )
+
+    assert isinstance(response, OCRResponse)
+    assert fake_bridge.calls == []
+    assert captured["model"] in {"pixtral-12b-2409", "mistral-ocr-2505"}
 
 
 def test_ocr_rust_path_converts_file_document_before_bridge(fake_bridge):
@@ -815,9 +858,6 @@ def test_ocr_provider_configs_expose_api_key_env_vars():
     assert BaseOCRConfig().get_api_key_env_var() is None
     assert MistralOCRConfig().get_api_key_env_var() == "MISTRAL_API_KEY"
     assert AzureAIOCRConfig().get_api_key_env_var() == "AZURE_AI_API_KEY"
-    assert (
-        AzureDocumentIntelligenceOCRConfig().get_api_key_env_var()
-        == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
-    )
+    assert AzureDocumentIntelligenceOCRConfig().get_api_key_env_var() == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
     assert VertexAIOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
     assert VertexAIDeepSeekOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"

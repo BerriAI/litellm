@@ -12,17 +12,27 @@ def _stable_request(request: CapturedRequest) -> dict[str, object]:
     return request.model_dump(mode="json", exclude={"user_agent"})
 
 
-def assert_parity(python: Execution, rust: Execution, python_user_agent: str) -> None:
+def assert_parity(
+    python: Execution,
+    rust: Execution,
+    python_user_agent: str,
+    native_expected: bool,
+) -> None:
     assert python.report.native.rust_enabled is False
     assert rust.report.native.rust_enabled is True
-    assert rust.report.native.native_callable_loaded is True
-    assert rust.report.native.native_handled_case is True
     assert tuple(request.user_agent for request in python.requests) == (python_user_agent,) * len(python.requests)
-    assert all(request.user_agent != python_user_agent for request in rust.requests)
+    if native_expected:
+        assert rust.report.native.native_callable_loaded is True
+        assert rust.report.native.native_handled_case is True
+        assert all(request.user_agent != python_user_agent for request in rust.requests)
+    else:
+        assert rust.report.native.native_handled_case is False
+        assert tuple(request.user_agent for request in rust.requests) == (python_user_agent,) * len(rust.requests)
     assert tuple(_stable_request(request) for request in rust.requests) == tuple(
         _stable_request(request) for request in python.requests
     )
-    assert rust.report.trace == python.report.trace
+    trace_differences: Final = _diff(rust.report.trace, python.report.trace)
+    assert not trace_differences, "\n".join(trace_differences)
     assert python.report.trace.exception is None
     assert python.report.trace.outputs
 

@@ -34,10 +34,15 @@ def run_execution(
     provider: JsonReplayServer,
     rust_enabled: bool,
 ) -> Execution:
+    project_root: Final = str(runner.entrypoint.resolve().parents[3])
+    existing_pythonpath: Final = os.environ.get("PYTHONPATH")
     env: Final = {
         **os.environ,
         runner.rust_env_var: "1" if rust_enabled else "0",
         "LITELLM_USER_AGENT": runner.python_user_agent,
+        "PYTHONPATH": os.pathsep.join(
+            path for path in (project_root, existing_pythonpath) if path
+        ),
     }
     completed: Final = subprocess.run(
         runner.command(case_file, provider.url, report_file),
