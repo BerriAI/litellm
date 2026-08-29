@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
@@ -26,3 +28,27 @@ class Execution(BaseModel):
 
     request: CapturedRequest
     report: SDKReport
+
+
+class SDKCommand(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    case_file: str
+    route: str
+
+
+class WorkerSuccess(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["ok"] = "ok"
+    report: SDKReport
+
+
+class WorkerFailure(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["error"] = "error"
+    error: str
+
+
+WorkerResult = Annotated[WorkerSuccess | WorkerFailure, Field(discriminator="status")]

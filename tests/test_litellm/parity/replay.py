@@ -4,6 +4,7 @@ import queue
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
@@ -28,22 +29,36 @@ EXCLUDED_RESPONSE_HEADERS: Final = frozenset({"content-length", "transfer-encodi
 class ReplayServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, status_code: int, headers: tuple[tuple[str, str], ...], body: bytes) -> None:
+    def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), _ReplayHandler)
-        self.status_code: Final = status_code
-        self.headers: Final = headers
-        self.body: Final = body
+        self.responses: queue.Queue[ReplayResponse] = queue.Queue()
         self.requests: queue.Queue[CapturedRequest] = queue.Queue()
 
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_address[1]}"
 
+    def enqueue_response(self, status_code: int, headers: tuple[tuple[str, str], ...], body: bytes) -> None:
+        self.responses.put(ReplayResponse(status_code=status_code, headers=headers, body=body))
+
     def take_request(self) -> CapturedRequest:
         request_count: Final = self.requests.qsize()
         if request_count != 1:
             raise AssertionError(f"expected exactly one provider request, received {request_count}")
         return self.requests.get_nowait()
+
+    def reset(self) -> None:
+        while not self.responses.empty():
+            self.responses.get_nowait()
+        while not self.requests.empty():
+            self.requests.get_nowait()
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayResponse:
+    status_code: int
+    headers: tuple[tuple[str, str], ...]
+    body: bytes
 
 
 class _ReplayHandler(BaseHTTPRequestHandler):
@@ -70,26 +85,27 @@ class _ReplayHandler(BaseHTTPRequestHandler):
                 user_agent=self.headers.get("user-agent"),
             )
         )
-        self.send_response_only(provider.status_code)
-        for name, value in provider.headers:
+        try:
+            response: Final = provider.responses.get(timeout=5)
+        except queue.Empty:
+            self.send_error(500, "no replay response queued")
+            return
+        self.send_response_only(response.status_code)
+        for name, value in response.headers:
             if name.lower() not in EXCLUDED_RESPONSE_HEADERS:
                 self.send_header(name, value)
-        self.send_header("content-length", str(len(provider.body)))
+        self.send_header("content-length", str(len(response.body)))
         self.end_headers()
-        self.wfile.write(provider.body)
+        self.wfile.write(response.body)
 
     def log_message(self, format: str, *args: object) -> None:
         return
 
 
 @contextmanager
-def replay_response(
-    status_code: int,
-    headers: tuple[tuple[str, str], ...],
-    body: bytes,
-) -> Generator[ReplayServer]:
-    server: Final = ReplayServer(status_code=status_code, headers=headers, body=body)
-    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+def replay_server() -> Generator[ReplayServer]:
+    server: Final = ReplayServer()
+    thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         yield server
