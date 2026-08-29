@@ -30,7 +30,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     except (ValidationError, ValueError) as error:
         raise pytest.UsageError(
             f"Invalid OCR parity fixture bundle at {directory}. "
-            "Each fixture must contain exactly `input` and `upstream_response`. "
+            "Each fixture must contain exactly `litellm_input` and `provider_response`. "
             "Record fresh fixtures in an empty directory with: "
             f"`uv run python tests/test_litellm/ocr/generate_fixtures.py --fixture-dir {directory}`. "
             f"Validation details: {error}"

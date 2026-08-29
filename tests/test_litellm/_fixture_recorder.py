@@ -5,6 +5,7 @@ import hashlib
 import queue
 import threading
 from collections.abc import Callable, Generator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -51,6 +52,7 @@ class RecorderResult:
 
 @dataclass(frozen=True, slots=True)
 class GeneratorArgs:
+    concurrency: int
     examples: int
     fixture_dir: Path | None
     model: str
@@ -66,7 +68,7 @@ def _excluded_headers(headers: tuple[tuple[str, str], ...]) -> frozenset[str]:
 
 def _end_to_end_headers(headers: httpx.Headers) -> tuple[HttpHeader, ...]:
     decoded: Final = tuple((name.decode("ascii"), value.decode("latin-1")) for name, value in headers.raw)
-    excluded: Final = _excluded_headers(decoded) | {"content-length"}
+    excluded: Final = _excluded_headers(decoded) | {"content-encoding", "content-length"}
     return tuple(HttpHeader(name=name, value=value) for name, value in decoded if name.lower() not in excluded)
 
 
@@ -110,7 +112,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
                 content=request_body,
                 timeout=120,
             ) as upstream:
-                response_body: Final = b"".join(upstream.iter_raw())
+                response_body: Final = b"".join(upstream.iter_bytes())
                 recorded_response: Final = RecordedHttpResponse.from_bytes(
                     status_code=upstream.status_code,
                     headers=_end_to_end_headers(upstream.headers),
@@ -172,18 +174,39 @@ def record_case(
         sdk_call(api_base=recorder.url, api_key=spec.api_key, **case_input.as_sdk_kwargs())
         upstream_response: Final = recorder.take_response()
 
-    case: Final = OcrParityCase(input=case_input, upstream_response=upstream_response)
+    case: Final = OcrParityCase(litellm_input=case_input, provider_response=upstream_response)
     cache.put(cache_key, cast(dict[str, object], case.model_dump(mode="json", exclude_unset=True)))
     return RecorderResult(case=case, cache_hit=False)
 
 
+def record_cases(
+    spec: ProviderSpec,
+    root: Path,
+    case_inputs: tuple[MistralOcrParityInput, ...],
+    sdk_call: Callable[..., object],
+    max_concurrency: int,
+) -> tuple[RecorderResult, ...]:
+    if max_concurrency < 1:
+        raise ValueError("max_concurrency must be at least 1")
+    unique_inputs: Final = tuple(
+        {canonical_json(fixture_cache_key(case_input)): case_input for case_input in case_inputs}.values()
+    )
+    with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+        futures: Final = tuple(
+            executor.submit(record_case, spec, root, case_input, sdk_call) for case_input in unique_inputs
+        )
+        return tuple(future.result() for future in futures)
+
+
 def parse_generator_args() -> GeneratorArgs:
     parser: Final = argparse.ArgumentParser()
+    parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--examples", type=int, default=4)
     parser.add_argument("--fixture-dir", type=Path)
     parser.add_argument("--model", default="mistral/mistral-ocr-latest")
     namespace: Final = parser.parse_args()
     return GeneratorArgs(
+        concurrency=cast(int, namespace.concurrency),
         examples=cast(int, namespace.examples),
         fixture_dir=cast(Path | None, namespace.fixture_dir),
         model=cast(str, namespace.model),
@@ -202,13 +225,13 @@ def recorded_fixtures(directory: Path) -> tuple[OcrParityCase, ...]:
             fixtures.append(OcrParityCase.model_validate(raw_fixture))
         except ValidationError as error:
             raise ValueError(
-                f"invalid OCR parity fixture {path}: expected exactly `input` and `upstream_response` "
+                f"invalid OCR parity fixture {path}: expected exactly `litellm_input` and `provider_response` "
                 f"({len(error.errors())} validation errors)"
             ) from error
     return tuple(fixtures)
 
 
 def fixture_id(fixture: OcrParityCase) -> str:
-    input_json: Final = canonical_json(fixture.input.canonical_input())
+    input_json: Final = canonical_json(fixture.litellm_input.canonical_input())
     digest: Final = hashlib.sha256(input_json.encode("utf-8")).hexdigest()[:8]
-    return f"mistral-{fixture.input.model.rsplit('/', 1)[-1]}-{digest}"
+    return f"mistral-{fixture.litellm_input.model.rsplit('/', 1)[-1]}-{digest}"
