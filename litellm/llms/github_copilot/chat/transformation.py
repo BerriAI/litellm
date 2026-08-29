@@ -17,6 +17,8 @@ from ..common_utils import (
     get_copilot_default_headers,
 )
 
+_REASONING_PARAMS: Final = frozenset({"thinking", "reasoning_effort"})
+
 
 class GithubCopilotConfig(OpenAIConfig):
     def __init__(
@@ -114,25 +116,44 @@ class GithubCopilotConfig(OpenAIConfig):
         """
         Get supported OpenAI parameters for GitHub Copilot.
 
-        For Claude models that support extended thinking (Claude 4 family and Claude 3-7), includes thinking and reasoning_effort parameters.
-        For other models, returns standard OpenAI parameters (which may include reasoning_effort for o-series models).
+        Claude models that support extended thinking accept both thinking and reasoning_effort.
+        Other reasoning-capable Copilot models (Gemini, Grok, gpt-5 family) accept reasoning_effort only.
         """
         from litellm.utils import supports_reasoning
 
-        # Get base OpenAI parameters
         base_params: Final = super().get_supported_openai_params(model)
+        normalized: Final = model.lower()
 
-        # Add Claude-specific parameters for models that support extended thinking
-        if "claude" in model.lower() and supports_reasoning(
-            model=model.lower(),
-        ):
-            if "thinking" not in base_params:
-                base_params.append("thinking")
-            # reasoning_effort is not included by parent for Claude models, so add it
-            if "reasoning_effort" not in base_params:
-                base_params.append("reasoning_effort")
+        if not supports_reasoning(model=normalized):
+            return base_params
+
+        # thinking is Anthropic-native; only Claude accepts it
+        if "claude" in normalized and "thinking" not in base_params:
+            base_params.append("thinking")
+        if "reasoning_effort" not in base_params:
+            base_params.append("reasoning_effort")
 
         return base_params
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,  # mutable-ok: matches the BaseConfig override signature
+        optional_params: dict,  # mutable-ok: matches the BaseConfig override signature
+        model: str,
+        drop_params: bool,
+    ) -> dict:  # mutable-ok: matches the BaseConfig override signature
+        # OpenAIConfig routes non-o-series/non-gpt-5 models to OpenAIGPTConfig, whose
+        # whitelist has neither key, so advertising them alone dropped them (#25666)
+        supported: Final = frozenset(self.get_supported_openai_params(model)) & _REASONING_PARAMS
+        reasoning_params: Final = {k: v for k, v in non_default_params.items() if k in supported}
+        remaining: Final = {k: v for k, v in non_default_params.items() if k not in supported}
+
+        return super().map_openai_params(
+            non_default_params=remaining,
+            optional_params={**optional_params, **reasoning_params},
+            model=model,
+            drop_params=drop_params,
+        )
 
     def _determine_initiator(self, messages: list[AllMessageValues]) -> str:
         """
