@@ -272,3 +272,33 @@ type VectorStoreDeleteRequest struct {
 type VectorStoreInfoRequest struct {
 	VectorStoreID string `json:"vector_store_id"`
 }
+
+type JWTKeyMappingRequest struct {
+	JWTClaimName  string `json:"jwt_claim_name"`
+	JWTClaimValue string `json:"jwt_claim_value"`
+	Key           string `json:"key"`
+	Description   string `json:"description,omitempty"`
+}
+
+type JWTKeyMappingUpdateRequest struct {
+	ID          string `json:"id"`
+	Key         string `json:"key,omitempty"`
+	Description string `json:"description"`
+	IsActive    bool   `json:"is_active"`
+}
+
+type JWTKeyMappingDeleteRequest struct {
+	ID string `json:"id"`
+}
+
+type JWTKeyMappingResponse struct {
+	ID            string `json:"id"`
+	JWTClaimName  string `json:"jwt_claim_name"`
+	JWTClaimValue string `json:"jwt_claim_value"`
+	Description   string `json:"description,omitempty"`
+	IsActive      bool   `json:"is_active"`
+	CreatedAt     string `json:"created_at,omitempty"`
+	UpdatedAt     string `json:"updated_at,omitempty"`
+	CreatedBy     string `json:"created_by,omitempty"`
+	UpdatedBy     string `json:"updated_by,omitempty"`
+}
