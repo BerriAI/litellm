@@ -18,7 +18,9 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
 )
+from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
@@ -3105,3 +3107,68 @@ async def test_a_provider_that_keeps_rejecting_is_not_retried_forever_on_the_asy
             )
 
     assert len(recorder.bodies) == 2
+
+
+def _async_client_returning(response: Mock) -> AsyncMock:
+    client = AsyncMock(spec=AsyncHTTPHandler)
+    client.post.return_value = response
+    return client
+
+
+@pytest.mark.asyncio
+async def test_create_file_async_awaits_the_provider_credential_hook_instead_of_blocking():
+    provider_config = Mock(spec=BaseFilesConfig)
+    provider_config.validate_environment.side_effect = AssertionError("sync validate_environment ran on the event loop")
+    provider_config.avalidate_environment = AsyncMock(return_value={"x-api-key": "federated"})
+    provider_config.get_complete_file_url.return_value = "https://files.example/v1/files"
+    provider_config.transform_create_file_request.return_value = {"file": ("batch.jsonl", b"{}", "application/jsonl")}
+    file_object = object()
+    provider_config.transform_create_file_response.return_value = file_object
+    client = _async_client_returning(Mock(spec=httpx.Response))
+
+    result = await BaseLLMHTTPHandler().create_file(
+        create_file_data={"file": b"{}", "purpose": "batch"},
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base=None,
+        api_key=None,
+        logging_obj=Mock(),
+        _is_async=True,
+        client=client,
+    )
+
+    assert result is file_object
+    provider_config.validate_environment.assert_not_called()
+    provider_config.avalidate_environment.assert_awaited_once()
+    assert client.post.call_args.kwargs["headers"] == {"x-api-key": "federated"}
+    assert client.post.call_args.kwargs["url"] == "https://files.example/v1/files"
+
+
+@pytest.mark.asyncio
+async def test_create_batch_async_validates_credentials_off_the_event_loop():
+    provider_config = Mock(spec=BaseBatchesConfig)
+    provider_config.validate_environment.side_effect = lambda **_: {"x-validated-on": str(threading.get_ident())}
+    provider_config.get_complete_batch_url.return_value = "https://batches.example/v1/messages/batches"
+    provider_config.transform_create_batch_request.return_value = {"requests": []}
+    batch = object()
+    provider_config.transform_create_batch_response.return_value = batch
+    client = _async_client_returning(Mock(spec=httpx.Response))
+
+    result = await BaseLLMHTTPHandler().create_batch(
+        create_batch_data={"input_file_id": "file_1", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base=None,
+        api_key=None,
+        logging_obj=Mock(),
+        _is_async=True,
+        client=client,
+        model="claude-sonnet-4-5",
+    )
+
+    assert result is batch
+    validated_on = client.post.call_args.kwargs["headers"]["x-validated-on"]
+    assert validated_on != str(threading.get_ident())
+    assert client.post.call_args.kwargs["url"] == "https://batches.example/v1/messages/batches"

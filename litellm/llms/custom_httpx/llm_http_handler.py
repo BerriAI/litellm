@@ -238,7 +238,7 @@ class _AsyncFilesEnvironmentValidator(Protocol):
 
 
 async def _avalidate_files_environment(
-    provider_config: BaseFilesConfig,
+    provider_config: BaseFilesConfig | BaseBatchesConfig,
     *,
     headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
     model: str,
@@ -3550,6 +3550,19 @@ class BaseLLMHTTPHandler:
         """
         Creates a file using Gemini's two-step upload process
         """
+        if _is_async:
+            return self._avalidate_and_create_file(
+                create_file_data=create_file_data,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=headers,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+            )
+
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -3578,18 +3591,6 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             optional_params={},
         )
-
-        if _is_async:
-            return self.async_create_file(
-                transformed_request=transformed_request,
-                litellm_params=litellm_params,
-                provider_config=provider_config,
-                headers=headers,
-                api_base=api_base,
-                logging_obj=logging_obj,
-                client=client,
-                timeout=timeout,
-            )
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()
@@ -3716,6 +3717,54 @@ class BaseLLMHTTPHandler:
             raw_response=upload_response,
             logging_obj=logging_obj,
             litellm_params=litellm_params_with_url,
+        )
+
+    async def _avalidate_and_create_file(
+        self,
+        *,
+        create_file_data: CreateFileRequest,
+        litellm_params: dict,  # mutable-ok: mirrors the create_file contract this dispatches for
+        provider_config: BaseFilesConfig,
+        headers: dict,  # mutable-ok: mirrors the create_file contract this dispatches for
+        api_base: str | None,
+        api_key: str | None,
+        logging_obj: LiteLLMLoggingObj,
+        client: HTTPHandler | AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> OpenAIFileObject:
+        validated_headers: Final = await _avalidate_files_environment(
+            provider_config,
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+            api_key=api_key,
+        )
+        complete_api_base: Final = provider_config.get_complete_file_url(
+            api_base=api_base,
+            api_key=api_key,
+            model="",
+            optional_params={},
+            litellm_params=litellm_params,
+            data=create_file_data,
+        )
+        if complete_api_base is None:
+            raise ValueError("api_base is required for create_file")
+        return await self.async_create_file(
+            transformed_request=provider_config.transform_create_file_request(
+                model="",
+                create_file_data=create_file_data,
+                litellm_params=litellm_params,
+                optional_params={},
+            ),
+            litellm_params=litellm_params,
+            provider_config=provider_config,
+            headers=validated_headers,
+            api_base=complete_api_base,
+            logging_obj=logging_obj,
+            client=client,
+            timeout=timeout,
         )
 
     async def async_create_file(
@@ -3968,6 +4017,20 @@ class BaseLLMHTTPHandler:
         if model is None:
             raise ValueError("model is required for create_batch")
 
+        if _is_async:
+            return self._avalidate_and_create_batch(
+                create_batch_data=create_batch_data,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=headers,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+                model=model,
+            )
+
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers,
@@ -3995,19 +4058,6 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             optional_params={},
         )
-
-        if _is_async:
-            return self.async_create_batch(
-                transformed_request=transformed_request,
-                litellm_params=litellm_params,
-                provider_config=provider_config,
-                headers=headers,
-                api_base=api_base,
-                logging_obj=logging_obj,
-                client=client,
-                timeout=timeout,
-                create_batch_data=create_batch_data,
-            )
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()
@@ -4143,6 +4193,56 @@ class BaseLLMHTTPHandler:
             raw_response=batch_response,
             logging_obj=logging_obj,
             litellm_params=litellm_params,
+        )
+
+    async def _avalidate_and_create_batch(
+        self,
+        *,
+        create_batch_data: "CreateBatchRequest",
+        litellm_params: dict,  # mutable-ok: mirrors the create_batch contract this dispatches for
+        provider_config: "BaseBatchesConfig",
+        headers: dict,  # mutable-ok: mirrors the create_batch contract this dispatches for
+        api_base: str | None,
+        api_key: str | None,
+        logging_obj: "LiteLLMLoggingObj",
+        client: Union["HTTPHandler", "AsyncHTTPHandler"] | None,
+        timeout: float | httpx.Timeout | None,
+        model: str,
+    ) -> "LiteLLMBatch":
+        validated_headers: Final = await _avalidate_files_environment(
+            provider_config,
+            headers=headers,
+            model=model,
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+            api_key=api_key,
+        )
+        complete_api_base: Final = provider_config.get_complete_batch_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params={},
+            litellm_params=litellm_params,
+            data=create_batch_data,
+        )
+        if complete_api_base is None:
+            raise ValueError("api_base is required for create_batch")
+        return await self.async_create_batch(
+            transformed_request=provider_config.transform_create_batch_request(
+                model=model,
+                create_batch_data=create_batch_data,
+                litellm_params=litellm_params,
+                optional_params={},
+            ),
+            litellm_params=litellm_params,
+            provider_config=provider_config,
+            headers=validated_headers,
+            api_base=complete_api_base,
+            logging_obj=logging_obj,
+            client=client,
+            timeout=timeout,
+            create_batch_data=create_batch_data,
         )
 
     async def async_create_batch(
