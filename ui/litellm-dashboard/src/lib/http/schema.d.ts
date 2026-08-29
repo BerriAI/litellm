@@ -6974,6 +6974,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/introspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Introspect Endpoint
+         * @description RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /
+         *     ``llm_srefresh_``), so an external gateway can validate them without the signing
+         *     secret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by
+         *     the route dependency); any token the gateway cannot vouch for answers
+         *     ``{"active": false}`` with no further detail.
+         */
+        post: operations["introspect_endpoint_introspect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/invitation/delete": {
         parameters: {
             query?: never;
@@ -23473,6 +23497,11 @@ export interface components {
             mask?: string[] | null;
             /** Mask[] */
             "mask[]"?: string[] | null;
+        };
+        /** Body_introspect_endpoint_introspect_post */
+        Body_introspect_endpoint_introspect_post: {
+            /** Token */
+            token: string;
         };
         /** Body_revoke_endpoint_revoke_post */
         Body_revoke_endpoint_revoke_post: {
@@ -47630,6 +47659,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    introspect_endpoint_introspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_introspect_endpoint_introspect_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

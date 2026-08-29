@@ -16555,6 +16555,19 @@
           "title": "Body_authorize_complete_authorize_complete_post",
           "type": "object"
         },
+        "Body_introspect_endpoint_introspect_post": {
+          "properties": {
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token"
+          ],
+          "title": "Body_introspect_endpoint_introspect_post",
+          "type": "object"
+        },
         "Body_revoke_endpoint_revoke_post": {
           "properties": {
             "client_id": {
@@ -19129,6 +19142,51 @@
             }
           ],
           "summary": "Register Guardrail",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/introspect": {
+        "post": {
+          "description": "RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /\n``llm_srefresh_``), so an external gateway can validate them without the signing\nsecret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by\nthe route dependency); any token the gateway cannot vouch for answers\n``{\"active\": false}`` with no further detail.",
+          "operationId": "introspect_endpoint_introspect_post",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_introspect_endpoint_introspect_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Introspect Endpoint",
           "tags": [
             "mcp_discoverable"
           ]
