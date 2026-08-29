@@ -936,6 +936,7 @@ class DBSpendUpdateWriter:
                     "daily_org_spend_update_transactions": daily_org_spend_update_transactions,
                     "daily_end_user_spend_update_transactions": daily_end_user_spend_update_transactions,
                     "daily_agent_spend_update_transactions": daily_agent_spend_update_transactions,
+                    "window_spend_update_transactions": window_spend_update_transactions,
                 }
 
                 if db_spend_update_transactions is not None:
@@ -1008,6 +1009,7 @@ class DBSpendUpdateWriter:
                         prisma_client=prisma_client,
                         window_spend_transactions=window_spend_update_transactions,
                     )
+                uncommitted.pop("window_spend_update_transactions", None)
             except Exception as e:
                 spend_log_error(
                     "Spend tracking - failed to commit spend updates from Redis to DB. "
@@ -1129,10 +1131,20 @@ class DBSpendUpdateWriter:
             await self.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
         )
 
-        await DBSpendUpdateWriter._commit_window_spend_updates(
-            prisma_client=prisma_client,
-            window_spend_transactions=window_spend_update_transactions,
-        )
+        try:
+            await DBSpendUpdateWriter._commit_window_spend_updates(
+                prisma_client=prisma_client,
+                window_spend_transactions=window_spend_update_transactions,
+            )
+        except Exception as e:  # noqa: BLE001  # the increments go back on the queue; the rest of the flush must run
+            spend_log_error(
+                "Spend tracking - failed to commit budget window spend updates. "
+                "Re-queued %d window increments for retry on next tick. Error: %s",
+                len(window_spend_update_transactions),
+                str(e),
+                exc=e,
+            )
+            await self.window_spend_update_queue.update_queue.put(window_spend_update_transactions)
 
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
@@ -1206,27 +1218,19 @@ class DBSpendUpdateWriter:
         """
         Commit per-budget-window spend increments to LiteLLM_BudgetWindowSpend.
 
-        Failures are logged rather than raised: these rows exist so budget
-        enforcement can stop aggregating LiteLLM_SpendLogs, and the read path
-        falls back to that aggregate, so a failed commit must not abort the
-        entity and daily spend commits that share this scheduler tick.
+        Raises on failure so the caller re-queues the increments: budget
+        enforcement trusts a current row without reconciling it against
+        LiteLLM_SpendLogs, so a dropped increment would let the entity spend
+        past its window limit after the next counter reseed.
         """
         from litellm.proxy.db.budget_window_spend_writer import (
             commit_window_spend_updates,
         )
 
-        try:
-            await commit_window_spend_updates(
-                prisma_client=prisma_client,
-                transactions=window_spend_transactions,
-            )
-        except Exception as e:  # noqa: BLE001  # any DB failure here must stay contained to the window rows
-            spend_log_error(
-                "Spend tracking - failed to commit budget window spend updates. %d window increments lost. Error: %s",
-                len(window_spend_transactions),
-                str(e),
-                exc=e,
-            )
+        await commit_window_spend_updates(
+            prisma_client=prisma_client,
+            transactions=window_spend_transactions,
+        )
 
     async def _drain_and_commit_daily_tag_spend_from_redis(
         self,
