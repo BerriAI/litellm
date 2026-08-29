@@ -4,6 +4,8 @@
 //! - Global rate limiting (in addition to per-key limits)
 //! - Graceful degradation logging for dependency failures
 //! - Slow loris protection configuration
+//! - Secret rotation support (file-based secret loading)
+//! - Audit log shipping to external systems
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -99,6 +101,124 @@ impl Default for SlowLorisConfig {
             body_timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024, // 10MB
         }
+    }
+}
+
+/// Secret rotation support: loads secrets from files and watches for changes.
+/// Enables zero-downtime secret rotation by reading from a file that can be
+/// updated externally (e.g., by a secrets manager sidecar).
+pub struct SecretRotator {
+    path: String,
+    current: RwLock<String>,
+}
+
+impl SecretRotator {
+    /// Create a new SecretRotator that reads from the given file path.
+    /// Returns error if the file cannot be read initially.
+    pub fn new(path: &str) -> Result<Self, std::io::Error> {
+        let content = std::fs::read_to_string(path)?;
+        Ok(Self {
+            path: path.to_string(),
+            current: RwLock::new(content),
+        })
+    }
+
+    /// Get the current secret value. Zero-allocation: returns a read guard.
+    pub async fn get(&self) -> tokio::sync::RwLockReadGuard<'_, String> {
+        self.current.read().await
+    }
+
+    /// Reload the secret from disk. Call this periodically or on signal.
+    pub async fn reload(&self) -> Result<(), std::io::Error> {
+        let content = std::fs::read_to_string(&self.path)?;
+        let mut current = self.current.write().await;
+        *current = content;
+        Ok(())
+    }
+
+    /// Spawn a background task that reloads the secret every `interval`.
+    pub fn spawn_watcher(self: Arc<Self>, interval: Duration) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                if let Err(e) = self.reload().await {
+                    log_degradation("secret_rotator", "reload", &e.to_string());
+                }
+            }
+        })
+    }
+}
+
+/// Audit log shipper: sends audit log entries to an external HTTP endpoint.
+/// Buffers entries and flushes them in batches for efficiency.
+pub struct AuditLogShipper {
+    endpoint: String,
+    buffer: RwLock<Vec<String>>,
+    max_batch_size: usize,
+    client: reqwest::Client,
+}
+
+impl AuditLogShipper {
+    /// Create a new AuditLogShipper that sends to the given endpoint.
+    pub fn new(endpoint: &str, max_batch_size: usize) -> Self {
+        Self {
+            endpoint: endpoint.to_string(),
+            buffer: RwLock::new(Vec::with_capacity(max_batch_size)),
+            max_batch_size,
+            client: reqwest::Client::new(),
+        }
+    }
+
+    /// Ship a log entry. Buffers entries and flushes when batch is full.
+    pub async fn ship(&self, entry: String) {
+        let should_flush = {
+            let mut buffer = self.buffer.write().await;
+            buffer.push(entry);
+            buffer.len() >= self.max_batch_size
+        };
+        if should_flush {
+            self.flush().await;
+        }
+    }
+
+    /// Flush all buffered entries to the external endpoint.
+    pub async fn flush(&self) {
+        let batch = {
+            let mut buffer = self.buffer.write().await;
+            if buffer.is_empty() {
+                return;
+            }
+            std::mem::take(&mut *buffer)
+        };
+
+        let body = serde_json::to_string(&batch).unwrap_or_default();
+        match self.client.post(&self.endpoint)
+            .header("content-type", "application/json")
+            .body(body)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {}
+            Ok(resp) => {
+                log_degradation("audit_shipper", "flush", &format!("HTTP {}", resp.status()));
+            }
+            Err(e) => {
+                log_degradation("audit_shipper", "flush", &e.to_string());
+            }
+        }
+    }
+
+    /// Spawn a background task that flushes buffered entries periodically.
+    pub fn spawn_flusher(self: Arc<Self>, interval: Duration) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                self.flush().await;
+            }
+        })
     }
 }
 
