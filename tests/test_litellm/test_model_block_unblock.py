@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -40,9 +41,7 @@ def _setup_model_block_mocks(monkeypatch, *, updated_blocked: bool):
     # No reconcile ran in these tests, so both fields are None and the verdict falls
     # back to reading the router live -- which is what the get_model_ids side_effects
     # below drive.
-    mock_clear_cache = AsyncMock(
-        return_value=ReconcileOutcome(still_desired=None, live_after=None)
-    )
+    mock_clear_cache = AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None))
     mock_audit_log = AsyncMock(return_value=None)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -75,8 +74,8 @@ async def test_model_block_endpoint_sets_blocked_true(monkeypatch):
         block_model,
     )
 
-    model_id, model_table, updated_row, mock_clear_cache, mock_audit_log = (
-        _setup_model_block_mocks(monkeypatch, updated_blocked=True)
+    model_id, model_table, updated_row, mock_clear_cache, mock_audit_log = _setup_model_block_mocks(
+        monkeypatch, updated_blocked=True
     )
 
     result = await block_model(
@@ -95,9 +94,7 @@ async def test_model_block_endpoint_sets_blocked_true(monkeypatch):
     assert "updated_at" in update_kwargs["data"]
     mock_clear_cache.assert_awaited_once_with()
     assert mock_audit_log.call_args.kwargs["action"] == "blocked"
-    assert (
-        mock_audit_log.call_args.kwargs["litellm_changed_by"] == "operator@example.com"
-    )
+    assert mock_audit_log.call_args.kwargs["litellm_changed_by"] == "operator@example.com"
 
 
 @pytest.mark.asyncio
@@ -106,8 +103,8 @@ async def test_model_unblock_endpoint_sets_blocked_false(monkeypatch):
         unblock_model,
     )
 
-    model_id, model_table, updated_row, mock_clear_cache, mock_audit_log = (
-        _setup_model_block_mocks(monkeypatch, updated_blocked=False)
+    model_id, model_table, updated_row, mock_clear_cache, mock_audit_log = _setup_model_block_mocks(
+        monkeypatch, updated_blocked=False
     )
 
     result = await unblock_model(
@@ -130,9 +127,7 @@ async def test_model_block_endpoint_requires_proxy_admin(monkeypatch):
         block_model,
     )
 
-    model_id, model_table, _, _, _ = _setup_model_block_mocks(
-        monkeypatch, updated_blocked=True
-    )
+    model_id, model_table, _, _, _ = _setup_model_block_mocks(monkeypatch, updated_blocked=True)
     non_admin = UserAPIKeyAuth(
         user_id="internal-user",
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -199,6 +194,158 @@ async def test_route_request_returns_403_when_model_is_fully_blocked(monkeypatch
             llm_router=router,
             user_model=None,
             route_type="acreate_eval",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Model is blocked" in exc_info.value.message
+
+
+def _blocked_primary_healthy_fallback_router(fallback_blocked: bool = False) -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x"},
+                "model_info": {"id": "p0", "blocked": True},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "x"},
+                "model_info": {"id": "f0", "blocked": fallback_blocked},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+    )
+
+
+def test_block_gate_allows_request_when_reachable_fallback_supplied():
+    from litellm.proxy.route_llm_request import _raise_if_model_fully_blocked
+
+    router = _blocked_primary_healthy_fallback_router()
+    _raise_if_model_fully_blocked(
+        llm_router=router,
+        model_name="primary",
+        team_id=None,
+        reachable_fallbacks=[{"primary": ["fallback"]}],
+    )
+
+
+def test_block_gate_raises_when_no_fallback_reaches_healthy_group():
+    from litellm.proxy.route_llm_request import _raise_if_model_fully_blocked
+
+    router = _blocked_primary_healthy_fallback_router()
+    with pytest.raises(litellm.PermissionDeniedError) as exc_info:
+        _raise_if_model_fully_blocked(
+            llm_router=router,
+            model_name="primary",
+            team_id=None,
+            reachable_fallbacks=None,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_reachable_block_fallbacks_none_for_eval_route():
+    from litellm.proxy.route_llm_request import _reachable_block_fallbacks
+
+    router = _blocked_primary_healthy_fallback_router()
+    result = _reachable_block_fallbacks(llm_router=router, data={"model": "primary"}, route_type="acreate_eval")
+    assert result is None
+
+
+def test_reachable_block_fallbacks_none_when_disabled():
+    from litellm.proxy.route_llm_request import _reachable_block_fallbacks
+
+    router = _blocked_primary_healthy_fallback_router()
+    result = _reachable_block_fallbacks(
+        llm_router=router,
+        data={"model": "primary", "disable_fallbacks": True},
+        route_type="acompletion",
+    )
+    assert result is None
+
+
+def test_reachable_block_fallbacks_request_list_replaces_router_chain():
+    from litellm.proxy.route_llm_request import _reachable_block_fallbacks
+
+    router = _blocked_primary_healthy_fallback_router()
+    result = _reachable_block_fallbacks(
+        llm_router=router,
+        data={"model": "primary", "fallbacks": [{"other": ["x"]}]},
+        route_type="acompletion",
+    )
+    assert result == [{"other": ["x"]}]
+
+
+def test_reachable_block_fallbacks_uses_router_chain_without_request_list():
+    from litellm.proxy.route_llm_request import _reachable_block_fallbacks
+
+    router = _blocked_primary_healthy_fallback_router()
+    result = _reachable_block_fallbacks(llm_router=router, data={"model": "primary"}, route_type="acompletion")
+    assert result == [{"primary": ["fallback"]}]
+
+
+@pytest.mark.asyncio
+async def test_route_request_allows_completion_fallback_when_primary_fully_blocked(monkeypatch):
+    from litellm.proxy.route_llm_request import route_request
+
+    router = _blocked_primary_healthy_fallback_router()
+    monkeypatch.setattr(
+        "litellm.proxy.route_llm_request.add_shared_session_to_data",
+        AsyncMock(return_value=None),
+    )
+    mock_acompletion = AsyncMock(return_value="ok")
+    monkeypatch.setattr(router, "acompletion", mock_acompletion)
+
+    result = await route_request(
+        data={"model": "primary", "messages": [{"role": "user", "content": "hi"}]},
+        llm_router=router,
+        user_model=None,
+        route_type="acompletion",
+    )
+    if asyncio.iscoroutine(result):
+        result.close()
+    mock_acompletion.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_route_request_blocks_eval_route_despite_healthy_fallback(monkeypatch):
+    from litellm.proxy.route_llm_request import route_request
+
+    router = _blocked_primary_healthy_fallback_router()
+    monkeypatch.setattr(
+        "litellm.proxy.route_llm_request.add_shared_session_to_data",
+        AsyncMock(return_value=None),
+    )
+
+    with pytest.raises(litellm.PermissionDeniedError) as exc_info:
+        await route_request(
+            data={"model": "primary"},
+            llm_router=router,
+            user_model=None,
+            route_type="acreate_eval",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Model is blocked" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_route_request_blocks_when_primary_and_fallback_fully_blocked(monkeypatch):
+    from litellm.proxy.route_llm_request import route_request
+
+    router = _blocked_primary_healthy_fallback_router(fallback_blocked=True)
+    monkeypatch.setattr(
+        "litellm.proxy.route_llm_request.add_shared_session_to_data",
+        AsyncMock(return_value=None),
+    )
+
+    with pytest.raises(litellm.PermissionDeniedError) as exc_info:
+        await route_request(
+            data={"model": "primary", "messages": [{"role": "user", "content": "hi"}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
         )
 
     assert exc_info.value.status_code == 403
