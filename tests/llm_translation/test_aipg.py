@@ -134,7 +134,9 @@ def test_aipg_image_generation_uses_native_endpoint():
 
     with (
         mock.patch.dict(os.environ, {"AIPG_API_KEY": "grid-test"}, clear=True),
-        mock.patch("litellm.llms.openai.openai.OpenAI", return_value=mock_client) as constructor,
+        mock.patch(  # test-quality-ok: capture the SDK-created client to verify the trusted AIPG base and env key
+            "litellm.llms.openai.openai.OpenAI", return_value=mock_client
+        ) as constructor,
     ):
         response = litellm.image_generation(
             model="aipg/z-image-turbo",
