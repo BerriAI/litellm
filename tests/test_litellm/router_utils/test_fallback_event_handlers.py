@@ -180,6 +180,30 @@ async def _acreate_file(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("only used for its __name__")
 
 
+async def _acancel_batch(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def _acompletion(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def _ageneric_api_call_with_fallbacks_helper(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def acreate_fine_tuning_job(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def aretrieve_fine_tuning_job(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def afile_content(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
 @pytest.mark.asyncio
 async def test_run_async_fallback_keeps_uploaded_file_requests_in_their_model_group():
     """An input_file_id only exists under the credentials of the group it was uploaded
@@ -217,6 +241,8 @@ async def test_run_async_fallback_keeps_fine_tuning_requests_in_their_model_grou
             fallback_depth=0,
             model="openai-group",
             training_file="file-owned-by-openai",
+            original_function=_ageneric_api_call_with_fallbacks_helper,
+            original_generic_function=acreate_fine_tuning_job,
         )
 
     assert router.attempted_model_groups == []
@@ -300,10 +326,33 @@ async def test_run_async_fallback_still_crosses_model_groups_without_an_uploaded
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("resource_key", ["batch_id", "file_id", "fine_tuning_job_id"])
-async def test_run_async_fallback_keeps_provider_scoped_ids_in_their_model_group(resource_key: str):
+@pytest.mark.parametrize(
+    ("resource_key", "handler_kwargs"),
+    [
+        ("batch_id", {"original_function": _acancel_batch}),
+        (
+            "file_id",
+            {
+                "original_function": _ageneric_api_call_with_fallbacks_helper,
+                "original_generic_function": afile_content,
+            },
+        ),
+        (
+            "fine_tuning_job_id",
+            {
+                "original_function": _ageneric_api_call_with_fallbacks_helper,
+                "original_generic_function": aretrieve_fine_tuning_job,
+            },
+        ),
+    ],
+)
+async def test_run_async_fallback_keeps_provider_scoped_ids_in_their_model_group(
+    resource_key: str, handler_kwargs: dict
+):
     """A batch, file, or fine-tuning job id only exists under the credentials of the group
-    that issued it, so a cross-group fallback asks a provider about an id it never saw."""
+    that issued it, so a cross-group fallback asks a provider about an id it never saw.
+    Generic API calls carry the real handler in original_generic_function, so the pin
+    must recognize it there too."""
     router = AttemptRecordingRouter()
 
     with pytest.raises(RuntimeError, match="openai connection error"):
@@ -316,9 +365,33 @@ async def test_run_async_fallback_keeps_provider_scoped_ids_in_their_model_group
             fallback_depth=0,
             model="openai-group",
             **{resource_key: "owned-by-openai"},
+            **handler_kwargs,
         )
 
     assert router.attempted_model_groups == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resource_key", ["batch_id", "file_id", "fine_tuning_job_id"])
+async def test_run_async_fallback_ignores_stray_resource_ids_on_completion_calls(resource_key: str):
+    """A caller-supplied top-level field like file_id on a chat completion is application
+    data, never a provider resource reference, so it must not cost the request its
+    cross-group fallbacks."""
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["azure-group"],
+        original_model_group="openai-group",
+        original_exception=RuntimeError("openai connection error"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="openai-group",
+        original_function=_acompletion,
+        **{resource_key: "caller-app-data"},
+    )
+
+    assert router.attempted_model_groups == ["azure-group"]
 
 
 @pytest.mark.asyncio
@@ -334,6 +407,7 @@ async def test_run_async_fallback_allows_same_model_group_retry_for_batch_cancel
         fallback_depth=0,
         model="openai-group",
         batch_id="owned-by-openai",
+        original_function=_acancel_batch,
     )
 
     assert router.attempted_model_groups == ["openai-group"]
