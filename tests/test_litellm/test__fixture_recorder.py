@@ -206,7 +206,7 @@ def test_streaming_response_records_and_replays_chunks(tmp_path: Path) -> None:
 
 
 def test_stream_response_model_rejects_buffered_body() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         RecordedHttpStreamResponse.model_validate(
             {
                 "kind": "http_stream",

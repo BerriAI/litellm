@@ -41,7 +41,7 @@ class FakeRedisCache(RedisCache):
     Records the ``ttl`` kwarg DualCache forwards on each Redis write for tests.
     """
 
-    def __init__(self):  # noqa: super().__init__ skipped intentionally
+    def __init__(self):
         self._store: dict[str, str] = {}
         self.last_ttl: Any = None
 
