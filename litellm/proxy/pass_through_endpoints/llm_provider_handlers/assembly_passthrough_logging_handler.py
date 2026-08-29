@@ -131,8 +131,8 @@ class AssemblyAIPassthroughLoggingHandler:
             status="success",
         )
 
-        passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = (  # type: ignore
-            kwargs.get("passthrough_logging_payload")
+        passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = kwargs.get(
+            "passthrough_logging_payload"
         )
 
         verbose_proxy_logger.debug(

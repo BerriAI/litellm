@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult
 
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class MCPGuardrailTranslationHandler(BaseTranslation):
@@ -48,7 +49,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         self,
         data: dict[str, Any],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> dict[str, Any]:
         mcp_tool_name: Final = data.get("mcp_tool_name") or data.get("name")
         mcp_arguments = data.get("mcp_arguments") or data.get("arguments")
@@ -99,7 +100,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         self,
         response: "CallToolResult",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
     ) -> Any:

@@ -6,8 +6,6 @@ including the logging handler, cost tracking, and WebSocket message processing.
 """
 
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import Dict, List, Any, Optional
@@ -16,7 +14,6 @@ import pytest
 import httpx
 
 # Add the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
     VertexAILivePassthroughLoggingHandler,
@@ -440,9 +437,6 @@ class TestVertexAILivePassthroughIntegration:
 
     def test_vertex_ai_live_route_detection(self):
         """Test that the route detection works correctly"""
-        from litellm.proxy.pass_through_endpoints.success_handler import (
-            PassThroughEndpointLogging,
-        )
 
         handler = PassThroughEndpointLogging()
 
@@ -464,9 +458,6 @@ class TestVertexAILivePassthroughIntegration:
         self, mock_handler_class, mock_logging_obj
     ):
         """Test the success handler integration with Vertex AI Live"""
-        from litellm.proxy.pass_through_endpoints.success_handler import (
-            PassThroughEndpointLogging,
-        )
 
         # Mock the handler
         mock_handler = MagicMock()

@@ -41,13 +41,13 @@ class InFlightRequestsMiddleware:
         InFlightRequestsMiddleware._in_flight += 1
         gauge: Final = InFlightRequestsMiddleware._get_gauge()
         if gauge is not None:
-            gauge.inc()  # type: ignore
+            gauge.inc()
         try:
             await self.app(scope, receive, send)
         finally:
             InFlightRequestsMiddleware._in_flight -= 1
             if gauge is not None:
-                gauge.dec()  # type: ignore
+                gauge.dec()
 
     @staticmethod
     def get_count() -> int:

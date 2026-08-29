@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 # Azure Content Safety APIs have a 10,000 character limit per request.
 AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
 
+# Azure Content Safety bills text in 1,000-character "text records"; a submitted
+# chunk of N characters consumes ceil(N / 1000) text records.
+AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
+
 
 class AzureGuardrailBase:
     """

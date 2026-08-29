@@ -28,6 +28,21 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
 
 
+_RESPONSES_API_PROVIDER_PREFIX: Final = "/openai"
+_RESPONSES_API_CREATE_ROUTES: Final = frozenset({"/v1/responses", "/responses"})
+
+
+def _is_responses_api_create_route(request_route: str | None) -> bool:
+    if request_route is None:
+        return False
+    canonical: Final = (
+        request_route[len(_RESPONSES_API_PROVIDER_PREFIX) :]
+        if request_route.startswith(_RESPONSES_API_PROVIDER_PREFIX + "/")
+        else request_route
+    )
+    return canonical in _RESPONSES_API_CREATE_ROUTES
+
+
 class ResponsesIDSecurity(CustomLogger):
     def __init__(self):
         pass
@@ -256,7 +271,7 @@ class ResponsesIDSecurity(CustomLogger):
             )
         return response
 
-    async def async_post_call_streaming_iterator_hook(  # type: ignore
+    async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
     ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
         from litellm.proxy.proxy_server import general_settings
@@ -267,8 +282,7 @@ class ResponsesIDSecurity(CustomLogger):
         async for chunk in response:
             if (
                 isinstance(chunk, BaseLiteLLMOpenAIResponseObject)
-                and user_api_key_dict.request_route
-                == "/v1/responses"  # only encrypt the response id for the responses api
+                and _is_responses_api_create_route(user_api_key_dict.request_route)
                 and not general_settings.get("disable_responses_id_security", False)
             ):
                 chunk = self._encrypt_response_id(chunk, user_api_key_dict, request_encryption_cache)

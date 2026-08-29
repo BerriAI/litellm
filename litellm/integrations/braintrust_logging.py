@@ -28,9 +28,9 @@ def get_utc_datetime():
     import datetime as dt
 
     if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
+        return datetime.now(dt.UTC)
     else:
-        return datetime.utcnow()  # type: ignore
+        return datetime.utcnow()
 
 
 class BraintrustLogger(CustomLogger):
@@ -43,7 +43,7 @@ class BraintrustLogger(CustomLogger):
         self.validate_environment(api_key=api_key)
         self.api_base = api_base or os.getenv("BRAINTRUST_API_BASE") or API_BASE
         self.default_project_id = None
-        self.api_key: str = api_key or os.getenv("BRAINTRUST_API_KEY")  # type: ignore
+        self.api_key: str = api_key or os.getenv("BRAINTRUST_API_KEY")
         self.headers = {
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",

@@ -24,10 +24,17 @@ resource "litellm_team" "advanced_team" {
 
   # Budget and rate limiting
   max_budget      = 1000.0
+  soft_budget     = 800.0
   budget_duration = "1mo"
   tpm_limit       = 500000
   rpm_limit       = 5000
   blocked         = false
+
+  # Who gets paged when spend crosses soft_budget
+  soft_budget_alerting_emails = ["finops@example.com"]
+
+  # Tags for spend tracking and tag-based routing
+  tags = ["team:ai-research", "environment:production"]
 
   # Team member permissions
   team_member_permissions = [
@@ -91,7 +98,9 @@ The following arguments are supported:
 
 * `models` - (Optional) List of model names that this team can access.
 
-* `metadata` - (Optional) A map of metadata key-value pairs associated with the team.
+* `metadata` - (Optional) A map of string metadata key-value pairs associated with the team. `tags` and `soft_budget_alerting_emails` are stored by the proxy under metadata but are managed through their own attributes below, not this map.
+
+* `tags` - (Optional) List of tags applied to the team, used for [spend tracking](https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags) and [tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing).
 
 * `blocked` - (Optional) Whether the team is blocked from making requests. Default is `false`.
 
@@ -101,6 +110,10 @@ The following arguments are supported:
 
 * `max_budget` - (Optional) Maximum budget allocated to the team.
 
+* `soft_budget` - (Optional) Spend threshold at which the proxy sends a soft budget alert without blocking requests.
+
+* `soft_budget_alerting_emails` - (Optional) List of email addresses notified when the team's spend crosses `soft_budget`.
+
 * `budget_duration` - (Optional) Duration for the budget cycle. Valid values are:
   * `daily`
   * `weekly`
@@ -108,6 +121,32 @@ The following arguments are supported:
   * `yearly`
 
 * `team_member_permissions` - (Optional) List of permissions granted to team members. This controls what actions team members can perform within the team context.
+
+* `model_aliases` - (Optional) Map of alias names to model names, letting the team call models under stable alias names.
+
+* `guardrails` - (Optional) List of guardrails applied to every request made by this team.
+
+* `prompts` - (Optional) List of prompt IDs the team is allowed to use.
+
+* `team_member_budget` - (Optional) Budget (in USD) applied to each individual team member.
+
+* `team_member_budget_duration` - (Optional) Reset cycle for the per-member budget (e.g. `30d`, `1mo`).
+
+* `team_member_rpm_limit` - (Optional) Requests per minute limit applied to each individual team member.
+
+* `team_member_tpm_limit` - (Optional) Tokens per minute limit applied to each individual team member.
+
+* `team_member_key_duration` - (Optional) Lifetime for keys created by team members (e.g. `1d`, `1w`).
+
+* `model_rpm_limit` - (Optional) Map of model name to requests per minute limit for that model.
+
+* `model_tpm_limit` - (Optional) Map of model name to tokens per minute limit for that model.
+
+* `allowed_passthrough_routes` - (Optional) List of pass-through routes this team is allowed to call.
+
+* `rpm_limit_type` - (Optional) How the RPM limit is enforced: `guaranteed_throughput` or `best_effort_throughput`. Changing this forces a new team to be created.
+
+* `tpm_limit_type` - (Optional) How the TPM limit is enforced: `guaranteed_throughput` or `best_effort_throughput`. Changing this forces a new team to be created.
 
 ## Attribute Reference
 

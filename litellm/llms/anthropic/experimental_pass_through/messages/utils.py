@@ -44,6 +44,7 @@ class AnthropicMessagesRequestUtils:
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+            from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
             AnthropicConfig._maybe_drop_speed_param(
                 model=model,
@@ -51,6 +52,16 @@ class AnthropicMessagesRequestUtils:
                 drop_params=drop_params,
                 custom_llm_provider=custom_llm_provider,
             )
+            for param in ("temperature", "top_p", "top_k"):
+                if param in filtered_params:
+                    AnthropicModelInfo._apply_sampling_param(  # pyright: ignore[reportPrivateUsage]  # same gating the /chat/completions path applies; forking it would drift
+                        optional_params=filtered_params,
+                        model=model,
+                        param=param,
+                        value=filtered_params.pop(param),
+                        drop_params=drop_params,
+                        output_key=param,
+                    )
         return cast(AnthropicMessagesRequestOptionalParams, filtered_params)
 
 

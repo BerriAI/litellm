@@ -1,6 +1,6 @@
-import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -20,7 +20,7 @@ import {
   SidebarMenuSub,
   SidebarSeparator,
   sidebarMenuButtonVariants,
-} from "@/components/ui/sidebar";
+} from "@/components/shared/Sidebar";
 import {
   Activity,
   BarChart3,
@@ -74,13 +74,13 @@ import {
   rolesWithWriteAccess,
 } from "../utils/roles";
 import BetaBadge from "./BetaBadge";
-import NewBadge from "./common_components/NewBadge";
-import type { Organization } from "./networking";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
 
 const ICON = { strokeWidth: 1.75 } as const;
+
+const LOGO_CLASS_NAME = "h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7";
 
 interface SidebarProps {
   setPage: (page: string) => void;
@@ -146,8 +146,20 @@ const menuGroups: MenuGroup[] = [
             icon: <Bot {...ICON} />,
             roles: rolesAllowedToViewWriteScopedPages,
           },
-          { key: "workflows", page: "workflows", label: "Workflow Runs", icon: <Workflow {...ICON} /> },
-          { key: "memory", page: "memory", label: "Memory", icon: <Database {...ICON} /> },
+          {
+            key: "workflows",
+            page: "workflows",
+            label: "Workflow Runs",
+            icon: <Workflow {...ICON} />,
+            roles: rolesWithCapability("viewWorkflowRuns"),
+          },
+          {
+            key: "memory",
+            page: "memory",
+            label: "Memory",
+            icon: <Database {...ICON} />,
+            roles: rolesWithCapability("viewMemory"),
+          },
         ],
       },
       { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
@@ -158,7 +170,7 @@ const menuGroups: MenuGroup[] = [
         page: "policies",
         label: "Policies",
         icon: <ScrollText {...ICON} />,
-        roles: all_admin_roles,
+        roles: rolesWithCapability("viewPolicies"),
       },
       {
         key: "tools",
@@ -206,7 +218,7 @@ const menuGroups: MenuGroup[] = [
         page: "guardrails-monitor",
         label: "Guardrails Monitor",
         icon: <HeartPulse {...ICON} />,
-        roles: [...all_admin_roles, ...internalUserRoles],
+        roles: rolesWithCapability("viewGuardrailUsage"),
       },
     ],
   },
@@ -268,7 +280,13 @@ const menuGroups: MenuGroup[] = [
         label: "Experimental",
         icon: <FlaskConical {...ICON} />,
         children: [
-          { key: "prompts", page: "prompts", label: "Prompts", icon: <FileText {...ICON} />, roles: all_admin_roles },
+          {
+            key: "prompts",
+            page: "prompts",
+            label: "Prompts",
+            icon: <FileText {...ICON} />,
+            roles: rolesWithCapability("viewPrompts"),
+          },
           {
             key: "transform-request",
             page: "transform-request",
@@ -283,7 +301,13 @@ const menuGroups: MenuGroup[] = [
             icon: <Tags {...ICON} />,
             roles: all_admin_roles,
           },
-          { key: "4", page: "usage", label: "Old Usage", icon: <BarChart3 {...ICON} /> },
+          {
+            key: "4",
+            page: "usage",
+            label: "Old Usage",
+            icon: <BarChart3 {...ICON} />,
+            roles: rolesWithCapability("viewGlobalSpend"),
+          },
         ],
       },
     ],
@@ -295,11 +319,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: (
-          <span className="flex items-center gap-2">
-            Settings <NewBadge />
-          </span>
-        ),
+        label: "Settings",
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles,
         children: [
@@ -320,14 +340,7 @@ const menuGroups: MenuGroup[] = [
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: (
-              <span className="flex items-center gap-2">
-                Admin Settings{" "}
-                <NewBadge dot>
-                  <span />
-                </NewBadge>
-              </span>
-            ),
+            label: "Admin Settings",
             icon: <SettingsIcon {...ICON} />,
             roles: all_admin_roles,
           },
@@ -407,10 +420,11 @@ const Sidebar_: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
-  const { userId, accessToken, userRole } = useAuthorized();
-  const { data: organizations } = useOrganizations();
+  const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
+  const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
-  const { logoUrl } = useTheme();
+  const { logoUrl, logoUrlDark } = useTheme();
+  const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const logout = useLogout(accessToken);
 
@@ -435,13 +449,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
     }
   }
 
-  const isOrgAdmin = useMemo(() => {
-    if (!userId || !organizations) return false;
-    return organizations.some((org: Organization) =>
-      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
-    );
-  }, [userId, organizations]);
-
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
@@ -449,6 +456,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
     return items
       .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
       .filter((item) => {
+        // A parent whose children were all filtered out renders as a leaf link
+        // to its own page id, which is not a real route. Drop it instead.
+        if (item.children && item.children.length === 0) return false;
+        if (item.key === "llm-playground" && isViewOnly) return false;
         if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
           if (!hasRoleAccess) return false;
@@ -583,6 +594,8 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   const logoSrc = logoUrl || `${baseUrl}/get_image`;
+  const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
+  const darkLogoSrc = reachableDarkLogo || logoUrl || `${baseUrl}/get_image?theme=dark`;
 
   return (
     <Sidebar collapsed={collapsed}>
@@ -590,10 +603,13 @@ const Sidebar_: React.FC<SidebarProps> = ({
         <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
           <div className="flex min-w-0 items-center gap-2">
             <Link href={migratedHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
+              <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
               <img
-                src={logoSrc}
-                alt="LiteLLM"
-                className="h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7"
+                src={darkLogoSrc}
+                alt=""
+                aria-hidden
+                onError={() => setErroredDarkLogo(logoUrlDark)}
+                className={cn(LOGO_CLASS_NAME, "hidden dark:block")}
               />
             </Link>
             {version && (

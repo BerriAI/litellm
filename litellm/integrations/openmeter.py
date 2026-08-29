@@ -21,9 +21,9 @@ def get_utc_datetime():
     from datetime import datetime
 
     if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
+        return datetime.now(dt.UTC)
     else:
-        return datetime.utcnow()  # type: ignore
+        return datetime.utcnow()
 
 
 class OpenMeterLogger(CustomLogger):

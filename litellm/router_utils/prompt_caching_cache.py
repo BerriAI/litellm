@@ -4,7 +4,7 @@ Wrapper around router cache. Meant to store model id when prompt caching support
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, Any, Final, Union, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from typing_extensions import TypedDict
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
     litellm_router = Router
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
     litellm_router = Any
