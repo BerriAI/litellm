@@ -110,7 +110,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
 from litellm.llms.anthropic.common_utils import (
-    is_empty_thinking_block,
+    is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
 )
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
@@ -1287,7 +1287,7 @@ class LiteLLMAnthropicMessagesAdapter:
             if hasattr(choice.message, "thinking_blocks") and choice.message.thinking_blocks:
                 for thinking_block in choice.message.thinking_blocks:
                     if thinking_block.get("type") == "thinking":
-                        if is_empty_thinking_block(thinking_block):
+                        if is_empty_unsigned_thinking_block(thinking_block):
                             continue
                         thinking_value = thinking_block.get("thinking", "")
                         signature_value = thinking_block.get("signature", "")
