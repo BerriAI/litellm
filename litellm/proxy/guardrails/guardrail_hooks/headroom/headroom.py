@@ -49,6 +49,9 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
+_STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
+    (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
+)
 HEADROOM_RETRIEVE_TOOL_NAME: Final = "headroom_retrieve"
 _HASH_PATTERN: Final = re.compile(r"hash=([a-f0-9]{24})")
 _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
@@ -724,7 +727,7 @@ class HeadroomGuardrail(CustomGuardrail):
     ) -> dict[str, Any] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
         base_result: Final = await super().async_pre_call_deployment_hook(kwargs, call_type)
         effective: Final = base_result if base_result is not None else kwargs
-        if call_type not in (CallTypes.completion, CallTypes.acompletion):
+        if call_type not in _STREAM_CONVERTIBLE_CALL_TYPES:
             return base_result
         if not effective.get("stream"):
             return base_result

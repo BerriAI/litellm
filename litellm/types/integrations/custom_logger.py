@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 from pydantic import BaseModel, Field
@@ -27,6 +28,13 @@ def is_interception_internal_key(
     prefixes: frozenset[str] = INTERCEPTION_INTERNAL_PREFIXES,
 ) -> bool:
     return any(key.startswith(prefix) for prefix in prefixes)
+
+
+CONVERTED_STREAM_KEYS: Final = frozenset(f"{prefix}_converted_stream" for prefix in INTERCEPTION_INTERNAL_PREFIXES)
+
+
+def converted_stream_requested(params: Mapping[str, object]) -> bool:
+    return any(bool(params.get(key)) for key in CONVERTED_STREAM_KEYS)
 
 
 class AgenticLoopSafetyError(ValueError):

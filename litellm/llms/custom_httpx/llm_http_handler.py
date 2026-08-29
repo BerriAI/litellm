@@ -97,9 +97,12 @@ from litellm.types.containers.main import (
 )
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
+    NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
+    converted_stream_requested,
+    is_interception_internal_key,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -2932,10 +2935,7 @@ class BaseLLMHTTPHandler:
         )
 
         result: Final = final_response if final_response is not None else initial_response
-        interception_converted_stream: Final = litellm_params.get(
-            "_code_interpreter_interception_converted_stream"
-        ) or litellm_params.get("_websearch_interception_converted_stream")
-        if interception_converted_stream and not litellm_params.get("_agentic_loop_depth"):
+        if converted_stream_requested(litellm_params) and not litellm_params.get("_agentic_loop_depth"):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -5399,8 +5399,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup: Final = {
             k: v
             for k, v in kwargs.items()
-            if not k.startswith("_websearch_interception")
-            and not k.startswith("_compression_interception")
+            if not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
             and k != "_code_interpreter_interception_converted_stream"
             and k not in internal_keys
             and k not in optional_params

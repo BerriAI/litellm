@@ -1984,6 +1984,58 @@ def _openai_text_payload(content: str) -> dict:
     return _openai_completion_payload({"role": "assistant", "content": content}, "stop")
 
 
+def _responses_retrieve_tool_definition() -> dict:
+    return {"type": "function", **_retrieve_tool_definition()["function"]}
+
+
+def _openai_responses_payload(output_item: dict) -> dict:
+    return {
+        "id": "resp_ccr",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-4o",
+        "output": [output_item],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "text": {"format": {"type": "text"}},
+        "truncation": "disabled",
+    }
+
+
+def _openai_responses_retrieve_call_payload() -> dict:
+    return _openai_responses_payload(
+        {
+            "type": "function_call",
+            "id": "fc_ccr",
+            "call_id": "call_ccr",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": json.dumps({"hash": CCR_HASH}),
+            "status": "completed",
+        }
+    )
+
+
+def _openai_responses_text_payload(text: str) -> dict:
+    return _openai_responses_payload(
+        {
+            "type": "message",
+            "id": "msg_ccr",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "call_type, stream, tools, expect_conversion",
     [
@@ -1992,12 +2044,14 @@ def _openai_text_payload(content: str) -> dict:
         (CallTypes.acompletion, False, [_retrieve_tool_definition()], False),
         (CallTypes.acompletion, True, [{"type": "function", "function": {"name": "get_weather"}}], False),
         (CallTypes.acompletion, True, None, False),
-        (CallTypes.aresponses, True, [_retrieve_tool_definition()], False),
+        (CallTypes.aresponses, True, [_retrieve_tool_definition()], True),
+        (CallTypes.responses, True, [_responses_retrieve_tool_definition()], True),
+        (CallTypes.aresponses, False, [_retrieve_tool_definition()], False),
         (CallTypes.anthropic_messages, True, [_retrieve_tool_definition()], False),
     ],
 )
 @pytest.mark.asyncio
-async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_completions(
+async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_completions_and_responses(
     guardrail: HeadroomGuardrail,
     call_type: CallTypes,
     stream: bool,
@@ -2125,6 +2179,65 @@ async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
     followup_body = json.loads(upstream.calls[1].request.content)
     assert not followup_body.get("stream")
     assert original_content in json.dumps(followup_body["messages"])
+    assert not any(key.startswith("_headroom_interception") for key in followup_body)
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_resolves_ccr_retrieval_end_to_end(
+    guardrail: HeadroomGuardrail,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression test for LIT-6481: streaming /v1/responses must resolve the
+    retrieve tool call server-side exactly like streaming /chat/completions does,
+    instead of streaming a headroom_retrieve function_call to the client."""
+    original_content = "the full uncompressed document"
+    final_answer = "the document says hello"
+    guardrail._issued_hashes_by_call_id["ccr-call-id"] = (
+        frozenset({CCR_HASH}),
+        time.monotonic() + 999,
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_responses_retrieve_call_payload()),
+            httpx.Response(200, json=_openai_responses_text_payload(final_answer)),
+        ]
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response(original_content),
+    ) as mock_get:
+        response = await litellm.aresponses(
+            model="openai/gpt-4o",
+            input=[{"role": "user", "content": f"summarize hash={CCR_HASH}"}],
+            tools=[_responses_retrieve_tool_definition()],
+            stream=True,
+            litellm_call_id="ccr-call-id",
+        )
+        events = [event async for event in response]
+
+    streamed_text = "".join(
+        getattr(event, "delta", "") for event in events if getattr(event, "type", None) == "response.output_text.delta"
+    )
+    assert streamed_text == final_answer
+    assert not any("function_call" in str(getattr(event, "type", "")) for event in events)
+    assert not any(
+        getattr(getattr(event, "item", None), "type", None) == "function_call" for event in events
+    )
+    mock_get.assert_called_once()
+    assert CCR_HASH in (mock_get.call_args.kwargs.get("url") or mock_get.call_args.args[0])
+
+    assert len(upstream.calls) == 2
+    followup_body = json.loads(upstream.calls[1].request.content)
+    assert not followup_body.get("stream")
+    assert original_content in json.dumps(followup_body["input"])
     assert not any(key.startswith("_headroom_interception") for key in followup_body)
 
 
