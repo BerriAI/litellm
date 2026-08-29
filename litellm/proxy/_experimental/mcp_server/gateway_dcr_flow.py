@@ -1229,6 +1229,7 @@ def _active_introspection_response(opened: OpenedSessionToken) -> Response:
     optional_claims: Final = {
         key: value
         for key, value in (
+            ("token_type", "Bearer" if opened.kind == "session" else None),
             ("team_id", principal.team_id),
             ("resource_server_id", principal.resource_server_id),
             ("audience", principal.audience),
@@ -1240,7 +1241,6 @@ def _active_introspection_response(opened: OpenedSessionToken) -> Response:
         content={
             "active": True,
             "iss": SESSION_ISSUER,
-            "token_type": "Bearer",
             "sub": principal.user_id,
             "client_id": principal.client_id,
             "jti": opened.jti,

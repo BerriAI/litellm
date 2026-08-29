@@ -10307,6 +10307,10 @@ def test_introspect_route_requires_virtual_key_auth_and_is_advertised():
     assert route.methods == {"POST"}
     assert any(dependency.call is user_api_key_auth for dependency in route.dependant.dependencies)
 
+    from litellm.proxy._types import LiteLLMRoutes
+
+    assert "/introspect" in LiteLLMRoutes.mcp_routes.value
+
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)

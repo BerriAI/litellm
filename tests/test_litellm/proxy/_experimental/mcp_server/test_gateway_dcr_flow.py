@@ -1737,6 +1737,7 @@ async def test_introspect_refresh_token_goes_inactive_once_rotated():
     cache = DualCache()
     status, body = await _introspect(minted.token.get_secret_value(), cache=cache)
     assert (status, body["active"], body["kind"]) == (200, True, "session_refresh")
+    assert "token_type" not in body
 
     revoked = await revoke_refresh_token(
         token=minted.token.get_secret_value(), client_id=client_id, master_key=MASTER_KEY, cache=cache
