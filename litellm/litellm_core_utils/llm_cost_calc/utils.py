@@ -137,10 +137,16 @@ def select_cost_metric_for_model(
     """
     Select 'cost_per_character' if model_info has 'input_cost_per_character'
     Select 'cost_per_token' if model_info has 'input_cost_per_token'
+
+    Presence is what selects the metric, not truthiness: a rate of ``0`` is a
+    valid price, declaring the model free. Testing truthiness treated such a
+    model as unpriced and raised below, reporting that fields it had explicitly
+    set were missing. This matches ``tier_rate`` in this package, where an
+    explicit zero already wins over the fallback.
     """
-    if model_info.get("input_cost_per_character"):
+    if model_info.get("input_cost_per_character") is not None:
         return "cost_per_character"
-    elif model_info.get("input_cost_per_token"):
+    elif model_info.get("input_cost_per_token") is not None:
         return "cost_per_token"
     else:
         raise ValueError(
