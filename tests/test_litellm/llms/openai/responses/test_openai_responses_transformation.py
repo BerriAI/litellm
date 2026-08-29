@@ -1626,3 +1626,49 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=True,
         )
         assert ("temperature" in mapped) is temperature_survives
+
+
+class TestReasoningFollowsModelSupport:
+    """Responses API clients like Codex send `reasoning` on every request, and OpenAI 400s it
+    on non-reasoning models like gpt-4o. drop_params must strip it there, the same way the
+    chat completions surface already strips reasoning_effort for those models.
+    """
+
+    @pytest.mark.parametrize(
+        "model, reasoning_survives",
+        [
+            ("gpt-4o", False),
+            ("gpt-4.1", False),
+            ("gpt-4o-mini", False),
+            ("gpt-5.6", True),
+            ("o3", True),
+            ("o3-deep-research", True),
+            ("codex-mini-latest", True),
+            ("computer-use-preview", True),
+        ],
+    )
+    def test_drop_params_strips_reasoning_by_model(self, local_model_cost_map, model, reasoning_survives):
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "auto"}},
+            model=model,
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is reasoning_survives
+
+    def test_without_drop_params_the_error_is_litellms_400(self, local_model_cost_map, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+            OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium"}},
+                model="gpt-4o",
+                drop_params=False,
+            )
+        assert excinfo.value.status_code == 400
+
+    def test_azure_deployments_keep_reasoning(self, local_model_cost_map):
+        mapped = AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model="my-o3-deployment",
+            drop_params=True,
+        )
+        assert mapped["reasoning"] == {"effort": "medium"}

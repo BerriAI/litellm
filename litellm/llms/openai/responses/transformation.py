@@ -76,6 +76,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     @staticmethod
+    def _is_o_series_name(model: str) -> bool:
+        base: Final = model.split("/")[-1]
+        return len(base) > 1 and base[0] == "o" and base[1].isdigit()
+
+    def _supports_reasoning_param(self, model: str) -> bool:
+        if self._is_gpt_5_model(model=model) or self._is_o_series_name(model=model):
+            return True
+        base: Final = model.split("/")[-1]
+        if base not in litellm.open_ai_chat_completion_models:
+            return True
+        return litellm.supports_reasoning(model=base, custom_llm_provider=self.custom_llm_provider.value)
+
+    @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
         """Raise sub-minimum max_output_tokens up to the OpenAI Responses API minimum.
 
@@ -123,6 +136,22 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         if "max_output_tokens" in params:
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
+
+        if (
+            self.custom_llm_provider == LlmProviders.OPENAI
+            and params.get("reasoning") is not None
+            and not self._supports_reasoning_param(model=model)
+        ):
+            if drop_params or litellm.drop_params:
+                params.pop("reasoning", None)
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message=(
+                        f"{model} doesn't support the `reasoning` parameter. "
+                        "To drop unsupported params set `litellm.drop_params = True`"
+                    ),
+                    status_code=400,
+                )
 
         if self._is_gpt_5_model(model=model):
             temperature: Final = params.get("temperature")
