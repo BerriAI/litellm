@@ -8,11 +8,12 @@ import time
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
@@ -182,6 +183,48 @@ class _VertexChunkLike(Protocol):
     candidates: Sequence[_VertexCandidateLike]
 
 
+class _ParsedChunkHiddenParams(BaseModel):
+    provider_specific_fields: Mapping[str, object] | None = None
+
+
+def _provider_response_model(chunk: object) -> str | None:
+    model: Final[object] = chunk.get("model") if isinstance(chunk, Mapping) else getattr(chunk, "model", None)
+    return model if isinstance(model, str) and model else None
+
+
+def _parsed_provider_hidden_params(hidden: object) -> _ParsedChunkHiddenParams | None:
+    if not isinstance(hidden, dict):
+        return None
+    try:
+        return _ParsedChunkHiddenParams.model_validate(hidden)
+    except ValidationError:
+        return None
+
+
+def _provider_hidden_params(
+    chunk: object,
+    provider_response_model: str | None,
+) -> Mapping[str, object] | None:
+    hidden: Final[object] = getattr(chunk, "_hidden_params", None)
+    parsed: Final = _parsed_provider_hidden_params(hidden)
+    provider_specific_fields: Final[object | None] = (
+        dict(parsed.provider_specific_fields)  # mutable-ok: stream assembly merges provider metadata into this dict
+        if parsed is not None and parsed.provider_specific_fields
+        else None
+    )
+    params: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            key: value
+            for key, value in (
+                ("provider_response_model", provider_response_model),
+                ("provider_specific_fields", provider_specific_fields),
+            )
+            if value is not None
+        }
+    )
+    return params or None
+
+
 class CustomStreamWrapper:
     def __init__(
         self,
@@ -211,6 +254,7 @@ class CustomStreamWrapper:
         self.thinking_content = ""
 
         self.system_fingerprint: str | None = None
+        self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
@@ -801,7 +845,9 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def model_response_creator(self, chunk: dict | None = None, hidden_params: dict | None = None):
+    def model_response_creator(
+        self, chunk: dict | None = None, hidden_params: Mapping[str, object] | None = None
+    ) -> ModelResponseStream:
         _model: Final = self._cached_model_name
         _logging_obj_llm_provider: Final = self._cached_logging_llm_provider
 
@@ -1505,7 +1551,12 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk: Any):
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
-        model_response = self.model_response_creator()
+        provider_response_model: Final = _provider_response_model(chunk)
+        if provider_response_model is not None:
+            self._provider_response_model = provider_response_model
+        model_response = self.model_response_creator(
+            hidden_params=_provider_hidden_params(chunk, self._provider_response_model)
+        )
         response_obj: dict[str, Any] = {}
         try:
             # return this for all models
@@ -2319,6 +2370,7 @@ class CustomStreamWrapper:
             partial_response: Final = litellm.stream_chunk_builder(
                 chunks=self.chunks,
                 messages=self.messages if isinstance(self.messages, list) else None,
+                logging_obj=self.logging_obj,
             )
             if partial_response is None:
                 return

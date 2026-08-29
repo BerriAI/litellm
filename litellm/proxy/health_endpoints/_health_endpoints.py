@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import logging
 import os
 import secrets
@@ -11,10 +12,16 @@ from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.integrations.SlackAlerting.ms_teams import (
+    MS_TEAMS_ALERT_HEADERS,
+    build_ms_teams_payload,
+    get_ms_teams_webhook_url,
+)
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -164,6 +171,7 @@ services = (
         "langfuse",
         "langfuse_otel",
         "slack",
+        "ms_teams",
         "openmeter",
         "webhook",
         "email",
@@ -178,6 +186,15 @@ services = (
     ]
     | str
 )
+
+
+class _ServiceTestErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+class _ServiceTestSuccessResponse(TypedDict):
+    status: ReadOnly[str]
+    message: ReadOnly[str]
 
 
 @router.get(
@@ -238,6 +255,7 @@ async def health_services_endpoint(
             "langfuse",
             "langfuse_otel",
             "slack",
+            "ms_teams",
             "openmeter",
             "webhook",
             "braintrust",
@@ -448,6 +466,38 @@ async def health_services_endpoint(
                     status_code=422,
                     detail={"error": f'"{service}" not in proxy config: general_settings. Unable to test this.'},
                 )
+        if service == "ms_teams":
+            if "ms_teams" not in general_settings.get("alerting", ()):
+                not_configured_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": f'"{service}" not in proxy config: general_settings. Unable to test this.'
+                }
+                raise HTTPException(status_code=422, detail=not_configured_detail)
+            ms_teams_webhook_url: Final = get_ms_teams_webhook_url()
+            if ms_teams_webhook_url is None:
+                missing_webhook_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": "MS_TEAMS_WEBHOOK_URL not set. Unable to test this."
+                }
+                raise HTTPException(status_code=422, detail=missing_webhook_detail)
+            ms_teams_test_message: Final = (
+                f"Alert type: `{AlertType.budget_alerts.value}`\nLevel: `Low`\n"
+                f"Timestamp: `{datetime.now().strftime('%H:%M:%S')}`\n\n"
+                "Message: This is a test MS Teams alert message"
+            )
+            ms_teams_response: Final = await proxy_logging_obj.slack_alerting_instance.async_http_handler.post(
+                url=ms_teams_webhook_url,
+                headers=dict(MS_TEAMS_ALERT_HEADERS),  # mutable-ok: async_http_handler.post only accepts dict headers
+                data=json.dumps(build_ms_teams_payload(ms_teams_test_message)),
+            )
+            if ms_teams_response.status_code >= 400:
+                delivery_failed_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": f"MS Teams webhook returned status {ms_teams_response.status_code}: {ms_teams_response.text}"
+                }
+                raise HTTPException(status_code=500, detail=delivery_failed_detail)
+            ms_teams_success: Final[_ServiceTestSuccessResponse] = {
+                "status": "success",
+                "message": "Mock MS Teams Alert sent, verify MS Teams Alert Received in your channel",
+            }
+            return ms_teams_success
         if service == "email":
             webhook_event: Final = WebhookEvent(
                 event="key_created",
