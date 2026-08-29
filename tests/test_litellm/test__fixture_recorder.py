@@ -10,7 +10,7 @@ from typing import Final, cast
 import httpx
 
 from tests.test_litellm._fixture_recorder import ProviderSpec, record_cases
-from tests.test_litellm.ocr.fixture_models import ImageUrlDocument, LiteLLMOcrInput
+from tests.test_litellm.ocr.fixture_models import MistralImageUrlDocument, MistralOcrSdkInput
 
 
 class _ControlledUpstream(ThreadingHTTPServer):
@@ -78,11 +78,11 @@ def _controlled_upstream() -> Generator[_ControlledUpstream]:
         thread.join(timeout=5)
 
 
-def _case(identifier: str) -> LiteLLMOcrInput:
-    return LiteLLMOcrInput.model_validate(
+def _case(identifier: str) -> MistralOcrSdkInput:
+    return MistralOcrSdkInput.model_validate(
         {
             "model": "mistral/mistral-ocr-latest",
-            "document": ImageUrlDocument(type="image_url", image_url="https://example.com/image.png"),
+            "document": MistralImageUrlDocument(type="image_url", image_url="https://example.com/image.png"),
             "id": identifier,
         }
     )

@@ -11,7 +11,7 @@ from typing import Final, cast
 import pytest
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from tests.test_litellm.ocr.fixture_models import LiteLLMOcrInput, OcrParityCase
+from tests.test_litellm.ocr.fixture_models import MistralOcrSdkInput, OcrParityCase
 from tests.test_litellm.parity.compare import assert_parity
 from tests.test_litellm.parity.models import SDKCommand, SDKReport, WorkerFailure, WorkerResult, WorkerSuccess
 from tests.test_litellm.parity.runner import (
@@ -31,7 +31,7 @@ class SDKRoute(str, Enum):
     AOCR = "aocr"
 
 
-def _call_kwargs(sdk_input: LiteLLMOcrInput, mock_url: str, route: SDKRoute) -> dict[str, object]:
+def _call_kwargs(sdk_input: MistralOcrSdkInput, mock_url: str, route: SDKRoute) -> dict[str, object]:
     return {
         **sdk_input.as_sdk_kwargs(),
         "api_base": mock_url,
@@ -41,7 +41,7 @@ def _call_kwargs(sdk_input: LiteLLMOcrInput, mock_url: str, route: SDKRoute) -> 
 
 
 def _execute_sdk_case(
-    sdk_input: LiteLLMOcrInput,
+    sdk_input: MistralOcrSdkInput,
     route: SDKRoute,
     mock_url: str,
     event_loop: asyncio.AbstractEventLoop,
