@@ -1,14 +1,9 @@
 import json
-import os
-import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import traceback
 from typing import Optional
@@ -982,7 +977,7 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
         make_call=_raise_400,
     )
 
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(Exception, match='litellm\\.BadRequestError: BedrockException') as excinfo:
         await response.__anext__()
     assert not isinstance(excinfo.value, MidStreamFallbackError)
     assert getattr(excinfo.value, "status_code", None) == 400
@@ -2143,10 +2138,13 @@ def test_raise_on_model_repetition(
     chunks = _build_chunks(chunks_pattern, len(chunks_pattern))
 
     if should_raise:
-        with pytest.raises(litellm.InternalServerError) as exc_info:
+        def _feed():
             for chunk in chunks:
                 wrapper.chunks.append(chunk)
                 wrapper.raise_on_model_repetition()
+
+        with pytest.raises(litellm.InternalServerError) as exc_info:
+            _feed()
         assert "repeating the same chunk" in str(exc_info.value)
     else:
         for chunk in chunks:
@@ -2719,7 +2717,7 @@ def test_dispatch_text_completion_codestral_requires_string(
     is a programming error and must surface loudly."""
     initialized_custom_stream_wrapper.custom_llm_provider = "text-completion-codestral"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="chunk is not a string: \\{'not': 'a string'\\}"):
         _run_dispatch(initialized_custom_stream_wrapper, {"not": "a string"})
 
 
@@ -3388,6 +3386,143 @@ def test_record_partial_usage_for_failure_noop_without_chunks():
     assert "combined_usage_object" not in logging_obj.model_call_details
 
 
+def _wrapper_with_partial_chunks(
+    chunk_model: str,
+    usage: Optional[Usage] = None,
+    model: str = "gpt-4o-mini",
+    custom_llm_provider: str = "openai",
+) -> tuple:
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "Tell me a long story"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-alias",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    logging_obj.optional_params = {}
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=model,
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-alias-1",
+            created=1742056047,
+            model=chunk_model,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="The Roman Empire began when", role="assistant"
+                    ),
+                )
+            ],
+            usage=usage,
+        )
+    ]
+    return wrapper, logging_obj
+
+
+def test_record_partial_usage_for_failure_prices_alias_restamped_chunks_at_real_model():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="bedrock-claude-opus-5",
+        usage=Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45),
+        model="us.anthropic.claude-opus-5",
+        custom_llm_provider="bedrock",
+    )
+    assert "bedrock/bedrock-claude-opus-5" not in litellm.model_cost
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.completion_tokens == 5
+    rates = litellm.model_cost["us.anthropic.claude-opus-5"]
+    expected = 40 * rates["input_cost_per_token"] + 5 * rates["output_cost_per_token"]
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected)
+
+
+def test_record_partial_usage_for_failure_counts_prompt_tokens_from_request_messages():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="my-public-alias")
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.prompt_tokens > 0
+
+
+def test_record_partial_usage_for_failure_backfills_missing_cache_fields():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="gpt-4o-mini")
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_creation_input_tokens == 0
+    assert stashed.cache_read_input_tokens == 0
+    assert stashed.prompt_tokens_details is not None
+    assert stashed.prompt_tokens_details.cached_tokens == 0
+
+
+def test_record_partial_usage_for_failure_prices_corrected_model_not_chunk_model():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="claude-opus-5",
+        usage=Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45),
+        model="gpt-4o-mini",
+        custom_llm_provider="openai",
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    rates = litellm.model_cost["gpt-4o-mini"]
+    expected = 40 * rates["input_cost_per_token"] + 5 * rates["output_cost_per_token"]
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected)
+
+
+def test_record_partial_usage_for_failure_carries_up_openai_style_cached_tokens():
+    recovered = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=500),
+    )
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="gpt-4o-mini", usage=recovered
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_read_input_tokens == 500
+    assert stashed.cache_creation_input_tokens == 0
+
+
+def test_record_partial_usage_for_failure_keeps_cache_values_recovered_from_chunks():
+    recovered = Usage(
+        prompt_tokens=40,
+        completion_tokens=5,
+        total_tokens=45,
+        cache_read_input_tokens=7,
+        cache_creation_input_tokens=3,
+    )
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="gpt-4o-mini", usage=recovered
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_read_input_tokens == 7
+    assert stashed.cache_creation_input_tokens == 3
+    assert stashed.prompt_tokens_details is not None
+    assert stashed.prompt_tokens_details.cached_tokens == 7
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_stream_chunk_builder_raise_at_end_of_stream_still_recovers_usage(
@@ -3616,9 +3751,12 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
     )
 
     received = []
-    with pytest.raises(MidStreamFallbackError):
+    async def _drain():
         async for chunk in response:
             received.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError):
+        await _drain()
 
     fabricated_finish_reasons = [
         chunk.choices[0].finish_reason
@@ -4176,7 +4314,7 @@ async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_corre
 
         wrapper._stream_created_time = time.time() - 10
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.Timeout):
             await wrapper.__anext__()
 
         assert trace_id_var.get() == "outer-trace-max-duration"
@@ -4323,7 +4461,9 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
 
         monkeypatch.setattr("litellm.litellm_core_utils.streaming_handler.exception_type", fake_exception_type)
 
-        with pytest.raises(Exception):
+        from litellm.exceptions import MidStreamFallbackError
+
+        with pytest.raises(MidStreamFallbackError):
             wrapper._handle_stream_fallback_error(RuntimeError("boom"))
 
         # The mapper ran while the stream's own ids were still active.
@@ -4335,3 +4475,220 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chunk():
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3.5-flash",
+        logging_obj=MagicMock(),
+        custom_llm_provider="vertex_ai",
+    )
+    parsed_chunk = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello", role="assistant"), finish_reason=None)],
+    )
+    parsed_chunk._hidden_params["provider_specific_fields"] = {"traffic_type": "ON_DEMAND_FLEX"}
+
+    result = wrapper.chunk_creator(chunk=parsed_chunk)
+
+    assert result is not None
+    assert result._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
+    assembled = litellm.stream_chunk_builder(chunks=[result])
+    assert assembled is not None
+    assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
+
+
+def test_chunk_creator_keeps_provider_model_private_across_stream():
+    from litellm.router_utils.add_retry_fallback_headers import (
+        get_hidden_params_dict,
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="requested-route",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+    selected_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="selected-model",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello"),
+            )
+        ],
+    )
+    terminal_chunk = ModelResponseStream(
+        id="chunk-1",
+        model=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(),
+            )
+        ],
+    )
+
+    first_result = wrapper.chunk_creator(chunk=selected_chunk)
+    terminal_result = wrapper.chunk_creator(chunk=terminal_chunk)
+
+    assert first_result is not None
+    assert terminal_result is not None
+    assert first_result.model == "requested-route"
+    assert terminal_result.model == "requested-route"
+    assert (
+        get_hidden_params_dict(first_result)["provider_response_model"]
+        == "selected-model"
+    )
+    assert (
+        get_hidden_params_dict(terminal_result)["provider_response_model"]
+        == "selected-model"
+    )
+
+    assembled = litellm.stream_chunk_builder(chunks=[first_result, terminal_result])
+    assert assembled is not None
+    assert assembled.model == "requested-route"
+    assert (
+        get_hidden_params_dict(assembled)["provider_response_model"]
+        == "selected-model"
+    )
+
+
+def test_assembled_stream_uses_later_provider_model_for_cost(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.router_utils.add_retry_fallback_headers import (
+        get_hidden_params_dict,
+    )
+
+    selected_model_info = {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000004,
+        "litellm_provider": "azure",
+    }
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/gpt-4.1-nano-2025-04-14",
+        selected_model_info,
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/azure-model-router",
+        {
+            "input_cost_per_token": 0.00002,
+            "output_cost_per_token": 0.00004,
+            "litellm_provider": "azure",
+        },
+    )
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"custom_llm_provider": "azure"}
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="azure-model-router",
+        logging_obj=logging_obj,
+        custom_llm_provider="azure",
+    )
+    router_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="azure-model-router",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello "),
+            )
+        ],
+    )
+    selected_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="gpt-4.1-nano-2025-04-14",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="world"),
+            )
+        ],
+    )
+    terminal_chunk = ModelResponseStream(
+        id="chunk-1",
+        model="azure-model-router",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(),
+            )
+        ],
+    )
+
+    router_result = wrapper.chunk_creator(chunk=router_chunk)
+    selected_result = wrapper.chunk_creator(chunk=selected_chunk)
+    terminal_result = wrapper.chunk_creator(chunk=terminal_chunk)
+
+    assert router_result is not None
+    assert selected_result is not None
+    assert terminal_result is not None
+    assert (
+        get_hidden_params_dict(router_result)["provider_response_model"]
+        == "azure-model-router"
+    )
+    assert (
+        get_hidden_params_dict(selected_result)["provider_response_model"]
+        == "gpt-4.1-nano-2025-04-14"
+    )
+    assert (
+        get_hidden_params_dict(terminal_result)["provider_response_model"]
+        == "azure-model-router"
+    )
+
+    assembled = litellm.stream_chunk_builder(
+        chunks=[router_result, selected_result, terminal_result]
+    )
+    assert assembled is not None
+    assert assembled.model == "gpt-4.1-nano-2025-04-14"
+    assert (
+        get_hidden_params_dict(assembled)["provider_response_model"]
+        == "gpt-4.1-nano-2025-04-14"
+    )
+    assembled.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    assert litellm.completion_cost(
+        completion_response=assembled,
+        custom_llm_provider="azure",
+    ) == pytest.approx(
+        10 * selected_model_info["input_cost_per_token"]
+        + 5 * selected_model_info["output_cost_per_token"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_stream_assembled_response_keeps_vertex_traffic_type(logging_obj: Logging):
+    content_chunk = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello", role="assistant"), finish_reason=None)],
+    )
+    final_chunk = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+    setattr(final_chunk, "usage", Usage(prompt_tokens=7, completion_tokens=5, total_tokens=12))
+    final_chunk._hidden_params["provider_specific_fields"] = {"traffic_type": "ON_DEMAND_FLEX"}
+
+    async def _stream():
+        yield content_chunk
+        yield final_chunk
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=_stream(),
+        model="gemini-3.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai",
+        stream_options={"include_usage": True},
+    )
+
+    received = [chunk async for chunk in wrapper]
+
+    assembled = litellm.stream_chunk_builder(chunks=received, messages=[{"role": "user", "content": "hi"}])
+    assert assembled is not None
+    assert assembled._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND_FLEX"

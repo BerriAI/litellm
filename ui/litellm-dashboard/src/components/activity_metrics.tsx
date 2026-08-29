@@ -234,7 +234,7 @@ const ModelCollapsible = ({
     >
       <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-3 text-left">
         <ChevronDown
-          className={`size-4 shrink-0 text-muted-foreground/70 transition-transform ${open ? "" : "-rotate-90"}`}
+          className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`}
         />
         {header}
       </CollapsibleTrigger>

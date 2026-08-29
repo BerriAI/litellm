@@ -9,14 +9,16 @@ import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
 import React from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
+import { DocsLink } from "./Navbar/DocsLink/DocsLink";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
-import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
+import { cn } from "@/lib/cva.config";
 import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
+import ThemeToggle from "./ThemeToggle/ThemeToggle";
 import ViewSwitcher from "./Navbar/ViewSwitcher";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
@@ -26,6 +28,8 @@ interface NavbarProps {
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
 }
+
+const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
 
 const Navbar: React.FC<NavbarProps> = ({
   accessToken,
@@ -44,6 +48,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
+  const darkImageUrl = logoUrl || `${baseUrl}/get_image?theme=dark`;
 
   const handleLogout = () => {
     clearTokenCookies();
@@ -61,7 +66,7 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <nav className="sticky top-0 z-10 border-b border-border bg-card">
+    <nav className="sticky top-0 z-chrome border-b border-border bg-card">
       <div className="w-full">
         <div className="flex h-14 items-center px-4">
           <div className="flex shrink-0 items-center">
@@ -85,10 +90,12 @@ const Navbar: React.FC<NavbarProps> = ({
               <Link href={migratedHref("")} className="flex items-center">
                 <div className="relative">
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
+                    <img src={imageUrl} alt="LiteLLM Brand" className={cn(NAV_LOGO_CLASS_NAME, "dark:hidden")} />
                     <img
-                      src={imageUrl}
-                      alt="LiteLLM Brand"
-                      className="h-auto max-h-full w-auto max-w-full object-contain"
+                      src={darkImageUrl}
+                      alt=""
+                      aria-hidden
+                      className={cn(NAV_LOGO_CLASS_NAME, "hidden dark:block")}
                     />
                   </div>
                 </div>
@@ -104,7 +111,7 @@ const Navbar: React.FC<NavbarProps> = ({
                       🌑
                     </span>
                   )}
-                  <Badge variant="outline" className="relative z-10 cursor-pointer text-xs font-medium">
+                  <Badge variant="outline" className="relative z-raised cursor-pointer text-xs font-medium">
                     <a
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"
@@ -136,16 +143,7 @@ const Navbar: React.FC<NavbarProps> = ({
               aria-label="Product documentation"
               className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-border pl-4" : ""}`}
             >
-              <a
-                href="https://docs.litellm.ai/docs/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className={NAV_PRODUCT_LINK_CLASS}
-              >
-                Docs
-                {/* Layout parity with Blog chevron — intentional single-level link */}
-                <ChevronDown className="pointer-events-none size-2.5 opacity-0" aria-hidden />
-              </a>
+              <DocsLink />
               <BlogDropdown />
             </nav>
 
@@ -158,6 +156,8 @@ const Navbar: React.FC<NavbarProps> = ({
             {!isPublicPage && (
               <div className="flex shrink-0 items-center border-l border-border pl-4">
                 <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
+                  <ThemeToggle />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   <NotificationsBell />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   <UserDropdown onLogout={handleLogout} />
@@ -165,7 +165,6 @@ const Navbar: React.FC<NavbarProps> = ({
               </div>
             )}
           </div>
-          {/* Dark mode toggle: keep disabled until the dashboard supports dark styles end-to-end. */}
         </div>
       </div>
     </nav>

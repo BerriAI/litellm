@@ -88,7 +88,7 @@ export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, lear
     <div className="relative inline-block ml-1.5">
       <button
         type="button"
-        className="inline-flex items-center justify-center w-4 h-4 text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-help focus:outline-hidden focus:ring-2 focus:ring-ring rounded-full"
+        className="inline-flex items-center justify-center w-4 h-4 text-muted-foreground hover:text-foreground transition-colors cursor-help focus:outline-hidden focus:ring-2 focus:ring-ring rounded-full"
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
         onFocus={() => setShowTooltip(true)}
@@ -102,7 +102,7 @@ export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, lear
       </button>
       {showTooltip && (
         <div
-          className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-50 bg-gray-900 text-white p-3 rounded-lg text-xs shadow-lg w-64"
+          className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-floating bg-gray-900 text-white p-3 rounded-lg text-xs shadow-lg w-64"
           style={{ pointerEvents: "none" }}
         >
           <div className="mb-2">{content}</div>
@@ -178,7 +178,7 @@ export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", cl
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-1 w-56 bg-card rounded-lg shadow-lg border border-border py-1 z-50">
+        <div className="absolute right-0 mt-1 w-56 bg-card rounded-lg shadow-lg border border-border py-1 z-floating">
           {items.map((item, index) => (
             <a
               key={index}
@@ -189,7 +189,7 @@ export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", cl
               onClick={() => setIsOpen(false)}
             >
               <span>{item.label}</span>
-              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0 ml-2" aria-hidden="true" />
+              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground shrink-0 ml-2" aria-hidden="true" />
             </a>
           ))}
         </div>

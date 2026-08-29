@@ -1,6 +1,8 @@
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import HTTPException
@@ -13,6 +15,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
+    get_passthrough_www_authenticate,
     get_request_base_url,
     well_known_root_suffix,
 )
@@ -39,9 +42,11 @@ from litellm.proxy._types import (
     SpecialMCPServerName,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import (
+    _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
     _run_centralized_common_checks,
     user_api_key_auth,
 )
@@ -60,6 +65,9 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+
+
+_EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 
 
 def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: resolver returns a list
@@ -160,7 +168,7 @@ def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> b
     """True when this auth is a keyless subject admitted by the gateway session / bridge user
     path, as opposed to a JWT or other keyless auth that merely lacks a ``team_id``.
 
-    Reads the server-only ``mcp_admitted_user_subject`` field, set only by ``_reload_admitted_user``. It
+    Reads the server-only ``mcp_admitted_user_subject`` field, set only by ``reload_admitted_user``. It
     is deliberately NOT a ``metadata`` key, which is caller-controlled at key creation and so forgeable
     on a personal key to gain the team grant union or dodge the egress scrub; this field cannot be."""
     return user_api_key_auth is not None and user_api_key_auth.mcp_admitted_user_subject is True
@@ -297,6 +305,16 @@ def _admission_failure_fallback(
     raise exc
 
 
+@dataclass(frozen=True, slots=True)
+class DcrBridgeTarget:
+    """The single DCR-bridge server a request targets, paired with the exact name the caller
+    used to reach it (alias or server_name, whichever they typed), which is the spelling an
+    ``invalid_token`` challenge must echo back."""
+
+    requested_name: str
+    server: MCPServer
+
+
 class MCPRequestHandler:
     """
     Class to handle MCP request processing, including:
@@ -415,7 +433,10 @@ class MCPRequestHandler:
             # An explicit x-litellm-api-key is always a LiteLLM credential, even
             # for a delegated server, so validate it: identity / spend / rate
             # limits resolve and any stored upstream token can be forwarded.
-            validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
+            validated_user_api_key_auth = await user_api_key_auth(
+                api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
+                request=request,
+            )
         elif MCPRequestHandler._target_servers_delegate_auth_to_upstream(
             path=request_route,
             mcp_servers=mcp_servers,
@@ -436,27 +457,33 @@ class MCPRequestHandler:
             path=request_route,
             mcp_servers=mcp_servers,
             client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        ) or (
+            MCPRequestHandler._single_dcr_bridge_delegate_target(
+                path=request_route,
+                mcp_servers=mcp_servers,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
+            )
+            is not None
+            and not oauth2_headers
+            and not mcp_server_auth_headers
+            and not mcp_auth_header
         ):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
-            (
-                bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
-                    path=request_route,
-                    mcp_servers=mcp_servers,
-                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
-                )
+            bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                path=request_route,
+                mcp_servers=mcp_servers,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
             )
-            is not None
-            and oauth2_headers
-            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
-        ):
-            # A single DCR-bridge oauth_delegate target carrying an envelope-shaped
-            # Authorization: open the envelope, admit under its recovered identity, and
-            # inject the inner upstream token for egress. A non-envelope bearer on the same
-            # server is NOT admitted here — it falls through to the oauth2 arm, which 401s.
-            validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
-                server=bridge_delegate_target,
+        ) is not None and oauth2_headers:
+            (
+                validated_user_api_key_auth,
+                mcp_server_auth_headers,
+            ) = await MCPRequestHandler._admit_dcr_bridge_authorization(
+                server=bridge_delegate_target.server,
+                requested_name=bridge_delegate_target.requested_name,
                 authorization_value=oauth2_headers["Authorization"],
+                litellm_api_key=litellm_api_key,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 request=request,
                 route=request_route,
@@ -722,10 +749,10 @@ class MCPRequestHandler:
     @staticmethod
     def _single_dcr_bridge_delegate_target(
         path: str, mcp_servers: list[str] | None, client_ip: str | None
-    ) -> MCPServer | None:
+    ) -> DcrBridgeTarget | None:
         """The one DCR-bridge ``oauth_delegate`` server this request targets, or ``None``.
 
-        Returns the server only when EXACTLY ONE target resolves and it is both
+        Returns the target only when EXACTLY ONE name resolves and its server is both
         ``is_oauth_delegate`` and ``is_dcr_bridge``. Fails closed (``None``) on a
         multi-target request, an unresolved target, or a non-matching server, so the
         envelope admission arm never fires for an aggregate scope or a server that did not
@@ -739,17 +766,21 @@ class MCPRequestHandler:
         if len(target_names) != 1:
             return None
         server: Final = global_mcp_server_manager.get_mcp_server_by_name(target_names[0], client_ip=client_ip)
-        if server is None or not server.is_oauth_delegate or not server.is_dcr_bridge:
+        # Both flags are security-sensitive opt-ins. Require literal booleans so
+        # partially populated objects and truthy proxy values cannot enable bridge
+        # admission accidentally.
+        if server is None or server.is_oauth_delegate is not True or server.is_dcr_bridge is not True:
             return None
         # Egress resolves the injected per-server token only by alias / server_name; a server with
         # neither cannot receive the forwarded token, so fail closed rather than admit-and-drop.
         if not (server.server_name or server.alias):
             return None
-        return server
+        return DcrBridgeTarget(requested_name=target_names[0], server=server)
 
     @staticmethod
     async def _admit_dcr_bridge_delegate(
         server: MCPServer,
+        requested_name: str,
         authorization_value: str,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         request: Request,
@@ -797,9 +828,61 @@ class MCPRequestHandler:
                 new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
-                raise HTTPException(status_code=401, detail="Invalid or expired credential")
+                raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(
+                    requested_name=requested_name, request=request
+                )
             case _:
                 assert_never(result)
+
+    @staticmethod
+    async def _admit_dcr_bridge_authorization(
+        server: MCPServer,
+        requested_name: str,
+        authorization_value: str,
+        litellm_api_key: str,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,  # mutable-ok: existing MCP sink shape
+        request: Request,
+        route: str,
+    ) -> tuple[UserAPIKeyAuth, dict[str, dict[str, str]] | None]:  # mutable-ok: existing MCP sink shape
+        if is_bridge_envelope_shaped(authorization_value):
+            return await MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=server,
+                requested_name=requested_name,
+                authorization_value=authorization_value,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=route,
+            )
+        try:
+            admitted: Final = await user_api_key_auth(api_key=litellm_api_key, request=request)
+        except (HTTPException, ProxyException) as exc:
+            if not _is_litellm_auth_admission_error(exc):
+                raise
+            raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(
+                requested_name=requested_name, request=request
+            ) from exc
+        return admitted, mcp_server_auth_headers
+
+    @staticmethod
+    def _dcr_bridge_invalid_token_challenge(requested_name: str, request: Request) -> HTTPException:
+        """The RFC 6750 ``invalid_token`` challenge for a failed bridge admission.
+
+        Named by the exact spelling the caller requested, matching the per-server well-known
+        document and the other challenge emitters, so ``resource_metadata`` always points at the
+        resource the client actually asked for even when alias and server_name differ."""
+        return HTTPException(
+            status_code=401,
+            detail="Invalid or expired credential",
+            headers=MappingProxyType(
+                {
+                    "www-authenticate": get_passthrough_www_authenticate(
+                        scope=request.scope,
+                        server_name=requested_name,
+                        invalid_token=True,
+                    )
+                }
+            ),
+        )
 
     @staticmethod
     async def _admit_gateway_session(
@@ -812,7 +895,7 @@ class MCPRequestHandler:
 
         Identity-only sibling of :meth:`_admit_dcr_bridge_delegate`: the session token seals no
         upstream credential (those are vaulted per user, resolved at egress), so authorization is
-        resolved fresh via :meth:`_reload_admitted_user` + the centralized policy gate rather than a
+        resolved fresh via :meth:`reload_admitted_user` + the centralized policy gate rather than a
         mint-time snapshot. Pre-DB gates (size, IP, route allowlist) run first, mirroring the standard
         pipeline. Fails closed with the requested scope's ``invalid_token`` challenge on an expired,
         tampered, foreign, or refresh token, or a missing/deactivated/policy-rejected user."""
@@ -835,7 +918,7 @@ class MCPRequestHandler:
         match result:
             case SessionBearerAdmitted():
                 try:
-                    admitted: Final = await MCPRequestHandler._reload_admitted_user(result.principal.user_id)
+                    admitted: Final = await MCPRequestHandler.reload_admitted_user(result.principal.user_id)
                     admitted.mcp_session_resource_server_id = result.principal.resource_server_id
                     await MCPRequestHandler._enforce_admitted_live_policy(
                         admitted=admitted, request=request, route=route
@@ -893,12 +976,12 @@ class MCPRequestHandler:
             case "key_hash":
                 return await MCPRequestHandler._reload_admitted_key(identity.subject)
             case "user_id":
-                return await MCPRequestHandler._reload_admitted_user(identity.subject)
+                return await MCPRequestHandler.reload_admitted_user(identity.subject)
             case _:
                 assert_never(identity.subject_type)
 
     @staticmethod
-    async def _reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
+    async def reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
         """Reload the live user an interactively-minted envelope references and admit them as themselves.
 
         The user's own object permission and ``org_id`` ride on the returned ``UserAPIKeyAuth``, and the
@@ -1417,7 +1500,11 @@ class MCPRequestHandler:
             team_set: Final = set(allowed_mcp_servers_for_team)
             grants_set: Final = set(key_access_group_grants)
 
-            has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set)
+            # A DECLARED toolset restricts even when it resolves to no servers: the org
+            # ceiling below may only cap it, never substitute the org's full server list.
+            has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set) or (
+                await MCPRequestHandler._key_or_team_declares_toolsets(user_api_key_auth)
+            )
 
             # 1. Key/team ceiling. An empty set means "this level does not restrict".
             if not team_set:
@@ -1785,11 +1872,14 @@ class MCPRequestHandler:
             global_mcp_server_manager,
         )
 
-        # An OPEN channel (allow_all_keys, the user's own BYOM) makes the server REACHABLE through the
-        # user, though no grant source names it — without this the union returns [], listable but
-        # uninvokable. Reachability is ALL it confers, NOT a ceiling waiver: the user's own
-        # mcp_tool_permissions and org tool ceiling still bind, exactly as a key's do on an allow_all server.
-        reachable_via_open_channel: Final = server_id in await global_mcp_server_manager.operator_open_server_ids(auth)
+        # An OPEN channel (allow_all_keys, the user's own BYOM, an unscoped admin-view role) makes the
+        # server REACHABLE through the user, though no grant source names it — without this the union
+        # returns [], listable but uninvokable. Reachability is ALL it confers, NOT a ceiling waiver:
+        # the user's own mcp_tool_permissions and org tool ceiling still bind, exactly as a key's do
+        # on an allow_all server or an admin key's do on any server.
+        reachable_via_open_channel: Final = server_id in await global_mcp_server_manager.operator_open_server_ids(
+            auth
+        ) or await MCPRequestHandler.admin_view_unscoped(auth)
 
         allowed: Final[set[str]] = set()
         for source, granted in await MCPRequestHandler.admitted_source_grants(auth):
@@ -1859,6 +1949,105 @@ class MCPRequestHandler:
         return team_obj.object_permission
 
     @staticmethod
+    async def _toolset_tool_permissions(
+        object_permission: LiteLLM_ObjectPermissionTable | None,
+    ) -> Mapping[str, Sequence[str]]:
+        """The ``server_id -> tool names`` grants of this permission row's toolsets, empty when it
+        declares none. The shared resolver for the team, org, and internal-user levels, so a toolset
+        behaves identically wherever it is attached.
+
+        RAISES ``UnloadableEntitlementError`` when the row DECLARES toolsets but resolution yields
+        nothing (deleted or unknown ids, a swallowed DB fault, or a toolset with no tools): that is a
+        KNOWN restriction with unknown contents, and every caller already turns this error into deny
+        rather than letting the level read as unrestricted."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        if object_permission is None or not object_permission.mcp_toolsets:
+            return _EMPTY_TOOLSET_GRANTS
+        resolved: Final = await global_mcp_server_manager.resolve_toolset_tool_permissions(
+            toolset_ids=object_permission.mcp_toolsets
+        )
+        if not resolved:
+            raise UnloadableEntitlementError(
+                f"declared mcp_toolsets {object_permission.mcp_toolsets!r} resolved to no grants"
+            )
+        return resolved
+
+    @staticmethod
+    async def _toolset_tools_for_server(
+        object_permission: LiteLLM_ObjectPermissionTable | None,
+        server_id: str,
+    ) -> Sequence[str] | None:
+        """Tool names this row's toolsets grant on ``server_id``, ``None`` when its toolsets place
+        no restriction on that server (it declares no toolsets, or none of them name it)."""
+        return (await MCPRequestHandler._toolset_tool_permissions(object_permission)).get(server_id)
+
+    @staticmethod
+    def _union_tool_grants(
+        direct: Sequence[str] | None,
+        via_toolsets: Sequence[str] | None,
+    ) -> Sequence[str] | None:
+        """Union of one level's direct tool grants and its toolset-granted tools on one server,
+        ``None`` when neither source restricts (allow-all from this level)."""
+        if direct is None and via_toolsets is None:
+            return None
+        return tuple({*(direct or ()), *(via_toolsets or ())})
+
+    @staticmethod
+    async def _key_object_permission_hydrated(
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        """The key's object_permission, loading it by ``object_permission_id`` when the main auth
+        flow cached the key with the relation unhydrated (its loader swallows a failed read and
+        caches the partial object)."""
+        loaded: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
+        if loaded is not None or not user_api_key_auth.object_permission_id:
+            return loaded
+        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if prisma_client is None:
+            return None
+        return await get_object_permission(
+            object_permission_id=user_api_key_auth.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_auth.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    @staticmethod
+    async def _key_or_team_declares_toolsets(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
+        """Whether the key or its team GRANTS any toolset, resolvable or not. A declared toolset is
+        a lower-level restriction even when it resolves to no servers (deleted or unknown ids), so the
+        org ceiling may only cap it; reading an empty resolution as "no restriction" would substitute
+        the org's entire server list for the narrowest grant an operator can write.
+
+        Falls back to the DB when the auth object carries ``object_permission_id`` unhydrated (the
+        main auth flow swallows a failed load and caches the partial object). An INDETERMINATE fault
+        answers False — no gate, org substitution as before the fault — mirroring how the org ceiling
+        keeps key auth open on a fault it cannot classify."""
+        if user_api_key_auth is None:
+            return False
+        try:
+            key_obj_perm: Final = await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth)
+            if key_obj_perm is not None and key_obj_perm.mcp_toolsets:
+                return True
+            if not user_api_key_auth.team_id:
+                return False
+            team_obj_perm: Final = await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
+            return bool(team_obj_perm is not None and team_obj_perm.mcp_toolsets)
+        except Exception as e:  # noqa: BLE001  # indeterminate fault: no gate, as before this level existed
+            verbose_logger.warning("Failed to check declared MCP toolsets, org ceiling unchanged: %s", e)
+            return False
+
+    @staticmethod
     async def get_allowed_tools_for_server(
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -1921,11 +2110,16 @@ class MCPRequestHandler:
                 if key_direct_tools is not None or key_toolset_tools is not None
                 else None
             )
-            team_tools: Final = (
+            team_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
                 if team_obj_perm
                 else None
             )
+
+            # Tools granted through the team's toolsets restrict this server exactly
+            # as the team's direct tool permissions do, mirroring the key path above
+            team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(team_obj_perm, server_id)
+            team_tools: Final = MCPRequestHandler._union_tool_grants(team_direct_tools, team_toolset_tools)
 
             # Apply same inheritance logic as get_allowed_mcp_servers
             if team_tools:
@@ -2011,11 +2205,13 @@ class MCPRequestHandler:
                     e,
                 )
                 return allowed_tools
-            org_tools: Final = (
+            org_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(org_obj_perm.mcp_tool_permissions).get(server_id)
                 if org_obj_perm and org_obj_perm.mcp_tool_permissions
                 else None
             )
+            org_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(org_obj_perm, server_id)
+            org_tools: Final = MCPRequestHandler._union_tool_grants(org_direct_tools, org_toolset_tools)
             if org_tools is not None:
                 allowed_tools = (
                     list(set(allowed_tools) & set(org_tools)) if allowed_tools is not None else list(org_tools)
@@ -2257,7 +2453,8 @@ class MCPRequestHandler:
     async def _team_granted_servers(team_obj: LiteLLM_TeamTable, team_access_group_servers: list[str]) -> set[str]:
         """The raw MCP-server set a team grants (before any org ceiling): its object_permission (direct
         ``mcp_servers``, the ``all_proxy_servers`` sentinel → the full registry, legacy access groups,
-        tool-perm-referenced servers) unioned with its unified ``access_group_ids`` servers."""
+        tool-perm-referenced servers, toolset-referenced servers) unioned with its unified
+        ``access_group_ids`` servers."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -2274,6 +2471,7 @@ class MCPRequestHandler:
             set(global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or []))
             | set(legacy_access_group_servers)
             | set(global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys())
+            | (await MCPRequestHandler._toolset_tool_permissions(object_permissions)).keys()
             | set(team_access_group_servers)
         )
 
@@ -2332,6 +2530,8 @@ class MCPRequestHandler:
             servers: Final = await MCPRequestHandler._team_granted_servers(team_obj, team_access_group_servers)
             return list(servers)
         except Exception as e:
+            if isinstance(e, UnloadableEntitlementError):
+                raise
             verbose_logger.warning("Failed to get allowed MCP servers for team: %s", e)
             return []
 
@@ -2463,7 +2663,13 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
 
-            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers
+            # servers referenced by the org's toolset grants are part of the org ceiling,
+            # exactly as servers referenced by its inline tool permissions are
+            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
+
+            all_servers: Final = tuple(
+                {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants}
+            )
             return list(set(all_servers))
         except Exception as e:
             # None = ceiling UNRESOLVED, distinct from [] = org places no restriction. Collapsing them
@@ -2657,8 +2863,8 @@ class MCPRequestHandler:
 
         ``[]`` means this human places no restriction (allow-all from this level); ``None`` means the
         ceiling is UNRESOLVED, which the caller denies on. Servers named only under
-        ``mcp_tool_permissions`` count as entitled, exactly as they do for a key or a team, so
-        granting one tool never requires naming its server twice.
+        ``mcp_tool_permissions`` or reached through ``mcp_toolsets`` count as entitled, exactly as
+        they do for a key or a team, so granting one tool never requires naming its server twice.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -2676,7 +2882,8 @@ class MCPRequestHandler:
             tool_perm_servers: Final = list(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
-            return list(set(direct_mcp_servers + access_group_servers + tool_perm_servers))
+            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
+            return tuple({*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants})
         except Exception as e:  # noqa: BLE001  # any resolution fault is an unresolved ceiling, never "no ceiling"
             verbose_logger.warning("Failed to get allowed MCP servers for user: %s", e)
             return None
@@ -2724,6 +2931,32 @@ class MCPRequestHandler:
         return entitled_servers is None or len(entitled_servers) > 0
 
     @staticmethod
+    async def admin_view_unscoped(user_api_key_auth: UserAPIKeyAuth | None = None) -> bool:
+        """Whether this principal's admin-view role grants the unscoped MCP resolution, whatever
+        credential carries it (admin key, dashboard session, or OAuth-admitted session subject).
+
+        Two bounds disqualify, one per ownership of the row. A CREDENTIAL's explicit
+        ``object_permission.mcp_servers`` scope wins even for admins, including the empty list. An
+        admitted subject's object_permission is the user's own row, whose ``mcp_servers`` column is
+        [] by DB default, so for that shape the row binds through the entitlement ceiling instead
+        (any non-empty entitlement, or an unresolved one, disqualifies), exactly as
+        ``operator_open_server_ids`` reads the same row. The one owner of this predicate: the
+        server-axis registry resolution in ``get_allowed_mcp_servers`` and the tools-axis open
+        channel in ``_resolve_admitted_subject_tools`` both consult it, so the two axes cannot
+        disagree."""
+        if user_api_key_auth is None or not user_api_key_has_admin_view(user_api_key_auth):
+            return False
+        object_permission: Final = user_api_key_auth.object_permission
+        credential_scoped: Final = (
+            not _is_mcp_admitted_user_subject(user_api_key_auth)
+            and object_permission is not None
+            and object_permission.mcp_servers is not None
+        )
+        if credential_scoped:
+            return False
+        return not await MCPRequestHandler._user_places_mcp_ceiling(user_api_key_auth)
+
+    @staticmethod
     async def _apply_user_tool_ceiling(
         allowed_tools: Sequence[str] | None,
         server_id: str,
@@ -2751,12 +2984,14 @@ class MCPRequestHandler:
             verbose_logger.warning("MCP user tool ceiling unresolvable, denying tools on %r: %s", server_id, e)
             return []
 
-        if object_permissions is None or not object_permissions.mcp_tool_permissions:
+        if object_permissions is None:
             return allowed_tools
 
-        user_tools = global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).get(
-            server_id
-        )
+        user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
+            object_permissions.mcp_tool_permissions
+        ).get(server_id)
+        user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
+        user_tools: Final = MCPRequestHandler._union_tool_grants(user_direct_tools, user_toolset_tools)
         if user_tools is None:
             return allowed_tools
         if allowed_tools is None:

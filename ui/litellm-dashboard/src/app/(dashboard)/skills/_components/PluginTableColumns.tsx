@@ -22,7 +22,8 @@ import { copyToClipboard } from "@/utils/dataUtils";
 const CATEGORY_BADGE_CLASS: Record<ReturnType<typeof getCategoryBadgeColor>, string> = {
   blue: "border-info/20 bg-info/10 text-info",
   green: "border-success/20 bg-success/10 text-success",
-  purple: "border-purple-200 bg-purple-50 text-purple-600",
+  purple:
+    "border-purple-200 bg-purple-50 text-purple-600 dark:border-purple-800 dark:bg-purple-950 dark:text-purple-300",
   red: "border-destructive/20 bg-destructive/10 text-destructive",
   orange: "border-warning/20 bg-warning/10 text-warning",
   yellow: "border-warning/20 bg-warning/10 text-warning",

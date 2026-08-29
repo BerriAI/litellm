@@ -98,6 +98,7 @@ class Cache:
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         qdrant_semantic_cache_vector_size: int | None = None,
         semantic_cache_embedding_max_input_tokens: int | None = None,
+        semantic_cache_embedding_timeout: float | None = None,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
@@ -124,6 +125,7 @@ class Cache:
             qdrant_collection_name (str, optional): The name for your qdrant collection. Required if type is "qdrant-semantic".
             similarity_threshold (float, optional): The similarity threshold for semantic-caching, Required if type is "redis-semantic" or "qdrant-semantic".
             semantic_cache_embedding_max_input_tokens (int, optional): Truncate prompts to this many tokens before embedding them for semantic caching. Defaults to the embedding deployment's configured max_input_tokens.
+            semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
 
             # Disk Cache Args
             disk_cache_dir (str, optional): The directory for the disk cache. Defaults to None.
@@ -195,6 +197,7 @@ class Cache:
                 embedding_model=redis_semantic_cache_embedding_model,
                 index_name=redis_semantic_cache_index_name,
                 embedding_max_input_tokens=semantic_cache_embedding_max_input_tokens,
+                embedding_timeout=semantic_cache_embedding_timeout,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.VALKEY_SEMANTIC:
@@ -211,6 +214,7 @@ class Cache:
                 index_name=valkey_semantic_cache_index_name,
                 startup_nodes=redis_startup_nodes,
                 embedding_max_input_tokens=semantic_cache_embedding_max_input_tokens,
+                embedding_timeout=semantic_cache_embedding_timeout,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
@@ -223,6 +227,7 @@ class Cache:
                 embedding_model=qdrant_semantic_cache_embedding_model,
                 vector_size=qdrant_semantic_cache_vector_size,
                 embedding_max_input_tokens=semantic_cache_embedding_max_input_tokens,
+                embedding_timeout=semantic_cache_embedding_timeout,
             )
         elif type == LiteLLMCacheType.LOCAL:
             self.cache = InMemoryCache()

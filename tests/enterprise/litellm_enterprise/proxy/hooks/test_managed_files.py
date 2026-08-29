@@ -1653,7 +1653,7 @@ async def test_afile_retrieve_raises_error_when_no_router_and_file_object_none()
 
     unified_file_id = "test-unified-file-id"
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='LiteLLM Managed File object with id=test-unified-file-id') as exc_info:
         await proxy_managed_files.afile_retrieve(
             file_id=unified_file_id,
             litellm_parent_otel_span=None,
@@ -1719,7 +1719,7 @@ async def test_afile_retrieve_raises_error_for_non_managed_file():
     # Mock get_unified_file_id to return None (file not found)
     proxy_managed_files.get_unified_file_id = AsyncMock(return_value=None)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='LiteLLM Managed File object with id=non-existent-file-id') as exc_info:
         await proxy_managed_files.afile_retrieve(
             file_id="non-existent-file-id",
             litellm_parent_otel_span=None,
@@ -2027,7 +2027,7 @@ async def test_list_batches_from_managed_objects_table_provider_filter_raises_ex
     )
 
     # Filtering by provider should raise Exception
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="Filtering by 'provider' is not supported when using managed") as exc_info:
         await proxy_managed_files.list_user_batches(
             user_api_key_dict=UserAPIKeyAuth(user_id="test-user"),
             limit=10,
@@ -2053,7 +2053,7 @@ async def test_list_batches_from_managed_objects_table_target_model_name_filter_
     )
 
     # Filtering by provider should raise Exception
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="Filtering by 'target_model_names' is not supported when") as exc_info:
         await proxy_managed_files.list_user_batches(
             user_api_key_dict=UserAPIKeyAuth(user_id="test-user"),
             limit=10,

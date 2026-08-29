@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CostTrackingSettingsProps } from "./types";
 import ProviderDiscountTable from "./provider_discount_table";
@@ -22,6 +23,7 @@ import { DocsMenu } from "@/components/HelpLink";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";
+import { useBlockUnpricedConfig } from "./use_block_unpriced_config";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -86,9 +88,16 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
     handleMarginChange,
   } = useMarginConfig({ accessToken });
 
+  const {
+    blockUnpriced,
+    isUpdating: isUpdatingBlockUnpriced,
+    fetchBlockUnpriced,
+    setBlockUnpriced,
+  } = useBlockUnpricedConfig({ accessToken });
+
   useEffect(() => {
     if (accessToken) {
-      Promise.all([fetchDiscountConfig(), fetchMarginConfig()]).finally(() => {
+      Promise.all([fetchDiscountConfig(), fetchMarginConfig(), fetchBlockUnpriced()]).finally(() => {
         setIsFetching(false);
       });
 
@@ -103,7 +112,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
       };
       loadModels();
     }
-  }, [accessToken, fetchDiscountConfig, fetchMarginConfig]);
+  }, [accessToken, fetchDiscountConfig, fetchMarginConfig, fetchBlockUnpriced]);
 
   const handleAddProvider = async () => {
     const success = await addProvider(selectedProvider, newDiscount);
@@ -223,7 +232,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                     ) : (
                       <div className="py-16 px-6 text-center">
                         <svg
-                          className="mx-auto h-12 w-12 text-muted-foreground/70 mb-4"
+                          className="mx-auto h-12 w-12 text-muted-foreground mb-4"
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -278,7 +287,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                 ) : (
                   <div className="py-16 px-6 text-center">
                     <svg
-                      className="mx-auto h-12 w-12 text-muted-foreground/70 mb-4"
+                      className="mx-auto h-12 w-12 text-muted-foreground mb-4"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -301,7 +310,35 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
           </Collapsible>
         )}
 
-        {/* Accordion 3: Pricing Calculator - Available to all roles */}
+        {/* Accordion 3: Block Unpriced Models - Only for proxy admins */}
+        {isProxyAdmin && (
+          <Collapsible className="rounded-lg border">
+            <SectionHeader
+              title="Block Unpriced Models"
+              description="Reject requests for models that have no pricing in the cost map instead of logging them as $0 spend"
+            />
+            <CollapsibleContent className="px-0">
+              <div className="p-6">
+                <div className="flex items-center justify-between">
+                  <div className="pr-6">
+                    <p className="text-foreground font-medium">Block requests for models without pricing</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      When enabled, a request whose resolved model has no cost mapping is rejected with a 403 so an
+                      admin can add pricing for it. Off by default
+                    </p>
+                  </div>
+                  <Switch
+                    checked={blockUnpriced}
+                    disabled={isUpdatingBlockUnpriced || isFetching}
+                    onCheckedChange={(checked) => setBlockUnpriced(checked)}
+                  />
+                </div>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+
+        {/* Accordion 4: Pricing Calculator - Available to all roles */}
         <Collapsible defaultOpen={true} className="rounded-lg border">
           <SectionHeader
             title="Pricing Calculator"

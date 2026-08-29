@@ -164,7 +164,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
             variant="ghost"
             size="icon-xs"
             onClick={() => copyToClipboard(code, copyKey)}
-            className={`absolute top-2 right-2 z-10 transition-all duration-200 ${
+            className={`absolute top-2 right-2 z-raised transition-all duration-200 ${
               copiedStates[copyKey]
                 ? "text-success bg-success/10 border-success/20"
                 : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -185,7 +185,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
   }> = ({ step, title, children }) => (
     <div className="flex gap-4">
       <div className="shrink-0">
-        <div className="w-8 h-8 bg-info text-white rounded-full flex items-center justify-center text-sm font-semibold">
+        <div className="w-8 h-8 bg-info text-info-foreground rounded-full flex items-center justify-center text-sm font-semibold">
           {step}
         </div>
       </div>

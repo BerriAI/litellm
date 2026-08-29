@@ -85,7 +85,7 @@ export function ComparisonPanel({
   };
 
   const disabledOpacity = comparison.useAdvancedParams ? 1 : 0.4;
-  const disabledTextColor = comparison.useAdvancedParams ? "text-foreground" : "text-muted-foreground/70";
+  const disabledTextColor = comparison.useAdvancedParams ? "text-foreground" : "text-muted-foreground";
 
   const handleTogglePopover = () => {
     setPopoverVisible((prev) => !prev);
@@ -100,7 +100,7 @@ export function ComparisonPanel({
       {/* Close button in top right */}
       <button
         onClick={handleClosePopover}
-        className="absolute top-0 right-0 p-1 hover:bg-accent rounded-sm transition-colors text-muted-foreground hover:text-foreground z-10"
+        className="absolute top-0 right-0 p-1 hover:bg-accent rounded-sm transition-colors text-muted-foreground hover:text-foreground z-raised"
       >
         <X size={14} />
       </button>

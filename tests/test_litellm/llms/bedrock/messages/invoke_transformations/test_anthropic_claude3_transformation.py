@@ -2,7 +2,6 @@ import asyncio
 import copy
 import json
 import os
-import sys
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -11,7 +10,6 @@ import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import (
@@ -30,23 +28,6 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so adaptive-thinking detection reads this
-    branch's ``supports_adaptive_thinking`` flags, which the network-fetched
-    ``main`` copy lacks until merge."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -1406,7 +1387,7 @@ def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
         )
 
     assert "reasoning_effort" not in result
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": expected_effort}
 
 
@@ -2954,7 +2935,7 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
         )
 
     result = transform()
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
     monkeypatch.setitem(litellm.model_cost[model], "supports_adaptive_thinking", False)

@@ -754,6 +754,7 @@ model LiteLLM_DailyUserSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -789,6 +790,7 @@ model LiteLLM_DailyOrganizationSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -824,6 +826,7 @@ model LiteLLM_DailyEndUserSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -858,6 +861,7 @@ model LiteLLM_DailyAgentSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -892,6 +896,7 @@ model LiteLLM_DailyTeamSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -929,6 +934,7 @@ model LiteLLM_DailyTagSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -1502,7 +1508,8 @@ model LiteLLM_ShadowEvalJob {
   baseline_model    String?  // reverse only: the fixed model the router is judged against
   judge_model       String
   shadow_percentage Float
-  max_turns         Int      // this key's sample budget: judge at most this many turns
+  max_turns         Int      // sample-count ceiling: the whole budget on pre-max_budget jobs, the error-loop valve otherwise
+  max_budget        Float?   // per-key USD cap on the eval's own shadow + judge spend; null on jobs from before spend budgets
   created_at        DateTime @default(now())
   created_by        String?
   ends_at           DateTime
@@ -1525,10 +1532,26 @@ model LiteLLM_ShadowEvalAttempt {
   shadow_model String?
   confidence   Float?
   judge_cost   Float    @default(0)
+  shadow_cost  Float    @default(0)
+  real_cost    Float?   // NULL = row predates cost measurement; comparisons read only measured rows
+  real_classifier_cost   Float @default(0)
+  shadow_classifier_cost Float @default(0)
+  real_cache_hit Boolean @default(false)
   error        String?
   created_at   DateTime @default(now())
 
   @@index([job_id])
+}
+
+// Per-leg sampling funnel counters the attempt rows cannot derive: requests an
+// admitting job saw but did not judge. attempted = the leg's attempt rows; the
+// leg's eligible traffic = not_sampled + unjudgeable + shed + withheld + attempted.
+model LiteLLM_ShadowEvalFunnel {
+  job_id      String @id
+  not_sampled Int    @default(0)
+  unjudgeable Int    @default(0)
+  shed        Int    @default(0)
+  withheld    Int    @default(0)
 }
 
 // ---------------------------------------------------------------------------

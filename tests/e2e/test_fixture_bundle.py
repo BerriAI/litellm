@@ -1,9 +1,9 @@
-"""Harness coverage for the on-disk fixture bundle format (LIT-5729).
+"""Harness coverage for the on-disk fixture bundle format (LIT-5729/LIT-5745).
 
 No proxy and no ``e2e`` marker: these pin the bundle CONTRACT - the seven-day
 freshness gate that names the bundle's age, record mode's wipe safety (never
 delete a directory that is not a bundle), collision-free per-test slugs, and
-lossless Result round-trips - so replay can never silently drift from what
+grouped-in-order loading - so replay can never silently drift from what
 record wrote.
 """
 
@@ -12,18 +12,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
-from pydantic import BaseModel
-
-from e2e_http import (
-    NetworkError,
-    RateLimitedError,
-    Result,
-    Success,
-    UnauthorizedError,
-    UnknownApiError,
-    ValidationError,
-)
 from fixture_bundle import (
     BUNDLE_FORMAT_VERSION,
     MANIFEST_FILENAME,
@@ -32,26 +20,21 @@ from fixture_bundle import (
     FreshBundle,
     LoadedBundle,
     Manifest,
+    RecordedHttpResponse,
     RecordedRequest,
-    RecordedResult,
+    RecordedStreamedResponse,
     StaleBundle,
     UnreadableBundle,
     UnsafeBundleDir,
     check_freshness,
     format_age,
-    from_result,
     interaction_filename,
     load_bundle,
     prepare_bundle,
     slug_for_test,
-    to_result,
 )
 
 NOW = datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc)
-
-
-class Payload(BaseModel):
-    value: str
 
 
 def write_manifest(
@@ -74,20 +57,8 @@ def plain_request(path: str) -> RecordedRequest:
     return RecordedRequest(method="post", path=path, headers={})
 
 
-class TestResultRoundTrip:
-    @pytest.mark.parametrize(
-        "result",
-        [
-            Success(status_code=201, data=Payload(value="ok")),
-            NetworkError(message="connection refused"),
-            UnauthorizedError(),
-            RateLimitedError(retry_after_seconds=7, body="slow down"),
-            ValidationError(message="bad shape"),
-            UnknownApiError(status_code=502, body="upstream exploded"),
-        ],
-    )
-    def test_every_result_kind_survives_disk_and_back(self, result: Result[Payload]) -> None:
-        assert to_result(from_result(result), Payload) == result
+def plain_response() -> RecordedHttpResponse:
+    return RecordedHttpResponse(status_code=401, headers={}, body_b64="")
 
 
 class TestFreshness:
@@ -144,7 +115,7 @@ class TestPrepareBundle:
         prepared(root).record(
             test_key="old.py::test_old",
             request=plain_request("/stale"),
-            response=RecordedResult(kind="unauthorized"),
+            response=plain_response(),
         )
         assert any(entry.is_dir() for entry in root.iterdir())
         prepared(root)
@@ -193,7 +164,7 @@ class TestRecordAndLoad:
             recorder.record(
                 test_key=key,
                 request=plain_request(path),
-                response=RecordedResult(kind="unauthorized"),
+                response=plain_response(),
             )
         loaded = load_bundle(root)
         assert isinstance(loaded, LoadedBundle)
@@ -208,7 +179,7 @@ class TestRecordAndLoad:
             recorder.record(
                 test_key=key,
                 request=plain_request(f"/{key[-3:]}"),
-                response=RecordedResult(kind="unauthorized"),
+                response=plain_response(),
             )
         loaded = load_bundle(root)
         assert isinstance(loaded, LoadedBundle)
@@ -216,3 +187,45 @@ class TestRecordAndLoad:
             slug_for_test("suite/test_a.py::test_one"),
             slug_for_test("suite/test_b.py::test_two"),
         }
+
+    def test_a_streamed_response_round_trips_through_the_bundle(self, tmp_path: Path) -> None:
+        """LIT-5742: the two response shapes share one file format and are told apart
+        by their ``kind`` tag, so a streamed recording comes back with its chunk list
+        intact rather than as a buffered response with an empty body."""
+        root = tmp_path / "bundle"
+        recorder = prepared(root)
+        key = "suite/test_mod.py::test_streamed"
+        recorder.record(
+            test_key=key,
+            request=plain_request("/messages"),
+            response=RecordedStreamedResponse(
+                status_code=200,
+                headers={"content-type": "text/event-stream"},
+                chunks_b64=["Zmly", "c3Q="],
+                truncated="upstream: hung up",
+            ),
+        )
+        loaded = load_bundle(root)
+        assert isinstance(loaded, LoadedBundle)
+        (interaction,) = loaded.interactions[slug_for_test(key)]
+        response = interaction.response
+        assert isinstance(response, RecordedStreamedResponse)
+        assert response.chunks_b64 == ["Zmly", "c3Q="]
+        assert response.truncated == "upstream: hung up"
+
+    def test_load_bundle_rejects_a_foreign_format_version(self, tmp_path: Path) -> None:
+        """A bundle is written atomically, so a manifest from another format version
+        means every response inside it may have a shape this code cannot read. Loading
+        has to refuse it by name, the way the freshness gate does, rather than parse
+        what it happens to understand."""
+        root = tmp_path / "bundle"
+        prepared(root).record(
+            test_key="suite/test_mod.py::test_old",
+            request=plain_request("/chat"),
+            response=plain_response(),
+        )
+        write_manifest(root, NOW, format_version=BUNDLE_FORMAT_VERSION - 1)
+        loaded = load_bundle(root)
+        assert isinstance(loaded, UnreadableBundle)
+        assert f"format_version {BUNDLE_FORMAT_VERSION - 1}" in loaded.reason
+        assert "E2E_FIXTURE_MODE=record" in loaded.reason

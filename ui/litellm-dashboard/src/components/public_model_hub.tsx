@@ -597,7 +597,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <div className="flex items-center space-x-2 mb-3">
                         <p className="text-sm font-medium text-foreground">Search Models:</p>
                         <Tooltip>
-                          <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground/70 cursor-help" />} />
+                          <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
                           <TooltipContent side="top">
                             Smart search with relevance ranking - finds models containing your search terms, ranked by
                             relevance. Try searching &apos;xai grok-4&apos;, &apos;claude-4&apos;, &apos;gpt-4&apos;, or
@@ -606,7 +606,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         </Tooltip>
                       </div>
                       <div className="relative">
-                        <SearchIcon className="w-4 h-4 text-muted-foreground/70 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                        <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
                         <input
                           type="text"
                           placeholder="Search model names... (smart search enabled)"
@@ -731,14 +731,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <div className="flex items-center space-x-2 mb-3">
                           <p className="text-sm font-medium text-foreground">Search Agents:</p>
                           <Tooltip>
-                            <TooltipTrigger
-                              render={<Info className="w-4 h-4 text-muted-foreground/70 cursor-help" />}
-                            />
+                            <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
                             <TooltipContent side="top">Search agents by name or description</TooltipContent>
                           </Tooltip>
                         </div>
                         <div className="relative">
-                          <SearchIcon className="w-4 h-4 text-muted-foreground/70 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                          <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
                           <input
                             type="text"
                             placeholder="Search agent names or descriptions..."
@@ -799,14 +797,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <div className="flex items-center space-x-2 mb-3">
                           <p className="text-sm font-medium text-foreground">Search MCP Servers:</p>
                           <Tooltip>
-                            <TooltipTrigger
-                              render={<Info className="w-4 h-4 text-muted-foreground/70 cursor-help" />}
-                            />
+                            <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
                             <TooltipContent side="top">Search MCP servers by name or description</TooltipContent>
                           </Tooltip>
                         </div>
                         <div className="relative">
-                          <SearchIcon className="w-4 h-4 text-muted-foreground/70 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                          <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
                           <input
                             type="text"
                             placeholder="Search MCP server names or descriptions..."

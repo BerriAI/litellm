@@ -14,19 +14,21 @@ export type ComplexityTier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
 export interface KeywordTierRule {
   id: string;
   keywords: string[];
-  tier: ComplexityTier;
+  /** A built-in tier name, or with a custom tier set, one of the defined tier names. */
+  tier: string;
 }
 
 interface KeywordTierRulesProps {
   rules: KeywordTierRule[];
   onChange: (rules: KeywordTierRule[]) => void;
   tierLabels?: Partial<Record<ComplexityTier, string>>;
+  tierNames?: string[];
 }
 
 // A row exists only because the caller asked for it, so it reports its own gap straight away
 // rather than waiting for a submit; the submit button is disabled while one is outstanding, so
 // there is no failed attempt left to surface it.
-const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, tierLabels }) => {
+const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, tierLabels, tierNames }) => {
   const emptyRuleIndexes = new Set(emptyKeywordTierRuleIndexes(rules));
 
   const replaceKeywords = (rule: KeywordTierRule) => (keywords: string[]) => {
@@ -34,7 +36,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
   };
 
   const addRule = () => {
-    onChange([...rules, { id: `${Date.now()}`, keywords: [], tier: "COMPLEX" }]);
+    onChange([...rules, { id: `${Date.now()}`, keywords: [], tier: tierNames?.[0] ?? "COMPLEX" }]);
   };
 
   const updateRule = (id: string, updates: Partial<Omit<KeywordTierRule, "id">>) => {
@@ -51,7 +53,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
         <div className="flex items-center gap-2">
           <h4 className="m-0 text-xl font-semibold text-foreground">Keyword Tier Overrides</h4>
           <SimpleTooltip content="Match known terms and force the request straight to a chosen complexity tier, bypassing rule-based scoring.">
-            <Info className="size-4 text-muted-foreground/70" />
+            <Info className="size-4 text-muted-foreground" />
           </SimpleTooltip>
         </div>
         <Button variant="outline" onClick={addRule}>
@@ -97,15 +99,15 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
                   <div style={{ width: 220 }}>
                     <strong className="mb-2 block font-semibold">Route to tier</strong>
                     <Select
-                      items={tierOptions(tierLabels)}
+                      items={tierOptions(tierLabels, tierNames)}
                       value={rule.tier}
-                      onValueChange={(tier: ComplexityTier | null) => tier && updateRule(rule.id, { tier })}
+                      onValueChange={(tier: string | null) => tier && updateRule(rule.id, { tier })}
                     >
                       <SelectTrigger aria-label={`Route keyword rule ${index + 1} to tier`} className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {tierOptions(tierLabels).map((option) => (
+                        {tierOptions(tierLabels, tierNames).map((option) => (
                           <SelectItem key={option.value} value={option.value}>
                             {option.label}
                           </SelectItem>
