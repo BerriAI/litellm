@@ -142,6 +142,10 @@ fn is_public_ipv4(ip: Ipv4Addr) -> bool {
 
 fn is_public_ipv6(ip: Ipv6Addr) -> bool {
     let segments = ip.segments();
+    if matches!(segments, [0x0064, 0xff9b, 0, 0, 0, 0, _, _]) {
+        let embedded_ipv4 = Ipv4Addr::from((u32::from(segments[6]) << 16) | u32::from(segments[7]));
+        return is_public_ipv4(embedded_ipv4);
+    }
     let value = u128::from_be_bytes(ip.octets());
     let is_ietf_assignment = segments[0] == 0x2001
         && segments[1] < 0x0200
@@ -348,6 +352,7 @@ mod tests {
             "fe80::1",
             "2001:db8::1",
             "::ffff:169.254.169.254",
+            "64:ff9b::a00:1",
         ] {
             assert!(!is_public_ip(blocked.parse().unwrap()), "allowed {blocked}");
         }
@@ -356,6 +361,7 @@ mod tests {
             "1.1.1.1",
             "2001:4860:4860::8888",
             "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
         ] {
             assert!(is_public_ip(public.parse().unwrap()), "blocked {public}");
         }
