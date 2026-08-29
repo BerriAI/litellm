@@ -15,15 +15,12 @@ following the OpenAI Response API format.
 """
 
 import json
-import os
-import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 

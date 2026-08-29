@@ -70,6 +70,28 @@ class TestRequestTagsFromMetadata:
     def test_malformed_key_auth_metadata_is_ignored(self):
         assert request_tags_from_metadata({"user_api_key_auth_metadata": "nope"}) is None
 
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            (["bad\x00tag"], ("badtag",)),
+            (["\x00leading"], ("leading",)),
+            (["trailing\x00"], ("trailing",)),
+            (["a\x00b\x00c"], ("abc",)),
+            (["\x00"], ("",)),
+            # every element, not just the first
+            (["clean", "bad\x00tag"], ("clean", "badtag")),
+            (["one\x00", "two\x00", "three\x00"], ("one", "two", "three")),
+        ],
+    )
+    def test_nul_bytes_are_stripped_from_request_tags(self, raw, expected):
+        """Regression for PostgreSQL 22P05: an unstripped NUL aborts the managed object row
+        insert, so the batch is never cost tracked."""
+        assert request_tags_from_metadata({"tags": raw}) == expected
+
+    def test_nul_bytes_are_stripped_from_key_tags_fallback(self):
+        """Regression for PostgreSQL 22P05: the key-tags fallback shares the same helper."""
+        assert request_tags_from_metadata({"user_api_key_auth_metadata": {"tags": ["key\x00tag"]}}) == ("keytag",)
+
 
 @pytest.mark.parametrize(
     "url_route, suffix, expected",
