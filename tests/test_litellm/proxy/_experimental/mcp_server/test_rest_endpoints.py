@@ -464,6 +464,140 @@ class TestTestConnection:
         route = _get_route("/mcp-rest/test/connection", "POST")
         assert _route_has_dependency(route, user_api_key_auth)
 
+    @staticmethod
+    def _capture_execute(monkeypatch) -> dict:
+        captured: dict = {}
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            captured["request"] = request
+            captured["mcp_auth_header"] = mcp_auth_header
+            captured["oauth2_headers"] = oauth2_headers
+            return {"status": "ok"}
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+        return captured
+
+    @staticmethod
+    def _oauth2_authorization_code_payload(**overrides) -> NewMCPServerRequest:
+        return NewMCPServerRequest(
+            server_name="github_mcp",
+            url="https://api.githubcopilot.com/mcp/",
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            authorization_url="https://github.com/login/oauth/authorize",
+            token_url="https://github.com/login/oauth/access_token",
+            **overrides,
+        )
+
+    @pytest.mark.asyncio
+    async def test_forwards_staged_oauth2_bearer(self, monkeypatch):
+        """The just-authorized upstream token rides the request's Authorization header, exactly
+        as /test/tools/list receives it; dropping it makes every authorization_code server fail
+        the connection test that its tools preview passes."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request(
+            {"x-litellm-api-key": "sk-admin-session", "authorization": "Bearer upstream-oauth-token"},
+            path="/mcp-rest/test/connection",
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            self._oauth2_authorization_code_payload(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["oauth2_headers"] == {"Authorization": "Bearer upstream-oauth-token"}
+        assert captured["mcp_auth_header"] is None
+
+    @pytest.mark.asyncio
+    async def test_forwards_staged_auth_value(self, monkeypatch):
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request({"x-litellm-api-key": "sk-admin-session"}, path="/mcp-rest/test/connection")
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com/mcp",
+            auth_type=MCPAuth.bearer_token,
+            credentials={"auth_value": "upstream-static-token"},
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["mcp_auth_header"] == "upstream-static-token"
+        assert captured["oauth2_headers"] is None
+
+    @pytest.mark.asyncio
+    async def test_inherits_stored_credentials_of_saved_server(self, monkeypatch):
+        """The edit form resends a saved server without its masked credential; the stored one
+        must be used, as /test/tools/list already does."""
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        captured = self._capture_execute(monkeypatch)
+        saved = MCPServer(
+            server_id="saved-server-id",
+            name="example",
+            url="https://example.com/mcp",
+            transport="http",
+            auth_type=MCPAuth.bearer_token,
+            authentication_token="stored-upstream-token",
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: saved if server_id == "saved-server-id" else None,
+        )
+        request = _build_request({"x-litellm-api-key": "sk-admin-session"}, path="/mcp-rest/test/connection")
+        payload = NewMCPServerRequest(
+            server_id="saved-server-id",
+            server_name="example",
+            url="https://example.com/mcp",
+            auth_type=MCPAuth.bearer_token,
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["mcp_auth_header"] == "stored-upstream-token"
+        assert captured["request"].credentials == {"auth_value": "stored-upstream-token"}
+
+    @pytest.mark.asyncio
+    async def test_does_not_forward_authorization_that_satisfied_admission(self, monkeypatch):
+        """With no x-litellm-api-key, the Authorization value is the caller's LiteLLM key and
+        must never reach the upstream."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request({"authorization": "Bearer sk-litellm-admission-key"}, path="/mcp-rest/test/connection")
+
+        result = await rest_endpoints.test_connection(
+            request,
+            self._oauth2_authorization_code_payload(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["oauth2_headers"] is None
+
 
 class TestTestToolsList:
     pytestmark = pytest.mark.asyncio

@@ -1,11 +1,13 @@
 import asyncio
 import importlib
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from starlette.datastructures import Headers
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import (
@@ -1130,6 +1132,45 @@ if MCP_AVAILABLE:
         scopes: Final[list[str] | None] = scopes_raw if isinstance(scopes_raw, list) else None
         return client_id, client_secret, scopes
 
+    _STAGED_AUTH_VALUE_AUTH_TYPES: Final = frozenset(
+        (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic, MCPAuth.authorization)
+    )
+
+    @dataclass(frozen=True, slots=True)
+    class _StagedServerTest:
+        request: NewMCPServerRequest
+        mcp_auth_header: str | None
+        oauth2_headers: dict[str, str] | None
+
+    def _stage_server_test(new_mcp_server_request: NewMCPServerRequest, headers: Headers) -> _StagedServerTest:
+        """
+        Resolve the credentials a not-yet-saved server config carries for a preview call.
+
+        Both preview endpoints (``/test/connection`` and ``/test/tools/list``) must hand the
+        temporary client the same credentials, or a server that the saved connection reaches
+        fine fails one of them.
+        """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        request: Final = _inherit_credentials_from_existing_server(new_mcp_server_request)
+        mcp_auth_header: Final = (
+            request.credentials.get("auth_value")
+            if request.auth_type in _STAGED_AUTH_VALUE_AUTH_TYPES and isinstance(request.credentials, dict)
+            else None
+        )
+        # Authorization doubles as the admission fallback (LITELLM_API_KEY_HEADER_NAME_SECONDARY):
+        # when the primary x-litellm-api-key header is absent, the Authorization value is the
+        # caller's LiteLLM key, not an upstream token, and must never be forwarded upstream.
+        oauth2_headers: Final = (
+            MCPRequestHandler._get_oauth2_headers_from_headers(headers)
+            if request.auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
+            and headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
+            else None
+        )
+        return _StagedServerTest(request=request, mcp_auth_header=mcp_auth_header, oauth2_headers=oauth2_headers)
+
     async def _execute_with_mcp_client(
         request: NewMCPServerRequest,
         operation: Callable[..., Awaitable[Mapping[str, object]]],
@@ -1339,6 +1380,8 @@ if MCP_AVAILABLE:
                 },
             )
 
+        staged: Final = _stage_server_test(new_mcp_server_request, request.headers)
+
         async def _test_connection_operation(client):
             async def _noop(session):
                 return "ok"
@@ -1347,8 +1390,10 @@ if MCP_AVAILABLE:
             return {"status": "ok"}
 
         return await _execute_with_mcp_client(
-            new_mcp_server_request,
+            staged.request,
             _test_connection_operation,
+            mcp_auth_header=staged.mcp_auth_header,
+            oauth2_headers=staged.oauth2_headers,
             raw_headers=_safe_get_request_headers(request),
         )
 
@@ -1369,37 +1414,11 @@ if MCP_AVAILABLE:
                 },
             )
 
-        new_mcp_server_request = _inherit_credentials_from_existing_server(new_mcp_server_request)
+        staged: Final = _stage_server_test(new_mcp_server_request, request.headers)
 
         # For OpenAPI spec servers, generate tools from the spec directly
-        if new_mcp_server_request.spec_path:
-            return await _preview_openapi_tools(new_mcp_server_request.spec_path)
-
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-            MCPRequestHandler,
-        )
-
-        headers: Final = request.headers
-
-        mcp_auth_header: str | None = None
-        if new_mcp_server_request.auth_type in {
-            MCPAuth.api_key,
-            MCPAuth.bearer_token,
-            MCPAuth.basic,
-            MCPAuth.authorization,
-        }:
-            credentials: Final = getattr(new_mcp_server_request, "credentials", None)
-            if isinstance(credentials, dict):
-                mcp_auth_header = credentials.get("auth_value")
-
-        # Authorization doubles as the admission fallback (LITELLM_API_KEY_HEADER_NAME_SECONDARY):
-        # when the primary x-litellm-api-key header is absent, the Authorization value is the
-        # caller's LiteLLM key, not an upstream token, and must never be forwarded upstream.
-        oauth2_headers: dict[str, str] | None = None
-        if new_mcp_server_request.auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES and headers.get(
-            MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY
-        ):
-            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
+        if staged.request.spec_path:
+            return await _preview_openapi_tools(staged.request.spec_path)
 
         async def _list_tools_operation(client):
             async def _list_tools_session_operation(session):
@@ -1415,9 +1434,9 @@ if MCP_AVAILABLE:
             }
 
         return await _execute_with_mcp_client(
-            new_mcp_server_request,
+            staged.request,
             _list_tools_operation,
-            mcp_auth_header=mcp_auth_header,
-            oauth2_headers=oauth2_headers,
+            mcp_auth_header=staged.mcp_auth_header,
+            oauth2_headers=staged.oauth2_headers,
             raw_headers=_safe_get_request_headers(request),
         )
