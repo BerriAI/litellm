@@ -413,6 +413,16 @@ class GuardrailRegistry:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
 
+def _apply_configured_bool_override(instance: CustomGuardrail, litellm_params: LitellmParams, param_name: str) -> None:
+    """Override ``instance.<param_name>`` only when ``litellm_params`` explicitly
+    sets it, preserving whatever default the guardrail's own constructor chose
+    otherwise (its constructor default may be True, so blindly copying an
+    absent/None config value would silently clobber it back to False)."""
+    configured: Final = getattr(litellm_params, param_name, None)
+    if configured is not None:
+        setattr(instance, param_name, bool(configured))
+
+
 class InMemoryGuardrailHandler:
     """
     Class that handles initializing guardrails and adding them to the CallbackManager
@@ -534,9 +544,8 @@ class InMemoryGuardrailHandler:
                     "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
                     "scanning, so no request content would ever be scanned. Remove one of the two."
                 )
-            configured_run_in_parallel: Final[bool | None] = getattr(litellm_params, "run_in_parallel", None)
-            if configured_run_in_parallel is not None:
-                custom_guardrail_callback.run_in_parallel = bool(configured_run_in_parallel)
+            for override_param in ("run_in_parallel", "scan_raw_request"):
+                _apply_configured_bool_override(custom_guardrail_callback, litellm_params, override_param)
 
         parsed_guardrail: Final = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
@@ -778,15 +787,23 @@ class InMemoryGuardrailHandler:
         """
         Force re-initialization of a guardrail even if it exists in memory.
         Removes old callback from litellm.callbacks and creates fresh instance.
+
+        If the new config fails to initialize (e.g. an invalid on_flagged
+        combination), the previous instance is restored rather than left
+        deleted: initialize_guardrail's own ValueError/TypeError propagate
+        uncaught, so a caller reaching this point after already deleting the
+        old instance would otherwise leave the guardrail providing no
+        protection at all, not merely "still enforcing the old config."
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
         if not guardrail_id:
             verbose_proxy_logger.error("Cannot reinitialize guardrail without guardrail_id")
             return None
 
-        # Remove from memory if exists (also removes from callbacks)
         previous_guardrail: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
         previous_source: Final = self._sources.get(guardrail_id, source)
+
+        # Remove from memory if exists (also removes from callbacks)
         if guardrail_id in self.IN_MEMORY_GUARDRAILS:
             self.delete_in_memory_guardrail(guardrail_id)
 

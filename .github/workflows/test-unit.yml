@@ -141,6 +141,7 @@ jobs:
             test-path: >-
               tests/test_litellm/proxy/analytics_endpoints
               tests/test_litellm/proxy/management_endpoints
+              tests/test_litellm/proxy/list_api
               tests/test_litellm/proxy/memory
               tests/test_litellm/proxy/guardrails
               tests/test_litellm/proxy/management_helpers
