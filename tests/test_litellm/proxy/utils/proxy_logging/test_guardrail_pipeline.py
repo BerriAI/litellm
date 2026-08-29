@@ -23,7 +23,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _raise_for_streaming_post_call_pipelines
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
@@ -865,3 +865,153 @@ async def test_process_prompt_template_aresponses_swaps_model_and_merges_input(p
     hook_kwargs = logging_obj.async_get_chat_completion_prompt.await_args.kwargs
     assert hook_kwargs["messages"] == [{"role": "user", "content": "Who are you?"}]
     assert hook_kwargs["prompt_spec"] is prompt_spec
+
+
+# ---------------------------------------------------------------------------
+# post_call pipeline execution (LIT-6410)
+# ---------------------------------------------------------------------------
+
+
+def _post_call_pipeline_data(guardrail: str = "gr-post", **extra: Any) -> Dict[str, Any]:
+    pipeline = GuardrailPipeline(
+        mode="post_call",
+        steps=[PipelineStep(guardrail=guardrail, on_pass="allow", on_fail="block")],
+    )
+    return {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "_guardrail_pipelines": [("response-governance", pipeline)],
+            "_pipeline_managed_guardrails": {guardrail},
+        },
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_runs_post_call_pipeline_and_reraises_block(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+
+    class OutputBlockingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            seen["response"] = response
+            raise HTTPException(status_code=400, detail={"error": "output blocked"})
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [OutputBlockingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data()
+    response = litellm.ModelResponse()
+
+    with pytest.raises(HTTPException) as info:
+        await proxy_logging.post_call_success_hook(
+            data=data, response=response, user_api_key_dict=make_user_api_key_auth()
+        )
+
+    assert info.value.detail["error"] == "output blocked"
+    assert seen["response"] is response
+
+
+@pytest.mark.asyncio
+async def test_post_call_pipeline_pass_runs_once_and_leaves_request_data_untouched(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {"count": 0}
+
+    class RecordingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            seen["count"] += 1
+            seen["response"] = response
+            return None
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [RecordingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data()
+    response = litellm.ModelResponse()
+
+    out = await proxy_logging.post_call_success_hook(
+        data=data, response=response, user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert out is response
+    assert seen["response"] is response
+    assert seen["count"] == 1
+    assert "response" not in data
+    assert "guardrails" not in data["metadata"]
+
+
+def test_handle_pipeline_result_modify_response_carries_original_response():
+    result = MagicMock()
+    result.terminal_action = "modify_response"
+    result.modify_response_message = "filtered"
+    response = litellm.ModelResponse()
+
+    with pytest.raises(ModifyResponseException) as info:
+        ProxyLogging._handle_pipeline_result(
+            result=result, data={"model": "m"}, policy_name="p", original_response=response
+        )
+
+    assert info.value.original_response is response
+
+
+def test_handle_pipeline_result_allow_discards_modifications_on_post_call():
+    data = {"a": 1, "metadata": {"guardrails": ["other"]}}
+    result = MagicMock()
+    result.terminal_action = "allow"
+    result.modified_data = {"metadata": {"guardrails": ["gr-post"]}, "response": object()}
+
+    out = ProxyLogging._handle_pipeline_result(
+        result=result, data=data, policy_name="p", original_response=litellm.ModelResponse()
+    )
+
+    assert out is data
+    assert data == {"a": 1, "metadata": {"guardrails": ["other"]}}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_rejects_streaming_request_with_post_call_pipeline(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    data = _post_call_pipeline_data(stream=True)
+
+    with pytest.raises(HTTPException) as info:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=data,
+            call_type="completion",
+            guardrails_only=True,
+        )
+
+    assert info.value.status_code == 400
+    assert info.value.detail["error"]["policies"] == ["response-governance"]
+    assert "stream=false" in info.value.detail["error"]["message"]
+
+
+def test_raise_for_streaming_post_call_pipelines_ignores_non_streaming_and_pre_call():
+    post_call = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="g", on_fail="block")])
+    pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="g", on_fail="block")])
+
+    assert (
+        _raise_for_streaming_post_call_pipelines(
+            {"stream": False, "metadata": {"_guardrail_pipelines": [("p", post_call)]}}
+        )
+        is None
+    )
+    assert _raise_for_streaming_post_call_pipelines({"metadata": {"_guardrail_pipelines": [("p", post_call)]}}) is None
+    assert (
+        _raise_for_streaming_post_call_pipelines(
+            {"stream": True, "metadata": {"_guardrail_pipelines": [("p", pre_call)]}}
+        )
+        is None
+    )
+    assert _raise_for_streaming_post_call_pipelines({"stream": True}) is None
