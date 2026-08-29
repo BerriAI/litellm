@@ -1,0 +1,5 @@
+flags:
+  circleci:
+    # line-misaligned with the PR head, so merging it marks blank and
+    # continuation lines as missed and poisons the patch status
+    joined: false
