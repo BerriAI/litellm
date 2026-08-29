@@ -660,7 +660,7 @@ async def test_scan_raw_request_snapshot_taken_before_pipelines(
         for msg in data.get("messages", []):
             if "SECRET" in msg.get("content", ""):
                 msg["content"] = msg["content"].replace("SECRET", "[REDACTED]")
-        return data
+        return data, None
 
     monkeypatch.setattr(ProxyLogging, "_maybe_execute_pipelines", fake_pipelines)
     monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(scan_raw_request=True)])

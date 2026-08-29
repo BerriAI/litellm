@@ -326,13 +326,14 @@ def test_process_guardrail_metadata_invalid_data_raises(proxy_logging):
 @pytest.mark.asyncio
 async def test_maybe_execute_pipelines_no_pipelines_returns_data(proxy_logging, make_user_api_key_auth):
     data = {"messages": [{"role": "user"}], "model": "m", "temperature": 0.1}
-    out = await proxy_logging._maybe_execute_pipelines(
+    out, replacement = await proxy_logging._maybe_execute_pipelines(
         data=data,
         user_api_key_dict=make_user_api_key_auth(),
         call_type="completion",
         event_hook="pre_call",
     )
     assert out == {"messages": [{"role": "user"}], "model": "m", "temperature": 0.1}
+    assert replacement is None
 
 
 @pytest.mark.asyncio
@@ -344,7 +345,7 @@ async def test_maybe_execute_pipelines_skips_pipelines_with_other_mode(proxy_log
     monkeypatch.setattr(
         "litellm.proxy.policy_engine.pipeline_executor.PipelineExecutor.execute_steps", executed
     )
-    out = await proxy_logging._maybe_execute_pipelines(
+    out, replacement = await proxy_logging._maybe_execute_pipelines(
         data=data,
         user_api_key_dict=make_user_api_key_auth(),
         call_type="completion",
@@ -352,6 +353,7 @@ async def test_maybe_execute_pipelines_skips_pipelines_with_other_mode(proxy_log
     )
     executed.assert_not_called()
     assert out is data
+    assert replacement is None
 
 
 @pytest.mark.parametrize(
@@ -947,6 +949,81 @@ async def test_post_call_pipeline_pass_runs_once_and_leaves_request_data_untouch
     assert seen["count"] == 1
     assert "response" not in data
     assert "guardrails" not in data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_pipeline_replacement_response_reaches_caller(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    masked = litellm.ModelResponse()
+
+    class MaskingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            return masked
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [MaskingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data()
+
+    out = await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert out is masked
+    assert "response" not in data
+
+
+@pytest.mark.asyncio
+async def test_post_call_pipeline_replacement_chains_to_next_step_without_pass_data(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    masked = litellm.ModelResponse()
+    seen: Dict[str, Any] = {}
+
+    class MaskingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            return masked
+
+    class RecordingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            seen["response"] = response
+            return None
+
+    pipeline = GuardrailPipeline(
+        mode="post_call",
+        steps=[
+            PipelineStep(guardrail="gr-mask", on_pass="next", on_fail="block"),
+            PipelineStep(guardrail="gr-audit", on_pass="allow", on_fail="block"),
+        ],
+    )
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            MaskingGuardrail(guardrail_name="gr-mask", event_hook=GuardrailEventHooks.post_call, default_on=False),
+            RecordingGuardrail(guardrail_name="gr-audit", event_hook=GuardrailEventHooks.post_call, default_on=False),
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "_guardrail_pipelines": [("response-governance", pipeline)],
+            "_pipeline_managed_guardrails": {"gr-mask", "gr-audit"},
+        },
+    }
+
+    out = await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert out is masked
+    assert seen["response"] is masked
 
 
 def test_handle_pipeline_result_modify_response_carries_original_response():

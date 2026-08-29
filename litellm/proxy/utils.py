@@ -1603,7 +1603,7 @@ class ProxyLogging:
         event_hook: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
         response: LLMResponseTypes | None = None,
-    ) -> dict:
+    ) -> tuple[dict, LLMResponseTypes | None]:
         """
         Execute guardrail pipelines if any are configured for this request.
 
@@ -1615,17 +1615,20 @@ class ProxyLogging:
         ``scan_raw_request`` evaluates the pristine request, not whatever an
         earlier ``pass_data`` step in the same pipeline already rewrote.
 
-        Returns the (possibly modified) data dict.
+        Returns the (possibly modified) data dict, plus the replacement
+        response when a post_call pipeline step returned one (None when the
+        response is unchanged), matching the flat callback-loop contract.
         """
         pipelines: Final = _policy_pipelines(data)
         if not pipelines:
-            return data
+            return data, None
 
-        step_input: Final = {**data, "response": response} if response is not None else data
-
+        current_response = response  # rebind-ok: chains each pipeline's replacement response into the next
         for policy_name, pipeline in pipelines:
             if pipeline.mode != event_hook:
                 continue
+
+            step_input: dict = {**data, "response": current_response} if current_response is not None else data
 
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,
@@ -1641,10 +1644,13 @@ class ProxyLogging:
                 result=result,
                 data=data,
                 policy_name=policy_name,
-                original_response=response,
+                original_response=current_response,
             )
 
-        return data
+            if current_response is not None and result.modified_data is not None:
+                current_response = result.modified_data.get("response", current_response)
+
+        return data, current_response if current_response is not response else None
 
     @staticmethod
     def _handle_pipeline_result(
@@ -1657,9 +1663,9 @@ class ProxyLogging:
         Handle a PipelineExecutionResult — allow, block, or modify_response.
 
         Returns data dict if allowed, raises on block/modify_response.
-        ``original_response`` is set on the post_call path, where allowed
-        modifications land on the response object in place, so the request
-        payload (already sent upstream) is left untouched.
+        ``original_response`` is set on the post_call path, where the request
+        payload (already sent upstream) must stay untouched; a replacement
+        response carried in ``modified_data`` is adopted by the caller.
         """
         if result.terminal_action == "allow":
             if result.modified_data is not None and original_response is None:
@@ -1822,7 +1828,7 @@ class ProxyLogging:
             _raise_for_streaming_post_call_pipelines(data)
 
             # Execute guardrail pipelines before the normal callback loop
-            data = await self._maybe_execute_pipelines(
+            data, _ = await self._maybe_execute_pipelines(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
@@ -2809,13 +2815,15 @@ class ProxyLogging:
         from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
-        await self._maybe_execute_pipelines(
+        _, pipeline_response = await self._maybe_execute_pipelines(
             data=data,
             user_api_key_dict=user_api_key_dict,
             call_type=getattr(data.get("litellm_logging_obj"), "call_type", None) or "acompletion",
             event_hook="post_call",
             response=response,
         )
+        if pipeline_response is not None:
+            response = pipeline_response  # rebind-ok: adopt the pipeline's replacement response, same contract as the callback loops below
 
         guardrail_callbacks: Final[list[CustomGuardrail]] = []
         other_callbacks: Final[list[CustomLogger]] = []
