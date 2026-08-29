@@ -1,9 +1,9 @@
+import asyncio
 import json
 import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
-
 
 import httpx
 import pytest
@@ -15,7 +15,6 @@ from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, Prisma
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
-
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
@@ -145,7 +144,11 @@ async def test_db_health_transport_error_never_raises(transport_error):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "disconnected"
-    mock_prisma.attempt_db_reconnect.assert_called_once_with(reason="health_readiness_check")
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+        lock_timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+    )
 
 
 @pytest.mark.asyncio
@@ -175,7 +178,11 @@ async def test_db_health_transport_error_reconnect_succeeds(transport_error):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "connected"
-    mock_prisma.attempt_db_reconnect.assert_called_once_with(reason="health_readiness_check")
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+        lock_timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+    )
     assert mock_prisma.health_check.call_count == 2
 
 
@@ -2277,6 +2284,159 @@ async def test_health_readiness_returns_503_when_db_disconnected():
 
 
 @pytest.mark.asyncio
+async def test_health_readiness_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34934.
+
+    allow_requests_on_db_unavailable keeps the proxy serving through a DB
+    outage, so the readiness probe must keep the pod in rotation (200) and
+    report the DB state through the body, not the status code. Otherwise
+    K8s pulls every replica before the request-layer fail-open can run.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_details_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    The detailed readiness payload (public via
+    allow_public_health_readiness_details, or /health/readiness/details)
+    must honor the same flag so probes pointed at it also stay 200.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _get_health_readiness_details,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await _get_health_readiness_details(response=response)
+
+    assert response.status_code == 200
+    assert result["db"] == "disconnected"
+
+
+@pytest.mark.asyncio
+async def test_db_health_readiness_check_bounds_hung_health_check():
+    """
+    A connection that hangs mid-failover must not stall the probe past the
+    kubelet's timeoutSeconds; the DB round-trip is bounded and reported as
+    disconnected instead.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _db_health_readiness_check,
+    )
+
+    async def hang():
+        await asyncio.sleep(60)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = hang
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still down"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
+        "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_CHECK_TIMEOUT_SECONDS",
+        0.05,
+    ):
+        start = time.monotonic()
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
+            result = await _db_health_readiness_check()
+        elapsed = time.monotonic() - start
+
+    assert result["status"] == "disconnected"
+    assert elapsed < 5
+
+
+@pytest.mark.asyncio
+async def test_db_health_readiness_check_overall_deadline_bounds_hung_reconnect():
+    """
+    The whole probe-path DB check (initial check + reconnect + re-check,
+    including reconnect lock waits) runs under one deadline, so a reconnect
+    that hangs on the lock still returns disconnected within the deadline.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _db_health_readiness_check,
+    )
+
+    async def hang(**kwargs):
+        await asyncio.sleep(60)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=httpx.ConnectError("down"))
+    mock_prisma.attempt_db_reconnect = hang
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
+        "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_PROBE_DEADLINE_SECONDS",
+        0.05,
+    ):
+        start = time.monotonic()
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
+            result = await _db_health_readiness_check()
+        elapsed = time.monotonic() - start
+
+    assert result["status"] == "disconnected"
+    assert elapsed < 5
+
+
+@pytest.mark.asyncio
 async def test_health_readiness_returns_200_when_db_connected():
     """Happy path: connected DB keeps the legacy 200."""
     from fastapi import Response
@@ -2746,13 +2906,13 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     app = FastAPI()
     app.include_router(_health_endpoints_module.router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     client = TestClient(app)
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
         respx.mock(assert_all_called=True) as respx_mock,
     ):
         respx_mock.post(host="api.openai.com", path="/v1/images/edits").respond(

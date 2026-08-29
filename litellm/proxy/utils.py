@@ -5580,12 +5580,8 @@ class PrismaClient:
             return True
 
         acquire_task: Final = asyncio.create_task(_acquire_reconnect_lock())
-        done, _pending = await asyncio.wait(
-            {acquire_task},
-            timeout=lock_timeout_seconds,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if acquire_task not in done:
+
+        async def _abandon_acquire_task() -> None:
             acquire_task.cancel()
             try:
                 await acquire_task
@@ -5600,6 +5596,18 @@ class PrismaClient:
                     self._db_reconnect_lock.release()
                 except RuntimeError:
                     pass
+
+        try:
+            done, _pending = await asyncio.wait(
+                {acquire_task},
+                timeout=lock_timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            await asyncio.shield(_abandon_acquire_task())
+            raise
+        if acquire_task not in done:
+            await _abandon_acquire_task()
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt due to lock acquisition timeout. reason=%s timeout=%ss",
                 reason,
