@@ -361,20 +361,12 @@ def _provider_specs(
 ) -> tuple[ProviderSpec, ...]:
     mistral_key: Final = os.environ.get("MISTRAL_API_KEY") or os.environ.get("LITELLM_API_KEY")
     reducto_key: Final = os.environ.get("REDUCTO_API_KEY")
-    mistral_model: Final = os.environ.get("MISTRAL_OCR_MODEL")
-    reducto_model: Final = os.environ.get("REDUCTO_OCR_MODEL")
     mistral_models: Final = (
-        (mistral_model,)
-        if mistral_model is not None
-        else (
-            ("mistral/mistral-ocr-2512", "mistral/mistral-ocr-4-0", "mistral/mistral-ocr-4-1")
-            if requests_only or all_models
-            else ("mistral/mistral-ocr-latest",)
-        )
+        ("mistral/mistral-ocr-2512", "mistral/mistral-ocr-4-0", "mistral/mistral-ocr-4-1")
+        if requests_only or all_models
+        else ("mistral/mistral-ocr-latest",)
     )
-    reducto_models: Final = (
-        (reducto_model,) if reducto_model is not None else ("reducto/parse-v3", "reducto/parse-legacy")
-    )
+    reducto_models: Final = ("reducto/parse-v3", "reducto/parse-legacy")
     mistral_specs: Final = (
         tuple(
             ProviderSpec(
