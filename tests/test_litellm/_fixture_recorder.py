@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from tests.test_litellm._json_fs_cache import JsonFileCache, canonical_json
 from tests.test_litellm.ocr.fixture_models import (
     HttpHeader,
-    LiteLLMOcrInput,
+    MistralOcrSdkInput,
     OcrParityCase,
     RecordedHttpResponse,
 )
@@ -145,14 +145,14 @@ def _recording_provider(spec: ProviderSpec) -> Generator[_RecordingProvider]:
         thread.join(timeout=5)
 
 
-def fixture_cache_key(case_input: LiteLLMOcrInput) -> dict[str, object]:
+def fixture_cache_key(case_input: MistralOcrSdkInput) -> dict[str, object]:
     return case_input.canonical_input()
 
 
 def record_case(
     spec: ProviderSpec,
     root: Path,
-    case_input: LiteLLMOcrInput,
+    case_input: MistralOcrSdkInput,
     sdk_call: Callable[..., object],
 ) -> RecorderResult:
     cache: Final = JsonFileCache(root)
@@ -173,7 +173,7 @@ def record_case(
 def record_cases(
     spec: ProviderSpec,
     root: Path,
-    case_inputs: tuple[LiteLLMOcrInput, ...],
+    case_inputs: tuple[MistralOcrSdkInput, ...],
     sdk_call: Callable[..., object],
     max_concurrency: int,
 ) -> tuple[RecorderResult, ...]:
