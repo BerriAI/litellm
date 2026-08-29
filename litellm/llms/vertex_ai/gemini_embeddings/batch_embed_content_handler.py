@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 
@@ -28,6 +28,9 @@ from .batch_embed_content_transformation import (
     transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class GoogleBatchEmbeddings(VertexLLM):
@@ -125,7 +128,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         api_base: str | None = None,
         encoding=None,
@@ -290,7 +293,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         use_embed_content: bool = False,
         api_key: str | None = None,
         optional_params: dict | None = None,
-        logging_obj: Any | None = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> EmbeddingResponse:
         if client is None:
             _params: Final = {}
