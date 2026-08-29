@@ -1,9 +1,5 @@
 import json
-import os
-import sys
 from datetime import datetime, timedelta, timezone
-
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
 
@@ -207,9 +203,7 @@ def test_aggregation_survives_the_redis_json_round_trip():
         [(_txn("k1", WINDOW_A, 1.0),), (_txn("k1", WINDOW_B, 2.0),)]
     )
 
-    reloaded = WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
-        [json.loads(json.dumps(aggregated))]
-    )
+    reloaded = WindowSpendUpdateQueue.get_aggregated_window_spend_transactions([json.loads(json.dumps(aggregated))])
 
     assert reloaded == aggregated
 
@@ -269,9 +263,7 @@ def test_request_ids_survive_the_redis_json_round_trip():
         [(_txn("k1", WINDOW_A, 1.0, request_id="req-1"),)]
     )
 
-    reloaded = WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
-        [json.loads(json.dumps(aggregated))]
-    )
+    reloaded = WindowSpendUpdateQueue.get_aggregated_window_spend_transactions([json.loads(json.dumps(aggregated))])
 
     assert reloaded[0]["request_ids"] == ("req-1",)
     assert reloaded[0]["spend"] == 1.0
