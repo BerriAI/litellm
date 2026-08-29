@@ -74,7 +74,7 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
             <span className="mb-1 block text-sm font-medium">Minimum match score</span>
             <NumberInput
               value={matchThreshold}
-              onValueChange={(threshold) => onMatchThresholdChange(threshold ?? DEFAULT_MATCH_THRESHOLD)}
+              onValueChange={onMatchThresholdChange}
               min={0}
               max={1}
               step={0.05}

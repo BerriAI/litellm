@@ -4,13 +4,9 @@ import { Input } from "@/components/ui/input";
 
 type NumberInputProps = Omit<React.ComponentProps<"input">, "type" | "value" | "onChange"> & {
   value: number;
-  onValueChange: (value: number | null) => void;
+  onValueChange: (value: number) => void;
 };
 
-/**
- * Number input whose field can be emptied while editing: the parent's value is only re-displayed on blur, so
- * backspacing the last digit leaves the field empty instead of snapping straight back to the current value.
- */
 const NumberInput = React.forwardRef<HTMLInputElement, NumberInputProps>(
   ({ value, onValueChange, onBlur, ...props }, ref) => {
     const [draft, setDraft] = React.useState<string | null>(null);
@@ -23,7 +19,9 @@ const NumberInput = React.forwardRef<HTMLInputElement, NumberInputProps>(
         value={draft ?? String(value)}
         onChange={(event) => {
           setDraft(event.target.value);
-          onValueChange(Number.isNaN(event.target.valueAsNumber) ? null : event.target.valueAsNumber);
+          if (!Number.isNaN(event.target.valueAsNumber)) {
+            onValueChange(event.target.valueAsNumber);
+          }
         }}
         onBlur={(event) => {
           setDraft(null);

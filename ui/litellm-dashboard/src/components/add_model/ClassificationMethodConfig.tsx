@@ -261,13 +261,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     });
   };
 
-  const handleClassifierTimeoutChange = (timeoutMs: number | null) => {
+  const handleClassifierTimeoutChange = (timeoutMs: number) => {
     onChange({
       ...value,
       classifier_llm_config: {
         ...value.classifier_llm_config,
         model: value.classifier_llm_config?.model ?? "",
-        timeout_ms: timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+        timeout_ms: timeoutMs,
       },
     });
   };
@@ -300,18 +300,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({ ...value, classifier_fallback: fallback });
   };
 
-  const handleClassifierContextWindowSizeChange = (windowSize: number | null) => {
-    onChange({
-      ...value,
-      classifier_context_window_size: windowSize ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
-    });
+  const handleClassifierContextWindowSizeChange = (windowSize: number) => {
+    onChange({ ...value, classifier_context_window_size: windowSize });
   };
 
-  const handleClassifierContextBudgetCharsChange = (budgetChars: number | null) => {
-    onChange({
-      ...value,
-      classifier_context_budget_chars: budgetChars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
-    });
+  const handleClassifierContextBudgetCharsChange = (budgetChars: number) => {
+    onChange({ ...value, classifier_context_budget_chars: budgetChars });
   };
 
   const handleClassifierContextIncludeAssistantTurnsChange = (includeAssistantTurns: boolean) => {

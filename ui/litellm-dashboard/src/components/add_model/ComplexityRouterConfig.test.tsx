@@ -291,6 +291,23 @@ describe("ComplexityRouterConfig", () => {
     expect(input).toHaveValue(9);
   });
 
+  it("should not save a value for a context window size field left empty", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+      classifier_context_window_size: 8,
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
+    fireEvent.change(within(windowSizeSection).getByRole("spinbutton"), { target: { value: "" } });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("should render the custom technical keywords field", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));

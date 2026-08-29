@@ -42,8 +42,8 @@ const AdaptiveRoutingConfig: React.FC<AdaptiveRoutingConfigProps> = ({ value, on
     onChange({ ...value, adaptive_eligible: eligible });
   };
 
-  const handleTierDistancePenaltyChange = (penalty: number | null) => {
-    onChange({ ...value, tier_distance_penalty: penalty ?? DEFAULT_TIER_DISTANCE_PENALTY });
+  const handleTierDistancePenaltyChange = (penalty: number) => {
+    onChange({ ...value, tier_distance_penalty: penalty });
   };
 
   return (
