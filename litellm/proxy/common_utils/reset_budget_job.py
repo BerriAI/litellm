@@ -1215,7 +1215,12 @@ class ResetBudgetJob:
         reset_at_str: Final = window.get("reset_at")
         if not reset_at_str:
             return False
-        reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        parsed_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
+        reset_at: Final = (
+            parsed_reset_at.replace(tzinfo=timezone.utc)
+            if parsed_reset_at.tzinfo is None
+            else parsed_reset_at.astimezone(timezone.utc)
+        )
         if reset_at > now:
             return False
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_cache)
@@ -1259,7 +1264,7 @@ class ResetBudgetJob:
 
         from litellm.proxy.proxy_server import spend_counter_cache
 
-        now: Final = datetime.utcnow()
+        now: Final = datetime.now(timezone.utc)
         for source in _WINDOW_SOURCES:
             try:
                 await self._reset_windows_for(source=source, now=now, spend_counter_cache=spend_counter_cache)
