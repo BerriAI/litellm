@@ -1876,6 +1876,11 @@ class ProxyBaseLLMRequestProcessing:
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
+        from litellm.proxy.agent_endpoints.a2a_routing import (
+            authorize_a2a_agent_before_hooks,
+            merge_a2a_agent_guardrails_before_hooks,
+        )
+
         logging_obj, self.data = litellm.utils.function_setup(
             original_function=route_type,
             rules_obj=litellm.utils.Rules(),
@@ -1884,6 +1889,13 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        self.data = await authorize_a2a_agent_before_hooks(
+            data=self.data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        self.data = await merge_a2a_agent_guardrails_before_hooks(self.data)
 
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set
@@ -1900,11 +1912,31 @@ class ProxyBaseLLMRequestProcessing:
             trust_client_model_info=False,
         )
 
+        authorized_model = self.data.get("model")
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
         )
+
+        if self.data.get("model") != authorized_model:
+            self.data = await authorize_a2a_agent_before_hooks(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+            )
+            self.data = await merge_a2a_agent_guardrails_before_hooks(self.data)
+            self.data = _check_and_merge_model_level_guardrails(
+                data=self.data,
+                llm_router=llm_router,
+                trust_client_model_info=False,
+            )
+            if isinstance(self.data.get("model"), str) and self.data["model"].startswith("a2a/"):
+                self.data = await proxy_logging_obj.pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=self.data,
+                    call_type=route_type,
+                    guardrails_only=True,
+                )
 
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
@@ -2539,6 +2571,7 @@ class ProxyBaseLLMRequestProcessing:
             ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
                 logging_obj=logging_obj,
                 exception_raised=_exception_raised,
+                response=response,
             )
 
             # Streaming cleanup: if an exception occurred AND the deferred
@@ -3023,6 +3056,7 @@ class ProxyBaseLLMRequestProcessing:
     def _flush_deferred_async_logging(
         logging_obj: Any,
         exception_raised: bool,
+        response: Any | None = None,
     ) -> None:
         """
         Fire the deferred async-success closure stored by wrapper_async, then
@@ -3053,7 +3087,7 @@ class ProxyBaseLLMRequestProcessing:
         if exception_raised:
             return
         try:
-            _enqueue_fn()
+            _enqueue_fn(response) if response is not None else _enqueue_fn()
         except Exception as e:
             verbose_proxy_logger.exception("Error firing deferred logging: %s", e)
 

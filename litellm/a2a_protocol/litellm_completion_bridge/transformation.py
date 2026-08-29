@@ -34,6 +34,7 @@ class A2AStreamingContext:
         self.request_id = request_id
         self.task_id = str(uuid4())
         self.context_id = str(uuid4())
+        self.artifact_id = str(uuid4())
         self.input_message = input_message
         self.accumulated_text = ""
         self.has_emitted_task = False
@@ -152,6 +153,22 @@ class A2ACompletionBridgeTransformation:
         return [openai_message]
 
     @staticmethod
+    def _model_dump(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        dump = getattr(value, "model_dump", None)
+        if callable(dump):
+            dumped = dump(exclude_none=True)
+            if isinstance(dumped, dict):
+                return dumped
+        dump = getattr(value, "dict", None)
+        if callable(dump):
+            dumped = dump(exclude_none=True)
+            if isinstance(dumped, dict):
+                return dumped
+        return {}
+
+    @staticmethod
     def openai_response_to_a2a_response(
         response: Any,
         request_id: str | None = None,
@@ -166,20 +183,78 @@ class A2ACompletionBridgeTransformation:
         Returns:
             A2A SendMessageResponse dict
         """
-        # Extract content from response
-        content = ""
-        if hasattr(response, "choices") and response.choices:
-            choice: Final = response.choices[0]
-            if hasattr(choice, "message") and choice.message:
-                content = choice.message.content or ""
+        serialized_choices: list[dict[str, Any]] = []
+        raw_choices: Final = getattr(response, "choices", None)
+        if raw_choices:
+            for choice in raw_choices:
+                raw_message = getattr(choice, "message", None)
+                message_fields: Final = A2ACompletionBridgeTransformation._model_dump(raw_message)
+                raw_content = message_fields.get("content")
+                if raw_content is None:
+                    raw_content = getattr(raw_message, "content", None)
+                content: Final = raw_content if isinstance(raw_content, str) else ""
+                message: Final = {
+                    "kind": "message",
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": content}],
+                    "messageId": uuid4().hex,
+                }
+                raw_tool_calls = message_fields.get("tool_calls")
+                if raw_tool_calls:
+                    message["tool_calls"] = [
+                        call.model_dump(exclude_none=True)
+                        if hasattr(call, "model_dump")
+                        else call.dict(exclude_none=True)
+                        if hasattr(call, "dict")
+                        else call
+                        for call in raw_tool_calls
+                    ]
+                for field in (
+                    "annotations",
+                    "audio",
+                    "function_call",
+                    "images",
+                    "provider_specific_fields",
+                    "reasoning_content",
+                    "reasoning_items",
+                    "refusal",
+                    "thinking_blocks",
+                ):
+                    value = message_fields.get(field)
+                    if value is not None:
+                        message[field] = value
+                choice_fields: Final = A2ACompletionBridgeTransformation._model_dump(choice)
+                finish_reason: Final = choice_fields.get("finish_reason")
+                if finish_reason is None:
+                    raw_finish_reason = getattr(choice, "finish_reason", None)
+                    finish_reason = raw_finish_reason if isinstance(raw_finish_reason, str) else None
+                if finish_reason:
+                    message["finish_reason"] = finish_reason
+                choice_payload: Final[dict[str, Any]] = {
+                    "index": len(serialized_choices),
+                    "message": message,
+                }
+                logprobs = choice_fields.get("logprobs")
+                if logprobs is None:
+                    raw_logprobs = getattr(choice, "logprobs", None)
+                    logprobs = raw_logprobs if isinstance(raw_logprobs, dict) else None
+                if logprobs is not None:
+                    choice_payload["logprobs"] = logprobs
+                    message["logprobs"] = logprobs
+                serialized_choices.append(choice_payload)
 
-        # Build A2A message
-        a2a_message: Final = {
-            "kind": "message",
-            "role": "agent",
-            "parts": [{"kind": "text", "text": content}],
-            "messageId": uuid4().hex,
-        }
+        a2a_message: Final = (
+            serialized_choices[0]["message"]
+            if serialized_choices
+            else {
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": ""}],
+                "messageId": uuid4().hex,
+            }
+        )
+
+        usage: Final = getattr(response, "usage", None)
 
         # Build A2A response
         a2a_response: Final = {
@@ -187,8 +262,16 @@ class A2ACompletionBridgeTransformation:
             "id": request_id,
             "result": a2a_message,
         }
+        if usage is not None:
+            a2a_response["usage"] = usage.model_dump(exclude_none=True) if hasattr(usage, "model_dump") else usage
+        for field in ("system_fingerprint", "service_tier"):
+            value = getattr(response, field, None)
+            if value is not None:
+                a2a_response[field] = value
+        if len(serialized_choices) > 1:
+            a2a_response["choices"] = serialized_choices
 
-        verbose_logger.debug("OpenAI -> A2A transform: content_length=%s", len(content))
+        verbose_logger.debug("OpenAI -> A2A transform: content_length=%s", len(a2a_message["parts"][0]["text"]))
 
         return a2a_response
 
@@ -277,6 +360,7 @@ class A2ACompletionBridgeTransformation:
     def create_artifact_update_event(
         ctx: A2AStreamingContext,
         text: str,
+        index: int | None = None,
     ) -> dict[str, Any]:
         """
         Create an artifact update event with content.
@@ -285,15 +369,18 @@ class A2ACompletionBridgeTransformation:
             ctx: Streaming context
             text: The text content for the artifact
         """
+        artifact: Final[dict[str, Any]] = {
+            "artifactId": ctx.artifact_id,
+            "name": "response",
+            "parts": [{"kind": "text", "text": text}],
+        }
+        if index is not None:
+            artifact["index"] = index
         return {
             "id": ctx.request_id,
             "jsonrpc": "2.0",
             "result": {
-                "artifact": {
-                    "artifactId": str(uuid4()),
-                    "name": "response",
-                    "parts": [{"kind": "text", "text": text}],
-                },
+                "artifact": artifact,
                 "contextId": ctx.context_id,
                 "kind": "artifact-update",
                 "taskId": ctx.task_id,

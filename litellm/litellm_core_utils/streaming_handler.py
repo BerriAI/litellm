@@ -1226,6 +1226,15 @@ class CustomStreamWrapper:
         completion_obj: dict[str, Any],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
+        if isinstance(chunk, ModelResponseStream) and self.custom_llm_provider == "a2a":
+            model_response = chunk
+            model_response.model = self.model
+            finish_reasons = [getattr(choice, "finish_reason", None) for choice in chunk.choices]
+            if finish_reasons and all(isinstance(reason, str) and reason for reason in finish_reasons):
+                self.received_finish_reason = finish_reasons[0]
+                self.sent_last_chunk = True
+            return _ProviderChunkEarlyReturn(model_response)
+
         if (
             isinstance(chunk, ModelResponseStream)
             and self.custom_llm_provider is not None
@@ -1264,7 +1273,13 @@ class CustomStreamWrapper:
                 if not _chunk_has_content and (not isinstance(chunk, dict) or "provider_specific_fields" not in chunk):
                     raise StopIteration
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
+            chunk_id = anthropic_response_obj.get("id")
+            if isinstance(chunk_id, str) and chunk_id.strip():
+                model_response = self.set_model_id(chunk_id, model_response)
             completion_obj["content"] = anthropic_response_obj["text"]
+            chunk_index = anthropic_response_obj.get("index")
+            if isinstance(chunk_index, int):
+                model_response.choices[0].index = chunk_index
             if anthropic_response_obj["is_finished"]:
                 self.received_finish_reason = anthropic_response_obj["finish_reason"]
 
@@ -1279,7 +1294,8 @@ class CustomStreamWrapper:
                 )
 
             if "tool_use" in anthropic_response_obj and anthropic_response_obj["tool_use"] is not None:
-                completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]
+                tool_use = anthropic_response_obj["tool_use"]
+                completion_obj["tool_calls"] = tool_use if isinstance(tool_use, list) else [tool_use]
 
             if (
                 "provider_specific_fields" in anthropic_response_obj
@@ -2611,6 +2627,8 @@ def convert_generic_chunk_to_model_response_stream(
 ) -> ModelResponseStream:
     from litellm.types.utils import Delta
 
+    tool_use = chunk.get("tool_use", None)
+    tool_calls = tool_use if isinstance(tool_use, list) else [tool_use] if tool_use is not None else None
     model_response_stream: Final = ModelResponseStream(
         id=str(uuid.uuid4()),
         model="",
@@ -2619,7 +2637,7 @@ def convert_generic_chunk_to_model_response_stream(
                 index=chunk.get("index", 0),
                 delta=Delta(
                     content=chunk["text"],
-                    tool_calls=chunk.get("tool_use", None),
+                    tool_calls=tool_calls,
                 ),
             )
         ],

@@ -4,6 +4,8 @@ Helper functions for appending A2A agents to model lists.
 Used by proxy model endpoints to make agents appear in UI alongside models.
 """
 
+from typing import Final
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -33,11 +35,14 @@ async def append_agents_to_model_group(
                 for agent_id in allowed_agent_ids:
                     agent = global_agent_registry.get_agent_by_id(agent_id)
                     if agent is not None:
+                        agent_params: Final = agent.litellm_params
+                        provider_value: Final = agent_params.get("custom_llm_provider") if agent_params else None
+                        custom_llm_provider: Final = provider_value if isinstance(provider_value, str) else "a2a"
                         model_groups.append(
                             ModelGroupInfoProxy(
                                 model_group=f"a2a/{agent.agent_name}",
                                 mode="chat",
-                                providers=["a2a"],
+                                providers=[custom_llm_provider],
                             )
                         )
             case _:
@@ -70,12 +75,15 @@ async def append_agents_to_model_info(
                 for agent_id in allowed_agent_ids:
                     agent = global_agent_registry.get_agent_by_id(agent_id)
                     if agent is not None:
+                        agent_params: Final = agent.litellm_params
+                        provider_value: Final = agent_params.get("custom_llm_provider") if agent_params else None
+                        custom_llm_provider: Final = provider_value if isinstance(provider_value, str) else "a2a"
                         models.append(
                             {
                                 "model_name": f"a2a/{agent.agent_name}",
                                 "litellm_params": {
                                     "model": f"a2a/{agent.agent_name}",
-                                    "custom_llm_provider": "a2a",
+                                    "custom_llm_provider": custom_llm_provider,
                                 },
                                 "model_info": {
                                     "id": agent.agent_id,

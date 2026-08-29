@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.types.utils import Choices, Message, ModelResponse
+
 
 class TestA2AStreamingTransformation:
     """Test the A2A streaming transformation creates proper events."""
@@ -26,9 +28,7 @@ class TestA2AStreamingTransformation:
             "parts": [{"text": "Reply to ticket #4823"}],
             "metadata": {"skillId": "draft_reply"},
         }
-        openai_messages = (
-            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
-        )
+        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         # Metadata is forwarded on the run payload only, not duplicated on messages.
         assert "metadata" not in openai_messages[0]
 
@@ -174,10 +174,7 @@ class TestA2AStreamingTransformation:
         assert "artifactId" in event["result"]["artifact"]
         assert event["result"]["artifact"]["name"] == "response"
         assert event["result"]["artifact"]["parts"][0]["kind"] == "text"
-        assert (
-            event["result"]["artifact"]["parts"][0]["text"]
-            == "Hello, I am an AI assistant."
-        )
+        assert event["result"]["artifact"]["parts"][0]["text"] == "Hello, I am an AI assistant."
 
 
 @pytest.mark.asyncio
@@ -197,6 +194,8 @@ async def test_handle_streaming_emits_proper_events():
     mock_chunk2.choices = [MagicMock()]
     mock_chunk2.choices[0].delta = MagicMock()
     mock_chunk2.choices[0].delta.content = " world"
+    mock_chunk2.choices[0].finish_reason = "length"
+    mock_chunk2.usage = {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
 
     async def mock_streaming_response():
         yield mock_chunk1
@@ -222,8 +221,8 @@ async def test_handle_streaming_emits_proper_events():
         ):
             events.append(event)
 
-        # Should have 4 events: task, working, artifact, completed
-        assert len(events) == 4
+        # Should have 5 events: task, working, two artifacts, completed
+        assert len(events) == 5
 
         # Event 1: task submitted
         assert events[0]["result"]["kind"] == "task"
@@ -234,14 +233,299 @@ async def test_handle_streaming_emits_proper_events():
         assert events[1]["result"]["status"]["state"] == "working"
         assert events[1]["result"]["final"] is False
 
-        # Event 3: artifact update with accumulated content
+        # Event 3: first artifact update
         assert events[2]["result"]["kind"] == "artifact-update"
-        assert events[2]["result"]["artifact"]["parts"][0]["text"] == "Hello world"
+        assert events[2]["result"]["artifact"]["parts"][0]["text"] == "Hello"
 
-        # Event 4: status completed
-        assert events[3]["result"]["kind"] == "status-update"
-        assert events[3]["result"]["status"]["state"] == "completed"
-        assert events[3]["result"]["final"] is True
+        # Event 4: second artifact update
+        assert events[3]["result"]["kind"] == "artifact-update"
+        assert events[3]["result"]["artifact"]["parts"][0]["text"] == " world"
+        assert (
+            events[2]["result"]["artifact"]["artifactId"]
+            == events[3]["result"]["artifact"]["artifactId"]
+        )
+
+        # Event 5: status completed
+        assert events[4]["result"]["kind"] == "status-update"
+        assert events[4]["result"]["status"]["state"] == "completed"
+        assert events[4]["result"]["final"] is True
+        assert events[4]["result"]["finish_reason"] == "length"
+        assert events[4]["usage"]["total_tokens"] == 5
+
+
+def test_build_completion_params_keeps_bridge_routing_fields():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    params = A2ACompletionBridgeHandler._build_completion_params(
+        params={"message": {"role": "user", "parts": []}},
+        litellm_params={
+            "custom_llm_provider": "openai",
+            "model": "agent",
+            "api_base": "https://untrusted.example",
+            "stream": False,
+        },
+        api_base="https://configured.example",
+        agent_extra_headers=None,
+        stream=True,
+    )
+
+    assert params["api_base"] == "https://configured.example"
+    assert params["stream"] is True
+
+
+def test_build_completion_params_drops_proxy_only_databricks_oauth():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    params = A2ACompletionBridgeHandler._build_completion_params(
+        params={"message": {"role": "user", "parts": []}},
+        litellm_params={
+            "custom_llm_provider": "databricks",
+            "model": "agent",
+            "databricks_oauth": {"client_id": "id"},
+        },
+        api_base="https://configured.example",
+        agent_extra_headers=None,
+        stream=False,
+    )
+
+    assert "databricks_oauth" not in params
+
+
+@pytest.mark.asyncio
+async def test_handle_streaming_accumulates_logprobs_and_provider_metadata():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    chunks = []
+    for token in ("a", "b"):
+        choice = MagicMock()
+        choice.index = 0
+        choice.finish_reason = None
+        choice.delta.content = token
+        choice.logprobs = {"content": [{"token": token}]}
+        chunk = MagicMock()
+        chunk.choices = [choice]
+        chunk.system_fingerprint = "fp-1"
+        chunk.service_tier = "scale"
+        chunks.append(chunk)
+    chunks[-1].choices[0].finish_reason = "stop"
+
+    async def mock_streaming_response():
+        for chunk in chunks:
+            yield chunk
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = mock_streaming_response()
+        events = [
+            event
+            async for event in A2ACompletionBridgeHandler.handle_streaming(
+                request_id="req-metadata",
+                params={"message": {"role": "user", "parts": []}},
+                litellm_params={"custom_llm_provider": "openai", "model": "agent"},
+            )
+        ]
+
+    result = events[-1]
+    assert result["system_fingerprint"] == "fp-1"
+    assert result["service_tier"] == "scale"
+    assert result["result"]["choices"][0]["logprobs"]["content"] == [
+        {"token": "a"},
+        {"token": "b"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_handle_streaming_preserves_multiple_choices():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    mock_chunk = MagicMock()
+    first_choice = MagicMock()
+    first_choice.index = 0
+    first_choice.finish_reason = None
+    first_choice.delta.content = "first"
+    second_choice = MagicMock()
+    second_choice.index = 1
+    second_choice.finish_reason = "length"
+    second_choice.delta.content = "second"
+    mock_chunk.choices = [first_choice, second_choice]
+
+    async def mock_streaming_response():
+        yield mock_chunk
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = mock_streaming_response()
+        events = [
+            event
+            async for event in A2ACompletionBridgeHandler.handle_streaming(
+                request_id="req-choices",
+                params={"message": {"role": "user", "parts": []}},
+                litellm_params={"custom_llm_provider": "langgraph", "model": "agent", "n": 2},
+            )
+        ]
+
+    choices = events[-1]["result"]["choices"]
+    assert [choice["index"] for choice in choices] == [0, 1]
+    assert [choice["message"]["parts"][0]["text"] for choice in choices] == ["", ""]
+    assert choices[1]["finish_reason"] == "length"
+
+
+@pytest.mark.asyncio
+async def test_handle_streaming_preserves_non_text_delta_fields():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    delta = MagicMock()
+    delta.content = ""
+    delta.tool_calls = None
+    delta.model_dump.return_value = {
+        "audio": {"data": "abc"},
+        "reasoning_content": "thinking",
+        "provider_specific_fields": {"trace_id": "trace-1"},
+    }
+    choice = MagicMock()
+    choice.index = 0
+    choice.finish_reason = "stop"
+    choice.delta = delta
+    choice.logprobs = {"content": []}
+    chunk = MagicMock()
+    chunk.choices = [choice]
+
+    async def mock_streaming_response():
+        yield chunk
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = mock_streaming_response()
+        events = [
+            event
+            async for event in A2ACompletionBridgeHandler.handle_streaming(
+                request_id="req-fields",
+                params={"message": {"role": "user", "parts": []}},
+                litellm_params={"custom_llm_provider": "langgraph", "model": "agent"},
+            )
+        ]
+
+    result = events[-1]["result"]
+    choice_result = result["choices"][0]
+    assert choice_result["delta"] == {
+        "audio": {"data": "abc"},
+        "reasoning_content": "thinking",
+        "provider_specific_fields": {"trace_id": "trace-1"},
+    }
+    assert choice_result["logprobs"] == {"content": []}
+
+
+@pytest.mark.asyncio
+async def test_provider_config_receives_full_message_history():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    provider_config = MagicMock()
+    provider_config.handle_non_streaming = AsyncMock(return_value={"result": {}})
+    messages = [
+        {"role": "system", "content": "Be concise"},
+        {"role": "user", "content": "Hello"},
+    ]
+    params = {
+        "message": {"role": "user", "parts": []},
+        "messages": messages,
+    }
+
+    with patch(
+        "litellm.a2a_protocol.litellm_completion_bridge.handler.A2AProviderConfigManager.get_provider_config",
+        return_value=provider_config,
+    ):
+        await A2ACompletionBridgeHandler.handle_non_streaming(
+            request_id="req-1",
+            params=params,
+            litellm_params={"custom_llm_provider": "langflow", "model": "flow"},
+        )
+
+    assert provider_config.handle_non_streaming.await_args.kwargs["params"]["messages"] == messages
+
+
+@pytest.mark.asyncio
+async def test_native_provider_config_drops_internal_message_history():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    provider_config = MagicMock()
+    provider_config.handle_non_streaming = AsyncMock(return_value={"result": {}})
+    params = {
+        "message": {"role": "user", "parts": []},
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    with patch(
+        "litellm.a2a_protocol.litellm_completion_bridge.handler.A2AProviderConfigManager.get_provider_config",
+        return_value=provider_config,
+    ):
+        await A2ACompletionBridgeHandler.handle_non_streaming(
+            request_id="req-native",
+            params=params,
+            litellm_params={"custom_llm_provider": "pydantic_ai_agents", "model": "agent"},
+        )
+
+    assert provider_config.handle_non_streaming.await_args.kwargs["params"] == {
+        "message": params["message"]
+    }
+
+
+def test_response_transform_preserves_audio_and_logprobs():
+    from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
+        A2ACompletionBridgeTransformation,
+    )
+
+    response = ModelResponse(
+        id="resp-1",
+        model="test-model",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="hello",
+                    role="assistant",
+                    audio={"data": "abc", "expires_at": 1, "transcript": "hello"},
+                ),
+                logprobs={"content": []},
+            )
+        ],
+    )
+
+    transformed = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(response)
+
+    assert transformed["result"]["audio"]["data"] == "abc"
+    assert transformed["result"]["logprobs"] == {"content": []}
+
+
+def test_response_transform_preserves_refusal():
+    from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
+        A2ACompletionBridgeTransformation,
+    )
+
+    message = MagicMock()
+    message.model_dump.return_value = {
+        "content": None,
+        "refusal": "I cannot help with that request.",
+    }
+    choice = MagicMock(message=message)
+    choice.model_dump.return_value = {"finish_reason": "stop"}
+    response = MagicMock(choices=[choice], usage=None)
+
+    transformed = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(response)
+
+    assert transformed["result"]["refusal"] == "I cannot help with that request."
+    assert transformed["result"]["parts"] == [{"kind": "text", "text": ""}]
 
 
 @pytest.mark.asyncio

@@ -6505,6 +6505,71 @@ class TestPerRequestModelGroupAlias:
         assert merged_for == ["group-b"]
 
 
+    @pytest.mark.asyncio
+    async def test_a2a_reroute_runs_target_guardrails(self, monkeypatch):
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": "source", "messages": [{"role": "user", "content": "hello"}]}
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        hook_modes = []
+
+        async def reroute_once(user_api_key_dict, data, call_type, guardrails_only=False):
+            hook_modes.append(guardrails_only)
+            if len(hook_modes) == 1:
+                data["model"] = "a2a/agent"
+            return data
+
+        async def passthrough(data, user_api_key_dict):
+            return data
+
+        async def passthrough_data_only(data):
+            return data
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=reroute_once)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr(
+            litellm.utils,
+            "function_setup",
+            lambda original_function, rules_obj, start_time, **kwargs: (MagicMock(), kwargs),
+        )
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "_check_and_merge_model_level_guardrails",
+            lambda data, llm_router, trust_client_model_info=True: data,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.a2a_routing.authorize_a2a_agent_before_hooks",
+            passthrough,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.a2a_routing.merge_a2a_agent_guardrails_before_hooks",
+            passthrough_data_only,
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=None,
+            route_type="acompletion",
+            llm_router=None,
+        )
+
+        assert returned_data["model"] == "a2a/agent"
+        assert hook_modes == [False, True]
+
+
 class TestInjectCostIntoUsageDict:
     @staticmethod
     def _expected_cost(model, prompt_tokens, completion_tokens):

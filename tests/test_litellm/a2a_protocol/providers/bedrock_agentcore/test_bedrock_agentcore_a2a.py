@@ -10,10 +10,9 @@ Verifies that:
 """
 
 import json
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 SAMPLE_ARN = "arn:aws:bedrock-agentcore:us-west-2:123456789:runtime/my_agent"
 SAMPLE_MODEL = f"bedrock/agentcore/{SAMPLE_ARN}"
@@ -482,6 +481,7 @@ class TestHandlerIntegration:
                 api_base=None,
                 litellm_params=SAMPLE_LITELLM_PARAMS,
                 agent_extra_headers=None,
+                agent_static_headers=None,
             )
 
     @pytest.mark.asyncio

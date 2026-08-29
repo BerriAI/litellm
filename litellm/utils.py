@@ -1928,11 +1928,11 @@ def client(original_function):
             if not _is_litellm_internal_call:
                 if getattr(logging_obj, "_defer_async_logging", False):
 
-                    def _enqueue_deferred_logging() -> None:
+                    def _enqueue_deferred_logging(final_response=None) -> None:
                         asyncio.create_task(
                             _client_async_logging_helper(
                                 logging_obj=logging_obj,
-                                result=result,
+                                result=final_response if final_response is not None else result,
                                 start_time=start_time,
                                 end_time=end_time,
                                 is_completion_with_fallbacks=is_completion_with_fallbacks,

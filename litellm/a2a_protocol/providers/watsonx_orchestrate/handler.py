@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final, NamedTuple, Protocol
 
 import httpx
@@ -26,7 +26,32 @@ _IBM_CLOUD_IAM_URL: Final = "https://iam.cloud.ibm.com/identity/token"
 _POLL_INTERVAL_S: Final = 2.0
 _MAX_POLL_ATTEMPTS: Final = 90
 _TOKEN_CACHE_TTL_BUFFER_S: Final = 60
+_WXO_RESERVED_HEADERS: Final = frozenset({"accept", "authorization", "content-type"})
 _token_cache: Final[dict[str, tuple[str, float]]] = {}
+
+
+def _build_wxo_headers(
+    token: str,
+    accept: str,
+    static_headers: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    headers: dict[str, str] = (
+        {
+            key: value
+            for key, value in static_headers.items()
+            if isinstance(key, str) and isinstance(value, str) and key.lower() not in _WXO_RESERVED_HEADERS
+        }
+        if isinstance(static_headers, Mapping)
+        else {}
+    )
+    headers.update(
+        {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": accept,
+        }
+    )
+    return headers
 
 
 class WXORequestParams(NamedTuple):
@@ -185,12 +210,25 @@ class WatsonxOrchestrateHandler:
         client: AsyncHTTPHandler,
         max_attempts: int = _MAX_POLL_ATTEMPTS,
         interval_s: float = _POLL_INTERVAL_S,
+        timeout: float | None = None,
     ) -> _WXORun:
         url: Final = f"{base_url}/v1/orchestrate/runs/{run_id}"
+        deadline: float | None = time.monotonic() + max(timeout, 0) if timeout is not None else None
 
         for attempt in range(max_attempts):
-            await asyncio.sleep(interval_s)
-            response = await client.get(url, headers=auth_headers)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError(f"WXO run '{run_id}' exceeded timeout of {timeout}s")
+                if interval_s > 0:
+                    await asyncio.sleep(min(interval_s, remaining))
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError(f"WXO run '{run_id}' exceeded timeout of {timeout}s")
+                response = await asyncio.wait_for(client.get(url, headers=auth_headers), timeout=remaining)
+            else:
+                await asyncio.sleep(interval_s)
+                response = await client.get(url, headers=auth_headers)
             response.raise_for_status()
             result = WatsonxOrchestrateHandler._run_body(response)
             status = result.get("status", "")
@@ -208,6 +246,7 @@ class WatsonxOrchestrateHandler:
         base_url: str,
         auth_headers: dict[str, str],
         client: AsyncHTTPHandler,
+        timeout: float | None = None,
     ) -> _WXORun:
         status = run_data.get("status", "")
         if status not in WatsonxOrchestrateTransformation.TERMINAL_STATES:
@@ -219,6 +258,7 @@ class WatsonxOrchestrateHandler:
                 run_id=run_id,
                 auth_headers=auth_headers,
                 client=client,
+                timeout=timeout,
             )
             status = run_data.get("status", "")
 
@@ -228,23 +268,28 @@ class WatsonxOrchestrateHandler:
         return run_data
 
     @staticmethod
-    async def _accumulate_wxo_sse_text(response: Any) -> str:
-        source: Final[_WXOView] = {"sse_source": response}
-        accumulated_text = ""
-        async for line in source["sse_source"].aiter_lines():
-            if not line.startswith("data:"):
-                continue
-            data_str = line[5:].strip()
-            if not data_str or data_str == "[DONE]":
-                continue
-            try:
-                event = WatsonxOrchestrateHandler._decode_run_event(data_str)
-            except json.JSONDecodeError:
-                continue
-            chunk_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(event)
-            if chunk_text:
-                accumulated_text += chunk_text
-        return accumulated_text
+    async def _accumulate_wxo_sse_text(response: Any, timeout: float | None = None) -> str:
+        async def _collect() -> str:
+            source: Final[_WXOView] = {"sse_source": response}
+            accumulated_text = ""
+            async for line in source["sse_source"].aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if not data_str or data_str == "[DONE]":
+                    continue
+                try:
+                    event = WatsonxOrchestrateHandler._decode_run_event(data_str)
+                except json.JSONDecodeError:
+                    continue
+                chunk_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(event)
+                if chunk_text:
+                    accumulated_text += chunk_text
+            return accumulated_text
+
+        if timeout is None:
+            return await _collect()
+        return await asyncio.wait_for(_collect(), timeout=max(timeout, 0))
 
     @staticmethod
     def _extract_litellm_params(litellm_params: WXOLitellmParams) -> WXORequestParams:
@@ -277,10 +322,12 @@ class WatsonxOrchestrateHandler:
         request_id: str,
         params: dict[str, object],
         litellm_params: WXOLitellmParams,
+        static_headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, object]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
-        client: Final = WatsonxOrchestrateHandler._http_client(timeout=90.0)
+        client: Final = WatsonxOrchestrateHandler._http_client(timeout=timeout if timeout is not None else 90.0)
         token: Final = await WatsonxOrchestrateHandler._get_bearer_token(
             cp4d_host=wxo.cp4d_host,
             auth_mode=wxo.auth_mode,
@@ -289,11 +336,11 @@ class WatsonxOrchestrateHandler:
             client=client,
         )
         base_url: Final = WatsonxOrchestrateTransformation.get_api_base_url(wxo.cp4d_host, wxo.instance_id)
-        auth_headers: Final = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        auth_headers: Final = _build_wxo_headers(
+            token=token,
+            accept="application/json",
+            static_headers=static_headers,
+        )
 
         text: Final = WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
         body: Final = WatsonxOrchestrateTransformation.build_wxo_run_body(
@@ -314,6 +361,7 @@ class WatsonxOrchestrateHandler:
             base_url=base_url,
             auth_headers=auth_headers,
             client=client,
+            timeout=timeout,
         )
 
         response_text: Final = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(run_data)
@@ -326,10 +374,12 @@ class WatsonxOrchestrateHandler:
         litellm_params: WXOLitellmParams,
         chunk_size: int = 50,
         delay_ms: int = 10,
+        static_headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> AsyncIterator[dict[str, object]]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
-        client: Final = WatsonxOrchestrateHandler._http_client(timeout=120.0)
+        client: Final = WatsonxOrchestrateHandler._http_client(timeout=timeout if timeout is not None else 120.0)
         token: Final = await WatsonxOrchestrateHandler._get_bearer_token(
             cp4d_host=wxo.cp4d_host,
             auth_mode=wxo.auth_mode,
@@ -338,11 +388,11 @@ class WatsonxOrchestrateHandler:
             client=client,
         )
         base_url: Final = WatsonxOrchestrateTransformation.get_api_base_url(wxo.cp4d_host, wxo.instance_id)
-        auth_headers: Final = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream, application/json",
-        }
+        auth_headers: Final = _build_wxo_headers(
+            token=token,
+            accept="text/event-stream, application/json",
+            static_headers=static_headers,
+        )
         text: Final = WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
         body: Final = WatsonxOrchestrateTransformation.build_wxo_run_body(
             wxo_agent_id=wxo.wxo_agent_id, text=text, thread_id=wxo.thread_id
@@ -366,6 +416,8 @@ class WatsonxOrchestrateHandler:
                 request_id=request_id,
                 params=params,
                 litellm_params=litellm_params,
+                static_headers=static_headers,
+                timeout=timeout,
             )
             response_text: Final = WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(result)
             async for chunk in WatsonxOrchestrateTransformation.fake_streaming_from_text(
@@ -387,10 +439,11 @@ class WatsonxOrchestrateHandler:
                 base_url=base_url,
                 auth_headers=auth_headers,
                 client=client,
+                timeout=timeout,
             )
             accumulated_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(result)
         else:
-            accumulated_text = await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response)
+            accumulated_text = await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response, timeout=timeout)
 
         async for chunk in WatsonxOrchestrateTransformation.fake_streaming_from_text(
             text=accumulated_text,

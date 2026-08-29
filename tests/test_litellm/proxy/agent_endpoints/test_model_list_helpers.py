@@ -4,8 +4,6 @@ Test appending A2A agents to model lists.
 Maps to: litellm/proxy/agent_endpoints/model_list_helpers.py
 """
 
-
-
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -67,6 +65,32 @@ async def test_append_agents_to_model_group():
 
 
 @pytest.mark.asyncio
+async def test_append_agents_to_model_group_preserves_registered_provider():
+    agent = AgentResponse(
+        agent_id="agent-123",
+        agent_name="test-agent",
+        agent_card_params={"url": "http://example.com"},
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
+    )
+    registry = Mock()
+    registry.get_agent_by_id = Mock(return_value=agent)
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
+            AsyncMock(return_value=RestrictedAgentAccess(frozenset({"agent-123"}))),
+        ),
+        patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry),
+    ):
+        result = await append_agents_to_model_group(
+            model_groups=[],
+            user_api_key_dict=Mock(spec=UserAPIKeyAuth),
+        )
+
+    assert result[0].providers == ["pydantic_ai_agents"]
+
+
+@pytest.mark.asyncio
 async def test_append_agents_to_model_info():
     """Test agents are converted to model info format with a2a/ prefix"""
 
@@ -109,3 +133,32 @@ async def test_append_agents_to_model_info():
             assert result[0]["litellm_params"]["custom_llm_provider"] == "a2a"
             assert result[0]["model_info"]["id"] == "agent-123"
             assert result[0]["model_info"]["mode"] == "chat"
+
+
+@pytest.mark.asyncio
+async def test_append_agents_to_model_info_preserves_registered_provider():
+    agent = AgentResponse(
+        agent_id="agent-123",
+        agent_name="test-agent",
+        agent_card_params={"url": "http://example.com"},
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
+    )
+    registry = Mock()
+    registry.get_agent_by_id = Mock(return_value=agent)
+
+    with (
+        patch(  # test-quality-ok: access resolution is outside model-list assembly
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
+            AsyncMock(return_value=RestrictedAgentAccess(frozenset({"agent-123"}))),
+        ),
+        patch(  # test-quality-ok: registry output drives model-list assembly
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            registry,
+        ),
+    ):
+        result = await append_agents_to_model_info(
+            models=[],
+            user_api_key_dict=Mock(spec=UserAPIKeyAuth),
+        )
+
+    assert result[0]["litellm_params"]["custom_llm_provider"] == "pydantic_ai_agents"

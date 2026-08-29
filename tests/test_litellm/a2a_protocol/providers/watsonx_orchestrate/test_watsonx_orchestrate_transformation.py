@@ -6,9 +6,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 from litellm.a2a_protocol.providers.watsonx_orchestrate import handler as wxo_handler
+from litellm.a2a_protocol.providers.watsonx_orchestrate.config import (
+    WatsonxOrchestrateA2AConfig,
+)
 from litellm.a2a_protocol.providers.watsonx_orchestrate.handler import (
     WatsonxOrchestrateHandler,
 )
@@ -44,6 +46,12 @@ class _SSELines:
     async def aiter_lines(self):
         for line in self.lines:
             yield line
+
+
+class _HangingSSELines:
+    async def aiter_lines(self):
+        await asyncio.Event().wait()
+        yield ""
 
 
 class _InvalidJsonStreamResponse:
@@ -232,6 +240,12 @@ async def test_accumulate_wxo_sse_text_ignores_non_dict_json_events():
 
 
 @pytest.mark.asyncio
+async def test_accumulate_wxo_sse_text_respects_timeout():
+    with pytest.raises(asyncio.TimeoutError):
+        await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(_HangingSSELines(), timeout=0.001)
+
+
+@pytest.mark.asyncio
 async def test_short_lived_tokens_are_not_served_from_cache():
     client = _ShortTtlTokenClient()
     token_1 = await WatsonxOrchestrateHandler._get_bearer_token(
@@ -341,6 +355,50 @@ async def test_poll_run_raises_asyncio_timeout_when_never_terminal():
             interval_s=0,
         )
     assert client.get_calls == 2
+
+
+def test_build_wxo_headers_preserves_auth_headers():
+    headers = wxo_handler._build_wxo_headers(
+        token="token",
+        accept="application/json",
+        static_headers={
+            "x-tenant-id": "tenant-1",
+            "Authorization": "caller-token",
+            "content-type": "text/plain",
+        },
+    )
+
+    assert headers["x-tenant-id"] == "tenant-1"
+    assert headers["Authorization"] == "Bearer token"
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Accept"] == "application/json"
+    assert "content-type" not in headers
+
+
+@pytest.mark.asyncio
+async def test_wxo_config_forwards_headers_and_timeout(monkeypatch):
+    captured = {}
+
+    async def fake_handle_non_streaming(**kwargs):
+        captured.update(kwargs)
+        return {"result": {}}
+
+    monkeypatch.setattr(WatsonxOrchestrateHandler, "handle_non_streaming", fake_handle_non_streaming)
+
+    await WatsonxOrchestrateA2AConfig().handle_non_streaming(
+        request_id="req-1",
+        params={},
+        litellm_params={"model": "agent"},
+        agent_extra_headers={"x-request-id": "request-1"},
+        agent_static_headers={"x-tenant-id": "tenant-1"},
+        timeout=12,
+    )
+
+    assert captured["static_headers"] == {
+        "x-request-id": "request-1",
+        "x-tenant-id": "tenant-1",
+    }
+    assert captured["timeout"] == 12
 
 
 @pytest.mark.asyncio
