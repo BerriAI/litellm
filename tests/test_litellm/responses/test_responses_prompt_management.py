@@ -13,7 +13,6 @@ Covers:
   I) async path propagates optional params to downstream handler
 """
 
-import asyncio
 from typing import List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -144,8 +143,8 @@ class TestResponsesAPIPromptManagement:
         prompt_manager = MagicMock()
         cache_hook = MagicMock(spec=AnthropicCacheControlHook)
         with (
-            patch("litellm.litellm_core_utils.litellm_logging.litellm.logging_callback_manager") as callback_manager,
-            patch("litellm.litellm_core_utils.litellm_logging.AnthropicCacheControlHook") as hook_class,
+            patch("litellm.litellm_core_utils.litellm_logging.litellm.logging_callback_manager") as callback_manager,  # test-quality-ok: isolate callback registry
+            patch("litellm.litellm_core_utils.litellm_logging.AnthropicCacheControlHook") as hook_class,  # test-quality-ok: isolate cache hook construction
         ):
             callback_manager.get_custom_loggers_for_type.return_value = [prompt_manager]
             hook_class.get_custom_logger_for_anthropic_cache_control_hook.return_value = cache_hook
