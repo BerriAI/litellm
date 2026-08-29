@@ -7454,9 +7454,6 @@ def test_newrelic_vars_scoped_to_newrelic_callback_entry():
     assert legit.callback_vars == {"newrelic_api_key": "REAL", "newrelic_region": "us"}
 
 
-    assert legit.callback_vars == {"newrelic_api_key": "REAL", "newrelic_region": "us"}
-
-
 def _reserved_stamp_request(path: str) -> MagicMock:
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()
