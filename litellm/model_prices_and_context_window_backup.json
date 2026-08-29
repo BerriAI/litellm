@@ -54651,34 +54651,6 @@
             "image"
         ]
     },
-    "xai/grok-imagine-video": {
-        "litellm_provider": "xai",
-        "mode": "video_generation",
-        "output_cost_per_second": 0.05,
-        "source": "https://docs.x.ai/developers/models/grok-imagine-video",
-        "supported_modalities": [
-            "text",
-            "image",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "video"
-        ]
-    },
-    "xai/grok-imagine-video-1.5": {
-        "litellm_provider": "xai",
-        "mode": "video_generation",
-        "output_cost_per_second": 0.08,
-        "source": "https://docs.x.ai/developers/models/grok-imagine-video-1.5",
-        "supported_modalities": [
-            "text",
-            "image",
-            "audio"
-        ],
-        "supported_output_modalities": [
-            "video"
-        ]
-    },
     "low/1024-x-1024/grok-imagine-image-2.0": {
         "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
