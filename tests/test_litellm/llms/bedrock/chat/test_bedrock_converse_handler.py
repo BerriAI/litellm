@@ -137,7 +137,9 @@ def test_the_core_receives_the_credentials_this_handler_already_resolved():
 
 def test_bearer_token_auth_does_not_resolve_aws_credentials():
     seen = _inject()
-    with patch.object(BedrockConverseLLM, "get_credentials") as get_credentials:
+    with patch.object(  # test-quality-ok: asserts bearer auth never calls the Bedrock credential resolver
+        BedrockConverseLLM, "get_credentials"
+    ) as get_credentials:
         BedrockConverseLLM().completion(**_completion_kwargs(api_key="bedrock-bearer-token"))
 
     get_credentials.assert_not_called()
