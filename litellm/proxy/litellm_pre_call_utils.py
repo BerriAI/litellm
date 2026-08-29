@@ -253,6 +253,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "_code_interpreter_interception_converted_stream",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
+    "_headroom_interception_converted_stream",
     "max_agentic_loops",
     # Recomputed below from the actual caller-controlled timeout sources (headers and
     # body fields); a client-forged value here would let a request either dodge cooldown
