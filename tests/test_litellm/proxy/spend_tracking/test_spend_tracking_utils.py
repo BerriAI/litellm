@@ -300,6 +300,22 @@ def test_sanitize_request_body_for_spend_logs_payload_long_string():
     assert sanitized["normal_text"] == "short text"
 
 
+@pytest.mark.parametrize("limit", [0, 1, -1])
+def test_sanitize_request_body_never_stores_more_than_it_was_given(monkeypatch, limit):
+    """The truncation is a database-size safeguard, so the tightest limits must be
+    the ones that store least. Both shares floor to zero at a limit of 1 or less,
+    and `value[-0:]` is the whole string, so the entire prompt was written out
+    behind a marker saying it had been skipped."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", str(limit))
+    long_string: Final = "a" * 5000
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload({"text": long_string})
+
+    assert long_string not in sanitized["text"]
+    assert len(sanitized["text"]) < len(long_string)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in sanitized["text"]
+
+
 def test_sanitize_request_body_for_spend_logs_payload_nested_dict():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 

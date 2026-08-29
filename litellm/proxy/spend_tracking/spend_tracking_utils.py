@@ -769,12 +769,17 @@ def _sanitize_request_body_for_spend_logs_payload(
                 # Calculate how many characters are being skipped
                 skipped_chars: Final = len(value) - total_keep
 
-                # Build the truncated string: beginning + truncation marker + end
+                # Build the truncated string: beginning + truncation marker + end.
+                # The tail is indexed from the front rather than written as
+                # `value[-end_chars:]`, which is the whole string when end_chars is 0.
+                # Both shares floor to 0 at MAX_STRING_LENGTH_PROMPT_IN_DB of 1 or less,
+                # so the tightest limits stored the entire prompt plus the marker saying
+                # it had been skipped, larger than the value the limit exists to bound.
                 truncated_value: Final = (
                     f"{value[:start_chars]}"
                     f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
                     f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-                    f"{value[-end_chars:]}"
+                    f"{value[len(value) - end_chars :]}"
                 )
                 return truncated_value
             return value
