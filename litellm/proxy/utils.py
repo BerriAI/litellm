@@ -1416,7 +1416,7 @@ class ProxyLogging:
         mutation is discarded and a warning is logged so the misconfiguration
         is visible instead of silently forwarding unredacted content.
         """
-        scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+        scans_raw_request: Final = callback.scan_raw_request
         should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
         input_data: Final = (  # mutable-ok: same request-payload shape as data
             independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
@@ -1453,7 +1453,7 @@ class ProxyLogging:
                 "scan_raw_request is for block-only guardrails and this mutation is being "
                 "discarded. Remove scan_raw_request from this guardrail's config if it needs "
                 "to mask/rewrite content.",
-                getattr(callback, "guardrail_name", None) or callback.__class__.__name__,
+                callback.guardrail_name or callback.__class__.__name__,
             )
         if scans_raw_request:
             if result is not None:
@@ -1471,7 +1471,7 @@ class ProxyLogging:
     async def _process_prompt_template(
         self,
         data: dict,
-        litellm_logging_obj: Any,
+        litellm_logging_obj: "LiteLLMLoggingObj",
         prompt_id: str,
         prompt_version: int | None,
         call_type: CallTypesLiteral,
@@ -1778,7 +1778,7 @@ class ProxyLogging:
         # guarantee must hold even under litellm.safe_memory_mode, which
         # otherwise makes deep copies return the original object.
         needs_raw_request_snapshot: Final = any(
-            isinstance(cb, CustomGuardrail) and getattr(cb, "scan_raw_request", False)
+            isinstance(cb, CustomGuardrail) and cb.scan_raw_request
             for cb in ProxyLogging._callback_capabilities().resolved_callbacks
         )
         raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
@@ -1938,7 +1938,7 @@ class ProxyLogging:
         """
 
         def _input_for(callback: CustomGuardrail) -> dict:  # mutable-ok: same request-payload shape as data
-            if not getattr(callback, "scan_raw_request", False) or raw_request_snapshot is None:
+            if not callback.scan_raw_request or raw_request_snapshot is None:
                 return data
             return independent_snapshot(raw_request_snapshot)
 
@@ -1962,11 +1962,7 @@ class ProxyLogging:
             # deployment-level guardrail sharing this name would see no marker
             # via _pre_call_hook_already_ran and re-run it a second time on
             # live kwargs.
-            if (
-                getattr(callback, "scan_raw_request", False)
-                and not isinstance(result, BaseException)
-                and result is not None
-            ):
+            if callback.scan_raw_request and not isinstance(result, BaseException) and result is not None:
                 callback.mark_pre_call_hook_ran(data)
         raised: Final = tuple(result for result in results if isinstance(result, BaseException))
         blocking: Final = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
@@ -3167,8 +3163,14 @@ class ProxyLogging:
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
         if not caps.iterator_overrides:
-            async for chunk in response:
-                yield chunk
+            try:
+                async for chunk in response:
+                    yield chunk
+            except (GeneratorExit, asyncio.CancelledError):
+                raise
+            except Exception:
+                ProxyLogging._fire_deferred_stream_logging(request_data)
+                raise
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
 
@@ -3221,9 +3223,14 @@ class ProxyLogging:
                     ),
                 )
 
-        # Actually iterate through the chained async generator and yield chunks
-        async for chunk in current_response:
-            yield chunk
+        try:
+            async for chunk in current_response:
+                yield chunk
+        except (GeneratorExit, asyncio.CancelledError):
+            raise
+        except Exception:
+            ProxyLogging._fire_deferred_stream_logging(request_data)
+            raise
 
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
         # completed.  unified_guardrail writes guardrail_information during
@@ -5569,12 +5576,8 @@ class PrismaClient:
             return True
 
         acquire_task: Final = asyncio.create_task(_acquire_reconnect_lock())
-        done, _pending = await asyncio.wait(
-            {acquire_task},
-            timeout=lock_timeout_seconds,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if acquire_task not in done:
+
+        async def _abandon_acquire_task() -> None:
             acquire_task.cancel()
             try:
                 await acquire_task
@@ -5589,6 +5592,18 @@ class PrismaClient:
                     self._db_reconnect_lock.release()
                 except RuntimeError:
                     pass
+
+        try:
+            done, _pending = await asyncio.wait(
+                {acquire_task},
+                timeout=lock_timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            await asyncio.shield(_abandon_acquire_task())
+            raise
+        if acquire_task not in done:
+            await _abandon_acquire_task()
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt due to lock acquisition timeout. reason=%s timeout=%ss",
                 reason,

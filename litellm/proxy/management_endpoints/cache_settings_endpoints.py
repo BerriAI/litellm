@@ -43,6 +43,8 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 
+_STORED_CACHE_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
 
 class _CacheConfigRow(Protocol):
     @property
@@ -63,13 +65,13 @@ def _cache_config_table(prisma_client: "PrismaClient") -> _CacheConfigTable:
 # Sentinel passwords never leave the server in a GET response. `url` is here
 # because a Redis/Valkey URL can embed a password inline
 # (e.g. redis://:secret@host:6379/1).
-_CACHE_SENSITIVE_FIELDS: Final[set] = {"password", "sentinel_password", "url"}
+_CACHE_SENSITIVE_FIELDS: Final[set[str]] = {"password", "sentinel_password", "url"}
 
 # The env fallback resolves the full set of redis.Redis kwargs, which includes
 # credential-bearing params (azure_client_secret, ssl_password, ...) that are
 # not cache UI fields. Only overlay fields the settings page actually renders,
 # so the read never surfaces a credential the UI does not manage.
-_CACHE_SETTINGS_FIELD_NAMES: Final[frozenset] = frozenset(field.field_name for field in CACHE_SETTINGS_FIELDS)
+_CACHE_SETTINGS_FIELD_NAMES: Final[frozenset[str]] = frozenset(field.field_name for field in CACHE_SETTINGS_FIELDS)
 
 # Classifier used, alongside _CACHE_SENSITIVE_FIELDS, to redact any
 # credential-bearing key before it leaves the server (`url` is kept in the
@@ -226,7 +228,7 @@ def _has_connection_target(value: object) -> bool:
 # Every field that identifies which Redis a credential belongs to, across node
 # (host/port/url), cluster (redis_startup_nodes), and sentinel
 # (sentinel_nodes/service_name) modes. A stored secret is bound to these.
-_CONNECTION_TARGET_FIELDS: Final[tuple] = (
+_CONNECTION_TARGET_FIELDS: Final[tuple[str, ...]] = (
     "host",
     "port",
     "url",
@@ -436,8 +438,6 @@ class CacheSettingsManager:
         Initialize cache settings from database into the router on startup.
         Only reinitializes if cache params have changed.
         """
-        import json
-
         try:
             cache_config: Final = await call_with_db_reconnect_retry(
                 prisma_client,
@@ -447,10 +447,11 @@ class CacheSettingsManager:
             if cache_config is not None and cache_config.cache_settings:
                 # Parse cache settings JSON
                 cache_settings_json: Final = cache_config.cache_settings
-                if isinstance(cache_settings_json, str):
-                    cache_settings_dict = json.loads(cache_settings_json)
-                else:
-                    cache_settings_dict = cache_settings_json
+                cache_settings_dict: Final[dict[str, object]] = (
+                    _STORED_CACHE_SETTINGS_ADAPTER.validate_json(cache_settings_json)
+                    if isinstance(cache_settings_json, str)
+                    else dict(cache_settings_json)
+                )
 
                 # Decrypt cache settings
                 decrypted_settings: Final = proxy_config._decrypt_db_variables(variables_dict=cache_settings_dict)
