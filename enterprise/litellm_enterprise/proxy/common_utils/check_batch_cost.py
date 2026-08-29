@@ -195,18 +195,22 @@ class CheckBatchCost:
 
         # A row already in a terminal status is never rewritten by the sweep above, so
         # without this it keeps a poll-page slot forever and starves newer batches.
+        # failed/cancelled are included because a client poll can stamp them before the
+        # cost job bills the completed portion (issue #37217); rows older than the cutoff
+        # were never billed and never will be, so retire them instead of billing a spike
+        # on deploy.
         retired: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
             where={
                 "file_purpose": "batch",
                 "batch_processed": False,
-                "status": {"in": ["complete", "completed"]},
+                "status": {"in": ["complete", "completed", "failed", "cancelled"]},
                 "created_at": {"lt": cutoff},
             },
             data={"batch_processed": True},
         )
         if retired > 0:
             verbose_proxy_logger.warning(
-                f"CheckBatchCost: gave up on {retired} completed managed objects older than "
+                f"CheckBatchCost: gave up on {retired} terminal managed objects older than "
                 f"{MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days that were never costed"
             )
 
@@ -852,19 +856,20 @@ class CheckBatchCost:
         # every subsequent poll cycle.
         if self._has_batch_processed_column:
             try:
-                # Include "complete"/"completed" batches: the retrieve_batch
-                # endpoint may transition a batch to "complete" before
-                # CheckBatchCost runs.  The batch_processed=False filter
-                # already prevents reprocessing finished batches.
+                # Include "complete"/"completed"/"failed"/"cancelled" batches: a
+                # client polling GET /v1/batches/{id} can stamp any of these terminal
+                # statuses before CheckBatchCost runs (issue #37217).  A cancelled or
+                # failed batch may still carry an output_file_id with completed work that
+                # must be billed.  The batch_processed=False filter prevents
+                # reprocessing, and the staleness sweep retires old terminal rows before
+                # this query runs so they cannot spike or starve newer batches.
                 jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
                     where={
                         "file_purpose": "batch",
                         "batch_processed": False,
                         "status": {
                             "not_in": [
-                                "failed",
                                 "expired",
-                                "cancelled",
                                 "stale_expired",
                             ]
                         },

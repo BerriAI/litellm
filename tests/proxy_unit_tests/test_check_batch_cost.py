@@ -180,13 +180,17 @@ class TestCheckBatchCost:
         assert find_call[1]["order"] == {"created_at": "asc"}
         not_in = find_call[1]["where"]["status"]["not_in"]
         assert "stale_expired" in not_in
-        # "complete"/"completed" are intentionally NOT excluded from the
-        # primary query — the batch_processed=False filter is sufficient.
-        # This allows CheckBatchCost to pick up batches that were
-        # transitioned to "complete" by the retrieve_batch endpoint
-        # before CheckBatchCost had a chance to process them.
+        assert "expired" in not_in
+        # "complete"/"completed"/"failed"/"cancelled" are intentionally NOT excluded
+        # from the primary query.  A client polling GET /v1/batches/{id} can stamp any
+        # of these terminal statuses before CheckBatchCost runs (issue #37217), and a
+        # cancelled/failed batch may still carry an output_file_id with completed work
+        # that must be billed.  The batch_processed=False filter prevents reprocessing,
+        # and the staleness sweep retires old terminal rows before this query runs.
         assert "complete" not in not_in
         assert "completed" not in not_in
+        assert "failed" not in not_in
+        assert "cancelled" not in not_in
         assert find_call[1]["where"]["batch_processed"] is False
         assert check_batch_cost_instance.batch_processed_support_confirmed is True
 
@@ -1342,6 +1346,63 @@ class TestCheckBatchCost:
         assert (
             update_data["status"] == terminal_status
         ), f"billed {terminal_status} batch must keep its real terminal status in the DB"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminal_status", ["cancelled", "failed"])
+    async def test_client_poll_terminal_status_still_picked_up_by_query(
+        self,
+        check_batch_cost_instance,
+        mock_prisma_client,
+        terminal_status,
+    ):
+        """Regression for issue #37217: a client polling GET /v1/batches/{id} stamps
+        the provider's terminal status (cancelled/failed) before the cost job runs.
+        The pickup query must still select that row so the completed portion is billed.
+        Before the fix, cancelled/failed were in the not_in list and the row was never
+        queried again, permanently losing the spend for the completed requests.
+        """
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[]
+        )
+
+        await check_batch_cost_instance.check_batch_cost()
+
+        find_call = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args
+        not_in = find_call[1]["where"]["status"]["not_in"]
+        assert terminal_status not in not_in, (
+            f"{terminal_status} must not be excluded from the pickup query, "
+            "otherwise a client poll that stamps it first permanently loses the spend"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stale_sweep_retires_old_failed_and_cancelled_rows(
+        self, check_batch_cost_instance, mock_prisma_client
+    ):
+        """The staleness sweep must also retire old failed/cancelled rows with
+        batch_processed=False so they don't spike or starve newer batches on deploy
+        when the pickup query starts including them (issue #37217 upgrade guard).
+        """
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[]
+        )
+
+        await check_batch_cost_instance.check_batch_cost()
+
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
+        retired_call = calls[1]
+        retired_statuses = retired_call[1]["where"]["status"]["in"]
+        assert "failed" in retired_statuses
+        assert "cancelled" in retired_statuses
+        assert retired_call[1]["where"]["batch_processed"] is False
+        assert retired_call[1]["data"] == {"batch_processed": True}
 
     @pytest.mark.asyncio
     async def test_terminal_batch_with_missing_output_file_is_retired_unbilled(
@@ -2577,7 +2638,7 @@ class TestPollPageStarvation:
         where = calls[1][1]["where"]
         assert where["file_purpose"] == "batch"
         assert where["batch_processed"] is False
-        assert where["status"] == {"in": ["complete", "completed"]}
+        assert where["status"] == {"in": ["complete", "completed", "failed", "cancelled"]}
         assert "created_at" in where
         assert calls[1][1]["data"] == {"batch_processed": True}
 
