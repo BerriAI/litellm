@@ -3104,3 +3104,23 @@ class TestRewritesStreamedOutput:
         )
 
         assert guardrail.rewrites_streamed_output() is True
+
+    @pytest.mark.parametrize("action, expected", [("MASK", True), ("BLOCK", False)])
+    def test_category_keywords_follow_the_category_action(self, action, expected):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            categories=[{"category": "bias_gender", "enabled": True, "action": action}],
+        )
+
+        assert guardrail.category_keywords and not guardrail.always_block_category_keywords
+        assert guardrail.rewrites_streamed_output() is expected
+
+    @pytest.mark.parametrize("action, expected", [("MASK", True), ("BLOCK", False)])
+    def test_always_block_category_keywords_follow_the_category_action(self, action, expected):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            categories=[{"category": "age_discrimination", "enabled": True, "action": action}],
+        )
+
+        assert guardrail.always_block_category_keywords and not guardrail.category_keywords
+        assert guardrail.rewrites_streamed_output() is expected
