@@ -2127,6 +2127,43 @@ async def test_apply_search_filter_bounds_db_fetch_by_page_and_cap():
 
 
 @pytest.mark.asyncio
+async def test_apply_search_filter_honours_exact_model_name_in_db_query():
+    """
+    `/v2/model/info?model=<group>&search=<term>`: the router list is already
+    narrowed to the exact group, so the DB count and fetch must be too, or
+    other groups' rows leak into the page and inflate total_count.
+    """
+    from litellm.proxy.proxy_server import _apply_search_filter_to_models
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=0)
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    proxy_config = MagicMock()
+    proxy_config.decrypt_model_list_from_db = lambda rows: []
+
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="sonnet",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        model_name="anthropic-sonnet-5",
+    )
+    where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
+    assert where["AND"] == [{"model_name": "anthropic-sonnet-5"}]
+    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
+    assert prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["where"] == where
+
+    prisma_client.db.litellm_proxymodeltable.count.reset_mock()
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="sonnet",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert "AND" not in prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
+
+
+@pytest.mark.asyncio
 async def test_filter_models_by_team_id_excludes_viewer_direct_access():
     """
     Regression test: when the UI picks a specific team in the Current Team
