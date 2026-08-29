@@ -252,12 +252,12 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         return;
       }
       const nextCursor = filteredLogs.next_session_cursor;
-      if (!nextCursor) return;
+      if (!nextCursor || logsQuery.isFetching) return;
       const nextPageIndex = pagination.pageIndex + 1;
       setSessionCursors((previous) => ({ ...previous, [nextPageIndex]: nextCursor }));
       setPagination({ ...requested, pageIndex: nextPageIndex });
     },
-    [isSessionGrouped, pagination, filteredLogs.next_session_cursor],
+    [isSessionGrouped, pagination, filteredLogs.next_session_cursor, logsQuery.isFetching],
   );
 
   const handleExcludeInternalHealthChecksChange = useCallback(
