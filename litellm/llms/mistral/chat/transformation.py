@@ -6,7 +6,8 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -24,7 +25,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, supports_reasoning
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -98,11 +99,25 @@ class MistralConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
         ]
 
-        # Add reasoning support for magistral models
-        if "magistral" in model.lower():
+        if self._is_magistral_model(model):
             supported_params.extend(["thinking", "reasoning_effort"])
+        elif self._supports_native_reasoning_effort(model):
+            supported_params.append("reasoning_effort")
 
         return supported_params
+
+    @staticmethod
+    def _is_magistral_model(model: str) -> bool:
+        return "magistral" in model.lower()
+
+    @staticmethod
+    def _supports_native_reasoning_effort(model: str) -> bool:
+        """
+        Mistral's hybrid reasoning models (mistral-medium-3-5 and newer) take ``reasoning_effort``
+        directly on /chat/completions, so it is forwarded as-is instead of being emulated with the
+        magistral system prompt: https://docs.mistral.ai/capabilities/reasoning
+        """
+        return supports_reasoning(model=model, custom_llm_provider="mistral")
 
     def _map_tool_choice(self, tool_choice: str) -> str:
         if tool_choice == "auto" or tool_choice == "none":
@@ -168,15 +183,18 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort" and "magistral" in model.lower():
-                # Flag that we need to add reasoning system prompt
-                optional_params["_add_reasoning_prompt"] = True
-            if param == "thinking" and "magistral" in model.lower():
-                # Flag that we need to add reasoning system prompt
-                optional_params["_add_reasoning_prompt"] = True
+            if param in ("reasoning_effort", "thinking"):
+                optional_params.update(self._map_reasoning_param(param=param, value=value, model=model))
             if param == "parallel_tool_calls":
                 optional_params["parallel_tool_calls"] = value
         return optional_params
+
+    def _map_reasoning_param(self, param: str, value: object, model: str) -> Mapping[str, object]:
+        if self._is_magistral_model(model):
+            return MappingProxyType({"_add_reasoning_prompt": True})
+        if param == "reasoning_effort" and value is not None and self._supports_native_reasoning_effort(model):
+            return MappingProxyType({"reasoning_effort": value})
+        return MappingProxyType({})
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai

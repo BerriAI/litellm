@@ -307,6 +307,48 @@ class TestMistralReasoningSupport:
         assert len(result["messages"]) == 1
         assert result["messages"][0]["role"] == "user"
 
+    @pytest.mark.parametrize(
+        "model",
+        ["mistral/mistral-medium-3-5", "mistral-medium-3-5", "mistral/mistral-medium-latest"],
+    )
+    def test_native_reasoning_model_supports_reasoning_effort(self, model):
+        """Hybrid reasoning models take reasoning_effort natively, see https://github.com/BerriAI/litellm/issues/36407"""
+        supported_params = MistralConfig().get_supported_openai_params(model)
+
+        assert "reasoning_effort" in supported_params
+        assert "thinking" not in supported_params
+
+    def test_native_reasoning_effort_forwarded_to_request_body(self):
+        mistral_config = MistralConfig()
+
+        optional_params = mistral_config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="mistral/mistral-medium-3-5",
+            drop_params=False,
+        )
+        assert optional_params == {"reasoning_effort": "high"}
+
+        request = mistral_config.transform_request(
+            model="mistral/mistral-medium-3-5",
+            messages=[{"role": "user", "content": "What is 15 * 7?"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        assert request["reasoning_effort"] == "high"
+        assert len(request["messages"]) == 1
+
+    def test_magistral_reasoning_effort_stays_prompt_based(self):
+        optional_params = MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="mistral/magistral-medium-2506",
+            drop_params=False,
+        )
+
+        assert optional_params == {"_add_reasoning_prompt": True}
+
     def test_case_insensitive_magistral_detection(self):
         """Test that magistral model detection is case-insensitive."""
         mistral_config = MistralConfig()
