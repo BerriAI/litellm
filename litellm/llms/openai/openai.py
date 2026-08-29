@@ -12,9 +12,14 @@ if TYPE_CHECKING:
 
 import openai
 from openai import AsyncOpenAI, OpenAI
+from openai._base_client import make_request_options
+from openai._constants import RAW_RESPONSE_HEADER
+from openai._legacy_response import LegacyAPIResponse
+from openai._types import RequestOptions
+from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import overload
 
 import litellm
@@ -320,6 +325,24 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
             return ModelResponseStream(**chunk)
         except Exception as e:
             raise e
+
+
+_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str] | None)
+_EXTRA_QUERY_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
+
+
+def _embedding_request_without_sdk_defaults(
+    data: Mapping[str, object], timeout: float | httpx.Timeout
+) -> tuple[dict[str, object], RequestOptions]:
+    body: Final = {k: v for k, v in data.items() if k not in ("extra_headers", "extra_query", "extra_body")}
+    extra_headers: Final = _EXTRA_HEADERS_ADAPTER.validate_python(data.get("extra_headers"))
+    options: Final = make_request_options(
+        extra_headers={**(extra_headers or {}), RAW_RESPONSE_HEADER: "true"},
+        extra_query=_EXTRA_QUERY_ADAPTER.validate_python(data.get("extra_query")),
+        extra_body=data.get("extra_body"),
+        timeout=timeout,
+    )
+    return body, options
 
 
 class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
@@ -1148,19 +1171,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data: dict,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-    ):
-        """
-        Helper to:
-        - call embeddings.create.with_raw_response when litellm.return_response_headers is True
-        - call embeddings.create by default
-        """
-        try:
-            raw_response = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)
-            headers: Final = dict(raw_response.headers)
-            response: Final = raw_response.parse()
-            return headers, response
-        except Exception as e:
-            raise e
+    ) -> tuple[dict[str, str], CreateEmbeddingResponse]:
+        if "encoding_format" not in data:
+            body, options = _embedding_request_without_sdk_defaults(data, timeout)
+            bypass_response: Final = await openai_aclient.post(
+                "/embeddings", body=body, options=options, cast_to=CreateEmbeddingResponse
+            )
+            assert isinstance(bypass_response, LegacyAPIResponse)
+            return dict(bypass_response.headers), bypass_response.parse(to=CreateEmbeddingResponse)
+        raw_response: Final = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)
+        return dict(raw_response.headers), raw_response.parse()
 
     @track_llm_api_timing()
     def make_sync_openai_embedding_request(
@@ -1169,20 +1189,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data: dict,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-    ):
-        """
-        Helper to:
-        - call embeddings.create.with_raw_response when litellm.return_response_headers is True
-        - call embeddings.create by default
-        """
-        try:
-            raw_response = openai_client.embeddings.with_raw_response.create(**data, timeout=timeout)
-
-            headers: Final = dict(raw_response.headers)
-            response: Final = raw_response.parse()
-            return headers, response
-        except Exception as e:
-            raise e
+    ) -> tuple[dict[str, str], CreateEmbeddingResponse]:
+        if "encoding_format" not in data:
+            body, options = _embedding_request_without_sdk_defaults(data, timeout)
+            bypass_response: Final = openai_client.post(
+                "/embeddings", body=body, options=options, cast_to=CreateEmbeddingResponse
+            )
+            assert isinstance(bypass_response, LegacyAPIResponse)
+            return dict(bypass_response.headers), bypass_response.parse(to=CreateEmbeddingResponse)
+        raw_response: Final = openai_client.embeddings.with_raw_response.create(**data, timeout=timeout)
+        return dict(raw_response.headers), raw_response.parse()
 
     async def aembedding(
         self,
