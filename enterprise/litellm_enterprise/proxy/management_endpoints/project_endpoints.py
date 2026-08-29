@@ -38,6 +38,8 @@ from litellm.repositories.verification_token_repository import VerificationToken
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
+    from litellm import Router
+
 router = APIRouter()
 
 _OBJECT_PERMISSION_PAYLOAD: Final = TypeAdapter(dict[str, object])
@@ -217,6 +219,114 @@ def _check_team_project_limits(
         )
 
 
+def _project_models_missing_positive_quota(
+    models: list[str] | None,
+    rpm_limits: Mapping[str, object] | None,
+    tpm_limits: Mapping[str, object] | None,
+) -> list[str]:
+    """Return the models that lack a positive `rpm` AND `tpm` quota.
+
+    A valid quota is a positive integer; null, zero, and negative are rejected
+    because downstream rate limiters treat a non-positive limit as immediately
+    exhausted (every request blocked).
+    """
+
+    def _is_positive(value: object) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+    rpm = rpm_limits or {}
+    tpm = tpm_limits or {}
+    return [model for model in (models or []) if not _is_positive(rpm.get(model)) or not _is_positive(tpm.get(model))]
+
+
+def _router_access_group_names(llm_router: "Router | None") -> frozenset[str]:
+    return frozenset(llm_router.get_model_access_groups()) if llm_router is not None else frozenset()
+
+
+def _project_models_expanding_at_request_time(
+    models: Sequence[str] | None, access_group_names: frozenset[str]
+) -> tuple[str, ...]:
+    """Entries project auth expands to many concrete models (`all-proxy-models`, `*` patterns,
+    access groups). The rate limiter looks quotas up by the exact requested model name, so a
+    quota keyed on one of these entries is never applied."""
+    return tuple(
+        model
+        for model in (models or ())
+        if model == SpecialModelNames.all_proxy_models.value or "*" in model or model in access_group_names
+    )
+
+
+def _raise_on_project_models_expanding_at_request_time(
+    models: Sequence[str] | None, access_group_names: frozenset[str]
+) -> None:
+    expanding: Final = _project_models_expanding_at_request_time(models, access_group_names)
+    if not expanding:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"models {list(expanding)} expand to multiple models at request time, so a per-model rpm/tpm quota cannot be enforced for them while 'enforce_project_model_quota' is enabled. List concrete model names instead."
+        },
+    )
+
+
+def _raise_on_missing_project_model_quota(
+    data: NewProjectRequest | UpdateProjectRequest, access_group_names: frozenset[str] = frozenset()
+) -> None:
+    """Require a positive `rpm`/`tpm` quota for every model on project CREATE.
+
+    `model_rpm_limit`/`model_tpm_limit` are relocated into `metadata` by the request
+    model's `set_model_info` validator, so they are read from there.
+
+    Only invoked when `general_settings.enforce_project_model_quota` is enabled
+    (default off), so it is opt-in and does not change behavior for existing users.
+    """
+    _raise_on_project_models_expanding_at_request_time(data.models, access_group_names)
+    metadata = data.metadata or {}
+    missing = _project_models_missing_positive_quota(
+        data.models, metadata.get("model_rpm_limit"), metadata.get("model_tpm_limit")
+    )
+    if not missing:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"models {missing} added to project without a positive rpm/tpm quota. Set a positive model_rpm_limit and model_tpm_limit for each model."
+        },
+    )
+
+
+def _raise_on_missing_project_model_quota_on_update(
+    data: UpdateProjectRequest, existing_project: object, access_group_names: frozenset[str] = frozenset()
+) -> None:
+    """Require a positive `rpm`/`tpm` quota over the RESULTING state on project UPDATE.
+
+    `/project/update` replaces `models` and `metadata` when they are provided, so the
+    check runs on what the project WILL look like: a partial update that doesn't touch
+    models/quota keeps the existing values, while one that adds a model or clears a
+    model's quota must leave every resulting model with a positive limit.
+
+    Only invoked when `general_settings.enforce_project_model_quota` is enabled
+    (default off), so it is opt-in and does not change behavior for existing users.
+    """
+    resulting_models = data.models if data.models is not None else (getattr(existing_project, "models", None) or [])
+    resulting_metadata = (
+        data.metadata if data.metadata is not None else (getattr(existing_project, "metadata", None) or {})
+    )
+    _raise_on_project_models_expanding_at_request_time(resulting_models, access_group_names)
+    missing = _project_models_missing_positive_quota(
+        resulting_models, resulting_metadata.get("model_rpm_limit"), resulting_metadata.get("model_tpm_limit")
+    )
+    if not missing:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"models {missing} would be left on the project without a positive rpm/tpm quota. Set a positive model_rpm_limit and model_tpm_limit for each model."
+        },
+    )
+
+
 async def _create_budget_for_project(
     data: NewProjectRequest,
     user_id: str | None,
@@ -362,7 +472,9 @@ async def new_project(
     ```
     """
     from litellm.proxy.proxy_server import (
+        general_settings,
         litellm_proxy_admin_name,
+        llm_router,
         premium_user,
         prisma_client,
     )
@@ -408,6 +520,10 @@ async def new_project(
             team_object=LiteLLM_TeamTable.model_validate(team_object.model_dump()),
             data=data,
         )
+
+        # Opt-in (default off): require rpm/tpm for every model added to the project.
+        if general_settings.get("enforce_project_model_quota", False):
+            _raise_on_missing_project_model_quota(data, _router_access_group_names(llm_router))
 
         # Check if user has permission to create projects for this team
         # only team admins can create projects for their team
@@ -546,7 +662,9 @@ async def update_project(
     ```
     """
     from litellm.proxy.proxy_server import (
+        general_settings,
         litellm_proxy_admin_name,
+        llm_router,
         premium_user,
         prisma_client,
         user_api_key_cache,
@@ -648,6 +766,12 @@ async def update_project(
             _check_team_project_limits(
                 team_object=LiteLLM_TeamTable.model_validate(target_team_obj.model_dump()),
                 data=data,
+            )
+
+        # Opt-in (default off): require rpm/tpm for every model the update would leave on the project.
+        if general_settings.get("enforce_project_model_quota", False):
+            _raise_on_missing_project_model_quota_on_update(
+                data, existing_project, _router_access_group_names(llm_router)
             )
 
         # Prepare update data

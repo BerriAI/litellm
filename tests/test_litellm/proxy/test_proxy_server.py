@@ -11246,6 +11246,35 @@ async def test_ptu_rollup_job_registered_at_startup(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ptu_rollup_job_hands_the_rollup_the_proxys_router(monkeypatch):
+    """The rollup prices PTU deployments declared in config.yaml, which only the router
+    knows about. It takes the router as an argument, so nothing but this call site puts the
+    proxy's own router in front of it: without it that half of the feature is dead."""
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.spend_tracking import ptu_flat_cost_rollup
+    from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+    from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import PTU_ROLLUP_JOB_ID
+
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    calls = []
+    monkeypatch.setattr(
+        ptu_flat_cost_rollup,
+        "run_scheduled_ptu_rollup",
+        AsyncMock(side_effect=lambda *args, **kwargs: calls.append(kwargs)),
+    )
+
+    scheduler = await _run_scheduled_background_jobs()
+
+    import litellm.proxy.proxy_server as ps
+
+    router = MagicMock()
+    monkeypatch.setattr(ps, "llm_router", router)
+    await scheduler.get_job(PTU_ROLLUP_JOB_ID).func()
+
+    assert [call["router"] for call in calls] == [router]
+
+
+@pytest.mark.asyncio
 async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
     """Without LITELLM_ENABLE_PTU_COST_ATTRIBUTION the rollup never runs, so no sentinel row
     is ever written. This is the gate that keeps the whole feature inert by default."""
@@ -11712,3 +11741,18 @@ async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the
     assert real_spend_counter_cache.in_memory_cache.get_cache(key=marker_key) == 0.0, (
         "the in-flight DB read clobbered the post-reset floor marker with the stale pre-reset value"
     )
+
+
+@pytest.mark.asyncio
+async def test_load_config_router_authorizes_fallback_targets_against_the_calling_key(tmp_path):
+    from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"model_list": [{"model_name": "m", "litellm_params": {"model": "openai/m", "api_key": "k"}}]})
+    )
+
+    router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert router.fallback_access_check is router_fallback_access_check

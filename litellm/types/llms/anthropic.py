@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, TypeAlias
 
@@ -254,6 +254,17 @@ class AnthropicContentParamSourceFileId(TypedDict):
     file_id: str
 
 
+class AnthropicContentParamSourceText(TypedDict):
+    type: ReadOnly[Literal["text"]]
+    media_type: ReadOnly[Literal["text/plain"]]
+    data: ReadOnly[str]
+
+
+class AnthropicContentParamSourceContent(TypedDict):
+    type: ReadOnly[Literal["content"]]
+    content: ReadOnly[str | Sequence["AnthropicMessagesTextParam | AnthropicMessagesImageParam"]]
+
+
 class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
     type: Required[Literal["container_upload"]]
     file_id: str
@@ -305,7 +316,13 @@ AnthropicCitation = AnthropicCitationPageLocation | AnthropicCitationCharLocatio
 
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
-    source: Required[AnthropicContentParamSource | AnthropicContentParamSourceFileId | AnthropicContentParamSourceUrl]
+    source: Required[
+        AnthropicContentParamSource
+        | AnthropicContentParamSourceFileId
+        | AnthropicContentParamSourceUrl
+        | AnthropicContentParamSourceText
+        | AnthropicContentParamSourceContent
+    ]
     cache_control: dict | ChatCompletionCachedContent | None
     title: str
     context: str
@@ -324,7 +341,12 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
     is_error: bool
     content: (
         str
-        | Iterable[AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam]
+        | Iterable[
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
+        ]
     )
     cache_control: dict | ChatCompletionCachedContent | None
 

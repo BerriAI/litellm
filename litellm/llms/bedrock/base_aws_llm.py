@@ -1434,9 +1434,12 @@ class BaseAWSLLM:
         data: str | bytes,
         headers: dict,
         api_key: str | None = None,
+        supports_bearer_token: bool = True,
     ) -> AWSPreparedRequest:
-        if api_key is not None:
-            aws_bearer_token: str | None = api_key
+        if not supports_bearer_token:
+            aws_bearer_token: str | None = None
+        elif api_key is not None:
+            aws_bearer_token = api_key
         else:
             aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 

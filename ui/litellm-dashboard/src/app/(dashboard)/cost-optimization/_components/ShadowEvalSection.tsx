@@ -10,7 +10,10 @@ import { PaginatedMultiSelect } from "@/components/shared/PaginatedMultiSelect";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CircleHelp } from "lucide-react";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -42,6 +45,18 @@ const routerWinRate = (direction: ShadowEvalDirection, slice: ShadowEvalSlice): 
 
 const otherArmWinRate = (direction: ShadowEvalDirection, slice: ShadowEvalSlice): number =>
   direction === "reverse" ? slice.shadow_win_rate_pct : slice.real_win_rate_pct;
+
+const routerArmSpend = (direction: ShadowEvalDirection, results: NonNullable<ShadowEvalJob["results"]>): number =>
+  direction === "reverse" ? results.sampled_real_spend : results.sampled_shadow_spend;
+
+const otherArmSpend = (direction: ShadowEvalDirection, results: NonNullable<ShadowEvalJob["results"]>): number =>
+  direction === "reverse" ? results.sampled_shadow_spend : results.sampled_real_spend;
+
+const routerSliceSpend = (direction: ShadowEvalDirection, slice: ShadowEvalSlice): number =>
+  direction === "reverse" ? slice.real_spend : slice.shadow_spend;
+
+const otherSliceSpend = (direction: ShadowEvalDirection, slice: ShadowEvalSlice): number =>
+  direction === "reverse" ? slice.shadow_spend : slice.real_spend;
 
 const routerMatchedOrBeatPct = (
   direction: ShadowEvalDirection,
@@ -122,13 +137,19 @@ const SliceTable: React.FC<{
     <TableHeader>
       <TableRow>
         <TableHead>{groupHeader}</TableHead>
-        {["Judged turns", "Router wins", `${otherArmLabel(direction)} wins`, "Ties", "Judge confidence"].map(
-          (label) => (
-            <TableHead key={label} className="text-right">
-              {label}
-            </TableHead>
-          ),
-        )}
+        {[
+          "Judged turns",
+          "Router wins",
+          `${otherArmLabel(direction)} wins`,
+          "Ties",
+          "Judge confidence",
+          "Router cost",
+          `${otherArmLabel(direction)} cost`,
+        ].map((label) => (
+          <TableHead key={label} className="text-right">
+            {label}
+          </TableHead>
+        ))}
       </TableRow>
     </TableHeader>
     <TableBody>
@@ -147,11 +168,53 @@ const SliceTable: React.FC<{
           <TableCell className="text-right tabular-nums">{pct(otherArmWinRate(direction, slice))}</TableCell>
           <TableCell className="text-right tabular-nums">{pct(slice.tie_rate_pct)}</TableCell>
           <TableCell className="text-right tabular-nums">{slice.avg_judge_confidence.toFixed(2)}</TableCell>
+          <TableCell className="text-right tabular-nums">
+            {routerSliceSpend(direction, slice) > 0 ? usd(routerSliceSpend(direction, slice)) : "-"}
+          </TableCell>
+          <TableCell className="text-right tabular-nums">
+            {otherSliceSpend(direction, slice) > 0 ? usd(otherSliceSpend(direction, slice)) : "-"}
+          </TableCell>
         </TableRow>
       ))}
     </TableBody>
   </Table>
 );
+
+const CostComparison: React.FC<{
+  direction: ShadowEvalDirection;
+  results: NonNullable<ShadowEvalJob["results"]>;
+}> = ({ direction, results }) => {
+  const routerSpend = routerArmSpend(direction, results);
+  const otherSpend = otherArmSpend(direction, results);
+  if (routerSpend <= 0 || otherSpend <= 0) return null;
+  const savingsPct = otherSpend > 0 ? ((otherSpend - routerSpend) / otherSpend) * 100 : null;
+  const cacheHits = results.by_tier.reduce((sum, slice) => sum + slice.cache_hit_turns, 0);
+  return (
+    <div className="flex min-w-[240px] flex-1 flex-col gap-1 border-t px-6 py-4 sm:border-l sm:border-t-0">
+      <p className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+        Router cost vs {direction === "reverse" ? "the baseline" : "your current model"}
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help" />} />
+            <TooltipContent>
+              Each arm is priced as its completion plus its own routing classifier call, measured on the same judged
+              turns; the judge&apos;s cost is excluded from both arms
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </p>
+      <p
+        className={`text-3xl font-semibold ${savingsPct != null && savingsPct > 0 ? "text-success" : "text-foreground"}`}
+      >
+        {savingsPct != null ? `${savingsPct > 0 ? "-" : "+"}${Math.abs(savingsPct).toFixed(1)}%` : "n/a"}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        {usd(routerSpend)} vs {usd(otherSpend)} on the same judged turns
+        {cacheHits > 0 ? `; ${cacheHits.toLocaleString()} cache-served turns excluded` : ""}
+      </p>
+    </div>
+  );
+};
 
 const VerdictBar: React.FC<{ direction: ShadowEvalDirection; results: NonNullable<ShadowEvalJob["results"]> }> = ({
   direction,
@@ -265,16 +328,19 @@ const ResultsBody: React.FC<{ job: ShadowEvalJob; resultsError?: boolean }> = ({
         <p className="px-6 py-8 text-center text-sm text-muted-foreground">{emptyResultsText(job, resultsError)}</p>
       ) : (
         <>
-          <div className="flex flex-col gap-1 border-b px-6 py-4">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-              Router matched or beat {job.direction === "reverse" ? "the baseline" : "your current model"}
-            </p>
-            <p className="text-3xl font-semibold text-foreground">
-              {pct(routerMatchedOrBeatPct(job.direction, results))}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              of {(job.judged_count ?? 0).toLocaleString()} judged responses
-            </p>
+          <div className="flex flex-wrap border-b">
+            <div className="flex min-w-[240px] flex-1 flex-col gap-1 px-6 py-4">
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Router matched or beat {job.direction === "reverse" ? "the baseline" : "your current model"}
+              </p>
+              <p className="text-3xl font-semibold text-foreground">
+                {pct(routerMatchedOrBeatPct(job.direction, results))}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                of {(job.judged_count ?? 0).toLocaleString()} judged responses
+              </p>
+            </div>
+            <CostComparison direction={job.direction} results={results} />
           </div>
           <VerdictBar direction={job.direction} results={results} />
           {results.by_current_model.length > 0 && (
