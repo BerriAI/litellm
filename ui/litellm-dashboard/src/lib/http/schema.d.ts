@@ -2858,6 +2858,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config_overrides/cyberark": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cyberark Config
+         * @description Get current CyberArk Conjur configuration.
+         *     Returns decrypted values from DB, or falls back to current env vars.
+         *     Sensitive fields are masked before leaving the server.
+         */
+        get: operations["get_cyberark_config_config_overrides_cyberark_get"];
+        put?: never;
+        /**
+         * Update Cyberark Config
+         * @description Update CyberArk Conjur secret manager configuration.
+         *     Sets environment variables, encrypts sensitive fields, and stores in DB.
+         *     Reinitializes the secret manager on this pod.
+         */
+        post: operations["update_cyberark_config_config_overrides_cyberark_post"];
+        /**
+         * Delete Cyberark Config
+         * @description Delete CyberArk Conjur configuration. Idempotent.
+         */
+        delete: operations["delete_cyberark_config_config_overrides_cyberark_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config_overrides/cyberark/test_connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Cyberark Connection
+         * @description Test the connection to the currently configured CyberArk Conjur server.
+         *     Uses the already-initialized secret manager client. Does not modify any state.
+         */
+        post: operations["test_cyberark_connection_config_overrides_cyberark_test_connection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config_overrides/hashicorp_vault": {
         parameters: {
             query?: never;
@@ -25841,6 +25894,52 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /**
+         * CyberArkConfig
+         * @description Configuration for CyberArk Conjur secret manager integration.
+         */
+        CyberArkConfig: {
+            /**
+             * Client Cert
+             * @description Path to the client TLS certificate for certificate-based authentication
+             */
+            client_cert?: string | null;
+            /**
+             * Client Key
+             * @description Path to the client TLS private key for certificate-based authentication
+             */
+            client_key?: string | null;
+            /**
+             * Cyberark Account
+             * @description The Conjur organization account name
+             */
+            cyberark_account?: string | null;
+            /**
+             * Cyberark Api Base
+             * @description The address of the CyberArk Conjur server (e.g., https://conjur.example.com)
+             */
+            cyberark_api_base?: string | null;
+            /**
+             * Cyberark Api Key
+             * @description API key for Conjur API-key authentication
+             */
+            cyberark_api_key?: string | null;
+            /**
+             * Cyberark Username
+             * @description The Conjur username (login) to authenticate as
+             */
+            cyberark_username?: string | null;
+            /**
+             * Refresh Interval
+             * @description Auth token cache TTL in seconds (default: 300)
+             */
+            refresh_interval?: string | null;
+            /**
+             * Ssl Verify
+             * @description Set to false to disable SSL verification (e.g., for self-signed certificates)
+             */
+            ssl_verify?: string | null;
+        };
         /** DailySpendData */
         DailySpendData: {
             breakdown?: components["schemas"]["BreakdownMetrics"];
@@ -42782,6 +42881,120 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cyberark_config_config_overrides_cyberark_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigOverrideSettingsResponse"];
+                };
+            };
+        };
+    };
+    update_cyberark_config_config_overrides_cyberark_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CyberArkConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_cyberark_config_config_overrides_cyberark_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_cyberark_connection_config_overrides_cyberark_test_connection_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };
