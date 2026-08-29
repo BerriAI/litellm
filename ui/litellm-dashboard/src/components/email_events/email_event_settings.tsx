@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getEmailEventSettings, updateEmailEventSettings, resetEmailEventSettings } from "../networking";
 import { EmailEvent } from "../../types";
 import { EmailEventSetting } from "./types";
@@ -31,7 +31,7 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
       setEventSettings(response.settings);
     } catch (error) {
       console.error("Failed to fetch email event settings:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setLoading(false);
     }
@@ -49,10 +49,10 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
     try {
       await updateEmailEventSettings(accessToken, { settings: eventSettings });
-      NotificationsManager.success("Email event settings updated successfully");
+      toast.success("Email event settings updated successfully");
     } catch (error) {
       console.error("Failed to update email event settings:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     }
   };
 
@@ -61,12 +61,12 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
     try {
       await resetEmailEventSettings(accessToken);
-      NotificationsManager.success("Email event settings reset to defaults");
+      toast.success("Email event settings reset to defaults");
       // Refresh settings after reset
       fetchEventSettings();
     } catch (error) {
       console.error("Failed to reset email event settings:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     }
   };
 

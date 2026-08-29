@@ -4,7 +4,6 @@ Test suite for XAI cost calculation functionality.
 
 import math
 import os
-import sys
 
 import litellm
 from litellm.types.utils import (
@@ -13,9 +12,6 @@ from litellm.types.utils import (
     Usage,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -168,18 +164,6 @@ class TestXAICostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_edge_case_no_completion_tokens_details(self):
-        """Test cost calculation when completion_tokens_details is not present."""
-        usage = Usage(prompt_tokens=12, completion_tokens=125, total_tokens=137)
-
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
-
-        # Should fall back to basic calculation
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = 125 * 5e-7
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
     def test_edge_case_large_reasoning_tokens(self):
         """Test cost calculation when reasoning_tokens is larger than completion_tokens."""

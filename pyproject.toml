@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.98.0"
+version = "1.100.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -67,9 +67,9 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.85",
-    "litellm-enterprise==0.1.55",
-    "RestrictedPython>=8.1,<9.0",
+    "litellm-proxy-extras==0.4.90",
+    "litellm-enterprise==0.1.61",
+    "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
     "polars>=1.38.1,<2.0",
@@ -78,13 +78,16 @@ proxy = [
     "expression>=5.6.0,<6.0",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
-# imports (fastapi, cryptography, ...) are all guarded, so it runs on the base
-# SDK plus just these four; none of the server runtime in `proxy` is pulled in.
+# imports are all guarded, so it runs on the base SDK plus just these five, and
+# none of the server runtime in `proxy` is pulled in. On Linux,
+# keyring reaches the Secret Service through secretstorage, which brings
+# cryptography with it.
 cli = [
     "rich>=13.9.4,<14.0",
     "pyyaml>=6.0.3,<7.0",
     "requests>=2.32.0,<3.0",
     "InquirerPy>=0.3.4,<1.0",
+    "keyring>=25.6.0,<26.0",
 ]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",
@@ -103,6 +106,7 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
+mcp = ["mcp>=1.28.1,<2.0"]
 # SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
 # bundle the native libxmlsec1/libxml2 libraries, so no system packages are
 # required. Kept out of the base `proxy` extra so it stays optional.
@@ -166,6 +170,7 @@ litellm-proxy = "litellm.proxy.client.cli:cli"
 dev = [
     "diff-cover==9.7.2",
     "basedpyright==1.39.7",
+    "keyring==25.7.0",
     "pytest==9.0.3",
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.3.0",
@@ -306,7 +311,7 @@ members = ["enterprise", "litellm-proxy-extras"]
 profile = "black"
 
 [tool.commitizen]
-version = "1.98.0"
+version = "1.100.0"
 version_files = [
     "pyproject.toml:^version",
 ]
@@ -337,9 +342,13 @@ filterwarnings = [
 paths_to_mutate = [
     "litellm/proxy/management_endpoints/",
 ]
+# Only the unit tier that maps to paths_to_mutate. mutmut times and
+# coverage-maps this whole set once before mutating, so a tier that needs a
+# seeded database (tests/proxy_behavior/) kills the run before it starts, and
+# a mutation score is only meaningful against the tests that claim to cover
+# the mutated code anyway.
 tests_dir = [
     "tests/test_litellm/proxy/management_endpoints/",
-    "tests/proxy_behavior/management/",
 ]
 also_copy = [
     "litellm/",
@@ -356,10 +365,16 @@ mutate_only_covered_lines = true
 # - rerunning a "failed" test on a mutant would mask which mutants are killed
 #   vs. survive, so reruns are wrong for mutation testing regardless.
 # - xdist is unnecessary inside mutmut (mutmut handles its own parallelism).
+# test_saml_sso.py cannot run inside mutmut's mutants/ sandbox: the copied tree
+# re-imports cryptography's hash classes under a second identity, so x509 .sign()
+# rejects the SHA256 instance the fixture builds with "Algorithm must be a
+# registered hash algorithm". Nothing to do with mutation coverage, and one
+# erroring test is enough to end the stats phase before any mutant runs.
 pytest_add_cli_args = [
     "-p", "no:retry",
     "-p", "no:rerunfailures",
     "-p", "no:xdist",
+    "--ignore=tests/test_litellm/proxy/management_endpoints/test_saml_sso.py",
 ]
 
 [tool.coverage.run]

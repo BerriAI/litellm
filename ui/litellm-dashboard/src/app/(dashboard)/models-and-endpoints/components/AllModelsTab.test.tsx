@@ -1,5 +1,5 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,12 +9,9 @@ import { STATUS_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
 const mockModelDeleteCall = vi.fn().mockResolvedValue({});
 const mockModelPatchUpdateCall = vi.fn().mockResolvedValue({});
 vi.mock("@/components/networking", () => ({
+  serverRootPath: "/",
   modelDeleteCall: (...args: unknown[]) => mockModelDeleteCall(...args),
   modelPatchUpdateCall: (...args: unknown[]) => mockModelPatchUpdateCall(...args),
-}));
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
 }));
 
 vi.mock("@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal", () => ({
@@ -192,7 +189,7 @@ describe("AllModelsTab", () => {
       expect(lastModelsInfoCall().sortOrder).toBe(firstDirection);
     });
 
-    it("maps the hidden Status column to the server field status", () => {
+    it("maps the hidden Source column to the server field status", () => {
       expect(toServerSortField(STATUS_COLUMN_ID)).toBe("status");
     });
 
@@ -233,7 +230,7 @@ describe("AllModelsTab", () => {
     const user = userEvent.setup();
     render(<AllModelsTab {...defaultProps} />);
 
-    await user.type(screen.getByTestId("datatable-search"), "claude");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "claude" } });
 
     await waitFor(() => {
       expect(lastModelsInfoCall().search).toBe("claude");
@@ -337,6 +334,23 @@ describe("AllModelsTab", () => {
       render(<AllModelsTab {...defaultProps} />);
 
       expect(screen.getByText(/create a Virtual Key without selecting a team/i)).toBeInTheDocument();
+    });
+
+    it("links the Virtual Keys page through the migrated /ui route", () => {
+      render(<AllModelsTab {...defaultProps} />);
+
+      expect(screen.getByRole("link", { name: "Virtual Keys page" })).toHaveAttribute("href", "/ui/api-keys");
+    });
+
+    it("links the team hint's Virtual Keys page through the migrated /ui route", async () => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
+
+      await user.click(screen.getByTestId("models-team-select"));
+      await user.click(await screen.findByRole("option", { name: "Engineering" }));
+
+      await screen.findByText(/select Team as "Engineering"/i);
+      expect(screen.getByRole("link", { name: "Virtual Keys page" })).toHaveAttribute("href", "/ui/api-keys");
     });
 
     it("names the selected team in the hint", async () => {

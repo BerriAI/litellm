@@ -1,16 +1,11 @@
 import asyncio
 import json
-import os
-import sys
 from datetime import datetime
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
@@ -953,6 +948,16 @@ class TestAnthropicBatchPassthroughCostTracking:
             await _drain_tasks()
         mock_managed_files_hook.store_unified_object_id.assert_awaited_once()
         return mock_managed_files_hook.store_unified_object_id.call_args[1]
+
+    @pytest.mark.asyncio
+    async def test_persisted_tags_are_db_safe(self, mock_logging_obj):
+        """Regression for PostgreSQL 22P05, asserted on the value that actually reaches
+        store_unified_object_id so it stays pinned if the sanitation moves."""
+        call_kwargs = await self._store_with_metadata(
+            mock_logging_obj, {"user_api_key": "hashed-key-a", "tags": ["clean", "bad\x00tag"]}
+        )
+
+        assert call_kwargs["request_tags"] == ("clean", "badtag")
 
     @pytest.mark.asyncio
     async def test_create_persists_key_hash_and_tags(self, mock_logging_obj):
@@ -2312,10 +2317,10 @@ class TestAnthropicResponseCostRecordedOnModelCallDetails:
 
 
 class TestAnthropicPassthroughFastMode:
-    """Anthropic charges a provider-specific multiplier for ``speed=fast``, and the
-    multiplier is applied off ``usage.speed``. The pass-through handler only sees the
-    speed in the request body, so it has to thread it into every usage-building path or
-    fast-mode pass-through spend is under-reported."""
+    """Anthropic charges a provider-specific multiplier for ``speed=fast``, applied off
+    ``usage.speed`` and covering every token type, cache included. The response usage
+    carries the served speed when the request asked for one; the request body's value is
+    the fallback, so the handler still threads it into every usage-building path."""
 
     MODEL = "claude-opus-4-8"
     STREAM_CHUNKS = [
@@ -2353,11 +2358,7 @@ class TestAnthropicPassthroughFastMode:
         return litellm.completion_cost(completion_response=response, model=f"anthropic/{self.MODEL}")
 
     def _expected_fast_cost(self, standard_cost: float) -> float:
-        import litellm
-
-        model_info = litellm.get_model_info(model=self.MODEL, custom_llm_provider="anthropic")
-        cache_read_cost = 200 * (model_info.get("cache_read_input_token_cost") or 0.0)
-        return (standard_cost - cache_read_cost) * 2.0 + cache_read_cost
+        return standard_cost * 2.0
 
     def test_non_streaming_applies_fast_multiplier(self):
         import httpx
@@ -2422,3 +2423,21 @@ class TestAnthropicPassthroughFastMode:
 
         assert fast.usage.speed == "fast"
         assert self._cost(fast) == pytest.approx(self._expected_fast_cost(self._cost(standard)))
+
+    def test_usage_only_fallback_prefers_served_speed_from_stream(self):
+        served_standard_chunks = [
+            chunk.replace('"usage": {"input_tokens": 1000', '"usage": {"speed": "standard", "input_tokens": 1000')
+            for chunk in self.STREAM_CHUNKS
+        ]
+        served_standard = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=served_standard_chunks,
+            model=self.MODEL,
+            speed="fast",
+        )
+        standard = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self.STREAM_CHUNKS,
+            model=self.MODEL,
+        )
+
+        assert served_standard.usage.speed == "standard"
+        assert self._cost(served_standard) == pytest.approx(self._cost(standard))

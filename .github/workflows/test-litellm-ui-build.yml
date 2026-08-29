@@ -1,6 +1,7 @@
 name: UI Build Check
 permissions:
   contents: read
+  pull-requests: read
 
 on:
   pull_request:
@@ -28,7 +29,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-changes
+        with:
+          category: ui
+
       - name: Setup Node.js
+        if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: ui/litellm-dashboard/.nvmrc
@@ -36,7 +44,9 @@ jobs:
           cache-dependency-path: ui/litellm-dashboard/package-lock.json
 
       - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
         run: npm ci
 
       - name: Build
+        if: steps.changes.outputs.decision != 'skip'
         run: npm run build
