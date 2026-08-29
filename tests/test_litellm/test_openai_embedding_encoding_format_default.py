@@ -100,3 +100,22 @@ async def test_aembedding_openai_omits_encoding_format_when_client_omits_it(
     request_body: Final = json.loads(mock_route.calls.last.request.read())
     assert "encoding_format" not in request_body
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_embedding_openai_omitted_encoding_format_maps_provider_errors(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            429,
+            headers={"retry-after": "42", "x-should-retry": "false"},
+            json={"error": {"message": "rate limited", "type": "rate_limit_error"}},
+        )
+    )
+
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        litellm.embedding(
+            model="openai/text-embedding-3-small", input=["hello"], api_key="sk-test", max_retries=0
+        )
+
+    assert int(exc_info.value.litellm_response_headers["retry-after"]) == 42

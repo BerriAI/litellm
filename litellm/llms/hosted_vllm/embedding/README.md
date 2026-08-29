@@ -4,7 +4,7 @@ VLLM is a superset of OpenAI's `embedding` endpoint.
 
 ## `encoding_format`
 
-For OpenAI-compatible embedding calls (including `openai/...` with a custom `api_base` pointing at vLLM), LiteLLM resolves `encoding_format` when it is not set on the request:
+For OpenAI-compatible embedding calls (including `openai/...` with a custom `api_base` pointing at vLLM), LiteLLM resolves `encoding_format` when it is not set on the request. `hosted_vllm/...` models use a separate handler that never adds the field on its own, so this resolution applies to the `openai/...`-style routes only:
 
 1. Explicit value on the embedding call (`encoding_format=...`).
 2. Model config (`litellm_params.encoding_format` on the proxy `model_list` entry).
