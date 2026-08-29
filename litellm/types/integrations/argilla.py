@@ -1,17 +1,14 @@
-import os
-from datetime import datetime as dt
-from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import Any, Final
 
 from typing_extensions import TypedDict
 
 
 class ArgillaItem(TypedDict):
-    fields: Dict[str, Any]
+    fields: dict[str, Any]
 
 
 class ArgillaPayload(TypedDict):
-    items: List[ArgillaItem]
+    items: list[ArgillaItem]
 
 
 class ArgillaCredentialsObject(TypedDict):
@@ -20,4 +17,4 @@ class ArgillaCredentialsObject(TypedDict):
     ARGILLA_BASE_URL: str
 
 
-SUPPORTED_PAYLOAD_FIELDS = ["messages", "response"]
+SUPPORTED_PAYLOAD_FIELDS: Final = ["messages", "response"]

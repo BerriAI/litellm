@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 def _event_hook_from_mode(
     mode: str | list[str] | Mode,
-) -> Union[GuardrailEventHooks, list[GuardrailEventHooks], Mode]:
+) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode:
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, list):
@@ -25,7 +25,7 @@ def _event_hook_from_mode(
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> RepelloAIGuardrail:
     import litellm
 
-    _repelloai_callback = RepelloAIGuardrail(
+    _repelloai_callback: Final = RepelloAIGuardrail(
         guardrail_name=guardrail["guardrail_name"],
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
@@ -39,11 +39,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _repelloai_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.REPELLOAI.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.REPELLOAI.value: RepelloAIGuardrail,
 }

@@ -26,6 +26,8 @@ vi.mock("@/components/key_team_helpers/filter_helpers", () => ({
 }));
 
 import { uiSpendLogsCall } from "../networking";
+import { fetchAllTeams } from "@/components/key_team_helpers/filter_helpers";
+import type { Team } from "../key_team_helpers/key_list";
 
 const emptyResponse: PaginatedResponse = {
   data: [],
@@ -43,9 +45,9 @@ const defaultProps = {
   userRole: "Admin" as string | null,
   userID: "user-1" as string | null,
   columnFilters: [] as ColumnFiltersState,
-  filterByCurrentUser: false,
   activeTab: "request logs",
   isLiveTail: false,
+  excludeInternalHealthChecks: false,
   startTime: "2025-01-01T00:00:00",
   endTime: "2025-01-01T23:59:59",
   pagination: FIRST_PAGE,
@@ -81,6 +83,8 @@ describe("useLogFilterLogic", () => {
       { id: LOG_FILTER_IDS.SESSION_ID, value: "sess-1", param: "session_id" },
       { id: LOG_FILTER_IDS.END_USER, value: "end-user-1", param: "end_user" },
       { id: LOG_FILTER_IDS.STATUS, value: "failure", param: "status_filter" },
+      { id: LOG_FILTER_IDS.CACHE_STATUS, value: "hit", param: "cache_hit_filter" },
+      { id: LOG_FILTER_IDS.CACHE_STATUS, value: "miss", param: "cache_hit_filter" },
       { id: LOG_FILTER_IDS.MODEL_ID, value: "model-uuid-1", param: "model_id" },
       { id: LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL, value: "gpt-4o", param: "model" },
       { id: LOG_FILTER_IDS.KEY_ALIAS, value: "alias-1", param: "key_alias" },
@@ -151,6 +155,7 @@ describe("useLogFilterLogic", () => {
       ["pagination", { pagination: { pageIndex: 1, pageSize: 50 } }],
       ["startTime", { startTime: "2025-02-02T00:00:00" }],
       ["columnFilters", { columnFilters: [{ id: LOG_FILTER_IDS.TEAM_ID, value: "team-2" }] }],
+      ["excludeInternalHealthChecks", { excludeInternalHealthChecks: true }],
     ])("refetches when %s changes", async (_label, nextProps) => {
       const { rerender } = renderHook((props: HookOverrides) => useLogFilterLogic({ ...defaultProps, ...props }), {
         wrapper,
@@ -160,6 +165,22 @@ describe("useLogFilterLogic", () => {
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1));
       rerender(nextProps);
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  describe("hide health checks toggle", () => {
+    it("passes exclude_internal_health_checks when the toggle is on", async () => {
+      renderFilterHook({ excludeInternalHealthChecks: true });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCallParams()?.params).toMatchObject({ exclude_internal_health_checks: true });
+    });
+
+    it("passes exclude_internal_health_checks as false when the toggle is off", async () => {
+      renderFilterHook();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCallParams()?.params).toMatchObject({ exclude_internal_health_checks: false });
     });
   });
 
@@ -179,23 +200,55 @@ describe("useLogFilterLogic", () => {
     });
   });
 
-  describe("filterByCurrentUser", () => {
-    it("scopes to the current user when no explicit user filter is set", async () => {
-      renderFilterHook({ filterByCurrentUser: true });
+  describe("user scope", () => {
+    it("leaves an empty user filter for the backend to authorize", async () => {
+      renderFilterHook();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
-      expect(lastCallParams()?.params).toMatchObject({ user_id: "user-1" });
+      expect(lastCallParams()?.params?.user_id).toBeUndefined();
     });
 
-    it("lets an explicit user filter win over the current-user scope", async () => {
+    it("sends an explicit user filter for the backend to intersect with authorization", async () => {
       renderFilterHook({
-        filterByCurrentUser: true,
         columnFilters: [{ id: LOG_FILTER_IDS.USER_ID, value: "someone-else" }],
       });
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCallParams()?.params).toMatchObject({ user_id: "someone-else" });
     });
+  });
+
+  describe("team filter list scope", () => {
+    const callerTeams = [{ team_id: "team-a" }, { team_id: "team-b" }] as Team[];
+
+    it("scopes /team/list to an internal user and still surfaces their teams", async () => {
+      vi.mocked(fetchAllTeams).mockResolvedValue(callerTeams);
+
+      const { result } = renderFilterHook({ userRole: "Internal User", userID: "member-7" });
+
+      await waitFor(() => expect(fetchAllTeams).toHaveBeenCalled());
+      expect(fetchAllTeams).toHaveBeenCalledWith("test-token", null, "member-7");
+      await waitFor(() => expect(result.current.allTeams).toEqual(callerTeams));
+    });
+
+    it("scopes /team/list for an internal viewer", async () => {
+      vi.mocked(fetchAllTeams).mockResolvedValue(callerTeams);
+
+      renderFilterHook({ userRole: "Internal Viewer", userID: "member-7" });
+
+      await waitFor(() => expect(fetchAllTeams).toHaveBeenCalledWith("test-token", null, "member-7"));
+    });
+
+    it.each(["Admin", "Admin Viewer", "Org Admin"])(
+      "leaves /team/list unscoped for %s so the broad list survives",
+      async (userRole) => {
+        vi.mocked(fetchAllTeams).mockResolvedValue(callerTeams);
+
+        renderFilterHook({ userRole, userID: "member-7" });
+
+        await waitFor(() => expect(fetchAllTeams).toHaveBeenCalledWith("test-token", null, null));
+      },
+    );
   });
 
   it("returns an empty payload and does not crash when the call fails", async () => {

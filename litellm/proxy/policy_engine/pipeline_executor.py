@@ -6,7 +6,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
 import time
-from typing import Any, List, Literal, Optional
+from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -15,6 +15,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import independent_snapshot
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -27,7 +28,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
 try:
     from fastapi.exceptions import HTTPException
 except ImportError:
-    HTTPException = None  # type: ignore
+    HTTPException = None
 
 
 class PipelineExecutor:
@@ -35,12 +36,13 @@ class PipelineExecutor:
 
     @staticmethod
     async def execute_steps(
-        steps: List[PipelineStep],
+        steps: list[PipelineStep],
         mode: str,
         data: dict,
         user_api_key_dict: Any,
         call_type: str,
         policy_name: str,
+        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
     ) -> PipelineExecutionResult:
         """
         Execute pipeline steps sequentially with conditional actions.
@@ -52,11 +54,16 @@ class PipelineExecutor:
             user_api_key_dict: User API key auth
             call_type: Type of call (completion, etc.)
             policy_name: Name of the owning policy (for logging)
+            raw_request_snapshot: pristine pre-pipeline, pre-guardrail request
+                (taken by the caller before any guardrail or pipeline ran), so a
+                step whose guardrail opted into ``scan_raw_request`` evaluates
+                the original request instead of whatever an earlier
+                ``pass_data`` step in this same pipeline already rewrote.
 
         Returns:
             PipelineExecutionResult with terminal action and step results
         """
-        step_results: List[PipelineStepResult] = []
+        step_results: Final[list[PipelineStepResult]] = []
         working_data = data.copy()
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
@@ -75,6 +82,7 @@ class PipelineExecutor:
                 data=working_data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
+                raw_request_snapshot=raw_request_snapshot,
             )
 
             duration = time.perf_counter() - start_time
@@ -92,7 +100,12 @@ class PipelineExecutor:
             step_results.append(step_result)
 
             verbose_proxy_logger.debug(
-                f"Pipeline '{policy_name}' step {i}: guardrail={step.guardrail}, outcome={outcome}, action={action}"
+                "Pipeline '%s' step %s: guardrail=%s, outcome=%s, action=%s",
+                policy_name,
+                i,
+                step.guardrail,
+                outcome,
+                action,
             )
 
             # Forward modified data to next step if pass_data is True
@@ -138,11 +151,12 @@ class PipelineExecutor:
         data: dict,
         user_api_key_dict: Any,
         call_type: str,
+        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
     ) -> tuple[
         Literal["pass", "fail", "error"],
-        Optional[dict],
-        Optional[str],
-        Optional[Exception],
+        dict | None,
+        str | None,
+        Exception | None,
     ]:
         """
         Run a single pipeline step's guardrail.
@@ -156,9 +170,9 @@ class PipelineExecutor:
               pipeline can re-raise it verbatim and match the direct-attachment
               response/trace, else None
         """
-        callback = PipelineExecutor.find_guardrail_callback(step.guardrail)
+        callback: Final = PipelineExecutor.find_guardrail_callback(step.guardrail)
         if callback is None:
-            verbose_proxy_logger.warning(f"Pipeline: guardrail '{step.guardrail}' not found in callbacks")
+            verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
         try:
@@ -167,19 +181,34 @@ class PipelineExecutor:
                 data["metadata"] = {}
             data["metadata"]["guardrails"] = [step.guardrail]
 
+            # A scan_raw_request step evaluates the pristine pre-pipeline
+            # snapshot instead of `data` (which earlier pass_data steps in
+            # this same pipeline may have already rewritten), same reason
+            # the normal sequential/parallel guardrail loops do this.
+            scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+            hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
+                independent_snapshot(raw_request_snapshot)
+                if scans_raw_request and raw_request_snapshot is not None
+                else data
+            )
+            if hook_input is not data:
+                hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
+
             # Use unified_guardrail path if callback implements apply_guardrail
             target: CustomLogger = callback
-            use_unified = "apply_guardrail" in type(callback).__dict__
+            use_unified: Final = (
+                "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
+            )
             if use_unified:
-                data["guardrail_to_apply"] = callback
+                hook_input["guardrail_to_apply"] = callback
                 target = UnifiedLLMGuardrails()
 
             if mode == "pre_call":
                 response = await target.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
-                    cache=None,  # type: ignore
-                    data=data,
-                    call_type=call_type,  # type: ignore
+                    cache=None,
+                    data=hook_input,
+                    call_type=call_type,
                 )
                 if isinstance(callback, CustomGuardrail):
                     callback.mark_pre_call_hook_ran(data)
@@ -189,27 +218,31 @@ class PipelineExecutor:
                 response = await target.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
                     data=data,
-                    response=data.get("response"),  # type: ignore
+                    response=data.get("response"),
                 )
             else:
                 return ("error", None, f"Unsupported pipeline mode: {mode}", None)
 
-            # Normal return means pass
+            # Normal return means pass. A scan_raw_request step is block-only,
+            # same contract as run_in_parallel/scan_raw_request elsewhere: any
+            # data it returned is discarded, since applying it on top of the
+            # raw snapshot would silently undo whatever an earlier step in
+            # this pipeline already did.
             modified_data = None
-            if response is not None and isinstance(response, dict):
+            if response is not None and isinstance(response, dict) and not scans_raw_request:
                 modified_data = response
             return ("pass", modified_data, None, None)
 
         except Exception as e:
             if CustomGuardrail._is_guardrail_intervention(e):
-                error_msg = _extract_error_message(e)
+                error_msg: Final = _extract_error_message(e)
                 return ("fail", None, error_msg, e)
             else:
-                verbose_proxy_logger.error(f"Pipeline: unexpected error from guardrail '{step.guardrail}': {e}")
+                verbose_proxy_logger.error("Pipeline: unexpected error from guardrail '%s': %s", step.guardrail, e)
                 return ("error", None, str(e), e)
 
     @staticmethod
-    def find_guardrail_callback(guardrail_name: str) -> Optional[CustomGuardrail]:
+    def find_guardrail_callback(guardrail_name: str) -> CustomGuardrail | None:
         """Look up an initialized guardrail callback by name from litellm.callbacks."""
         for callback in litellm.callbacks:
             if isinstance(callback, CustomGuardrail):
@@ -240,7 +273,7 @@ def _extract_error_message(e: Exception) -> str:
     if isinstance(e, ModifyResponseException):
         return str(e)
     if HTTPException is not None and isinstance(e, HTTPException):
-        detail = getattr(e, "detail", None)
+        detail: Final = getattr(e, "detail", None)
         if detail:
             return str(detail)
     return str(e)

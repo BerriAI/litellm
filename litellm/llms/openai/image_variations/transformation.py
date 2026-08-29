@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Union
+from typing import TYPE_CHECKING
 
 from aiohttp import ClientResponse
 from httpx import Headers, Response
@@ -11,9 +11,12 @@ from litellm.types.utils import FileTypes, HttpHandlerRequestFields, ImageRespon
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ..common_utils import OpenAIError
 
+if TYPE_CHECKING:
+    import tiktoken
+
 
 class OpenAIImageVariationConfig(BaseImageVariationConfig):
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageVariationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageVariationOptionalParams]:
         return ["n", "size", "response_format", "user"]
 
     def map_openai_params(
@@ -28,7 +31,7 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
 
     def transform_request_image_variation(
         self,
-        model: Optional[str],
+        model: str | None,
         image: FileTypes,
         optional_params: dict,
         headers: dict,
@@ -42,7 +45,7 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
 
     async def async_transform_response_image_variation(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: ClientResponse,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -50,14 +53,14 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
     ) -> ImageResponse:
         return model_response
 
     def transform_response_image_variation(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -65,12 +68,12 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
     ) -> ImageResponse:
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return OpenAIError(
             status_code=status_code,
             message=error_message,

@@ -1,4 +1,6 @@
 import asyncio
+import threading
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,6 +9,13 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
+from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    AnthropicMessagesStreamingResponse,
+)
+from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    AgenticAnthropicStreamingIterator,
+)
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -19,6 +28,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.budget_reservation import (
+    TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
+    _approximate_input_size,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
@@ -611,12 +622,12 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
 
 
 @pytest.mark.asyncio
-async def test_should_reserve_user_budget_counter_for_team_key(spend_counter_state):
-    """A user's personal budget must be reserved even when the key belongs to a team.
+async def test_should_not_reserve_user_budget_counter_for_team_key(spend_counter_state):
+    """The reservation path mirrors the read path: no personal user counter for a team key.
 
-    Regression for GitHub issue #12905: previously the reservation path skipped the
-    user spend counter whenever the key had a team, so a team key could overshoot the
-    user's personal max_budget under concurrency.
+    A team-scoped key reserves against the key and team counters only, so the key
+    owner's personal max_budget never gates a team request. Fails if the user
+    counter is reserved for team keys again.
     """
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
@@ -645,25 +656,29 @@ async def test_should_reserve_user_budget_counter_for_team_key(spend_counter_sta
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team") == pytest.approx(0.3)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team") is None
 
     await release_budget_reservation(reservation)
 
 
 @pytest.mark.asyncio
-async def test_should_skip_user_budget_counter_for_team_key_when_flag_set(spend_counter_state):
-    """skip_user_budget_on_team_key=True restores the legacy behavior where a user's
-    personal budget is not reserved for a team key."""
+async def test_should_reserve_user_budget_counter_for_team_key_when_flag_enabled(spend_counter_state):
+    """apply_user_budget_to_team_keys must widen the reservation path too.
+
+    Read-time enforcement alone leaks budget under concurrency, so the opt-in has
+    to reserve against the personal counter as well or a burst of team-key
+    requests slips past the owner's max_budget.
+    """
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
-        token="key-user-on-team-skip",
+        token="key-user-on-team-flagged",
         spend=0.0,
-        user_id="user-on-team-skip",
-        team_id="team-no-budget-skip",
+        user_id="user-on-team-flagged",
+        team_id="team-no-budget",
     )
-    team_object = LiteLLM_TeamTable(team_id="team-no-budget-skip", spend=0.0, max_budget=None)
-    user_object = LiteLLM_UserTable(user_id="user-on-team-skip", spend=0.0, max_budget=5.0)
+    team_object = LiteLLM_TeamTable(team_id="team-no-budget", spend=0.0, max_budget=None)
+    user_object = LiteLLM_UserTable(user_id="user-on-team-flagged", spend=0.0, max_budget=5.0)
 
     with patch(
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
@@ -679,10 +694,10 @@ async def test_should_skip_user_budget_counter_for_team_key_when_flag_set(spend_
             prisma_client=None,
             user_api_key_cache=key_cache,
             proxy_logging_obj=proxy_logging_obj,
-            skip_user_budget_on_team_key=True,
+            apply_user_budget_to_team_keys=True,
         )
 
-    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team-skip") is None
+    assert counter_cache.in_memory_cache.get_cache(key="spend:user:user-on-team-flagged") == pytest.approx(0.3)
 
     await release_budget_reservation(reservation)
 
@@ -2371,6 +2386,11 @@ async def _reserve_for_stream(counter_cache, key_cache, proxy_logging_obj, token
     return valid_token, reservation
 
 
+async def _never_ending_stream():
+    yield b'event: message_start\ndata: {"type": "message_start"}\n\n'
+    await asyncio.sleep(30)
+
+
 def _drive_streaming_cancel(valid_token, iterator_hook):
     streaming_logging_obj = MagicMock()
     streaming_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook
@@ -2404,9 +2424,12 @@ async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
 
     generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_before_chunk)
     received = []
-    with pytest.raises(asyncio.CancelledError):
+    async def _drain():
         async for chunk in generator:
             received.append(chunk)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _drain()
 
     assert received == []
     # no chunk delivered, but the provider already received the input, so the
@@ -2436,9 +2459,12 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
 
     generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_after_chunk)
     received = []
-    with pytest.raises(asyncio.CancelledError):
+    async def _drain():
         async for chunk in generator:
             received.append(chunk)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _drain()
 
     assert received == ["data: chunk\n\n"]
     # a consumed stream must NOT be refunded
@@ -2447,6 +2473,108 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
     ) == pytest.approx(2.0)
     assert reservation.get("finalized") is not True
     streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_after_only_keepalive_pings_reconciles_to_input_cost(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token, reservation = await _reserve_for_stream(
+        counter_cache, key_cache, proxy_logging_obj, "key-cancel-after-ping"
+    )
+
+    async def cancel_after_ping(user_api_key_dict, response, request_data):
+        yield STREAM_SSE_KEEPALIVE_PING_BYTES
+        raise asyncio.CancelledError()
+
+    generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_after_ping)
+    received = []
+
+    async def _drain():
+        async for chunk in generator:
+            received.append(chunk)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _drain()
+
+    assert received == [STREAM_SSE_KEEPALIVE_PING_BYTES]
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-after-ping"
+    ) == pytest.approx(0.5)
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancel_while_holding_back_provider_output_keeps_reservation(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token, reservation = await _reserve_for_stream(
+        counter_cache, key_cache, proxy_logging_obj, "key-cancel-held-back"
+    )
+
+    held_back = AgenticAnthropicStreamingIterator(
+        completion_stream=_never_ending_stream(),
+        http_handler=MagicMock(),
+        model="claude-haiku-4-5",
+        messages=[],
+        anthropic_messages_provider_config=MagicMock(),
+        anthropic_messages_optional_request_params={},
+        logging_obj=MagicMock(),
+        custom_llm_provider="anthropic",
+        kwargs={},
+        hold_back=True,
+        server_fulfilled_tool_names=frozenset({"headroom_retrieve"}),
+        ping_interval_seconds=0.01,
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-haiku-4-5",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-test"},
+            }
+        ]
+    )
+    response = await router._aanthropic_messages_streaming_iterator(
+        response=AnthropicMessagesStreamingResponse(completion_stream=held_back, hidden_params={"additional_headers": {}}),
+        initial_kwargs={"model": "claude-haiku-4-5"},
+    )
+
+    async def ping_then_cancel(user_api_key_dict, response, request_data):
+        yield await response.__anext__()
+        while not response.has_buffered_provider_output:
+            yield await response.__anext__()
+        raise asyncio.CancelledError()
+
+    streaming_logging_obj = MagicMock()
+    streaming_logging_obj.async_post_call_streaming_iterator_hook = ping_then_cancel
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
+    generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        response=response,
+        user_api_key_dict=valid_token,
+        request_data=_request_body(),
+        proxy_logging_obj=streaming_logging_obj,
+        serialize_chunk=lambda chunk: chunk,
+        serialize_error=lambda exc: str(exc),
+    )
+
+    received = []
+
+    async def _drain():
+        async for chunk in generator:
+            received.append(chunk)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(_drain(), timeout=5)
+
+    assert received and received == [STREAM_SSE_KEEPALIVE_PING_BYTES] * len(received)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-cancel-held-back"
+    ) == pytest.approx(2.0)
+    assert reservation.get("finalized") is not True
 
 
 @pytest.mark.asyncio
@@ -2500,9 +2628,12 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
     received = []
     # include_cost_in_streaming_usage forces fast_path off, so the hook above runs
     with patch.object(litellm, "include_cost_in_streaming_usage", True, create=True):
-        with pytest.raises(asyncio.CancelledError):
+        async def _drain():
             async for chunk in generator:
                 received.append(chunk)
+
+        with pytest.raises(asyncio.CancelledError):
+            await _drain()
 
     assert received == []
     # cancellation happened before any chunk reached the client, but the
@@ -2579,3 +2710,255 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
 
     assert received == [{"content": "hi"}]
     streaming_logging_obj.async_post_call_streaming_hook.assert_awaited_once()
+
+
+def _tiered_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "dashscope/qwen3-max",
+                "litellm_params": {"model": "dashscope/qwen3-max", "api_key": "sk-fake"},
+                "model_info": {
+                    "max_input_tokens": 258048,
+                    "max_output_tokens": 65536,
+                    "tiered_pricing": [
+                        {
+                            "input_cost_per_token": 1.2e-06,
+                            "output_cost_per_token": 6e-06,
+                            "range": [0, 32000],
+                        },
+                        {
+                            "input_cost_per_token": 2.4e-06,
+                            "output_cost_per_token": 1.2e-05,
+                            "range": [32000, 128000],
+                        },
+                    ],
+                },
+            }
+        ]
+    )
+
+
+def _body_with_content_size(model: str, content_chars: int) -> dict:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "token " * (content_chars // 6)}],
+        "max_tokens": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_reservation_tokenizes_the_prompt_once(spend_counter_state):
+    """Tokenizing is the reservation path's dominant CPU cost, so a request is
+    tokenized once no matter how many cost estimates and pricing candidates it
+    is priced against. The max-cost and input-cost estimates each used to
+    re-tokenize the prompt, once per tiered-pricing candidate."""
+    _, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-tokenize-once", spend=0.0, max_budget=100.0
+    )
+    request_body = _body_with_content_size("dashscope/qwen3-max", 600)
+    real_token_counter = litellm.token_counter
+    calls = []
+
+    def counting_token_counter(**kwargs):
+        calls.append(kwargs)
+        return real_token_counter(**kwargs)
+
+    with patch.object(litellm, "token_counter", counting_token_counter):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=_tiered_router(),
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] > 0
+    assert reservation["input_cost"] > 0
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_large_prompt_is_tokenized_off_the_event_loop(spend_counter_state):
+    """Counting a large prompt inline blocks the event loop for the whole count,
+    stalling every other request the worker is serving."""
+    _, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-offloaded", spend=0.0, max_budget=100.0)
+    request_body = _body_with_content_size(
+        "gpt-4o-mini", TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS + 6000
+    )
+    threads = []
+
+    def recording_token_counter(**kwargs):
+        threads.append(threading.current_thread())
+        return 1000
+
+    with patch.object(litellm, "token_counter", recording_token_counter):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert threads
+    assert all(thread is not threading.main_thread() for thread in threads)
+
+
+def _values_only_size(value: object) -> int:
+    """The keys-ignoring walk the fixture below is sized to defeat"""
+    if isinstance(value, Mapping):
+        return sum(_values_only_size(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_values_only_size(item) for item in value)
+    return len(value) if isinstance(value, str) else 0
+
+
+_TOOL_PROPERTY_NAME_PREFIX = "service_metric_name_segment_" * 3
+
+
+def _key_heavy_tool(index: int) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": f"lookup_service_metric_{index}",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    f"{_TOOL_PROPERTY_NAME_PREFIX}{index}_{field}": {"type": "string"}
+                    for field in range(24)
+                },
+            },
+        },
+    }
+
+
+def _body_with_key_heavy_tool_schema(model: str) -> dict:
+    """A tool schema whose bulk is property names rather than property values"""
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "which service is slow?"}],
+        "tools": [_key_heavy_tool(index) for index in range(24)],
+        "max_tokens": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_large_tool_schema_is_tokenized_off_the_event_loop(spend_counter_state):
+    """Tool-schema property names are tokenized like any other text. Sizing a
+    request by its values alone hides a large schema below the threshold, so it
+    gets counted inline and stalls the loop the threshold exists to spare."""
+    body = _body_with_key_heavy_tool_schema("gpt-4o-mini")
+    assert _values_only_size(body["tools"]) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS
+    assert _approximate_input_size(body) >= TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS
+
+    _, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-tool-schema", spend=0.0, max_budget=100.0)
+    threads = []
+
+    def recording_token_counter(**kwargs):
+        threads.append(threading.current_thread())
+        return 1000
+
+    with patch.object(litellm, "token_counter", recording_token_counter):
+        reservation = await reserve_budget_for_request(
+            request_body=body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert threads
+    assert all(thread is not threading.main_thread() for thread in threads)
+
+
+@pytest.mark.asyncio
+async def test_large_tool_choice_is_tokenized_off_the_event_loop(spend_counter_state):
+    """tool_choice is handed to the tokenizer alongside the messages, so a
+    request is only sized correctly if the heuristic covers it too."""
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "which service is slow?"}],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "lookup_" + "service_metric_" * 3000},
+        },
+        "max_tokens": 10,
+    }
+    assert _approximate_input_size(body) >= TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS
+
+    _, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-tool-choice", spend=0.0, max_budget=100.0)
+    threads = []
+
+    def recording_token_counter(**kwargs):
+        threads.append(threading.current_thread())
+        return 1000
+
+    with patch.object(litellm, "token_counter", recording_token_counter):
+        reservation = await reserve_budget_for_request(
+            request_body=body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert threads
+    assert all(thread is not threading.main_thread() for thread in threads)
+
+
+@pytest.mark.asyncio
+async def test_small_prompt_is_tokenized_inline(spend_counter_state):
+    """A thread hand-off costs more than counting a small prompt"""
+    _, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-inline", spend=0.0, max_budget=100.0)
+    threads = []
+
+    def recording_token_counter(**kwargs):
+        threads.append(threading.current_thread())
+        return 10
+
+    with patch.object(litellm, "token_counter", recording_token_counter):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert threads == [threading.main_thread()]

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchClient } from "./api";
 import {
@@ -36,7 +37,7 @@ const spyOnRequestConstruction = () => {
 
 describe("typed api client middleware", () => {
   beforeEach(() => {
-    registerBaseUrlGetter(() => "");
+    registerBaseUrlGetter(() => "http://localhost:4000");
     registerAuthHeaderNameGetter(() => "Authorization");
     registerErrorHandler(() => {});
     registerAuthTokenGetter(() => null);
@@ -66,7 +67,7 @@ describe("typed api client middleware", () => {
     expect(requests[0].headers.get("Authorization")).toBeNull();
   });
 
-  it("rebases the request onto the registered base url, preserving path and query", async () => {
+  it("builds the request url from the registered base url, preserving path and query", async () => {
     registerBaseUrlGetter(() => "https://proxy.example.com/");
     const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
 
@@ -90,7 +91,7 @@ describe("typed api client middleware", () => {
     expect(await requests[0].text()).toBe(JSON.stringify({ key_alias: "my-key" }));
   });
 
-  it("keeps the POST body as bytes when rebasing onto a runtime base url", async () => {
+  it("keeps the POST body as bytes when a different runtime base url is registered", async () => {
     registerBaseUrlGetter(() => "https://proxy.example.com");
     registerAuthTokenGetter(() => "sk-test");
     const { streamBodiedInits } = spyOnRequestConstruction();
@@ -106,6 +107,43 @@ describe("typed api client middleware", () => {
     expect(sent.headers.get("Content-Type")).toBe("application/json");
     expect(await sent.text()).toBe(JSON.stringify({ key_alias: "my-key" }));
   });
+
+  it("reads the base url on every call, so a base registered after import still takes effect", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return jsonResponse(200, { data: [] });
+    });
+
+    registerBaseUrlGetter(() => "https://first.example.com");
+    await fetchClient.GET("/model_group/info", { fetch });
+    registerBaseUrlGetter(() => "https://second.example.com");
+    await fetchClient.GET("/model_group/info", { fetch });
+
+    expect(requests.map((request) => new URL(request.url).origin)).toEqual([
+      "https://first.example.com",
+      "https://second.example.com",
+    ]);
+  });
+
+  it("forwards the caller's abort signal so an in-flight request can be cancelled", async () => {
+    const controller = new AbortController();
+    const seen: Request[] = [];
+    const fetch = vi.fn(
+      (request: Request) =>
+        new Promise<Response>((_resolve, reject) => {
+          seen.push(request);
+          request.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        }),
+    );
+
+    const pending = fetchClient.GET("/model_group/info", { fetch, signal: controller.signal });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(seen[0].signal.aborted).toBe(true);
+  }, 5000);
 
   it("maps a non-2xx response to an ApiError carrying status and the derived message", async () => {
     const { fetch } = capturingFetch(jsonResponse(403, { error: { message: "no access" } }));

@@ -19,12 +19,11 @@ test.describe("Internal User", () => {
 
     // Open the team dropdown — seeded internal user is a member of
     // e2e-team-crud and e2e-team-org, so we expect at least the CRUD alias.
-    const teamSelect = page.locator(".ant-select", { hasText: "Search or select a team" });
+    const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await expect(page.locator(".ant-select-dropdown:visible").getByText(E2E_TEAM_CRUD_ALIAS).first()).toBeVisible({
-      timeout: 5_000,
-    });
+    const dropdown = page.locator('[data-slot="combobox-content"]:visible');
+    await expect(dropdown.getByText(E2E_TEAM_CRUD_ALIAS).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test("Team info page omits the Settings tab for non-admin members", async ({ page }) => {
