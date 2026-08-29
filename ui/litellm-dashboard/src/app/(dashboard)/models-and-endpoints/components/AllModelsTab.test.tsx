@@ -33,6 +33,7 @@ interface ModelsInfoArgs {
   teamId?: string;
   sortBy?: string;
   sortOrder?: string;
+  modelName?: string;
 }
 
 const modelsInfoCalls: ModelsInfoArgs[] = [];
@@ -47,12 +48,14 @@ type UseModelsInfoArgs = [
   teamId?: string,
   sortBy?: string,
   sortOrder?: string,
+  excludeAutoRouters?: boolean,
+  modelName?: string,
 ];
 
 vi.mock("../../hooks/models/useModels", () => ({
   useModelsInfo: (...args: UseModelsInfoArgs) => {
-    const [page, size, search, , teamId, sortBy, sortOrder] = args;
-    const call: ModelsInfoArgs = { page, size, search, teamId, sortBy, sortOrder };
+    const [page, size, search, , teamId, sortBy, sortOrder, , modelName] = args;
+    const call: ModelsInfoArgs = { page, size, search, teamId, sortBy, sortOrder, modelName };
     modelsInfoCalls.push(call);
     return { ...modelsInfoResult, refetch: mockRefetch };
   },
@@ -260,25 +263,26 @@ describe("AllModelsTab", () => {
     expect(within(table).queryByText("gpt-4")).not.toBeInTheDocument();
   });
 
-  it("queries the server for the selected model group so deployments beyond the first page are found", () => {
+  it("asks the server for the exact selected model group so deployments beyond the first page are found", () => {
     render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
 
-    expect(lastModelsInfoCall().search).toBe("claude-opus");
-  });
-
-  it.each(["all", "wildcard"])("does not seed the server search from the %s pseudo group", (group) => {
-    render(<AllModelsTab {...defaultProps} selectedModelGroup={group} />);
-
+    expect(lastModelsInfoCall().modelName).toBe("claude-opus");
     expect(lastModelsInfoCall().search).toBeUndefined();
   });
 
-  it("lets a typed search override the selected model group in the server query", async () => {
-    const user = userEvent.setup();
+  it.each(["all", "wildcard"])("sends no exact model name for the %s pseudo group", (group) => {
+    render(<AllModelsTab {...defaultProps} selectedModelGroup={group} />);
+
+    expect(lastModelsInfoCall().modelName).toBeUndefined();
+  });
+
+  it("keeps the exact model group alongside a typed search", async () => {
     render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
 
-    await user.type(screen.getByPlaceholderText("Search model names…"), "gpt");
+    fireEvent.change(screen.getByPlaceholderText("Search model names…"), { target: { value: "opus" } });
 
-    await waitFor(() => expect(lastModelsInfoCall().search).toBe("gpt"));
+    await waitFor(() => expect(lastModelsInfoCall().search).toBe("opus"));
+    expect(lastModelsInfoCall().modelName).toBe("claude-opus");
   });
 
   it("resets search, filters, team and sorting from the drawer reset button", async () => {
