@@ -504,6 +504,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
         "/v1/mcp/tools",
+        "/introspect",
     ]
 
     # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
@@ -566,6 +567,7 @@ class LiteLLMRoutes(enum.Enum):
     model_info_routes = [
         "/model/info",
         "/v1/model/info",
+        "/model_group/info",
     ]
 
     llm_api_routes = (
@@ -729,6 +731,7 @@ class LiteLLMRoutes(enum.Enum):
             "/litellm/.well-known/litellm-ui-config",
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
+            "/public/v1/model_hub",
             "/public/model_hub/info",
             "/public/agent_hub",
             "/public/mcp_hub",
@@ -938,6 +941,8 @@ class LiteLLMRoutes(enum.Enum):
             # Model cost map maintenance views (read-only status / source).
             "/schedule/model_cost_map_reload/status",
             "/model/cost_map/source",
+            # A pure read; POST only so the prompt does not ride in a URL.
+            "/auto_router/classifier/default_prompt",
         ]
         # Spend tracking reads (/spend/logs, /spend/logs/ui, /spend/keys,
         # /spend/users, /spend/tags, /spend/calculate, /cost/estimate). Admin
@@ -2510,6 +2515,18 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "are skipped for on-demand GET /health as well as the background health loop."
         ),
     )
+    background_health_check_model_groups: tuple[str, ...] | None = Field(
+        None,
+        description=(
+            "Opt-in allowlist of model group names for background health checks and "
+            "health-check routing. When set, the background loop probes only deployments "
+            "whose model_name is listed, and enable_health_check_routing filters unhealthy "
+            "deployments only within the listed groups; every other group, including newly "
+            "added deployments, is skipped and keeps its configured routing strategy. "
+            "When unset, all deployments participate (opt out per deployment via "
+            "model_info.disable_background_health_check)."
+        ),
+    )
     model_list_healthy_only: bool | None = Field(
         None,
         description=(
@@ -2576,6 +2593,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     disable_auto_add_proxy_admin_to_teams: bool | None = Field(
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
+    )
+    enforce_fallback_model_access: bool | None = Field(
+        None,
+        description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.",
     )
     scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
         None,
@@ -3565,6 +3586,7 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
+    litellm_gateway_injected_cache: ReadOnly[str | None]
 
 
 class SpendLogsPayload(TypedDict):
@@ -4845,6 +4867,7 @@ class BaseDailySpendTransaction(TypedDict):
     # cost-savings metrics (dollars, priced per request before aggregation)
     compression_savings_spend: float
     prompt_caching_savings_spend: float
+    gateway_injected_caching_savings_spend: float  # writable-ok: the rollup queue accumulates into this key in place, as it does for every sibling spend field
     # Not required: rows queued by a pod running the previous release, or replayed from
     # the Redis buffer across an upgrade, carry no such key. Every reader coalesces a
     # missing value to zero, so requiring it here would describe a shape the aggregation

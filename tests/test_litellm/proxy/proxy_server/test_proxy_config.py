@@ -26,6 +26,7 @@ from litellm.proxy.proxy_server import (
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
     resolve_routing_plugins,
+    validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
 )
 
@@ -152,6 +153,44 @@ def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance
     assert len(config["plugins"]) == 1
     assert hasattr(config["plugins"][0], "run")
     assert type(config["plugins"][0]).__name__ == "_Plugin"
+
+
+def test_validate_deployment_complexity_router_placement_refuses_to_start():
+    """Rejected here rather than at router build for the same reason as max_agentic_loops: the
+    proxy builds its router with ignore_invalid_deployments=True, so a rejection further down
+    turns the bad deployment into a silently missing model instead of a refusal to start."""
+    model = {
+        "model_name": "smart-router",
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
+            "tier_boundaries": {"simple_medium": 0.1},
+        },
+    }
+
+    with pytest.raises(ValueError, match="tier_boundaries"):
+        validate_deployment_complexity_router_placement(model)
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"model": "gpt-4o"},
+        {"model": "openai/gpt-4o", "embedding_model": "text-embedding-3-small"},
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}, "tier_boundaries": {"simple_medium": 0.1}},
+        },
+    ],
+)
+def test_validate_deployment_complexity_router_placement_leaves_valid_deployments_alone(litellm_params):
+    """`embedding_model` is a legitimate flat param on an s3_vectors vector store, so the gate is
+    scoped to complexity routers rather than applied to every deployment."""
+    model = {"model_name": "m", "litellm_params": dict(litellm_params)}
+
+    validate_deployment_complexity_router_placement(model)
+
+    assert model["litellm_params"] == litellm_params
 
 
 def test_validate_deployment_max_agentic_loops_allows_a_deployment_without_the_key():
