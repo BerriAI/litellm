@@ -1241,3 +1241,20 @@ def test_marks_gateway_injection_credits_only_the_deployment_that_was_injected()
     assert marks_gateway_injection({"litellm_gateway_injected_cache": ""}, None) is True
     assert marks_gateway_injection({"litellm_call_id": "c1"}, "dep-a") is False
     assert marks_gateway_injection({"litellm_gateway_injected_cache": True}, "dep-a") is False
+
+
+def test_explicit_zero_cache_rate_is_a_price_not_an_absence():
+    from litellm.proxy.spend_tracking.savings import _baseline_cache_rate_keys
+
+    free = {
+        "cache_read_input_token_cost": 0.0,
+        "cache_creation_input_token_cost": 0.0,
+    }
+    priced = {
+        "cache_read_input_token_cost": 1e-07,
+        "cache_creation_input_token_cost": 2e-07,
+    }
+
+    assert _baseline_cache_rate_keys(free) == (True, True)
+    assert _baseline_cache_rate_keys(priced) == (True, True)
+    assert _baseline_cache_rate_keys({}) == (False, False)
