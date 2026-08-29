@@ -150,6 +150,7 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
+            log_extra: Final = {"requester_ip": requester_ip}
             is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
             is_quiet_log: Final = is_invalid_virtual_key and not litellm.log_client_error_tracebacks
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
@@ -159,7 +160,7 @@ class UserAPIKeyAuthExceptionHandler:
                 e,
                 requester_ip,
                 exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
-                extra={"requester_ip": requester_ip},
+                extra=log_extra,
             )
 
             # Log this exception to OTEL, Datadog etc. Reuse the identity resolved
@@ -207,4 +208,12 @@ class UserAPIKeyAuthExceptionHandler:
             if transformed_exception is not None:
                 e = transformed_exception
 
-            raise mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
+            final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
+            if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
+                verbose_proxy_logger.error(
+                    "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
+                    final_exception,
+                    requester_ip,
+                    extra=log_extra,
+                )
+            raise final_exception

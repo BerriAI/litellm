@@ -11,6 +11,7 @@ from typing import List
 import pytest
 
 import litellm
+import litellm._logging as litellm_logging
 from litellm._logging import (
     _COLOR_LOG_FORMAT,
     _PLAIN_LOG_FORMAT,
@@ -978,6 +979,21 @@ def test_error_threshold_suppresses_invalid_key_warning_like_ordinary_warnings(c
     finally:
         for h, level in zip(proxy_handlers, original_levels, strict=True):
             h.setLevel(level)
+
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "invalid virtual key" not in err
+    assert "ordinary proxy warning" not in err
+    assert "ordinary proxy error" in err
+
+
+def test_config_json_mode_handler_honors_the_litellm_log_threshold(monkeypatch, capsys):
+    monkeypatch.setattr(litellm_logging, "numeric_level", logging.ERROR)
+    _turn_on_json()
+
+    verbose_proxy_stdout_logger.warning("invalid virtual key")
+    verbose_proxy_logger.warning("ordinary proxy warning")
+    verbose_proxy_logger.error("ordinary proxy error")
 
     out, err = capsys.readouterr()
     assert out == ""

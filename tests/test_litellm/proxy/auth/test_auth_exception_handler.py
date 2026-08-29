@@ -882,7 +882,7 @@ async def test_handle_authentication_error_keeps_unexpected_source_traceback_aft
 
 
 @pytest.mark.asyncio
-async def test_handle_authentication_error_does_not_preserve_invalid_virtual_key_marker_for_callback_503(caplog):
+async def test_handle_authentication_error_logs_callback_503_at_error_level_without_the_marker(caplog):
     handler = UserAPIKeyAuthExceptionHandler()
     transformed_exception = HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -895,11 +895,12 @@ async def test_handle_authentication_error_does_not_preserve_invalid_virtual_key
         )
 
     records = _auth_failure_records(caplog)
-    assert len(records) == 1
-    assert records[0].name == verbose_proxy_stdout_logger.name
-    assert records[0].levelno == logging.WARNING
-    assert records[0].exc_info is None
+    assert [(r.name, r.levelno, r.exc_info) for r in records] == [
+        (verbose_proxy_stdout_logger.name, logging.WARNING, None),
+        (verbose_proxy_logger.name, logging.ERROR, None),
+    ]
     assert "LiteLLM Virtual Key expected" in records[0].getMessage()
+    assert "Authentication service temporarily unavailable" in records[1].getMessage()
     assert exc_info.value.message == "Authentication service temporarily unavailable"
     assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
     assert not hasattr(exc_info.value, "_litellm_invalid_virtual_key_error")
