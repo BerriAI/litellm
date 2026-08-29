@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -35,6 +35,9 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import ProxyLogging
 
 _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
     {
@@ -555,7 +558,7 @@ def _get_request_tags_for_cost_tracking(
 
 
 async def _update_database_and_spend_counters(
-    proxy_logging_obj: Any,
+    proxy_logging_obj: "ProxyLogging",
     increment_spend_counters: Any,
     user_api_key: str | None,
     user_id: str | None,

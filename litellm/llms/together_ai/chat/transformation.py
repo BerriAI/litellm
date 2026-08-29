@@ -18,6 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
+from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_function_calling, supports_reasoning, supports_response_schema
 
@@ -139,6 +140,8 @@ def _reasoning_effort_payload(effort: str, model: str) -> Mapping[str, object]:
     if effort == "none":
         disable_reasoning: Final[TogetherReasoningToggle] = {"enabled": False}
         return MappingProxyType({"reasoning": disable_reasoning})
+    if effort in (declared_reasoning_efforts_for_model(model, "together_ai") or ()):
+        return MappingProxyType({"reasoning_effort": effort})
     if model.startswith(HIGH_MAX_EFFORT_MODEL_PREFIX):
         return MappingProxyType({"reasoning_effort": HIGH_MAX_EFFORT_TRANSLATION.get(effort, effort)})
     return MappingProxyType({"reasoning_effort": EFFORT_TRANSLATION.get(effort, effort)})

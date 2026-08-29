@@ -278,6 +278,7 @@ export function LogDetailsDrawer({
   ).length;
   const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
+  const cacheHitCount = sessionLogs.filter((row) => String(row.cache_hit ?? "").toLowerCase() === "true").length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
@@ -387,6 +388,11 @@ export function LogDetailsDrawer({
                     </>
                   )}
                 </div>
+                {isSessionMode && (
+                  <div className="text-[11px] text-muted-foreground font-mono whitespace-nowrap">
+                    {cacheHitCount}/{logsForList.length} cached
+                  </div>
+                )}
                 {isSessionMode && sessionTruncated && (
                   <div className="mt-1 text-[11px] text-warning font-mono">
                     Showing most recent {logsForList.length} of {sessionTotalCount}
