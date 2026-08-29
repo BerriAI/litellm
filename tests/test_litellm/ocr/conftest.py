@@ -9,12 +9,15 @@ import pytest
 from tests.test_litellm._fixture_recorder import fixture_id, recorded_fixtures
 
 FIXTURE_DIR_ENV: Final = "LITELLM_OCR_FIXTURE_DIR"
-pytest_plugins: Final = ("tests.test_litellm.parity.pytest_plugin",)
 
 
 def _fixture_directory() -> Path:
-    configured: Final = os.environ.get(FIXTURE_DIR_ENV)
-    return Path(configured).expanduser() if configured else Path(__file__).with_name(".fixtures")
+    if FIXTURE_DIR_ENV not in os.environ:
+        return Path(__file__).with_name(".fixtures")
+    configured: Final = os.environ[FIXTURE_DIR_ENV]
+    if not configured:
+        raise pytest.UsageError(f"{FIXTURE_DIR_ENV} is set but empty")
+    return Path(configured).expanduser()
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -22,6 +25,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         return
     fixtures: Final = recorded_fixtures(_fixture_directory())
     if not fixtures:
+        if FIXTURE_DIR_ENV in os.environ:
+            raise pytest.UsageError(f"no recorded OCR fixtures in {_fixture_directory()}")
         metafunc.parametrize(
             "ocr_fixture",
             (

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import queue
 import threading
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,95 +12,80 @@ from pathlib import Path
 from typing import Final, cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from tests.test_litellm._json_fs_cache import JsonFileCache, canonical_json
+from tests.test_litellm.ocr.fixture_models import (
+    HttpHeader,
+    MistralOcrParityInput,
+    OcrParityCase,
+    RecordedHttpResponse,
+)
 
-JSON_OBJECT: Final = TypeAdapter(dict[str, object])
-
-
-class ProviderWireRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    method: str
-    path: str
-    body: dict[str, object]
-
-
-class FixtureRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    provider: str
-    sdk_kwargs: dict[str, object]
-    provider_request: ProviderWireRequest
-
-
-class FixtureResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    status_code: int
-    headers: dict[str, str]
-    body: dict[str, object]
-
-
-class Fixture(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    request: FixtureRequest
-    response: FixtureResponse
+_HOP_BY_HOP_HEADERS: Final = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderSpec:
-    name: str
     model: str
     upstream_base: str
-    api_key: str | None
-    upstream_model: str | None = None
+    api_key: str
 
 
 @dataclass(frozen=True, slots=True)
 class RecorderResult:
-    request: FixtureRequest
-    response: FixtureResponse | None
+    case: OcrParityCase
     cache_hit: bool
 
 
 @dataclass(frozen=True, slots=True)
 class GeneratorArgs:
-    providers: tuple[str, ...]
     examples: int
     fixture_dir: Path | None
-    requests_only: bool
-    responses_only: bool
+    model: str
+
+
+def _excluded_headers(headers: tuple[tuple[str, str], ...]) -> frozenset[str]:
+    connection_values: Final = tuple(value for name, value in headers if name.lower() == "connection")
+    connection_headers: Final = frozenset(
+        token.strip().lower() for value in connection_values for token in value.split(",") if token.strip()
+    )
+    return _HOP_BY_HOP_HEADERS | connection_headers
+
+
+def _end_to_end_headers(headers: httpx.Headers) -> tuple[HttpHeader, ...]:
+    decoded: Final = tuple((name.decode("ascii"), value.decode("latin-1")) for name, value in headers.raw)
+    excluded: Final = _excluded_headers(decoded) | {"content-length"}
+    return tuple(HttpHeader(name=name, value=value) for name, value in decoded if name.lower() not in excluded)
 
 
 class _RecordingProvider(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(
-        self,
-        spec: ProviderSpec,
-        sdk_kwargs: dict[str, object],
-        cache: JsonFileCache,
-        requests_only: bool,
-    ) -> None:
+    def __init__(self, spec: ProviderSpec) -> None:
         super().__init__(("127.0.0.1", 0), _RecordingHandler)
         self.spec: Final = spec
-        self.sdk_kwargs: Final = sdk_kwargs
-        self.cache: Final = cache
-        self.requests_only: Final = requests_only
-        self.results: queue.Queue[RecorderResult] = queue.Queue()
+        self.responses: queue.Queue[RecordedHttpResponse] = queue.Queue()
 
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_address[1]}"
 
-    def take_result(self) -> RecorderResult:
+    def take_response(self) -> RecordedHttpResponse:
         try:
-            return self.results.get(timeout=5)
+            return self.responses.get(timeout=5)
         except queue.Empty as error:
-            raise RuntimeError("successful SDK call did not produce a recorder result") from error
+            raise RuntimeError("successful SDK call did not produce a recorded response") from error
 
 
 class _RecordingHandler(BaseHTTPRequestHandler):
@@ -111,81 +95,41 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         provider: Final = self.server
         assert isinstance(provider, _RecordingProvider)
         length: Final = int(self.headers.get("content-length") or "0")
-        body: Final = JSON_OBJECT.validate_json(self.rfile.read(length))
-        fixture_request: Final = FixtureRequest(
-            provider=provider.spec.name,
-            sdk_kwargs=provider.sdk_kwargs,
-            provider_request=ProviderWireRequest(method=self.command, path=self.path, body=body),
-        )
-        cache_key: Final = fixture_cache_key(
-            provider.spec.name,
-            fixture_request.sdk_kwargs,
-            fixture_request.provider_request,
-        )
-        cached_value: Final = provider.cache.get(cache_key)
-        if cached_value is not None:
-            cached_request: Final = FixtureRequest.model_validate(cached_value["request"])
-            raw_cached_response: Final = cached_value.get("response")
-            if raw_cached_response is not None:
-                cached_response: Final = FixtureResponse.model_validate(raw_cached_response)
-                provider.results.put(RecorderResult(request=cached_request, response=cached_response, cache_hit=True))
-                self._send_fixture_response(cached_response)
-                return
-            if provider.requests_only:
-                provider.results.put(RecorderResult(request=cached_request, response=None, cache_hit=True))
-                self._send_response(200, {"content-type": "application/json"}, b"{}")
-                return
-
-        if provider.requests_only:
-            provider.results.put(RecorderResult(request=fixture_request, response=None, cache_hit=False))
-            self._send_response(200, {"content-type": "application/json"}, b"{}")
-            return
-
+        request_body: Final = self.rfile.read(length)
+        raw_headers: Final = tuple(self.headers.raw_items())
+        excluded: Final = _excluded_headers(raw_headers) | {"host", "content-length"}
+        forwarded_headers: Final = tuple((name, value) for name, value in raw_headers if name.lower() not in excluded)
         upstream_url: Final = f"{provider.spec.upstream_base.rstrip('/')}{self.path}"
-        forwarded_headers: Final = {
-            name: value
-            for name, value in self.headers.items()
-            if name.lower() not in {"host", "content-length", "accept-encoding", "x-parity-case"}
-        }
-        upstream_body: Final = (
-            {**body, "model": provider.spec.upstream_model} if provider.spec.upstream_model is not None else body
-        )
+
         try:
-            upstream_response: Final = httpx.post(
+            with httpx.stream(
+                self.command,
                 upstream_url,
                 headers=forwarded_headers,
-                content=json.dumps(upstream_body, separators=(",", ":")),
+                content=request_body,
                 timeout=120,
-            )
+            ) as upstream:
+                response_body: Final = b"".join(upstream.iter_raw())
+                recorded_response: Final = RecordedHttpResponse.from_bytes(
+                    status_code=upstream.status_code,
+                    headers=_end_to_end_headers(upstream.headers),
+                    body=response_body,
+                )
         except httpx.HTTPError as error:
-            error_body: Final = json.dumps({"error": str(error)}).encode()
-            self._send_response(502, {"content-type": "application/json"}, error_body)
+            self._send_response(502, (), str(error).encode("utf-8"))
             return
 
-        raw_content_type: Final = cast(object, upstream_response.headers.get("content-type", "application/json"))
-        content_type: Final = raw_content_type if isinstance(raw_content_type, str) else "application/json"
-        response_headers: Final = {"content-type": content_type.split(";", 1)[0]}
-        if not upstream_response.is_success:
-            self._send_response(upstream_response.status_code, response_headers, upstream_response.content)
-            return
+        if 200 <= recorded_response.status_code < 300:
+            provider.responses.put(recorded_response)
+        self._send_recorded_response(recorded_response)
 
-        upstream_response_body: Final = JSON_OBJECT.validate_json(upstream_response.content)
-        fixture_response: Final = FixtureResponse(
-            status_code=upstream_response.status_code,
-            headers=response_headers,
-            body=upstream_response_body,
-        )
-        provider.results.put(RecorderResult(request=fixture_request, response=fixture_response, cache_hit=False))
-        self._send_fixture_response(fixture_response)
+    def _send_recorded_response(self, response: RecordedHttpResponse) -> None:
+        self._send_response(response.status_code, response.headers, response.body_bytes())
 
-    def _send_fixture_response(self, response: FixtureResponse) -> None:
-        response_body: Final = json.dumps(response.body, separators=(",", ":")).encode()
-        self._send_response(response.status_code, response.headers, response_body)
-
-    def _send_response(self, status_code: int, headers: Mapping[str, str], body: bytes) -> None:
-        self.send_response(status_code)
-        for name, value in headers.items():
-            self.send_header(name, value)
+    def _send_response(self, status_code: int, headers: tuple[HttpHeader, ...], body: bytes) -> None:
+        self.send_response_only(status_code)
+        for header in headers:
+            self.send_header(header.name, header.value)
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -195,18 +139,8 @@ class _RecordingHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _recording_provider(
-    spec: ProviderSpec,
-    sdk_kwargs: dict[str, object],
-    cache: JsonFileCache,
-    requests_only: bool,
-) -> Generator[_RecordingProvider]:
-    server: Final = _RecordingProvider(
-        spec=spec,
-        sdk_kwargs=sdk_kwargs,
-        cache=cache,
-        requests_only=requests_only,
-    )
+def _recording_provider(spec: ProviderSpec) -> Generator[_RecordingProvider]:
+    server: Final = _RecordingProvider(spec)
     thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -217,87 +151,41 @@ def _recording_provider(
         thread.join(timeout=5)
 
 
-def fixture_cache_key(
-    provider: str,
-    sdk_kwargs: dict[str, object],
-    request: ProviderWireRequest,
-) -> dict[str, object]:
-    return {
-        "provider": provider,
-        "sdk_kwargs": sdk_kwargs,
-        "request": request.model_dump(mode="json"),
-    }
+def fixture_cache_key(case_input: MistralOcrParityInput) -> dict[str, object]:
+    return case_input.canonical_input()
 
 
 def record_case(
     spec: ProviderSpec,
     root: Path,
-    sdk_kwargs: dict[str, object],
-    requests_only: bool,
+    case_input: MistralOcrParityInput,
     sdk_call: Callable[..., object],
 ) -> RecorderResult:
-    cache: Final = JsonFileCache(root / spec.name)
-    with _recording_provider(
-        spec=spec,
-        sdk_kwargs=sdk_kwargs,
-        cache=cache,
-        requests_only=requests_only,
-    ) as recorder:
-        try:
-            sdk_call(api_base=recorder.url, api_key=spec.api_key, **sdk_kwargs)
-        except Exception:
-            if not requests_only:
-                raise
-        result: Final = recorder.take_result()
+    cache: Final = JsonFileCache(root)
+    cache_key: Final = fixture_cache_key(case_input)
+    cached: Final = cache.get(cache_key)
+    if cached is not None:
+        return RecorderResult(case=OcrParityCase.model_validate(cached), cache_hit=True)
 
-    if not result.cache_hit:
-        value: Final = (
-            Fixture(request=result.request, response=result.response).model_dump(mode="json")
-            if result.response is not None
-            else {"request": result.request.model_dump(mode="json")}
-        )
-        cache.put(
-            fixture_cache_key(spec.name, result.request.sdk_kwargs, result.request.provider_request),
-            value,
-        )
-    return result
+    with _recording_provider(spec) as recorder:
+        sdk_call(api_base=recorder.url, api_key=spec.api_key, **case_input.as_sdk_kwargs())
+        upstream_response: Final = recorder.take_response()
+
+    case: Final = OcrParityCase(input=case_input, upstream_response=upstream_response)
+    cache.put(cache_key, cast(dict[str, object], case.model_dump(mode="json", exclude_unset=True)))
+    return RecorderResult(case=case, cache_hit=False)
 
 
-def pending_requests(cache: JsonFileCache) -> tuple[FixtureRequest, ...]:
-    return tuple(
-        FixtureRequest.model_validate(value["request"]) for value in cache.values() if value.get("response") is None
-    )
-
-
-def fill_missing_responses(
-    specs: tuple[ProviderSpec, ...],
-    root: Path,
-    sdk_call: Callable[..., object],
-) -> tuple[RecorderResult, ...]:
-    return tuple(
-        record_case(spec, root, request.sdk_kwargs, requests_only=False, sdk_call=sdk_call)
-        for spec in specs
-        for request in pending_requests(JsonFileCache(root / spec.name))
-        if request.sdk_kwargs.get("model") == spec.model
-    )
-
-
-def parse_generator_args(provider_names: tuple[str, ...]) -> GeneratorArgs:
+def parse_generator_args() -> GeneratorArgs:
     parser: Final = argparse.ArgumentParser()
-    parser.add_argument("--provider", action="append", choices=provider_names)
     parser.add_argument("--examples", type=int, default=4)
     parser.add_argument("--fixture-dir", type=Path)
-    mode: Final = parser.add_mutually_exclusive_group()
-    mode.add_argument("--requests-only", action="store_true", help="record deterministic requests without API calls")
-    mode.add_argument("--responses-only", action="store_true", help="fill responses for saved pending requests")
+    parser.add_argument("--model", default="mistral/mistral-ocr-latest")
     namespace: Final = parser.parse_args()
-    providers: Final = cast(list[str] | None, namespace.provider)
     return GeneratorArgs(
-        providers=tuple(providers) if providers else provider_names,
         examples=cast(int, namespace.examples),
         fixture_dir=cast(Path | None, namespace.fixture_dir),
-        requests_only=cast(bool, namespace.requests_only),
-        responses_only=cast(bool, namespace.responses_only),
+        model=cast(str, namespace.model),
     )
 
 
@@ -305,17 +193,11 @@ def fixture_directory(configured: Path | None, env_value: str | None, default: P
     return (configured or Path(env_value or default)).expanduser()
 
 
-def recorded_fixtures(directory: Path) -> tuple[Fixture, ...]:
-    return tuple(
-        Fixture.model_validate(raw_fixture)
-        for raw_fixture in JsonFileCache(directory).values()
-        if raw_fixture.get("response") is not None
-    )
+def recorded_fixtures(directory: Path) -> tuple[OcrParityCase, ...]:
+    return tuple(OcrParityCase.model_validate(raw_fixture) for raw_fixture in JsonFileCache(directory).values())
 
 
-def fixture_id(fixture: Fixture) -> str:
-    raw_model: Final = fixture.request.sdk_kwargs.get("model")
-    model: Final = raw_model if isinstance(raw_model, str) else "unknown-model"
-    request_json: Final = canonical_json(fixture.request.provider_request.model_dump(mode="json"))
-    digest: Final = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:8]
-    return f"{fixture.request.provider}-{model.rsplit('/', 1)[-1]}-{digest}"
+def fixture_id(fixture: OcrParityCase) -> str:
+    input_json: Final = canonical_json(fixture.input.canonical_input())
+    digest: Final = hashlib.sha256(input_json.encode("utf-8")).hexdigest()[:8]
+    return f"mistral-{fixture.input.model.rsplit('/', 1)[-1]}-{digest}"
