@@ -186,9 +186,11 @@ HS256 secret, or operator-configured RS256 RSA keys."""
 @lru_cache(maxsize=8)
 def _public_key_pem_from_private(private_key_pem: str) -> str:
     loaded: Final = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
-    return loaded.public_key().public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-    ).decode()
+    return (
+        loaded.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
 
 
 def session_public_key_pem(keys: AsymmetricSessionKeys) -> str:

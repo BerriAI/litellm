@@ -144,11 +144,15 @@ def resolve_session_signing_keys(
             private_key_pem=SecretStr(private_pem),
             kid=settings.kid,
             previous_public_keys=tuple(
-                SessionRotatedPublicKey(kid=kid, public_key_pem=pem) for kid, pem in resolved_previous if pem is not None
+                SessionRotatedPublicKey(kid=kid, public_key_pem=pem)
+                for kid, pem in resolved_previous
+                if pem is not None
             ),
         )
     except ValidationError as exc:
-        return SessionSigningConfigError(detail=f"mcp_session_token_signing keys are not usable RSA PEM material: {exc}")
+        return SessionSigningConfigError(
+            detail=f"mcp_session_token_signing keys are not usable RSA PEM material: {exc}"
+        )
 
 
 def active_session_signing_keys(master_key: str) -> SessionSigningKeys | SessionSigningConfigError:
