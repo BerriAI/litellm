@@ -1253,6 +1253,43 @@ class StructuredRewriteGuardrail(CustomGuardrail):
         return {**inputs, "structured_messages": rewritten}
 
 
+class ToolOutputRewriteGuardrail(CustomGuardrail):
+    """Guardrail that compresses the first tool-result row, the way Headroom does."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        first_tool = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "tool")
+        rewritten = [
+            {**m, "content": COMPRESSED_MARKER} if i == first_tool else m for i, m in enumerate(messages)
+        ]
+        return {**inputs, "structured_messages": rewritten}
+
+
+class DroppingRewriteGuardrail(CustomGuardrail):
+    """Guardrail that rewrites the first user row and drops the last row, so the
+    rewrite can only land through the full-conversion fallback."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        first_user = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user")
+        rewritten = [
+            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
+        ]
+        return {**inputs, "structured_messages": rewritten[:-1]}
+
+
 def _texts(item: dict) -> list[str]:
     content = item.get("content")
     if isinstance(content, str):
@@ -1296,7 +1333,93 @@ class TestStructuredMessagesWriteBack:
         assert "instructions" not in result
 
     @pytest.mark.asyncio
-    async def test_developer_item_survives_write_back_as_input_text(self):
+    async def test_developer_item_preserved_verbatim_by_row_patch(self):
+        handler = OpenAIResponsesHandler()
+        developer_item = {"role": "developer", "content": "Always answer in French."}
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                developer_item,
+                {"role": "user", "content": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert result["input"][0] is developer_item
+        assert developer_item["content"] == "Always answer in French."
+        assert _texts(result["input"][1]) == [COMPRESSED_MARKER]
+        assert _texts(result["input"][2]) == ["What is the codename?"]
+
+    @pytest.mark.asyncio
+    async def test_reasoning_and_function_call_items_survive_tool_output_compression(self):
+        handler = OpenAIResponsesHandler()
+        reasoning_item = {
+            "id": "rs_123",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "gAAAAA-signed-reasoning",
+        }
+        function_call_item = {
+            "id": "fc_123",
+            "type": "function_call",
+            "call_id": "call_abc",
+            "name": "read_document",
+            "arguments": '{"path": "memo.txt"}',
+            "status": "completed",
+        }
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Answer from the memo only.",
+            "input": [
+                reasoning_item,
+                function_call_item,
+                {"type": "function_call_output", "call_id": "call_abc", "output": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, ToolOutputRewriteGuardrail())
+
+        assert result["instructions"] == "Answer from the memo only."
+        assert result["input"][0] is reasoning_item
+        assert reasoning_item["encrypted_content"] == "gAAAAA-signed-reasoning"
+        assert result["input"][1] is function_call_item
+        assert function_call_item["id"] == "fc_123"
+        assert result["input"][2] == {
+            "type": "function_call_output",
+            "call_id": "call_abc",
+            "output": COMPRESSED_MARKER,
+        }
+        assert result["input"][3] == {"role": "user", "content": "What is the codename?"}
+
+    @pytest.mark.asyncio
+    async def test_web_search_call_item_preserved_verbatim(self):
+        handler = OpenAIResponsesHandler()
+        web_search_item = {
+            "id": "ws_123",
+            "type": "web_search_call",
+            "status": "completed",
+            "action": {"type": "search", "query": "codename memo"},
+        }
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                web_search_item,
+                {"role": "user", "content": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert result["input"][0] is web_search_item
+        assert _texts(result["input"][1]) == [COMPRESSED_MARKER]
+        assert _texts(result["input"][2]) == ["What is the codename?"]
+
+    @pytest.mark.asyncio
+    async def test_row_count_change_falls_back_to_full_conversion(self):
         handler = OpenAIResponsesHandler()
         data = {
             "model": "gpt-5.6",
@@ -1307,10 +1430,12 @@ class TestStructuredMessagesWriteBack:
             ],
         }
 
-        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+        result = await handler.process_input_messages(data, DroppingRewriteGuardrail())
 
+        assert len(result["input"]) == 2
         developer = next(item for item in result["input"] if item.get("role") == "developer")
         assert developer["content"] == [{"type": "input_text", "text": "Always answer in French."}]
+        assert _texts(next(item for item in result["input"] if item.get("role") == "user")) == [COMPRESSED_MARKER]
 
     @pytest.mark.asyncio
     async def test_same_inputs_object_back_keeps_the_text_mapping(self):

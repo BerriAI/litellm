@@ -24,6 +24,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
 
 CHAT_COMPLETION_ID = "chatcmpl-77d33d09-effa-4cd2-9c0d-c742d4358256"
@@ -523,3 +524,17 @@ async def test_streaming_response_id_falls_back_when_upstream_yields_nothing():
     assert response_ids
     assert len(set(response_ids)) == 1
     assert response_ids[0].startswith("resp_")
+
+
+def test_completed_event_restores_usage_hidden_by_stream_options_none():
+    final_chunk = _chunk("", finish_reason="stop")
+    final_chunk._hidden_params = {"usage": Usage(prompt_tokens=117, completion_tokens=5, total_tokens=122)}
+    iterator = _build_iterator([_chunk("the document says hello"), final_chunk])
+
+    events = list(iterator)
+
+    completed = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert completed.response.usage.input_tokens == 117
+    assert completed.response.usage.output_tokens == 5

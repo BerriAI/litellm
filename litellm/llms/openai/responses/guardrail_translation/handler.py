@@ -28,7 +28,8 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
     - text: str
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
@@ -50,6 +51,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
     OpenAIMcpServerTool,
+    ResponsesAPIOptionalRequestParams,
     ResponsesAPIStreamEvents,
 )
 from litellm.types.responses.main import (
@@ -79,6 +81,119 @@ class ResponsesStreamChunk(TypedDict, total=False):
 
     type: ReadOnly[str]
     text: ReadOnly[str]
+
+
+_PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"function_call_output": "output", "message": "content"}
+)
+
+_EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
+
+
+def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
+    item_type: Final = item.get("type")
+    if item_type is None:
+        return "content" if "content" in item else None
+    if not isinstance(item_type, str):
+        return None
+    return _PATCHABLE_ITEM_FIELDS.get(item_type)
+
+
+def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+    field: Final = _item_rewrite_field(item)
+    if field is None or not isinstance(rewritten, Mapping):
+        return None
+    rewritten_content: Final = rewritten.get("content")
+    if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
+        return {**item, field: rewritten_content}  # mutable-ok: request input items must stay JSON-plain dicts
+    rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
+    converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [rewritten_row]  # mutable-ok: converter signature takes a list
+    )
+    if len(converted_items) != 1 or not isinstance(converted_items[0], Mapping):
+        return None
+    first_converted: Final = cast("Mapping[str, object]", converted_items[0])  # cast-ok: isinstance-checked above
+    converted_value: Final = first_converted.get(field)
+    if converted_value is None:
+        return None
+    return {**item, field: converted_value}  # mutable-ok: request input items must stay JSON-plain dicts
+
+
+def _input_item_provenance(
+    raw_input: Sequence[object],
+    expected_messages: Sequence[object],
+) -> tuple[Mapping[int, int], frozenset[int]] | None:
+    if not all(isinstance(item, Mapping) for item in raw_input):
+        return None
+    prefixes: Final = tuple(
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=cast("ResponseInputParam", raw_input[:count]),  # cast-ok: items checked as Mappings above
+            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+        )
+        for count in range(len(raw_input) + 1)
+    )
+    if tuple(prefixes[-1]) != tuple(expected_messages):
+        return None
+    item_for_message: Final = MappingProxyType(
+        {
+            message_index: item_index
+            for item_index in range(len(raw_input))
+            for message_index in range(len(prefixes[item_index]), len(prefixes[item_index + 1]))
+        }
+    )
+    tainted: Final = frozenset(
+        message_index
+        for item_index in range(len(raw_input))
+        for message_index in range(len(prefixes[item_index]))
+        if prefixes[item_index + 1][message_index] != prefixes[item_index][message_index]
+    )
+    return item_for_message, tainted
+
+
+def _patch_rewritten_rows_into_input(
+    data: dict,
+    original_messages: Sequence[object],
+    structured_messages: Sequence[object],
+) -> bool:
+    raw_input: Final = data.get("input")
+    if not isinstance(raw_input, list) or len(original_messages) != len(structured_messages):
+        return False
+    offset: Final = 1 if data.get("instructions") else 0
+    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:])
+    if provenance is None:
+        return False
+    item_for_message, tainted = provenance
+    changed: Final = tuple(
+        (index, rewritten)
+        for index, (original, rewritten) in enumerate(zip(original_messages, structured_messages))
+        if original != rewritten
+    )
+    instruction_rewrites: Final = tuple(rewritten for index, rewritten in changed if index < offset)
+    rewritten_instructions: Final = (
+        instruction_rewrites[0].get("content")
+        if instruction_rewrites and isinstance(instruction_rewrites[0], Mapping)
+        else None
+    )
+    if instruction_rewrites and not isinstance(rewritten_instructions, str):
+        return False
+    body_changes: Final = tuple((index - offset, rewritten) for index, rewritten in changed if index >= offset)
+    if any(message_index in tainted or message_index not in item_for_message for message_index, _ in body_changes):
+        return False
+    replacements: Final = MappingProxyType(
+        {
+            item_for_message[message_index]: _rewritten_input_item(
+                cast("Mapping[str, object]", raw_input[item_for_message[message_index]]),  # cast-ok: checked Mappings
+                rewritten,
+            )
+            for message_index, rewritten in body_changes
+        }
+    )
+    if len(replacements) != len(body_changes) or any(item is None for item in replacements.values()):
+        return False
+    data["input"] = [replacements.get(index, item) for index, item in enumerate(raw_input)]  # mutable-ok: JSON body
+    if isinstance(rewritten_instructions, str):
+        data["instructions"] = rewritten_instructions
+    return True
 
 
 class OpenAIResponsesHandler(BaseTranslation):
@@ -155,9 +270,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not structured_messages
             ):
-                self._write_back_structured_messages(data, guardrailed_structured_messages)
+                self._write_back_structured_messages(data, structured_messages or (), guardrailed_structured_messages)
             else:
-                guardrailed_texts = guardrailed_inputs.get("texts", [])
+                guardrailed_texts = guardrailed_inputs.get("texts") or ()
                 data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
             self._apply_guardrailed_tools_to_data(data, original_tools, guardrailed_inputs.get("tools"))
             verbose_proxy_logger.debug("OpenAI Responses API: Processed string input")
@@ -217,12 +332,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not structured_messages
             ):
-                self._write_back_structured_messages(data, guardrailed_structured_messages)
+                self._write_back_structured_messages(data, structured_messages or (), guardrailed_structured_messages)
             else:
                 # Step 3: Map guardrail responses back to original input structure
                 await self._apply_guardrail_responses_to_input(
                     messages=input_data,
-                    responses=guardrailed_inputs.get("texts", []),
+                    responses=guardrailed_inputs.get("texts", []),  # mutable-ok: callee signature takes a list
                     task_mappings=task_mappings,
                 )
 
@@ -231,10 +346,16 @@ class OpenAIResponsesHandler(BaseTranslation):
         return data
 
     @staticmethod
-    def _write_back_structured_messages(data: dict, structured_messages: Sequence[AllMessageValues]) -> None:
+    def _write_back_structured_messages(
+        data: dict,
+        original_messages: Sequence[object],
+        structured_messages: Sequence[AllMessageValues],
+    ) -> None:
+        if _patch_rewritten_rows_into_input(data, original_messages, structured_messages):
+            return
         input_items, instructions = (
             LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
-                list(structured_messages)
+                list(structured_messages)  # mutable-ok: converter signature takes a list
             )
         )
         data["input"] = input_items
