@@ -12768,6 +12768,7 @@ async def _fetch_db_models_for_search(
     size: int,
     sort_by: str | None,
     is_byok_outside_caller_teams: Callable[[dict[str, JsonValue]], bool],
+    model_name: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
@@ -12784,7 +12785,11 @@ async def _fetch_db_models_for_search(
     filter for `team_public_model_name` instead and keep the DB cost
     bounded by `search`.
     """
-    db_where_condition: Final[dict[str, Any]] = {"model_name": {"contains": search_lower, "mode": "insensitive"}}
+    exact_name_filter: Final[dict[str, Any]] = {} if model_name is None else {"AND": [{"model_name": model_name}]}
+    db_where_condition: Final[dict[str, Any]] = {
+        "model_name": {"contains": search_lower, "mode": "insensitive"},
+        **exact_name_filter,
+    }
     if db_model_ids_in_router:
         db_where_condition["model_id"] = {"not": {"in": list(db_model_ids_in_router)}}
 
@@ -12831,6 +12836,7 @@ async def _apply_search_filter_to_models(
     page: int = 1,
     size: int = 50,
     sort_by: str | None = None,
+    model_name: str | None = None,
 ) -> tuple[list[dict[str, Any]], int | None]:
     """
     Apply search filter to models, querying database for additional matching models.
@@ -12851,6 +12857,10 @@ async def _apply_search_filter_to_models(
         sort_by: Sort field. When set, results must be sorted across the
             full match set, so the DB fetch is capped at
             ``_SORTED_SEARCH_DB_FETCH_CAP`` instead of one page.
+        model_name: Exact ``model_name`` the caller already narrowed
+            ``all_models`` to (``?model=``). The DB query honours it too,
+            otherwise rows from other model groups leak into the result
+            and the count.
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
@@ -12920,6 +12930,7 @@ async def _apply_search_filter_to_models(
                 size=size,
                 sort_by=sort_by,
                 is_byok_outside_caller_teams=_is_byok_outside_caller_teams,
+                model_name=model_name,
             )
             search_total_count = router_models_count + db_models_total_count
         except Exception as e:
@@ -13485,6 +13496,7 @@ async def model_info_v2(
             page=page,
             size=size,
             sort_by=sortBy,
+            model_name=model,
         )
 
     if user_models_only:
