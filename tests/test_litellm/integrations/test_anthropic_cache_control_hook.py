@@ -2798,6 +2798,81 @@ class TestPromptCacheBreakpointCapability:
         assert supports_openai_prompt_cache_breakpoint(model) is expected
 
 
+class TestHostedOpenAIDialectFlag:
+    """#38666: an OpenAI-shaped model served by another provider can opt in through its own
+    model-map entry, instead of being excluded by the openai-only provider check."""
+
+    MANTLE_MODEL = "bedrock_mantle/openai.gpt-5.6-sol"
+
+    def _register(self, monkeypatch, key, provider, flag=True, **extra):
+        entry = {"litellm_provider": provider, "mode": "chat", **extra}
+        if flag is not None:
+            entry["supports_prompt_cache_breakpoint"] = flag
+        monkeypatch.setitem(litellm.model_cost, key, entry)
+
+    def test_flagged_non_openai_deployment_is_eligible(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is True
+        )
+
+    def test_bedrock_api_base_does_not_veto_the_explicit_flag(self, monkeypatch):
+        """The api_base check exists to sniff for api.openai.com, which a Bedrock host never is."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+                self.MANTLE_MODEL,
+                "bedrock_mantle",
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+            )
+            is True
+        )
+
+    def test_flag_set_false_keeps_the_deployment_ineligible(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=False)
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    def test_unflagged_non_openai_deployment_stays_ineligible(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=None)
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    def test_entry_provider_must_match_the_request_provider(self, monkeypatch):
+        """A flagged entry does not license a different provider serving the same model string."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "azure") is False
+        )
+
+    def test_openai_entries_still_go_through_the_api_base_check(self, monkeypatch):
+        """gpt-5.6 is flagged and openai-provided, so it must not bypass the host gate."""
+        assert litellm.model_cost["gpt-5.6"]["supports_prompt_cache_breakpoint"] is True
+        assert litellm.model_cost["gpt-5.6"]["litellm_provider"] == "openai"
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+                "gpt-5.6", "openai", api_base="https://some-compatible-host.example.com"
+            )
+            is False
+        )
+
+    def test_azure_hosted_gpt_5_6_remains_ineligible(self):
+        """Regression guard: the openai entry's flag must not leak to another provider."""
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-5.6", "azure") is False
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/gpt-5.6", None) is False
+
+    def test_provider_is_not_resolved_when_no_flag_is_present(self):
+        """The cheap model-map lookup must short-circuit before the provider lookup."""
+        with patch.object(AnthropicCacheControlHook, "_resolve_provider") as resolve:
+            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-4.1", None) is False
+        resolve.assert_not_called()
+
+
 class TestRecordGatewayInjection:
     """The injection marker spend accounting gates prompt-caching savings on."""
 
