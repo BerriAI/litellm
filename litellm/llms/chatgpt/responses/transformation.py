@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm.exceptions import AuthenticationError
@@ -27,6 +28,25 @@ from ..common_utils import (
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
 )
+
+# Codex >= 0.144 sends this header for models served over the "Responses
+# Lite" transport (gpt-5.6-* at the time of writing). When the header is
+# present the backend rejects the request unless `parallel_tool_calls` is
+# exactly false and `reasoning.context` is "all_turns":
+#   "X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls`
+#    to be false." (param=parallel_tool_calls, code=unsupported_value)
+CODEX_RESPONSES_LITE_HEADER: Final[str] = "x-openai-internal-codex-responses-lite"
+_FALSY_HEADER_VALUES: Final[frozenset[str]] = frozenset({"", "0", "false", "no"})
+
+
+def is_codex_responses_lite_request(headers: Mapping[str, object] | None) -> bool:
+    """True when the outbound headers carry the Codex Responses-Lite marker."""
+    if not headers:
+        return False
+    for key, value in headers.items():
+        if key.lower() == CODEX_RESPONSES_LITE_HEADER:
+            return str(value).strip().lower() not in _FALSY_HEADER_VALUES
+    return False
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -96,12 +116,32 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "include",
             "tools",
             "tool_choice",
+            "parallel_tool_calls",
             "reasoning",
             "previous_response_id",
             "truncation",
         }
 
-        return {k: v for k, v in request.items() if k in allowed_keys}
+        filtered: Final[dict[str, object]] = {  # mutable-ok: outgoing JSON request body
+            k: v for k, v in request.items() if k in allowed_keys
+        }
+
+        if is_codex_responses_lite_request(headers):
+            # The Responses-Lite backend hard-rejects any other combination,
+            # so normalize even when the caller omitted these fields (codex
+            # 0.144.x can omit the reasoning object on a metadata race).
+            filtered["parallel_tool_calls"] = False
+            raw_reasoning: Final = filtered.get("reasoning")
+            reasoning_items: Final = raw_reasoning.items() if isinstance(raw_reasoning, dict) else ()
+            reasoning: dict[str, object] = {  # mutable-ok: rebuilt to force the required context key
+                reasoning_key: reasoning_value
+                for reasoning_key, reasoning_value in reasoning_items
+                if isinstance(reasoning_key, str)
+            }
+            reasoning["context"] = "all_turns"
+            filtered["reasoning"] = reasoning
+
+        return filtered
 
     def transform_response_api_response(
         self,
