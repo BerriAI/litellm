@@ -430,3 +430,39 @@ def test_update_settings_rebuilds_max_parallel_request_clients():
 
     router.update_settings(default_max_parallel_requests=5)
     assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")._value == 5
+
+
+def test_max_parallel_requests_cache_key_addresses_the_cached_semaphore():
+    """The read site and the write site have to agree on the key, or clearing
+    the cache silently misses and every deployment keeps its old limit. Pinning
+    the helper against what the cache actually holds is what makes the two
+    sites one contract rather than two matching string literals."""
+    router = _build_router()
+    deployment = router.model_list[0]
+    router.update_settings(default_max_parallel_requests=3)
+
+    semaphore = router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")
+    key = router.max_parallel_requests_cache_key(deployment["model_info"]["id"])
+    assert router.cache.get_cache(key=key, local_only=True) is semaphore
+
+    router._clear_max_parallel_requests_clients()
+    assert router.cache.get_cache(key=key, local_only=True) is None
+
+
+def test_verbose_logger_level_maps_verbosity_to_a_level():
+    """Both the constructor and update_settings drive the router logger from
+    this one mapping, so an off value has to resolve to NOTSET rather than to
+    a level that keeps the logger louder than it started."""
+    import logging
+
+    router = _build_router()
+
+    router.set_verbose = False
+    assert router._verbose_logger_level() == logging.NOTSET
+
+    router.set_verbose = True
+    router.debug_level = "INFO"
+    assert router._verbose_logger_level() == logging.INFO
+
+    router.debug_level = "DEBUG"
+    assert router._verbose_logger_level() == logging.DEBUG
