@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
 from litellm.litellm_core_utils.llm_judge import judge_target
@@ -119,6 +120,10 @@ class _ShadowEvalAttemptRow(Protocol):
     def error(self) -> str | None: ...
 
 
+class _ShadowEvalFunnelTable(Protocol):
+    async def create_many(self, data: Sequence[Mapping[str, object]], skip_duplicates: bool) -> int: ...
+
+
 class _ShadowEvalAttemptTable(Protocol):
     async def find_first(
         self, *, where: Mapping[str, object], order: Mapping[str, str]
@@ -135,6 +140,10 @@ def _verification_tokens(prisma_client: "PrismaClient") -> _VerificationTokenTab
 
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
     return prisma_client.db.litellm_shadowevaljob
+
+
+def _shadow_eval_funnel(prisma_client: "PrismaClient") -> _ShadowEvalFunnelTable:
+    return prisma_client.db.litellm_shadowevalfunnel  # pyright: ignore[reportAttributeAccessIssue]  # generated client
 
 
 def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTable:
@@ -678,6 +687,20 @@ def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) 
     )
 
 
+def _sdk_model_is_missing_anthropic_credentials(model: str) -> bool:
+    _, provider, _, _ = litellm.get_llm_provider(model=model)
+    if provider != "anthropic" or litellm.anthropic_key or litellm.api_key:
+        return False
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.secret_managers.main import secret_manager_would_be_consulted
+
+    if AnthropicModelInfo.get_api_key() or AnthropicModelInfo.get_auth_token():
+        return False
+    return not any(
+        secret_manager_would_be_consulted(secret_name) for secret_name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+    )
+
+
 def _validate_plain_model(
     llm_router: "Router | None", model: str, field_name: str, team_ids: Sequence[str | None]
 ) -> None:
@@ -694,14 +717,26 @@ def _validate_plain_model(
             status_code=400,
             detail=f"{field_name} '{model}' is an auto-router; it must be a plain model",
         )
-    unreachable: Final = tuple(team for team in team_ids if judge_target(llm_router, model, team).via == "nothing")
-    if not unreachable:
+    targets: Final = tuple((team, judge_target(llm_router, model, team)) for team in team_ids)
+    unreachable: Final = tuple(team for team, target in targets if target.via == "nothing")
+    if unreachable:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{field_name} '{model}' is neither a model configured on this proxy nor a "
+                "provider-qualified public model name (e.g. 'anthropic/claude-sonnet-5')" + _for_teams(unreachable)
+            ),
+        )
+    sdk_teams: Final = tuple(team for team, target in targets if target.via == "sdk")
+    if not sdk_teams:
+        return
+    if not _sdk_model_is_missing_anthropic_credentials(model):
         return
     raise HTTPException(
         status_code=400,
         detail=(
-            f"{field_name} '{model}' is neither a model configured on this proxy nor a "
-            "provider-qualified public model name (e.g. 'anthropic/claude-sonnet-5')" + _for_teams(unreachable)
+            f"{field_name} '{model}' uses the LiteLLM SDK but required credentials are not configured: "
+            "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN" + _for_teams(sdk_teams)
         ),
     )
 
@@ -820,6 +855,9 @@ class _AttemptAggRow(BaseModel):
     shadow_wins: int
     ties: int
     avg_confidence: float | None
+    real_spend: float
+    shadow_spend: float
+    cache_hit_turns: int
 
 
 _ATTEMPT_AGG_ROWS: Final = TypeAdapter(list[_AttemptAggRow])
@@ -829,7 +867,10 @@ _ATTEMPT_AGG_SELECT: Final = """
     COUNT(*) FILTER (WHERE outcome = 'real')::int AS real_wins,
     COUNT(*) FILTER (WHERE outcome = 'shadow')::int AS shadow_wins,
     COUNT(*) FILTER (WHERE outcome = 'tie')::int AS ties,
-    AVG(confidence)::float AS avg_confidence
+    AVG(confidence)::float AS avg_confidence,
+    COALESCE(SUM(real_cost + real_classifier_cost) FILTER (WHERE real_cost IS NOT NULL AND NOT real_cache_hit), 0)::float AS real_spend,
+    COALESCE(SUM(shadow_cost + shadow_classifier_cost) FILTER (WHERE real_cost IS NOT NULL AND NOT real_cache_hit), 0)::float AS shadow_spend,
+    COUNT(*) FILTER (WHERE real_cache_hit)::int AS cache_hit_turns
 FROM "LiteLLM_ShadowEvalAttempt"
 WHERE job_id = ANY($1::text[]) AND outcome != 'error'
 GROUP BY 1
@@ -850,7 +891,7 @@ WHERE j.api_key_id = ANY($1::text[]) AND j.stopped_at IS NULL
     OR (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_turns
     OR (
       j.max_budget IS NOT NULL
-      AND (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_budget
+      AND (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost + a.shadow_classifier_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_budget
     )
   )
 """
@@ -865,12 +906,23 @@ WHERE job_id = ANY($1::text[])
 """
 
 _ATTEMPT_COUNTS_SQL: Final = """
-SELECT a.job_id, COUNT(*)::int AS attempt_count, COALESCE(SUM(a.judge_cost + a.shadow_cost), 0)::float AS spend
+SELECT a.job_id, COUNT(*)::int AS attempt_count, COALESCE(SUM(a.judge_cost + a.shadow_cost + a.shadow_classifier_cost), 0)::float AS spend
 FROM "LiteLLM_ShadowEvalAttempt" a
 JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
 WHERE a.job_id = ANY($1::text[]) AND (j.stopped_at IS NULL OR a.created_at <= j.stopped_at)
 GROUP BY a.job_id
 """
+
+_FUNNEL_TOTALS_SQL: Final = """
+SELECT COUNT(*)::int AS legs_with_rows,
+    COALESCE(SUM(not_sampled), 0)::int AS not_sampled,
+    COALESCE(SUM(unjudgeable), 0)::int AS unjudgeable,
+    COALESCE(SUM(shed), 0)::int AS shed,
+    COALESCE(SUM(withheld), 0)::int AS withheld
+FROM "LiteLLM_ShadowEvalFunnel"
+WHERE job_id = ANY($1::text[])
+"""
+
 
 _STOP_JOB_SQL: Final = """
 UPDATE "LiteLLM_ShadowEvalJob"
@@ -883,10 +935,18 @@ WHERE group_id = $1 AND stopped_by IS NULL
       AND (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_turns
       AND (
         k.max_budget IS NULL
-        OR (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_budget
+        OR (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost + a.shadow_classifier_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_budget
       )
   )
 """
+
+
+class _FunnelTotalsRow(BaseModel):
+    legs_with_rows: int
+    not_sampled: int
+    unjudgeable: int
+    shed: int
+    withheld: int
 
 
 class _AttemptCountRow(BaseModel):
@@ -937,6 +997,9 @@ def _slices(rows: Sequence[_AttemptAggRow]) -> tuple[ShadowEvalSlice, ...]:
             shadow_win_rate_pct=_pct_of(row.shadow_wins, row.turn_count),
             tie_rate_pct=_pct_of(row.ties, row.turn_count),
             avg_judge_confidence=round(row.avg_confidence or 0.0, 3),
+            real_spend=row.real_spend,
+            shadow_spend=row.shadow_spend,
+            cache_hit_turns=row.cache_hit_turns,
         )
         for row in sorted(rows, key=lambda r: r.turn_count, reverse=True)
     )
@@ -1087,12 +1150,23 @@ async def _shadow_eval_results(prisma_client: "PrismaClient", legs: Sequence[_Le
         for row in by_leg
     )
     total_turns: Final = sum(r.turn_count for r in by_tier)
+    funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, leg_ids)
+    counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
+    # Coverage only when EVERY leg has a funnel row: a partial seed (one leg's insert
+    # failed) must read as unknown, not as job-level counts missing a leg's traffic.
+    funnel: Final = counted if counted is not None and counted.legs_with_rows == len(leg_ids) else None
     return ShadowEvalResult(
         by_tier=_slices(by_tier),
         by_current_model=_slices(by_model),
         by_key=_slices(by_key),
         overall_shadow_win_rate_pct=_pct_of(sum(r.shadow_wins for r in by_tier), total_turns),
         overall_tie_rate_pct=_pct_of(sum(r.ties for r in by_tier), total_turns),
+        sampled_real_spend=sum(r.real_spend for r in by_tier),
+        sampled_shadow_spend=sum(r.shadow_spend for r in by_tier),
+        not_sampled_count=funnel.not_sampled if funnel is not None else None,
+        unjudgeable_count=funnel.unjudgeable if funnel is not None else None,
+        shed_count=funnel.shed if funnel is not None else None,
+        withheld_count=funnel.withheld if funnel is not None else None,
     )
 
 
@@ -1191,8 +1265,14 @@ async def start_shadow_eval(
         "ends_at": ends_at,
     }
     try:
+        # Leg ids are minted here rather than by the DB default so the funnel seed below
+        # writes from the same values with no read-back, which a lagging read replica
+        # (DATABASE_URL_READ_REPLICA) could otherwise return empty.
+        leg_ids: Final = tuple(str(uuid4()) for _ in data.api_key_ids)
         await _shadow_eval_jobs(prisma_client).create_many(
-            data=[{**shared_config, "api_key_id": key} for key in data.api_key_ids]  # mutable-ok: Prisma payload
+            data=[  # mutable-ok: Prisma payload
+                {**shared_config, "id": leg_id, "api_key_id": key} for leg_id, key in zip(leg_ids, data.api_key_ids)
+            ]
         )
     except Exception as e:
         if not _is_unique_violation(e):
@@ -1203,6 +1283,16 @@ async def start_shadow_eval(
                 f"A requested key was claimed by another {data.direction} shadow eval job concurrently. Stop it first."
             ),
         ) from e
+    # Seed a zero funnel row per leg NOW: a fully covered job never skips a request, so
+    # waiting for the first skip would leave it indistinguishable from a pre-funnel job
+    # (null coverage). A failed seed degrades this job to exactly that, nothing worse.
+    try:
+        await _shadow_eval_funnel(prisma_client).create_many(
+            data=[{"job_id": leg_id} for leg_id in leg_ids],  # mutable-ok: Prisma payload
+            skip_duplicates=True,
+        )
+    except Exception as seed_err:  # noqa: BLE001  # coverage is advisory; the job must still start
+        verbose_proxy_logger.error("shadow_eval: funnel seed failed for job %s: %s", group_id, seed_err)
     labels: Final = MappingProxyType({row.token: row for row in token_rows})
     return ShadowEvalJobResponse(
         job_id=group_id,

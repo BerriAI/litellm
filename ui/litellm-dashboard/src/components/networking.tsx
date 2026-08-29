@@ -48,6 +48,27 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   }
 };
 
+export const getAutoRouterCustomTierPromptCall = async (
+  accessToken: string,
+  contextWindowSize: number,
+  tierDefinitions: { name: string; description?: string }[],
+  classificationPrompt?: string,
+): Promise<string> => {
+  /**
+   * Assembled by the proxy, because a built-in name with no description inherits criteria that live
+   * only in the backend. POSTed so the operator's prompt does not reach access logs through a URL.
+   */
+  const response = await apiClient.post<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+    accessToken,
+    body: {
+      context_window_size: contextWindowSize,
+      tier_definitions: tierDefinitions,
+      ...(classificationPrompt?.trim() ? { classification_prompt: classificationPrompt } : {}),
+    },
+  });
+  return response.system_prompt;
+};
+
 /**
  * Helper file for calls being made to proxy
  */
@@ -1656,6 +1677,7 @@ export const modelInfoCall = async (
   sortBy?: string,
   sortOrder?: string,
   excludeAutoRouters?: boolean,
+  modelName?: string,
 ) => {
   /**
    * Get all models on proxy
@@ -1668,6 +1690,9 @@ export const modelInfoCall = async (
     params.append("size", size.toString());
     if (search && search.trim()) {
       params.append("search", search.trim());
+    }
+    if (modelName && modelName.trim()) {
+      params.append("model", modelName.trim());
     }
     if (modelId && modelId.trim()) {
       params.append("modelId", modelId.trim());
@@ -2395,6 +2420,30 @@ export const testAutoRouterRouting = async (
     return { status: "success", result };
   } catch (error) {
     return { status: "error", error: extractProxyErrorMessage(error) };
+  }
+};
+
+export interface ComplexityRouterConfigValidation {
+  valid: boolean;
+  error?: string | null;
+}
+
+// Dry-runs the same write gate /model/new and /model/update apply, so a save that would come back
+// as a raw 400 shows the backend's own message inline first. Transport failures fail open: the
+// write gate stays authoritative.
+export const validateAutoRouterConfig = async (
+  accessToken: string,
+  complexityRouterConfig: Record<string, unknown>,
+  teamId?: string,
+): Promise<ComplexityRouterConfigValidation> => {
+  try {
+    return await apiClient.post<ComplexityRouterConfigValidation>("/auto_router/validate_complexity_router_config", {
+      accessToken,
+      body: { complexity_router_config: complexityRouterConfig, ...(teamId && { team_id: teamId }) },
+    });
+  } catch (error) {
+    console.warn("Could not dry-run the complexity router config; the save will be validated server side", error);
+    return { valid: true };
   }
 };
 
@@ -8072,26 +8121,5 @@ export const deleteMemory = async (accessToken: string, key: string): Promise<vo
   if (!response.ok) {
     const errorData = await response.text();
     throw new Error(errorData);
-  }
-};
-
-export interface ComplexityRouterConfigValidation {
-  valid: boolean;
-  error?: string | null;
-}
-
-export const validateAutoRouterConfig = async (
-  accessToken: string,
-  complexityRouterConfig: Record<string, unknown>,
-  teamId?: string,
-): Promise<ComplexityRouterConfigValidation> => {
-  try {
-    return await apiClient.post<ComplexityRouterConfigValidation>("/auto_router/validate_complexity_router_config", {
-      accessToken,
-      body: { complexity_router_config: complexityRouterConfig, ...(teamId && { team_id: teamId }) },
-    });
-  } catch (error) {
-    console.warn("Could not dry-run the complexity router config; the save will be validated server side", error);
-    return { valid: true };
   }
 };

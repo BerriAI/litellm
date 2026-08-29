@@ -2377,6 +2377,17 @@
               ],
               "title": "Rpm Limit"
             },
+            "search_score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search Score"
+            },
             "session_rpm_limit": {
               "anyOf": [
                 {
@@ -3414,7 +3425,7 @@
       },
       "/v1/agents": {
         "get": {
-          "description": "Example usage:\n```\ncurl -X GET \"http://localhost:4000/v1/agents\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?health_check=true` to filter out agents whose URL is unreachable:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?health_check=true\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nReturns: List[AgentResponse]",
+          "description": "Example usage:\n```\ncurl -X GET \"http://localhost:4000/v1/agents\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?health_check=true` to filter out agents whose URL is unreachable:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?health_check=true\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?query=<task>` to get the best matching agents ranked by semantic similarity:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?query=translate+a+PDF+document&top_k=5\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nReturns: List[AgentResponse]",
           "operationId": "get_agents_v1_agents_get",
           "parameters": [
             {
@@ -3427,6 +3438,39 @@
                 "description": "When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out.",
                 "title": "Health Check",
                 "type": "boolean"
+              }
+            },
+            {
+              "description": "Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model.",
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model.",
+                "title": "Query"
+              }
+            },
+            {
+              "description": "With query: the maximum number of ranked agents to return.",
+              "in": "query",
+              "name": "top_k",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "description": "With query: the maximum number of ranked agents to return.",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Top K",
+                "type": "integer"
               }
             }
           ],
@@ -8974,6 +9018,18 @@
               "description": "When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.",
               "title": "Scan Only Tool Results"
             },
+            "scan_raw_request": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
+              "title": "Scan Raw Request"
+            },
             "sensitive_data_route_to_model": {
               "anyOf": [
                 {
@@ -10023,6 +10079,18 @@
               ],
               "description": "Additional provider-specific parameters for generic guardrail APIs",
               "title": "Additional Provider Specific Params"
+            },
+            "advisory_system_message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
+              "title": "Advisory System Message"
             },
             "akto_account_id": {
               "anyOf": [
@@ -11078,7 +11146,8 @@
                 {
                   "enum": [
                     "block",
-                    "monitor"
+                    "monitor",
+                    "inject_system_message"
                   ],
                   "type": "string"
                 },
@@ -11087,7 +11156,7 @@
                 }
               ],
               "default": "block",
-              "description": "Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+              "description": "Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
               "title": "On Flagged"
             },
             "on_flagged_action": {
@@ -11596,6 +11665,18 @@
               ],
               "description": "When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.",
               "title": "Scan Only Tool Results"
+            },
+            "scan_raw_request": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
+              "title": "Scan Raw Request"
             },
             "send_user_api_key_alias": {
               "anyOf": [
@@ -16474,6 +16555,19 @@
           "title": "Body_authorize_complete_authorize_complete_post",
           "type": "object"
         },
+        "Body_introspect_endpoint_introspect_post": {
+          "properties": {
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token"
+          ],
+          "title": "Body_introspect_endpoint_introspect_post",
+          "type": "object"
+        },
         "Body_revoke_endpoint_revoke_post": {
           "properties": {
             "client_id": {
@@ -19048,6 +19142,51 @@
             }
           ],
           "summary": "Register Guardrail",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/introspect": {
+        "post": {
+          "description": "RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /\n``llm_srefresh_``), so an external gateway can validate them without the signing\nsecret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by\nthe route dependency); any token the gateway cannot vouch for answers\n``{\"active\": false}`` with no further detail.",
+          "operationId": "introspect_endpoint_introspect_post",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_introspect_endpoint_introspect_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Introspect Endpoint",
           "tags": [
             "mcp_discoverable"
           ]
