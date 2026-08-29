@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Final, cast
 
 import httpx
+from pydantic import ValidationError
 
 from tests.test_litellm._json_fs_cache import JsonFileCache, canonical_json
 from tests.test_litellm.ocr.fixture_models import (
@@ -194,7 +195,17 @@ def fixture_directory(configured: Path | None, env_value: str | None, default: P
 
 
 def recorded_fixtures(directory: Path) -> tuple[OcrParityCase, ...]:
-    return tuple(OcrParityCase.model_validate(raw_fixture) for raw_fixture in JsonFileCache(directory).values())
+    cache: Final = JsonFileCache(directory)
+    fixtures: list[OcrParityCase] = []
+    for path, raw_fixture in cache.values_with_paths():
+        try:
+            fixtures.append(OcrParityCase.model_validate(raw_fixture))
+        except ValidationError as error:
+            raise ValueError(
+                f"invalid OCR parity fixture {path}: expected exactly `input` and `upstream_response` "
+                f"({len(error.errors())} validation errors)"
+            ) from error
+    return tuple(fixtures)
 
 
 def fixture_id(fixture: OcrParityCase) -> str:

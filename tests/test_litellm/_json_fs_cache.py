@@ -43,3 +43,9 @@ class JsonFileCache:
             return ()
         paths: Final = tuple(sorted(self.root.rglob("*.json")))
         return tuple(JSON_OBJECT.validate_json(path.read_text(encoding="utf-8")) for path in paths)
+
+    def values_with_paths(self) -> tuple[tuple[Path, dict[str, object]], ...]:
+        if not self.root.is_dir():
+            return ()
+        paths: Final = tuple(sorted(self.root.rglob("*.json")))
+        return tuple((path, JSON_OBJECT.validate_json(path.read_text(encoding="utf-8"))) for path in paths)
