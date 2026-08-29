@@ -34,9 +34,11 @@ validation error. Runs before the first registry load on every boot and is idemp
 a healed fleet has no null rows and the backfill exits after one query.
 """
 
-import json
 from collections import Counter
-from typing import Any, Final, Literal
+from collections.abc import Mapping
+from typing import Final, Literal, Protocol
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.db import _decode_oauth_payload, decrypt_credentials
@@ -53,14 +55,46 @@ BackfillRule = Literal[
 ]
 
 _BACKFILL_AUDIT_ACTOR: Final = "oauth2_flow_backfill"
+_CREDENTIALS_JSON: Final = TypeAdapter(dict[str, object])
 
 
-def _decrypted_credentials(raw_credentials: Any) -> MCPCredentials | None:
+class _MCPServerRow(Protocol):
+    """The MCP server row fields this backfill reads, narrowing the untyped DB record once here."""
+
+    server_id: str
+    authorization_url: str | None
+    registration_url: str | None
+    token_url: str | None
+    credentials: object
+
+
+class _MCPUserCredentialRow(Protocol):
+    """The per-user credential row fields this backfill reads."""
+
+    server_id: str
+    credential_b64: str
+
+
+class _MCPServerTable(Protocol):
+    """The ``LiteLLM_MCPServerTable`` queries this backfill issues."""
+
+    async def find_many(self, *, where: Mapping[str, object]) -> list[_MCPServerRow]: ...
+
+    async def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
+
+class _MCPUserCredentialsTable(Protocol):
+    """The ``LiteLLM_MCPUserCredentials`` query this backfill issues."""
+
+    async def find_many(self, *, where: Mapping[str, object]) -> list[_MCPUserCredentialRow]: ...
+
+
+def _decrypted_credentials(raw_credentials: object) -> MCPCredentials | None:
     if raw_credentials is None:
         return None
     if isinstance(raw_credentials, str):
         try:
-            parsed = json.loads(raw_credentials)
+            parsed: object = _CREDENTIALS_JSON.validate_json(raw_credentials)
         except (ValueError, TypeError):
             return None
     else:
@@ -92,14 +126,16 @@ def classify_null_flow_row(
 async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[BackfillRule, int]:
     """Classify every ``auth_type=oauth2`` row whose ``oauth2_flow`` is null; stamp the provable
     ones, warn on the ambiguous ones, and return counts per rule."""
-    null_rows: Final[list[Any]] = await prisma_client.db.litellm_mcpservertable.find_many(
+    server_table: Final[_MCPServerTable] = prisma_client.db.litellm_mcpservertable
+    null_rows: Final = await server_table.find_many(
         where={"auth_type": "oauth2", "oauth2_flow": None},
     )
     if not null_rows:
         return {}
 
     server_ids: Final = [row.server_id for row in null_rows]
-    token_rows: Final[list[Any]] = await prisma_client.db.litellm_mcpusercredentials.find_many(
+    user_credentials_table: Final[_MCPUserCredentialsTable] = prisma_client.db.litellm_mcpusercredentials
+    token_rows: Final = await user_credentials_table.find_many(
         where={"server_id": {"in": server_ids}},
     )
     server_ids_with_oauth_tokens: Final[set[str]] = {
@@ -141,7 +177,7 @@ async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[Backfi
     stamped_flows: Final = {flow for _, (flow, _) in classified if flow is not None}
     for stamped_flow in stamped_flows:
         server_ids_for_flow = [row.server_id for row, (row_flow, _) in classified if row_flow == stamped_flow]
-        await prisma_client.db.litellm_mcpservertable.update_many(
+        await server_table.update_many(
             where={"server_id": {"in": server_ids_for_flow}, "oauth2_flow": None},
             data={"oauth2_flow": stamped_flow, "updated_by": _BACKFILL_AUDIT_ACTOR},
         )

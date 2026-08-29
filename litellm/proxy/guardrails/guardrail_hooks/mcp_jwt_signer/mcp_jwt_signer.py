@@ -80,7 +80,7 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -89,6 +89,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
@@ -105,6 +106,19 @@ class _JWTDecodeKwargs(TypedDict):
     options: "Options"
     audience: NotRequired[str]
     issuer: NotRequired[str]
+
+
+class _DebugHeaderClaims(TypedDict, total=False):
+    sub: ReadOnly[object]
+    iss: ReadOnly[object]
+    exp: ReadOnly[object]
+    scope: ReadOnly[str]
+
+
+class _SignedClaimSummary(TypedDict):
+    sub: ReadOnly[object]
+    act: ReadOnly[Mapping[str, object]]
+    exp: ReadOnly[object]
 
 
 # Module-level singleton for the JWKS discovery endpoint to access.
@@ -265,7 +279,8 @@ class MCPJWTSigner(CustomGuardrail):
         **kwargs: Any,
     ) -> None:
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        super().__init__(**kwargs)
+        base_kwargs: Final[GuardrailBaseInitKwargs] = kwargs
+        super().__init__(**base_kwargs)
 
         # --- Signing key setup ---
         key_material: Final = os.environ.get(self.SIGNING_KEY_ENV)
@@ -677,7 +692,7 @@ class MCPJWTSigner(CustomGuardrail):
         data: dict,
         jwt_claims: Mapping[str, object] | None = None,
         call_type: CallTypesLiteral | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Build JWT claims for the outbound MCP access token.
 
@@ -752,7 +767,7 @@ class MCPJWTSigner(CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_debug_header(claims: dict[str, Any], kid: str) -> str:
+    def _build_debug_header(claims: _DebugHeaderClaims, kid: str) -> str:
         """
         Build the x-litellm-mcp-debug header value.
 
@@ -873,16 +888,18 @@ class MCPJWTSigner(CustomGuardrail):
         # FR-9: Debug header
         # ------------------------------------------------------------------
         if self.debug_headers:
-            new_headers["x-litellm-mcp-debug"] = self._build_debug_header(claims, self._kid)
+            debug_claims: Final[_DebugHeaderClaims] = claims
+            new_headers["x-litellm-mcp-debug"] = self._build_debug_header(debug_claims, self._kid)
 
         hook_data["extra_headers"] = new_headers
 
+        logged_claims: Final[_SignedClaimSummary] = claims
         verbose_proxy_logger.debug(
             "MCPJWTSigner: signed JWT sub=%s act=%s tool=%s exp=%d verified=%s channel=%s call_type=%s",
-            claims.get("sub"),
-            claims.get("act", {}).get("sub"),
+            logged_claims.get("sub"),
+            logged_claims.get("act", {}).get("sub"),
             hook_data.get("mcp_tool_name"),
-            claims["exp"],
+            logged_claims["exp"],
             jwt_claims is not None,
             bool(self.channel_token_audience),
             call_type,

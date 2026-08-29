@@ -3146,6 +3146,14 @@ def _get_pass_through_endpoints_from_config() -> list[PassThroughGenericEndpoint
     return returned_endpoints
 
 
+def _config_field_endpoints(response: ConfigFieldInfo) -> list[object] | None:
+    return response.field_value
+
+
+def _request_app(request: Request) -> FastAPI:
+    return request.app
+
+
 async def _get_pass_through_endpoints_from_db(
     endpoint_id: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
@@ -3162,7 +3170,7 @@ async def _get_pass_through_endpoints_from_db(
     except Exception:
         return []
 
-    pass_through_endpoint_data: Final[list | None] = response.field_value
+    pass_through_endpoint_data: Final = _config_field_endpoints(response)
     if pass_through_endpoint_data is None:
         return []
 
@@ -3325,7 +3333,7 @@ async def update_pass_through_endpoints(
             detail={"error": "No pass-through endpoints found"},
         )
 
-    pass_through_endpoint_data: Final[list | None] = response.field_value
+    pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
     if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=404,
@@ -3396,7 +3404,7 @@ async def update_pass_through_endpoints(
     _custom_headers: dict | None = updated_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
-    route_app: Final[FastAPI] = request.app
+    route_app: Final = _request_app(request)
     if updated_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
             app=route_app,
@@ -3488,7 +3496,7 @@ async def create_pass_through_endpoints(
     _custom_headers: dict | None = created_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
-    route_app: Final[FastAPI] = request.app
+    route_app: Final = _request_app(request)
     if created_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
             app=route_app,
@@ -3556,7 +3564,7 @@ async def delete_pass_through_endpoints(
         response = ConfigFieldInfo(field_name="pass_through_endpoints", field_value=None)
 
     ## Update field by removing endpoint
-    pass_through_endpoint_data: Final[list | None] = response.field_value
+    pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
     if response.field_value is None or pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=400,

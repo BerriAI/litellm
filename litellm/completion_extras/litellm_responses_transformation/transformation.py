@@ -200,7 +200,8 @@ def _tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Ch
         LiteLLMCompletionResponsesConfig,
     )
 
-    is_custom: Final = item.get("type") == "custom_tool_call"
+    item_type: Final[object] = item.get("type")
+    is_custom: Final = item_type == "custom_tool_call"
     arguments: Final = (item.get("input") if is_custom else item.get("arguments")) or ""
     name: Final = item.get("name") or ("custom_tool" if is_custom else "")
     function_chunk: Final = ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments)
@@ -210,7 +211,7 @@ def _tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Ch
         function=function_chunk,
         index=index,
     )
-    raw_provider_fields: Final = item.get("provider_specific_fields")
+    raw_provider_fields: Final[object] = item.get("provider_specific_fields")
     if isinstance(raw_provider_fields, dict):
         provider_specific_fields = raw_provider_fields
     elif raw_provider_fields and hasattr(raw_provider_fields, "__dict__"):
@@ -495,7 +496,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def _merge_responses_api_request_into_request_data(
         self,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         responses_api_request: "ResponsesAPIOptionalRequestParams",
         instructions: str | None,
     ) -> None:

@@ -90,6 +90,16 @@ def _is_json_array(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial 
     return isinstance(value, list)
 
 
+def _optional_str(value: object) -> str | None:
+    """Keep a JSON payload entry only when it is a string, since the wire format is caller-controlled."""
+    return value if isinstance(value, str) else None
+
+
+def _json_array_or_empty(value: object) -> Sequence[object]:
+    """Narrow a JSON payload entry that the caller iterates, tolerating a missing or malformed value."""
+    return value if _is_json_array(value) else ()
+
+
 def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verifies every value is str
     return _is_json_object(value) and all(isinstance(item, str) for item in value.values())
 
@@ -301,7 +311,7 @@ class BaseResponsesAPIStreamingIterator:
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 ):
-                    _item: Final = getattr(openai_responses_api_chunk, "item", None)
+                    _item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
                     if _item is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                             item=_item,
@@ -309,7 +319,7 @@ class BaseResponsesAPIStreamingIterator:
                             model_id=_stream_model_id,
                         )
                 elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
-                    _annotation: Final = getattr(openai_responses_api_chunk, "annotation", None)
+                    _annotation: Final[object] = getattr(openai_responses_api_chunk, "annotation", None)
                     if _annotation is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                             item=_annotation,
@@ -1081,7 +1091,7 @@ class _HasModelDumpJson(Protocol):
     def model_dump_json(self, *, exclude_none: bool = ...) -> str: ...
 
 
-def _dump_response_object(obj: object) -> dict[str, Any]:
+def _dump_response_object(obj: object) -> dict[str, object]:
     if isinstance(obj, _HasModelDump):
         return obj.model_dump()
     if _is_json_object(obj):
@@ -1254,7 +1264,7 @@ def _build_synthetic_response_events(
         )
 
         if item_type == "message":
-            content_parts: Sequence[object] = output_item_payload.get("content", []) or []
+            content_parts: Sequence[object] = _json_array_or_empty(output_item_payload.get("content"))
             for content_index, part in enumerate(content_parts):
                 part_payload = _dump_response_object(part)
                 events.append(
@@ -1302,7 +1312,7 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            summaries: Sequence[object] = output_item_payload.get("summary", []) or []
+            summaries: Sequence[object] = _json_array_or_empty(output_item_payload.get("summary"))
             for summary_index, summary in enumerate(summaries):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
@@ -2018,7 +2028,7 @@ class ManagedResponsesWebSocketHandler:
         model: str,
         logging_obj: LiteLLMLoggingObj,
         user_api_key_dict: UserAPIKeyAuth | None = None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | None = None,
@@ -2031,9 +2041,9 @@ class ManagedResponsesWebSocketHandler:
         self.model = model
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.litellm_metadata: dict[str, Any] = litellm_metadata or {}
-        self.model_group: str | None = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
-            "deployment_model_name"
+        self.litellm_metadata: dict[str, object] = litellm_metadata or {}
+        self.model_group: str | None = _optional_str(
+            self.litellm_metadata.get("model_group") or self.litellm_metadata.get("deployment_model_name")
         )
         self.api_key = api_key
         self.api_base = api_base
@@ -2055,7 +2065,7 @@ class ManagedResponsesWebSocketHandler:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _serialize_chunk(chunk: Any) -> str | None:
+    def _serialize_chunk(chunk: object) -> str | None:
         """Serialize a streaming chunk to a JSON string for WebSocket transmission."""
         try:
             if isinstance(chunk, _HasModelDumpJson):
@@ -2246,7 +2256,7 @@ class ManagedResponsesWebSocketHandler:
             await self.websocket.send_text(serialized)
 
     @staticmethod
-    def _build_base_call_kwargs(msg_obj: dict[str, object]) -> dict[str, Any]:
+    def _build_base_call_kwargs(msg_obj: dict[str, object]) -> dict[str, object]:
         """
         Extract Responses API params from the event, handling both wire formats:
           Nested: {"type": "response.create", "response": {"input": [...], ...}}
@@ -2462,12 +2472,12 @@ class ManagedResponsesWebSocketHandler:
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        requested_model: Final[str | None] = call_kwargs.pop("model", None)
+        requested_model: Final[str | None] = _optional_str(call_kwargs.pop("model", None))
         model: Final[str] = (
             self.model if requested_model is None or requested_model == self.model_group else requested_model
         )
 
-        previous_response_id: Final[str | None] = call_kwargs.pop("previous_response_id", None)
+        previous_response_id: Final[str | None] = _optional_str(call_kwargs.pop("previous_response_id", None))
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history

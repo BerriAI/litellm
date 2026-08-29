@@ -13,10 +13,109 @@ Generated files are returned directly in the response - no separate storage need
 
 import base64
 import json
+from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import Any, Final
+from typing import Any, Final, Protocol, TypedDict
+
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
+
+
+class _ToolParameterSchema(TypedDict, total=False):
+    type: ReadOnly[str]
+    description: ReadOnly[str]
+
+
+class _ToolArgumentSchema(TypedDict, total=False):
+    type: ReadOnly[str]
+    properties: ReadOnly[Mapping[str, _ToolParameterSchema]]
+    required: ReadOnly[Sequence[str]]
+
+
+class _OpenAIToolFunction(TypedDict, total=False):
+    name: ReadOnly[str]
+    description: ReadOnly[str]
+    parameters: ReadOnly[_ToolArgumentSchema]
+
+
+class _OpenAIToolSpec(TypedDict, total=False):
+    type: ReadOnly[str]
+    function: ReadOnly[_OpenAIToolFunction]
+
+
+class _AnthropicToolSpec(TypedDict, total=False):
+    name: ReadOnly[str]
+    description: ReadOnly[str]
+    input_schema: ReadOnly[_ToolArgumentSchema]
+
+
+class _CodeExecutionArguments(TypedDict, total=False):
+    code: ReadOnly[str]
+
+
+class _GeneratedFile(TypedDict, total=False):
+    name: ReadOnly[str]
+    mime_type: ReadOnly[str]
+    content_base64: ReadOnly[str]
+    size: ReadOnly[int]
+
+
+class _SandboxGeneratedFile(TypedDict):
+    name: ReadOnly[str]
+    mime_type: ReadOnly[str]
+    content_base64: ReadOnly[str]
+
+
+class _SandboxExecutionResult(TypedDict):
+    success: ReadOnly[bool]
+    output: ReadOnly[str]
+    error: ReadOnly[str]
+    files: ReadOnly[Sequence[_SandboxGeneratedFile]]
+
+
+class _ExecutionResult(TypedDict, total=False):
+    iteration: ReadOnly[int]
+    success: ReadOnly[bool]
+    output: ReadOnly[str]
+    error: ReadOnly[str]
+    files: ReadOnly[Sequence[str]]
+
+
+class _ToolCallFunction(Protocol):
+    name: str
+    arguments: str
+
+
+class _ToolCall(Protocol):
+    id: str
+    function: _ToolCallFunction
+
+
+class _AssistantMessage(Protocol):
+    content: str | None
+    tool_calls: Sequence[_ToolCall] | None
+
+
+class _ResponseChoice(Protocol):
+    message: _AssistantMessage
+    finish_reason: str | None
+
+
+class _CompletionResponse(Protocol):
+    choices: Sequence[_ResponseChoice]
+
+
+class _CodeExecutionOutcome(TypedDict, total=False):
+    response: ReadOnly[_CompletionResponse | None]
+    files: ReadOnly[Sequence[_GeneratedFile]]
+    execution_results: ReadOnly[Sequence[_ExecutionResult]]
+    messages: ReadOnly[Sequence[dict[str, object]]]
+    max_iterations_reached: ReadOnly[bool]
+
+
+def _parse_code_execution_arguments(serialized_arguments: str) -> _CodeExecutionArguments:
+    return json.loads(serialized_arguments)
 
 
 class LiteLLMInternalTools(str, Enum):
@@ -30,7 +129,7 @@ class LiteLLMInternalTools(str, Enum):
     CODE_EXECUTION = "litellm_code_execution"
 
 
-def get_litellm_code_execution_tool() -> dict[str, Any]:
+def get_litellm_code_execution_tool() -> _OpenAIToolSpec:
     """
     Returns the litellm_code_execution tool definition in OpenAI format.
 
@@ -51,7 +150,7 @@ def get_litellm_code_execution_tool() -> dict[str, Any]:
     }
 
 
-def get_litellm_code_execution_tool_anthropic() -> dict[str, Any]:
+def get_litellm_code_execution_tool_anthropic() -> _AnthropicToolSpec:
     """
     Returns the litellm_code_execution tool definition in Anthropic/messages API format.
 
@@ -98,12 +197,12 @@ class CodeExecutionHandler:
     async def execute_with_code_execution(
         self,
         model: str,
-        messages: list[dict],
-        tools: list[dict],
+        messages: list[dict[str, object]],
+        tools: list[_OpenAIToolSpec],
         skill_files: dict[str, bytes],
         skill_id: str | None = None,
         **kwargs,
-    ) -> dict[str, Any]:
+    ) -> _CodeExecutionOutcome:
         """
         Execute an LLM call with automatic code execution handling.
 
@@ -134,8 +233,8 @@ class CodeExecutionHandler:
         )
 
         current_messages: Final = list(messages)
-        generated_files: Final[list[dict[str, Any]]] = []  # Files returned directly
-        execution_results: Final[list[dict]] = []
+        generated_files: Final[list[_GeneratedFile]] = []  # Files returned directly
+        execution_results: Final[list[_ExecutionResult]] = []
 
         executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
         response: Any = None  # Initialize to avoid possibly unbound error
@@ -151,11 +250,12 @@ class CodeExecutionHandler:
                 **kwargs,
             )
 
-            assistant_message = response.choices[0].message
-            stop_reason = response.choices[0].finish_reason
+            choice: _ResponseChoice = response.choices[0]
+            assistant_message = choice.message
+            stop_reason = choice.finish_reason
 
             # Build assistant message for conversation history
-            assistant_msg_dict: dict[str, Any] = {
+            assistant_msg_dict: dict[str, object] = {
                 "role": "assistant",
                 "content": assistant_message.content,
             }
@@ -190,12 +290,12 @@ class CodeExecutionHandler:
                 if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value:
                     # Execute code in sandbox
                     try:
-                        args = json.loads(tool_call.function.arguments)
+                        args = _parse_code_execution_arguments(tool_call.function.arguments)
                         code = args.get("code", "")
 
                         verbose_logger.debug("CodeExecutionHandler: Executing code (%s chars)", len(code))
 
-                        exec_result = executor.execute(
+                        exec_result: _SandboxExecutionResult = executor.execute(
                             code=code,
                             skill_files=skill_files,
                         )
@@ -278,7 +378,7 @@ class CodeExecutionHandler:
         }
 
 
-def has_code_execution_tool(tools: list[dict] | None) -> bool:
+def has_code_execution_tool(tools: list[_OpenAIToolSpec] | None) -> bool:
     """Check if litellm_code_execution tool is in the tools list."""
     if not tools:
         return False
@@ -289,7 +389,7 @@ def has_code_execution_tool(tools: list[dict] | None) -> bool:
     return False
 
 
-def add_code_execution_tool(tools: list[dict] | None) -> list[dict]:
+def add_code_execution_tool(tools: list[_OpenAIToolSpec] | None) -> list[_OpenAIToolSpec]:
     """Add litellm_code_execution tool if not already present."""
     tools = tools or []
     if not has_code_execution_tool(tools):

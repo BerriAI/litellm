@@ -14,7 +14,18 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, Optional, TypedDict, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    NotRequired,
+    Optional,
+    Protocol,
+    TypedDict,
+    Union,
+    cast,
+    runtime_checkable,
+)
 
 from typing_extensions import ReadOnly
 
@@ -159,11 +170,11 @@ async def _check_summary_model_access(
         return True
 
     key_models: Final = list(getattr(user_api_key_auth, "models", None) or [])
-    team_id: Final = getattr(user_api_key_auth, "team_id", None)
-    team_model_aliases: Final = getattr(user_api_key_auth, "team_model_aliases", None)
+    team_id: Final[str | None] = getattr(user_api_key_auth, "team_id", None)
+    team_model_aliases: Final[dict[str, str] | None] = getattr(user_api_key_auth, "team_model_aliases", None)
     team_models: Final = list(getattr(user_api_key_auth, "team_models", None) or [])
-    user_id: Final = getattr(user_api_key_auth, "user_id", None)
-    project_id: Final = getattr(user_api_key_auth, "project_id", None)
+    user_id: Final[str | None] = getattr(user_api_key_auth, "user_id", None)
+    project_id: Final[str | None] = getattr(user_api_key_auth, "project_id", None)
 
     checks: Final[tuple[tuple[Literal["key", "team"], list[str]], ...]] = (
         ("key", key_models),
@@ -371,8 +382,10 @@ async def _check_summary_model_budget(
             )
             return False
 
-    end_user_model_max_budget: Final = getattr(user_api_key_auth, "end_user_model_max_budget", None)
-    end_user_id: Final = getattr(user_api_key_auth, "end_user_id", None)
+    end_user_model_max_budget: Final[dict[str, object] | None] = getattr(
+        user_api_key_auth, "end_user_model_max_budget", None
+    )
+    end_user_id: Final[str | None] = getattr(user_api_key_auth, "end_user_id", None)
     if isinstance(end_user_model_max_budget, dict) and end_user_model_max_budget and end_user_id is not None:
         try:
             await model_max_budget_limiter.is_end_user_within_model_budget(
@@ -490,7 +503,7 @@ def _find_latest_compaction_index(
 
 
 def _slice_around_compaction_block(
-    messages: list[dict[str, Any]],
+    messages: list[dict[str, object]],
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     """Apply Anthropic's "drop everything before the compaction block" rule.
 
@@ -505,7 +518,8 @@ def _slice_around_compaction_block(
         return messages, None
 
     original_msg: Final = messages[msg_idx]
-    original_content: Final = original_msg["content"]
+    raw_content: Final = original_msg.get("content")
+    original_content: Final[list[object]] = raw_content if isinstance(raw_content, list) else []
     compaction_block: Final = cast(dict[str, object], original_content[blk_idx])
 
     # Per Anthropic's contract everything before the compaction block is
@@ -760,7 +774,7 @@ def _extract_summary_text(raw: str | None) -> str | None:
 
 
 def _system_to_openai_message(
-    system: str | list[dict[str, Any]] | None,
+    system: str | list[dict[str, object]] | None,
 ) -> dict[str, object] | None:
     """Translate Anthropic-shaped ``system`` to an OpenAI system message.
 
@@ -772,8 +786,10 @@ def _system_to_openai_message(
     if isinstance(system, str):
         return {"role": "system", "content": system} if system else None
     if isinstance(system, list):
-        parts = [block.get("text", "") for block in system if isinstance(block, dict) and block.get("type") == "text"]
-        joined: Final = "\n\n".join(part for part in parts if part)
+        parts: Final[list[object]] = [
+            block.get("text", "") for block in system if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        joined: Final = "\n\n".join(part for part in parts if isinstance(part, str) and part)
         return {"role": "system", "content": joined} if joined else None
     return None
 
@@ -873,7 +889,7 @@ async def _call_summary_model(
     summary_model: str,
     summary_messages: list[dict[str, object]],
     metadata: Mapping[str, object],
-    llm_router: Any,
+    llm_router: Optional["Router"],
     allowed_model_region: str | None = None,
     max_tokens: int = COMPACT_SUMMARY_MAX_TOKENS,
 ) -> Union["ModelResponse", "CustomStreamWrapper"]:
@@ -927,11 +943,17 @@ async def _call_summary_model(
     return await litellm.acompletion(**call_kwargs)
 
 
-def _extract_response_text(response: Any) -> str | None:
+@runtime_checkable
+class _ResponseWithChoices(Protocol):
+    choices: Sequence[object]
+
+
+def _extract_response_text(response: object) -> str | None:
+    if not isinstance(response, _ResponseWithChoices) or not response.choices:
+        return None
     try:
-        choice: Final = response.choices[0]
-        message: Final = choice.message
-        content: Final = getattr(message, "content", None)
+        message: Final[object] = getattr(response.choices[0], "message", None)
+        content: Final[object] = getattr(message, "content", None)
         if isinstance(content, str):
             return content
         # Some providers return a list of content parts.
@@ -946,13 +968,12 @@ def _extract_response_text(response: Any) -> str | None:
 
 
 def _extract_usage(response: object) -> tuple[int, int]:
-    usage: Final = getattr(response, "usage", None)
+    usage: Final[object] = getattr(response, "usage", None)
     if usage is None:
         return 0, 0
-    return (
-        int(getattr(usage, "prompt_tokens", 0) or 0),
-        int(getattr(usage, "completion_tokens", 0) or 0),
-    )
+    prompt_tokens: Final[int | None] = getattr(usage, "prompt_tokens", 0)
+    completion_tokens: Final[int | None] = getattr(usage, "completion_tokens", 0)
+    return int(prompt_tokens or 0), int(completion_tokens or 0)
 
 
 def apply_client_compaction_block_history(

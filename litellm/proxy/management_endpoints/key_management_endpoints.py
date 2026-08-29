@@ -2467,7 +2467,7 @@ async def _validate_update_key_data(
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router | None,
     premium_user: bool,
-    prisma_client: Any,
+    prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """Validate permissions and constraints for key update."""
@@ -3700,7 +3700,7 @@ async def info_key_fn(
         except Exception:
             # if using pydantic v1
             key_info = key_info.dict()  # pyright: ignore[reportDeprecated]  # deliberate pydantic v1 fallback
-        key_token_hash: Final = key_info.pop("token")
+        key_token_hash: Final[str | None] = key_info.pop("token")
 
         model_max_budget = key_info.get("model_max_budget") or {}
         budget_table: Final = key_info.get("litellm_budget_table") or {}
@@ -5155,7 +5155,7 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
 
     max_budget = key_in_db.max_budget
     if key_in_db.litellm_budget_table is not None:
-        budget_max_budget: Final = getattr(key_in_db.litellm_budget_table, "max_budget", None)
+        budget_max_budget: Final[float | None] = getattr(key_in_db.litellm_budget_table, "max_budget", None)
         if budget_max_budget is not None:
             if max_budget is None or budget_max_budget < max_budget:
                 max_budget = budget_max_budget

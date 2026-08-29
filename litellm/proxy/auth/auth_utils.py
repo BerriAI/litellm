@@ -956,7 +956,7 @@ def get_key_model_rpm_limit(
 
     # 2. Check model_max_budget
     if user_api_key_dict.model_max_budget:
-        model_rpm_limit: Final[dict[str, Any]] = {}
+        model_rpm_limit: Final[dict[str, int]] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
             if isinstance(budget, dict) and budget.get("rpm_limit") is not None:
                 model_rpm_limit[model] = budget["rpm_limit"]
@@ -999,7 +999,7 @@ def get_key_model_tpm_limit(
 
     # 2. Check model_max_budget (iterate per-model like RPM does)
     if user_api_key_dict.model_max_budget:
-        model_tpm_limit: Final[dict[str, Any]] = {}
+        model_tpm_limit: Final[dict[str, int]] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
             if isinstance(budget, dict) and budget.get("tpm_limit") is not None:
                 model_tpm_limit[model] = budget["tpm_limit"]
@@ -1062,7 +1062,7 @@ def _validated_output_token_estimates_per_model(raw: object) -> Mapping[str, int
 
 
 def _estimated_output_tokens_from_metadata(
-    metadata: Mapping[str, Any] | None,
+    metadata: Mapping[str, object] | None,
     model_name: str | None,
 ) -> int | None:
     """Resolve the per-model, then global, estimate out of one metadata blob.
@@ -1628,7 +1628,7 @@ def _dedupe_model_candidates(candidates: list[str]) -> list[str]:
     return deduped
 
 
-def _get_case_insensitive_mapping_value(mapping: Mapping[str, Any] | None, key: str) -> Any:
+def _get_case_insensitive_mapping_value(mapping: Mapping[str, object] | None, key: str) -> object:
     if not mapping:
         return None
     if key in mapping:
@@ -1732,8 +1732,8 @@ def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | Non
 def _extract_model_candidates_from_request(
     request_data: dict,
     route: str,
-    request_headers: Mapping[str, Any] | None = None,
-    request_query_params: Mapping[str, Any] | None = None,
+    request_headers: Mapping[str, object] | None = None,
+    request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
 ) -> list[str]:
     candidates: Final[list[str]] = []
@@ -1825,8 +1825,8 @@ def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool
 def get_model_from_request(
     request_data: dict,
     route: str,
-    request_headers: Mapping[str, Any] | None = None,
-    request_query_params: Mapping[str, Any] | None = None,
+    request_headers: Mapping[str, object] | None = None,
+    request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
     request: Request | None = None,
 ) -> str | list[str] | None:

@@ -2,7 +2,7 @@
 #    On success, logs events to Promptlayer
 import re
 import traceback
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 
     from litellm.caching.caching import DualCache
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.anthropic_messages.transformation import (
+        BaseAnthropicMessagesConfig,
+    )
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import (
         MCPPostCallResponseObject,
@@ -39,7 +42,7 @@ if TYPE_CHECKING:
     )
     from litellm.types.router import PreRoutingHookResponse
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
     LiteLLMLoggingObj = Any
@@ -123,11 +126,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             return []
 
         callbacks: Final = AllCallbacks()
-        callback_info: Final = getattr(callbacks, lookup_name, None)
+        callback_info: Final[object] = getattr(callbacks, lookup_name, None)
         if callback_info is None:
             return []
 
-        params: Final = getattr(callback_info, "litellm_callback_params", None)
+        params: Final[list[str] | None] = getattr(callback_info, "litellm_callback_params", None)
         if not params:
             return []
 
@@ -268,7 +271,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> list[dict]:
         return healthy_deployments
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict | None:
         """
         Allow modifying the request just before it's sent to the deployment.
 
@@ -344,9 +349,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_post_call_streaming_deployment_hook(
         self,
         request_data: dict,
-        response_chunk: Any,
+        response_chunk: object,
         call_type: CallTypes | None,
-    ) -> Any | None:
+    ) -> object | None:
         """
         Allow modifying streaming chunks just before they're returned to the user.
 
@@ -378,7 +383,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
 
     def translate_completion_output_params_streaming(
-        self, completion_stream: Any
+        self, completion_stream: object
     ) -> AdapterCompletionStreamWrapper | None:
         """
         Translates the streaming chunk, from the OpenAI format to the custom format.
@@ -418,9 +423,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: object,
         request_headers: dict[str, str] | None = None,
-        litellm_call_info: dict[str, Any] | None = None,
+        litellm_call_info: dict[str, object] | None = None,
     ) -> dict[str, str] | None:
         """
         Called after an LLM API call (success or failure) to allow injecting custom HTTP response headers.
@@ -471,11 +476,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> Any:
         pass
 
-    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
+    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
-    def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
+    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
@@ -581,7 +586,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_should_run_agentic_loop(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         tools: list[dict] | None,
@@ -642,8 +647,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         tools: dict,
         model: str,
         messages: list[dict],
-        response: Any,
-        anthropic_messages_provider_config: Any,
+        response: object,
+        anthropic_messages_provider_config: "BaseAnthropicMessagesConfig | None",
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
@@ -711,8 +716,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         tools: dict,
         model: str,
         messages: list[dict],
-        response: Any,
-        anthropic_messages_provider_config: Any,
+        response: object,
+        anthropic_messages_provider_config: "BaseAnthropicMessagesConfig | None",
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
@@ -728,7 +733,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_post_agentic_loop_response_hook(
         self,
-        response: Any,
+        response: object,
         plan: AgenticLoopPlan,
         kwargs: dict,
     ) -> Any:
@@ -767,7 +772,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_should_run_chat_completion_agentic_loop(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         tools: list[dict] | None,
@@ -785,12 +790,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         tools: dict,
         model: str,
         messages: list[dict],
-        response: Any,
+        response: object,
         optional_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
         kwargs: dict,
-    ) -> Any:
+    ) -> object:
         """
         Hook to execute chat completion agentic loop based on context from should_run hook.
         """
@@ -800,7 +805,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         tools: dict,
         model: str,
         messages: list[dict],
-        response: Any,
+        response: object,
         optional_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
@@ -851,7 +856,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             - Converting to string and then truncating the logged content catches this
         2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
         """
-        field_value: Final = standard_logging_object.get(field_name)
+        field_value: Final[object] = standard_logging_object.get(field_name)
         if field_value:
             str_value: Final = str(field_value)
             if len(str_value) > max_length:
@@ -1005,8 +1010,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
           • Keep untyped or text content.
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
-        raw_messages: Final[Any] = payload.get("messages", [])
-        messages: Final[list[Any]] = raw_messages if isinstance(raw_messages, list) else []
+        raw_messages: Final[object] = payload.get("messages", [])
+        messages: Final[list[object]] = raw_messages if isinstance(raw_messages, list) else []
         verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
 
         if messages:
@@ -1037,8 +1042,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
           • Keep untyped or text content.
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
-        raw_messages: Final[Any] = payload.get("messages", [])
-        messages: Final[list[Any]] = raw_messages if isinstance(raw_messages, list) else []
+        raw_messages: Final[object] = payload.get("messages", [])
+        messages: Final[list[object]] = raw_messages if isinstance(raw_messages, list) else []
         verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
 
         if messages:
@@ -1056,10 +1061,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     def _redact_base64(
         self,
-        value: Any,
+        value: object,
         depth: int = 0,
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
-    ) -> Any:
+    ) -> object:
         """Recursively redact inline base64 from any nested structure with a max recursion depth limit."""
         if depth > max_depth:
             verbose_logger.warning("[CustomLogger] Max recursion depth %s reached while redacting base64", max_depth)
@@ -1079,7 +1084,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         return value
 
-    def _should_keep_content(self, content: Any) -> bool:
+    def _should_keep_content(self, content: object) -> bool:
         """Return True if this content item should be retained."""
         if not isinstance(content, dict):
             return True
@@ -1090,16 +1095,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     def _process_messages(
         self,
-        messages: list[Any],
+        messages: Sequence[object],
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
-    ) -> list[dict[str, Any]]:
-        filtered_messages: Final[list[dict[str, Any]]] = []
+    ) -> list[dict[str, object]]:
+        filtered_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
-            contents: Any = msg.get("content")
+            contents: object = msg.get("content")
             if isinstance(contents, list):
-                cleaned: list[Any] = []
+                cleaned: list[object] = []
                 for c in contents:
                     if self._should_keep_content(content=c):
                         cleaned.append(self._redact_base64(value=c, max_depth=max_depth))
