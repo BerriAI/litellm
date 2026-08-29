@@ -3,10 +3,8 @@ Support for gpt model family
 """
 
 import json
-import os
 from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
-from urllib.parse import urlparse
 
 import httpx
 
@@ -51,7 +49,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import convert_to_model_response_object
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, should_preserve_cache_control_for_endpoint
 
 if TYPE_CHECKING:
     import tiktoken
@@ -398,21 +396,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         custom_llm_provider: str | None,
         api_base: str | None,
     ) -> bool:
-        """
-        The generic `openai` provider also reaches OpenAI-compatible endpoints
-        (a LiteLLM proxy, vLLM, an Anthropic-compatible gateway) via a custom
-        api_base. Those can understand cache_control, so it must survive there.
-        Real OpenAI cannot, so it is still stripped for an openai.com host.
-        """
-        if custom_llm_provider != "openai":
-            return False
-        resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-        if not resolved_api_base:
-            return False
-        hostname: Final = urlparse(resolved_api_base).hostname
-        if hostname is None:
-            return False
-        return hostname != "openai.com" and not hostname.endswith(".openai.com")
+        """See `should_preserve_cache_control_for_endpoint`; the responses path
+        applies the same rule to the same deployment."""
+        return should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base)
 
     def transform_request(
         self,

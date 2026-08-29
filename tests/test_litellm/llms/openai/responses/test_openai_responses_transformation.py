@@ -120,7 +120,7 @@ class TestOpenAIResponsesAPIConfig:
             model=self.model,
             input=input_text,
             response_api_optional_request_params=optional_params,
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -162,7 +162,7 @@ class TestOpenAIResponsesAPIConfig:
             model=self.model,
             input=input_with_cache_control,
             response_api_optional_request_params={},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -193,7 +193,7 @@ class TestOpenAIResponsesAPIConfig:
             model=self.model,
             input="hi",
             response_api_optional_request_params={"tools": tools_with_cache_control},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -213,7 +213,7 @@ class TestOpenAIResponsesAPIConfig:
             model=self.model,
             input=input_clean,
             response_api_optional_request_params={},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -508,7 +508,7 @@ class TestOpenAIResponsesAPIConfig:
             model=self.model,
             input=input_text,
             response_api_optional_request_params=optional_params,
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -538,7 +538,7 @@ class TestOpenAIResponsesAPIConfig:
                 model=self.model,
                 input=input_text,
                 response_api_optional_request_params=optional_params,
-                litellm_params={},
+                litellm_params=GenericLiteLLMParams(),
                 headers={},
             )
 
@@ -750,6 +750,132 @@ class TestOpenAIResponsesAPIConfig:
         assert norm["input"][0].get("namespace") == "my_tools"
         assert norm["input"][1]["type"] == "custom_tool_call"
         assert "namespace" not in norm["input"][1]
+
+
+class TestResponsesCacheControlPreservationForCustomEndpoint:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/37474
+
+    The chat completions transformer keeps `cache_control` for the generic
+    `openai` provider on a custom api_base, because such an endpoint (a LiteLLM
+    proxy, vLLM, an Anthropic-compatible gateway) can understand it. The
+    responses transformer stripped it unconditionally, so the same deployment
+    lost prompt caching on whichever of the two paths a request happened to
+    take. Both paths now ask the same question.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIResponsesAPIConfig()
+        self.model = "claude-sonnet-4"
+
+    @pytest.fixture(autouse=True)
+    def _clean_openai_base_env(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None, raising=False)
+
+    @staticmethod
+    def _cache_controlled_input():
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+
+    @staticmethod
+    def _cache_controlled_tools():
+        return [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object", "properties": {}},
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    def _transform(self, custom_llm_provider, api_base, tools=None):
+        return self.config.transform_responses_api_request(
+            model=self.model,
+            input=self._cache_controlled_input(),
+            response_api_optional_request_params={"tools": tools} if tools else {},
+            litellm_params=GenericLiteLLMParams(
+                custom_llm_provider=custom_llm_provider, api_base=api_base
+            ),
+            headers={},
+        )
+
+    def test_preserves_for_openai_provider_on_custom_api_base(self):
+        result = self._transform("openai", "http://localhost:4000/v1")
+        assert result["input"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_preserves_tool_cache_control_for_custom_api_base(self):
+        result = self._transform(
+            "openai", "http://localhost:4000/v1", tools=self._cache_controlled_tools()
+        )
+        assert result["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_strips_for_real_openai_without_api_base(self):
+        result = self._transform("openai", None)
+        assert "cache_control" not in result["input"][0]["content"][0]
+
+    def test_strips_for_explicit_openai_host(self):
+        result = self._transform("openai", "https://api.openai.com/v1")
+        assert "cache_control" not in result["input"][0]["content"][0]
+
+    def test_strips_for_non_openai_provider(self):
+        result = self._transform("azure", "https://example.openai.azure.com")
+        assert "cache_control" not in result["input"][0]["content"][0]
+
+    def test_compact_request_follows_the_same_rule(self):
+        _, preserved = self.config.transform_compact_response_api_request(
+            model=self.model,
+            input=self._cache_controlled_input(),
+            response_api_optional_request_params={},
+            api_base="http://localhost:4000/v1/responses",
+            litellm_params=GenericLiteLLMParams(
+                custom_llm_provider="openai", api_base="http://localhost:4000/v1"
+            ),
+            headers={},
+        )
+        assert preserved["input"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+        _, stripped = self.config.transform_compact_response_api_request(
+            model=self.model,
+            input=self._cache_controlled_input(),
+            response_api_optional_request_params={},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(
+                custom_llm_provider="openai", api_base="https://api.openai.com/v1"
+            ),
+            headers={},
+        )
+        assert "cache_control" not in stripped["input"][0]["content"][0]
+
+    def test_chat_and_responses_paths_agree_for_the_same_deployment(self):
+        """The bug was the two paths disagreeing, so assert them together."""
+        from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+        for provider, api_base, expected in [
+            ("openai", "http://localhost:4000/v1", True),
+            ("openai", None, False),
+            ("openai", "https://api.openai.com/v1", False),
+            ("fireworks_ai", "https://api.fireworks.ai/inference/v1", False),
+        ]:
+            chat_keeps = OpenAIGPTConfig()._should_preserve_cache_control_for_endpoint(
+                provider, api_base
+            )
+            responses_keeps = "cache_control" in self._transform(provider, api_base)["input"][0][
+                "content"
+            ][0]
+            assert chat_keeps is expected, (provider, api_base)
+            assert responses_keeps is expected, (provider, api_base)
 
 
 class TestAzureResponsesAPIConfig:

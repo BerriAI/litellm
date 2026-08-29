@@ -18,7 +18,7 @@ from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, should_preserve_cache_control_for_endpoint
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
 
@@ -161,12 +161,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI's Responses API rejects unknown fields on input content blocks
         with HTTP 400 ("Unknown parameter: 'input[0].content[0].cache_control'").
         Chat Completions strips these in
-        `remove_cache_control_flag_from_messages_and_tools`; mirror that here.
+        `remove_cache_control_flag_from_messages_and_tools`; mirror that here,
+        including its carve-out for an openai-provider deployment on a custom
+        api_base, which may well understand cache_control.
         """
 
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
-        input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
+        if not should_preserve_cache_control_for_endpoint(litellm_params.custom_llm_provider, litellm_params.api_base):
+            input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
         if tools is not None:
             response_api_optional_request_params["tools"] = tools
         final_request_params: Final = dict(
@@ -645,7 +648,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
-        input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
+        if not should_preserve_cache_control_for_endpoint(litellm_params.custom_llm_provider, litellm_params.api_base):
+            input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
         if tools is not None:
             response_api_optional_request_params["tools"] = tools
         data: Final = dict(ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params))
