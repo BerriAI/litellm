@@ -12191,6 +12191,23 @@
             "/v1/images/generations"
         ]
     },
+    "black_forest_labs/flux-3-video": {
+        "litellm_provider": "black_forest_labs",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.17,
+        "source": "https://docs.bfl.ai/quick_start/pricing",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "Per-second pricing varies by mode and resolution: t2v and i2v are $0.17/s hd and $0.29/s fhd, v2v is $0.43/s hd and $0.54/s fhd, drafts are $0.06/s (t2v, i2v) and $0.12/s (v2v). The t2v hd rate is used here."
+        }
+    },
     "cerebras/llama-3.3-70b": {
         "input_cost_per_token": 8.5e-07,
         "litellm_provider": "cerebras",

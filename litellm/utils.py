@@ -9122,6 +9122,12 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.BLACK_FOREST_LABS == provider:
+            from litellm.llms.black_forest_labs.videos.transformation import (
+                BlackForestLabsVideoConfig,
+            )
+
+            return BlackForestLabsVideoConfig()
         return None
 
     @staticmethod
