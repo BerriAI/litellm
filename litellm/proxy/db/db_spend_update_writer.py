@@ -112,7 +112,7 @@ def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
     return tx
 
 
-def _get_llm_router():
+def get_llm_router():
     """The proxy's router, or None outside a running proxy.
 
     Injected rather than imported where it is used, so the savings computation stays
@@ -371,7 +371,7 @@ class DBSpendUpdateWriter:
                 routing_decision=metadata.get("routing_decision"),
                 usage_object=usage_object_raw if isinstance(usage_object_raw, dict) else None,
                 model_id=payload.get("model_id"),
-                llm_router=_get_llm_router,
+                llm_router=get_llm_router,
                 cost_breakdown=metadata.get("cost_breakdown"),
                 recorded_autorouter_savings=metadata.get("autorouter_savings"),
             )
@@ -562,7 +562,7 @@ class DBSpendUpdateWriter:
             request_model_access_groups=request_model_access_groups,
             served_model_id=payload_copy.get("model_id"),
             prisma_client=prisma_client,
-            router=_get_llm_router(),
+            router=get_llm_router(),
         )
 
         _agent_id_for_spend: Final = payload_copy.get("agent_id")
@@ -2004,7 +2004,7 @@ class DBSpendUpdateWriter:
                 gateway_injected_cache=marks_gateway_injection(_metadata, payload.get("model_id")),
                 routing_decision=_metadata.get("routing_decision"),
                 model_id=payload.get("model_id"),
-                llm_router=_get_llm_router,
+                llm_router=get_llm_router,
                 usage_object=usage_obj,
                 cost_breakdown=_metadata.get("cost_breakdown"),
                 recorded_autorouter_savings=_metadata.get("autorouter_savings"),

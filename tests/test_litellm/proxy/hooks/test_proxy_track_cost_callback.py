@@ -1956,3 +1956,83 @@ async def test_track_cost_callback_charges_no_model_access_group_when_none_were_
 
     mock_increment_spend_counters.assert_awaited_once()
     assert mock_increment_spend_counters.await_args.kwargs["model_access_groups"] == ()
+
+
+class _FakeDeploymentLookup:
+    """Deployment lookup returning the access groups each deployment declares."""
+
+    def __init__(self, deployments):
+        self._deployments = deployments
+
+    def get_model_info(self, id):
+        if id not in self._deployments:
+            return None
+        return {"model_name": "premium-haiku", "model_info": {"id": id, "access_groups": list(self._deployments[id])}}
+
+
+def _model_access_group_kwargs(granted, served_model_id):
+    return {
+        "call_type": "acompletion",
+        "model": "premium-haiku",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "u-1",
+                MODEL_ACCESS_GROUP_METADATA_KEY: list(granted),
+            }
+        },
+        "stream": False,
+        "standard_logging_object": {"response_cost": 0.25, "model_id": served_model_id},
+    }
+
+
+async def _run_callback_capturing_groups(kwargs, deployments):
+    logger = _ProxyDBLogger()
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback._update_database_and_spend_counters",
+            new=AsyncMock(),
+        ) as mock_update,
+        patch("litellm.proxy.proxy_server.llm_router", new=_FakeDeploymentLookup(deployments)),
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    return mock_update.await_args.kwargs["model_access_groups"]
+
+
+@pytest.mark.asyncio
+async def test_spend_counters_only_debit_the_group_the_served_deployment_belongs_to():
+    """A caller granted two pools that both cover the model group only draws down the pool that served.
+
+    The database writer already narrows by served deployment, so passing the unnarrowed set to the
+    live counters let one request block a pool the persisted spend never debited.
+    """
+    debited = await _run_callback_capturing_groups(
+        kwargs=_model_access_group_kwargs(granted=["premium", "tier0"], served_model_id="deployment-premium"),
+        deployments={"deployment-premium": ["premium"], "deployment-tier0": ["tier0"]},
+    )
+
+    assert debited == ("premium",)
+
+
+@pytest.mark.asyncio
+async def test_spend_counters_keep_every_granted_group_when_the_deployment_is_unknown():
+    """An unidentifiable deployment leaves the auth-time set standing, so nothing silently stops billing."""
+    debited = await _run_callback_capturing_groups(
+        kwargs=_model_access_group_kwargs(granted=["premium", "tier0"], served_model_id="deployment-gone"),
+        deployments={"deployment-premium": ["premium"]},
+    )
+
+    assert debited == ("premium", "tier0")
