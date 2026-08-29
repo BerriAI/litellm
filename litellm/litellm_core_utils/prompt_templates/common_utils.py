@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from os import PathLike
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
 from openai.types.chat.chat_completion_custom_tool_param import (
@@ -1087,6 +1088,91 @@ def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSc
     allowed_keys: Final = set(AnthropicInputSchema.__annotations__.keys())
     filtered: Final = {key: value for key, value in normalized.items() if key in allowed_keys}
     return AnthropicInputSchema(**filtered)
+
+
+_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("allOf", "anyOf", "oneOf")
+_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS: Final = ("enum", "const", "not")
+_EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
+    properties: Final = schema.get("properties")
+    return properties if isinstance(properties, dict) else _EMPTY_SCHEMA
+
+
+def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[Mapping[str, object], ...]:
+    branches: Final = schema.get(combinator)
+    if not isinstance(branches, list):
+        return ()
+    return tuple(branch for branch in branches if isinstance(branch, dict))
+
+
+def _schema_required_names(schema: Mapping[str, object]) -> frozenset[str]:
+    required: Final = schema.get("required")
+    if not isinstance(required, list):
+        return frozenset()
+    return frozenset(name for name in required if isinstance(name, str))
+
+
+def _combinator_required_names(combinator: str, branches: tuple[Mapping[str, object], ...]) -> frozenset[str]:
+    branch_names: Final = tuple(_schema_required_names(branch) for branch in branches)
+    if not branch_names:
+        return frozenset()
+    if combinator == "allOf":
+        return branch_names[0].union(*branch_names[1:])
+    return branch_names[0].intersection(*branch_names[1:])
+
+
+def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Merge top-level ``allOf``/``anyOf``/``oneOf`` branches into an object tool schema.
+
+    OpenAI's function-calling validator rejects tool ``parameters`` carrying
+    'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level (nested uses
+    are accepted), while lenient backends such as the ChatGPT backend Codex
+    talks to natively accept them, so an MCP tool declaring a top-level union
+    400s through LiteLLM. Branch properties merge without clobbering (the
+    top-level schema wins, then earlier branches); a missing ``required``
+    becomes the intersection of the branch lists for anyOf/oneOf and their
+    union for allOf. Non-object schemas pass through unchanged and the input
+    is never mutated.
+    """
+    branch_groups: Final = tuple(
+        (combinator, _schema_branches(schema, combinator))
+        for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS
+        if isinstance(schema.get(combinator), list)
+    )
+    dropped: Final = (
+        *(combinator for combinator, _ in branch_groups),
+        *(key for key in _OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS if key in schema),
+    )
+    if not dropped:
+        return schema
+
+    branches: Final = tuple(branch for _, group in branch_groups for branch in group)
+    is_object_schema: Final = schema.get("type") == "object" or (
+        "type" not in schema and branches != () and all("properties" in branch for branch in branches)
+    )
+    if not is_object_schema:
+        return schema
+
+    merged_properties: Final = {  # mutable-ok: tool parameters are JSON dicts
+        name: value for source in (*reversed(branches), schema) for name, value in _schema_properties(source).items()
+    }
+    fallback_required: Final = frozenset(
+        name for combinator, group in branch_groups for name in _combinator_required_names(combinator, group)
+    )
+    kept: Final = MappingProxyType({key: value for key, value in schema.items() if key not in dropped})
+    required_update: Final = (
+        MappingProxyType({"required": sorted(fallback_required)})
+        if "required" not in kept and fallback_required
+        else _EMPTY_SCHEMA
+    )
+    return {  # mutable-ok: tool parameters are JSON dicts
+        **kept,
+        "type": "object",
+        "properties": merged_properties,
+        **required_update,
+    }
 
 
 def _get_image_mime_type_from_url(url: str) -> str | None:

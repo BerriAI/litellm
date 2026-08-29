@@ -1,3 +1,5 @@
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast, get_type_hints
 
 import httpx
@@ -28,6 +30,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -167,8 +171,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
         input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        if tools is not None:
-            response_api_optional_request_params["tools"] = tools
+        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(tools)
+        if sanitized_tools is not None:
+            response_api_optional_request_params["tools"] = sanitized_tools
         final_request_params: Final = dict(
             ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params)
         )
@@ -206,6 +211,54 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     filter_value_from_dict(cast(dict, tool), "cache_control")
 
         return input, tools
+
+    def _flatten_tool_schema_combinators_for_openai(
+        self,
+        tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None,  # mutable-ok: request tools are a JSON list
+    ) -> list[ALL_RESPONSES_API_TOOL_PARAMS] | None:  # mutable-ok: request tools are a JSON list
+        """Flatten top-level schema combinators for OpenAI itself only.
+
+        OpenAI-compatible backends reusing this config (and the ChatGPT backend
+        Codex talks to natively) accept them. Codex wraps MCP tools inside
+        namespace entries, so nested ``tools`` arrays are walked too.
+        """
+        if tools is None or self.custom_llm_provider != LlmProviders.OPENAI:
+            return tools
+        flattened: Final = [  # mutable-ok: request tools are a JSON list
+            self._flattened_tool_entry(tool) for tool in tools
+        ]
+        return cast("list[ALL_RESPONSES_API_TOOL_PARAMS]", flattened)  # cast-ok: dict spread keeps each tool's shape
+
+    @staticmethod
+    def _flattened_tool_entry(
+        entry: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: request tools are JSON dicts
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        parameters: Final = entry.get("parameters")
+        nested_tools: Final = entry.get("tools")
+        parameters_update: Final = (
+            MappingProxyType({"parameters": flatten_top_level_schema_combinators(parameters)})
+            if isinstance(parameters, dict)
+            else _NO_TOOL_UPDATE
+        )
+        tools_update: Final = (
+            MappingProxyType({"tools": OpenAIResponsesAPIConfig._flattened_nested_tools(nested_tools)})
+            if isinstance(nested_tools, list)
+            else _NO_TOOL_UPDATE
+        )
+        return {**entry, **parameters_update, **tools_update}  # mutable-ok: request tools are JSON dicts
+
+    @staticmethod
+    def _flattened_nested_tools(
+        nested_tools: Sequence[object],
+    ) -> list[object]:  # mutable-ok: namespace tools are a JSON list
+        return [  # mutable-ok: namespace tools are a JSON list
+            OpenAIResponsesAPIConfig._flattened_tool_entry(item) if isinstance(item, dict) else item
+            for item in nested_tools
+        ]
 
     def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """
@@ -646,8 +699,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
         input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        if tools is not None:
-            response_api_optional_request_params["tools"] = tools
+        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(tools)
+        if sanitized_tools is not None:
+            response_api_optional_request_params["tools"] = sanitized_tools
         data: Final = dict(ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params))
 
         return url, data
