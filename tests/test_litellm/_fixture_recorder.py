@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import queue
 import threading
@@ -18,7 +17,7 @@ from pydantic import ValidationError
 from tests.test_litellm._json_fs_cache import JsonFileCache, canonical_json
 from tests.test_litellm.ocr.fixture_models import (
     HttpHeader,
-    MistralOcrParityInput,
+    LiteLLMOcrInput,
     OcrParityCase,
     RecordedHttpResponse,
 )
@@ -48,14 +47,6 @@ class ProviderSpec:
 class RecorderResult:
     case: OcrParityCase
     cache_hit: bool
-
-
-@dataclass(frozen=True, slots=True)
-class GeneratorArgs:
-    concurrency: int
-    examples: int
-    fixture_dir: Path | None
-    model: str
 
 
 def _excluded_headers(headers: tuple[tuple[str, str], ...]) -> frozenset[str]:
@@ -154,14 +145,14 @@ def _recording_provider(spec: ProviderSpec) -> Generator[_RecordingProvider]:
         thread.join(timeout=5)
 
 
-def fixture_cache_key(case_input: MistralOcrParityInput) -> dict[str, object]:
+def fixture_cache_key(case_input: LiteLLMOcrInput) -> dict[str, object]:
     return case_input.canonical_input()
 
 
 def record_case(
     spec: ProviderSpec,
     root: Path,
-    case_input: MistralOcrParityInput,
+    case_input: LiteLLMOcrInput,
     sdk_call: Callable[..., object],
 ) -> RecorderResult:
     cache: Final = JsonFileCache(root)
@@ -182,7 +173,7 @@ def record_case(
 def record_cases(
     spec: ProviderSpec,
     root: Path,
-    case_inputs: tuple[MistralOcrParityInput, ...],
+    case_inputs: tuple[LiteLLMOcrInput, ...],
     sdk_call: Callable[..., object],
     max_concurrency: int,
 ) -> tuple[RecorderResult, ...]:
@@ -196,21 +187,6 @@ def record_cases(
             executor.submit(record_case, spec, root, case_input, sdk_call) for case_input in unique_inputs
         )
         return tuple(future.result() for future in futures)
-
-
-def parse_generator_args() -> GeneratorArgs:
-    parser: Final = argparse.ArgumentParser()
-    parser.add_argument("--concurrency", type=int, default=4)
-    parser.add_argument("--examples", type=int, default=4)
-    parser.add_argument("--fixture-dir", type=Path)
-    parser.add_argument("--model", default="mistral/mistral-ocr-latest")
-    namespace: Final = parser.parse_args()
-    return GeneratorArgs(
-        concurrency=cast(int, namespace.concurrency),
-        examples=cast(int, namespace.examples),
-        fixture_dir=cast(Path | None, namespace.fixture_dir),
-        model=cast(str, namespace.model),
-    )
 
 
 def fixture_directory(configured: Path | None, env_value: str | None, default: Path) -> Path:
@@ -234,4 +210,7 @@ def recorded_fixtures(directory: Path) -> tuple[OcrParityCase, ...]:
 def fixture_id(fixture: OcrParityCase) -> str:
     input_json: Final = canonical_json(fixture.litellm_input.canonical_input())
     digest: Final = hashlib.sha256(input_json.encode("utf-8")).hexdigest()[:8]
-    return f"mistral-{fixture.litellm_input.model.rsplit('/', 1)[-1]}-{digest}"
+    model_id: Final = fixture.litellm_input.model.replace("/", "-")
+    provider: Final = fixture.litellm_input.custom_llm_provider
+    prefix: Final = f"{provider}-{model_id}" if provider and not model_id.startswith(f"{provider}-") else model_id
+    return f"{prefix}-{digest}"
