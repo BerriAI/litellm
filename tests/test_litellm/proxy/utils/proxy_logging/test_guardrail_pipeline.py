@@ -23,6 +23,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.utils import ProxyLogging, _raise_for_streaming_post_call_pipelines
 from litellm.types.guardrails import GuardrailEventHooks
@@ -1309,31 +1310,35 @@ async def test_pre_call_hook_rejects_background_request_with_post_call_pipeline(
     assert "background=false" in info.value.detail["error"]["message"]
 
 
-def test_raise_for_streaming_post_call_pipelines_ignores_non_streaming_and_pre_call():
+def test_raise_for_streaming_post_call_pipelines_ignores_non_streaming_and_pre_call(make_user_api_key_auth):
     post_call = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="g", on_fail="block")])
     pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="g", on_fail="block")])
+    auth = make_user_api_key_auth(request_route="/custom/stream")
 
     assert (
         _raise_for_streaming_post_call_pipelines(
-            {"stream": False, "metadata": {"_guardrail_pipelines": [("p", post_call)]}}
+            {"stream": False, "metadata": {"_guardrail_pipelines": [("p", post_call)]}}, auth
         )
         is None
     )
     assert (
         _raise_for_streaming_post_call_pipelines(
-            {"background": False, "metadata": {"_guardrail_pipelines": [("p", post_call)]}}
+            {"background": False, "metadata": {"_guardrail_pipelines": [("p", post_call)]}}, auth
         )
         is None
     )
-    assert _raise_for_streaming_post_call_pipelines({"metadata": {"_guardrail_pipelines": [("p", post_call)]}}) is None
+    assert (
+        _raise_for_streaming_post_call_pipelines({"metadata": {"_guardrail_pipelines": [("p", post_call)]}}, auth)
+        is None
+    )
     assert (
         _raise_for_streaming_post_call_pipelines(
-            {"stream": True, "metadata": {"_guardrail_pipelines": [("p", pre_call)]}}
+            {"stream": True, "metadata": {"_guardrail_pipelines": [("p", pre_call)]}}, auth
         )
         is None
     )
-    assert _raise_for_streaming_post_call_pipelines({"stream": True}) is None
-    assert _raise_for_streaming_post_call_pipelines({"background": True}) is None
+    assert _raise_for_streaming_post_call_pipelines({"stream": True}, auth) is None
+    assert _raise_for_streaming_post_call_pipelines({"background": True}, auth) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1366,15 +1371,16 @@ async def _async_chunk_iter(chunks: List[Any]):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("request_route", [None, "/v1/chat/completions"])
 async def test_pre_call_hook_allows_streaming_when_pipeline_guardrail_supports_unified(
-    proxy_logging, make_user_api_key_auth, monkeypatch
+    proxy_logging, make_user_api_key_auth, monkeypatch, request_route
 ):
     seen: Dict[str, Any] = {}
     monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen)])
     data = _post_call_pipeline_data(stream=True)
 
     out = await proxy_logging.pre_call_hook(
-        user_api_key_dict=make_user_api_key_auth(),
+        user_api_key_dict=make_user_api_key_auth(request_route=request_route),
         data=data,
         call_type="completion",
         guardrails_only=True,
@@ -1420,6 +1426,60 @@ async def test_pre_call_hook_rejects_streaming_when_pipeline_guardrail_lacks_uni
     assert info.value.status_code == 400
     assert info.value.detail["error"]["guardrails"] == ("gr-post",)
     assert "apply_guardrail" in info.value.detail["error"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rewrite_attribute, value",
+    [
+        ("mask_response_content", True),
+        ("streaming_transform_mode", "incremental_diff"),
+        ("guardrail_config", {"streaming_transform_mode": "incremental_diff"}),
+    ],
+)
+async def test_pre_call_hook_rejects_streaming_when_pipeline_guardrail_rewrites_streamed_content(
+    proxy_logging, make_user_api_key_auth, monkeypatch, rewrite_attribute, value
+):
+    seen: Dict[str, Any] = {}
+    guardrail = _unified_stream_guardrail(seen)
+    setattr(guardrail, rewrite_attribute, value)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    data = _post_call_pipeline_data(stream=True)
+
+    with pytest.raises(HTTPException) as info:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+            data=data,
+            call_type="completion",
+            guardrails_only=True,
+        )
+
+    assert info.value.status_code == 400
+    assert info.value.detail["error"]["guardrails"] == ("gr-post",)
+    assert "rewrite streamed content" in info.value.detail["error"]["message"]
+    assert seen.get("count") is None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_rejects_streaming_when_route_has_no_guardrail_translation(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen)])
+    data = _post_call_pipeline_data(stream=True)
+
+    with pytest.raises(HTTPException) as info:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/custom/stream"),
+            data=data,
+            call_type="completion",
+            guardrails_only=True,
+        )
+
+    assert info.value.status_code == 400
+    assert info.value.detail["error"]["policies"] == ("response-governance",)
+    assert "/custom/stream" in info.value.detail["error"]["message"]
+    assert seen.get("count") is None
 
 
 @pytest.mark.asyncio
@@ -1490,10 +1550,10 @@ async def test_streaming_iterator_hook_pipeline_withholds_unresolvable_response_
         ):
             delivered.append(item)
 
-    with pytest.raises(HTTPException) as info:
+    with pytest.raises(ProxyException) as info:
         await _drain()
 
     assert delivered == []
-    assert info.value.status_code == 500
-    assert "withheld" in info.value.detail["error"]["message"]
+    assert info.value.code == "500"
+    assert "withheld" in info.value.message
     assert seen.get("count") is None
