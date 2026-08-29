@@ -4,6 +4,7 @@ import logging
 import time
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
@@ -128,6 +129,8 @@ from litellm.utils import (
     _cached_get_model_info_helper,
     token_counter,
 )
+
+_EMPTY_SEARCH_COST_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -1494,6 +1497,21 @@ def completion_cost(
                 elif call_type in _SEARCH_CALL_TYPES:
                     from litellm.search import search_provider_cost_per_query
 
+                    search_response_hidden_params: object = getattr(completion_response, "_hidden_params", None)
+                    billed_results: object = (
+                        search_response_hidden_params.get("billed_results")
+                        if isinstance(search_response_hidden_params, Mapping)
+                        else None
+                    )
+                    billed_result_params: Mapping[str, object] = (
+                        MappingProxyType({"billed_results": billed_results})
+                        if billed_results is not None
+                        else MappingProxyType({})
+                    )
+                    search_cost_params: Mapping[str, object] = MappingProxyType(
+                        {**(optional_params or _EMPTY_SEARCH_COST_PARAMS), **billed_result_params}
+                    )
+
                     # Extract number_of_queries from optional_params or default to 1
                     number_of_queries = 1
                     if optional_params is not None:
@@ -1516,7 +1534,7 @@ def completion_cost(
                         model=search_model,
                         custom_llm_provider=custom_llm_provider,
                         number_of_queries=number_of_queries,
-                        optional_params=optional_params,
+                        optional_params=search_cost_params,
                     )
 
                     # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)

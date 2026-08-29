@@ -8233,12 +8233,8 @@ class Router:
             if ptu_error is not None and is_ptu_cost_attribution_enabled():
                 raise ValueError(ptu_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
-                **(
-                    _litellm_params
-                    if zeroed_pricing is None
-                    else MappingProxyType({**_litellm_params, **zeroed_pricing})
-                )
+            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(
+                _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(

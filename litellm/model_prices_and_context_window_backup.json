@@ -17425,6 +17425,15 @@
             "notes": "Nimble Search API pay-as-you-go list price: $5 per 1,000 searches, up to 100 results per search. Volume plans price differently."
         }
     },
+    "xquik/search": {
+        "input_cost_per_result": 0.00015,
+        "litellm_provider": "xquik",
+        "mode": "search",
+        "metadata": {
+            "notes": "Xquik Search pay-as-you-go list price: $10 for 66,666 credits. Search costs 1 credit per returned post. Monthly plans price credits differently."
+        },
+        "source": "https://xquik.com/en#pricing"
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",

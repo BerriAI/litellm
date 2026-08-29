@@ -268,6 +268,10 @@
           "type": "number",
           "minimum": 0
         },
+        "input_cost_per_result": {
+          "type": "number",
+          "minimum": 0
+        },
         "input_cost_per_second": {
           "type": "number",
           "minimum": 0

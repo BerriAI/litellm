@@ -2,22 +2,26 @@
 Cost calculation for search providers.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.utils import get_model_info
+
+_NO_SEARCH_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def search_provider_cost_per_query(
     model: str,
     custom_llm_provider: str | None = None,
     number_of_queries: int = 1,
-    optional_params: dict | None = None,
+    optional_params: Mapping[str, object] | None = None,
 ) -> tuple[float, float]:
     """
     Calculate cost for search-only providers.
 
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
-    Supports tiered pricing based on max_results parameter.
+    Supports tiered pricing and per-result pricing.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
@@ -29,6 +33,20 @@ def search_provider_cost_per_query(
         Tuple of (input_cost, output_cost) where output_cost is always 0.0
     """
     model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+
+    input_cost_per_result: Final = model_info.get("input_cost_per_result")
+    if input_cost_per_result is not None:
+        params: Final = optional_params or _NO_SEARCH_PARAMS
+        billed_results: Final = params.get("billed_results")
+        if isinstance(billed_results, int) and not isinstance(billed_results, bool) and billed_results >= 0:
+            return (billed_results * float(input_cost_per_result), 0.0)
+        requested_results: Final = params.get("max_results")
+        estimated_results: Final = (
+            requested_results
+            if isinstance(requested_results, int) and not isinstance(requested_results, bool) and requested_results >= 0
+            else 10
+        )
+        return (number_of_queries * estimated_results * float(input_cost_per_result), 0.0)
 
     # Check for tiered pricing (e.g., Exa AI based on max_results)
     tiered_pricing: Final = model_info.get("tiered_pricing")

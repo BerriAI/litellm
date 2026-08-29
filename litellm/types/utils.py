@@ -235,7 +235,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens_flex: float | None
     input_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
-    input_cost_per_query: float | None  # only for rerank models
+    input_cost_per_query: float | None  # only for rerank and search models
+    input_cost_per_result: ReadOnly[float | None]  # only for search models
     input_cost_per_image: float | None  # only for vertex ai models
     input_cost_per_image_token: float | None  # for gpt-image-1 and similar models
     input_cost_per_video_token: float | None  # for gemini omni models with video input
@@ -3370,6 +3371,7 @@ class MirroredPricingParams(BaseModel):
 
 class CustomPricingLiteLLMParams(MirroredPricingParams):
     ## CUSTOM PRICING ##
+    input_cost_per_result: float | None = None
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
@@ -3890,6 +3892,7 @@ class SearchProviders(str, Enum):
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
+    XQUIK = "xquik"
 
 
 # Create a set of all search provider values for quick lookup
