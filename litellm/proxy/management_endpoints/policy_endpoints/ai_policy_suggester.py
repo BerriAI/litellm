@@ -9,6 +9,7 @@ from typing import Final
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
 SUGGEST_TOOL: Final = {
     "type": "function",
@@ -60,6 +61,14 @@ class AiPolicySuggester:
         system_prompt: Final = self._build_system_prompt(templates)
         user_prompt: Final = self._build_user_prompt(attack_examples, description)
         model = model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+        supported_params: Final = litellm.get_supported_openai_params(model=model)
+        if supported_params is not None and "tools" not in supported_params:
+            raise ProxyException(
+                message=(f"AI policy suggestion requires tool calling; model '{model}' does not support it"),
+                type=ProxyErrorTypes.validation_error.value,
+                param="model",
+                code=400,
+            )
 
         try:
             response: Final = await litellm.acompletion(
