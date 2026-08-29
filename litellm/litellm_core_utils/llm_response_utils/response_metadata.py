@@ -74,7 +74,7 @@ async def prefetch_proxy_stream_for_timing(completion_response: object) -> None:
         not is_proxy_stream_header_prefetch.get()
         or is_internal_call.get()
         or not isinstance(completion_response, CustomStreamWrapper)
-        or completion_response.custom_llm_provider != "vertex_ai_beta"
+        or not completion_response.prefetch_for_proxy_stream_headers
         or completion_response.completion_stream is not None
         or completion_response.make_call is None
     ):

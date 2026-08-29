@@ -410,6 +410,17 @@ async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None
             pass
 
 
+async def _close_unowned_stream(response: object) -> None:
+    aclose: Final = getattr(response, "aclose", None)
+    if aclose is None:
+        return
+    with anyio.CancelScope(shield=True):
+        try:
+            await aclose()
+        except Exception as exc:  # noqa: BLE001
+            verbose_proxy_logger.debug("Error closing unowned response stream: %s", exc)
+
+
 @lru_cache(maxsize=512)
 def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
     try:
@@ -2320,8 +2331,6 @@ class ProxyBaseLLMRequestProcessing:
             await _cancel_pending_gather_tasks(tasks)
 
         response = responses[1]
-        response_ownership_transferred = False
-        response_requires_cleanup = False
 
         _exception_raised = False
         try:
@@ -2350,7 +2359,6 @@ class ProxyBaseLLMRequestProcessing:
             if self._is_streaming_request(
                 data=self.data, is_streaming_request=is_streaming_request
             ) or self._is_streaming_response(response):  # use generate_responses to stream responses
-                response_requires_cleanup = self._is_streaming_response(response)
                 custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
                     user_api_key_dict=user_api_key_dict,
                     call_id=logging_obj.litellm_call_id,
@@ -2434,7 +2442,6 @@ class ProxyBaseLLMRequestProcessing:
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
                     if self._is_streaming_response(response):
-                        response_ownership_transferred = True
                         if asyncio.iscoroutine(response):
                             generator = await response
                         else:
@@ -2505,7 +2512,6 @@ class ProxyBaseLLMRequestProcessing:
                             headers=custom_headers,
                             request=request,
                         )
-                        response_ownership_transferred = True
                         return anthropic_stream_response
                     # Non-streaming response - fall through to normal response handling
                 elif select_data_generator:
@@ -2538,7 +2544,6 @@ class ProxyBaseLLMRequestProcessing:
                         headers=custom_headers,
                         request=request,
                     )
-                    response_ownership_transferred = True
                     return responses_stream_response
 
             ### CALL HOOKS ### - modify outgoing data
@@ -2580,18 +2585,16 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 response=response,
             )
+        except asyncio.CancelledError:
+            if self._is_streaming_response(response):
+                await _close_unowned_stream(response)
+            raise
         except Exception:
             _exception_raised = True
+            if self._is_streaming_response(response):
+                await _close_unowned_stream(response)
             raise
         finally:
-            if response_requires_cleanup and not response_ownership_transferred:
-                aclose = getattr(response, "aclose", None)
-                if aclose is not None:
-                    with anyio.CancelScope(shield=True):
-                        try:
-                            await aclose()
-                        except Exception as exc:  # noqa: BLE001
-                            verbose_proxy_logger.debug("Error closing unowned response stream: %s", exc)
             ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
                 logging_obj=logging_obj,
                 exception_raised=_exception_raised,

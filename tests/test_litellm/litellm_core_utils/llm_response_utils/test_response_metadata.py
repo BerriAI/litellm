@@ -281,6 +281,7 @@ class TestPrefetchedStreamTiming:
             logging_obj=logging_obj,
             custom_llm_provider="vertex_ai_beta",
             make_call=AsyncMock(return_value=empty_stream()),
+            prefetch_for_proxy_stream_headers=True,
         )
 
         token = is_proxy_stream_header_prefetch.set(True)
@@ -293,14 +294,14 @@ class TestPrefetchedStreamTiming:
         assert dict(logging_obj.set_response_timing_metrics.call_args.args[0])["litellm_overhead_time_ms"] > 0
 
     @pytest.mark.asyncio
-    async def test_prefetch_does_not_open_non_vertex_stream(self):
+    async def test_prefetch_does_not_open_stream_without_capability(self):
         logging_obj = _messages_logging_obj()
         logging_obj.start_time = datetime.datetime.now() - datetime.timedelta(milliseconds=1000)
         stream = litellm.CustomStreamWrapper(
             completion_stream=None,
-            model="other-model",
+            model="gemini-3.5-flash",
             logging_obj=logging_obj,
-            custom_llm_provider="openai",
+            custom_llm_provider="vertex_ai_beta",
             make_call=AsyncMock(return_value=object()),
         )
 

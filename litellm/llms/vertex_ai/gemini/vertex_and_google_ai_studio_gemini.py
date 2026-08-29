@@ -2744,6 +2744,7 @@ class VertexLLM(VertexBase):
             model=model,
             custom_llm_provider="vertex_ai_beta",
             logging_obj=logging_obj,
+            prefetch_for_proxy_stream_headers=True,
         )
         return streaming_response
 
@@ -3026,6 +3027,7 @@ class VertexLLM(VertexBase):
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
                 logging_obj=logging_obj,
+                prefetch_for_proxy_stream_headers=True,
             )
 
             return streaming_response

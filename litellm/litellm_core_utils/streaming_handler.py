@@ -235,9 +235,11 @@ class CustomStreamWrapper:
         stream_options=None,
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
+        prefetch_for_proxy_stream_headers: bool = False,
     ):
         self.model = model
         self.make_call = make_call
+        self.prefetch_for_proxy_stream_headers = prefetch_for_proxy_stream_headers
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream

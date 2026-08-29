@@ -74,6 +74,7 @@ def _deferred_stream(provider: str = "vertex_ai_beta") -> litellm.CustomStreamWr
         logging_obj=logging_obj,
         custom_llm_provider=provider,
         make_call=AsyncMock(return_value=_EmptyAsyncStream()),
+        prefetch_for_proxy_stream_headers=provider == "vertex_ai_beta",
     )
 
 

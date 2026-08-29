@@ -96,6 +96,7 @@ async def test_async_responses_bridge_keeps_sdk_deferred_gemini_stream_lazy():
         model="gemini-3.5-flash",
         logging_obj=logging_obj,
         custom_llm_provider="vertex_ai_beta",
+        prefetch_for_proxy_stream_headers=True,
         make_call=AsyncMock(return_value=_EmptyAsyncStream()),
     )
 
@@ -123,6 +124,7 @@ async def test_async_responses_bridge_prefetches_deferred_gemini_stream_for_prox
         model="gemini-3.5-flash",
         logging_obj=logging_obj,
         custom_llm_provider="vertex_ai_beta",
+        prefetch_for_proxy_stream_headers=True,
         make_call=AsyncMock(return_value=_EmptyAsyncStream()),
     )
     token = is_proxy_stream_header_prefetch.set(True)
@@ -153,6 +155,7 @@ async def test_async_responses_bridge_does_not_prefetch_already_connected_gemini
         model="gemini-3.5-flash",
         logging_obj=logging_obj,
         custom_llm_provider="vertex_ai_beta",
+        prefetch_for_proxy_stream_headers=True,
         make_call=AsyncMock(return_value=_EmptyAsyncStream()),
     )
     token = is_proxy_stream_header_prefetch.set(True)
@@ -182,6 +185,7 @@ async def test_async_responses_bridge_closes_prefetched_gemini_stream_on_early_c
         model="gemini-3.5-flash",
         logging_obj=logging_obj,
         custom_llm_provider="vertex_ai_beta",
+        prefetch_for_proxy_stream_headers=True,
         make_call=AsyncMock(return_value=upstream),
     )
     token = is_proxy_stream_header_prefetch.set(True)
@@ -217,6 +221,7 @@ async def test_async_responses_bridge_propagates_initial_fetch_failure():
         model="gemini-3.5-flash",
         logging_obj=logging_obj,
         custom_llm_provider="vertex_ai_beta",
+        prefetch_for_proxy_stream_headers=True,
         make_call=AsyncMock(side_effect=expected_error),
     )
     token = is_proxy_stream_header_prefetch.set(True)
