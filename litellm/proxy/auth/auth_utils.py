@@ -33,6 +33,43 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
 
+INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
+_INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
+
+
+def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
+    """True when an authentication error rejects a malformed virtual key."""
+    if not isinstance(exception, (HTTPException, ProxyException)):
+        return False
+
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    if str(status_code) != str(status.HTTP_401_UNAUTHORIZED):
+        return False
+
+    if getattr(exception, _INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True:
+        return True
+
+    message: Final = getattr(exception, "detail", None) or getattr(exception, "message", "")
+    return INVALID_VIRTUAL_KEY_ERROR_MESSAGE in str(message)
+
+
+def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual_key: bool) -> ProxyException:
+    """Return an independently marked malformed-key exception after callback transformations."""
+    if not is_invalid_virtual_key or str(exception.code) != str(status.HTTP_401_UNAUTHORIZED):
+        return exception
+    marked_exception: Final = ProxyException(
+        message=exception.message,
+        type=exception.type,
+        param=exception.param,
+        code=exception.code,
+        headers=exception.headers.copy(),
+        openai_code=None if exception.openai_code is None else str(exception.openai_code),
+        provider_specific_fields=exception.provider_specific_fields,
+    )
+    setattr(marked_exception, _INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+    return marked_exception
+
 
 def _get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
     client_ip = None

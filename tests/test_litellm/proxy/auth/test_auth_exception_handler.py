@@ -705,21 +705,28 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "auth_error,expect_traceback",
+    "auth_error,expect_traceback,expect_level",
     [
         pytest.param(
             ProxyException(
                 message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401
             ),
             False,
+            "ERROR",
             id="expected_401_no_traceback",
         ),
-        pytest.param(ValueError("unexpected internal error"), True, id="unexpected_error_keeps_traceback"),
+        pytest.param(ValueError("unexpected internal error"), True, "ERROR", id="unexpected_error_keeps_traceback"),
+        pytest.param(
+            HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test"),
+            False,
+            "WARNING",
+            id="malformed_virtual_key_warning_no_traceback",
+        ),
     ],
 )
-async def test_handle_authentication_error_traceback_only_for_unexpected_errors(auth_error, expect_traceback, caplog):
+async def test_handle_authentication_error_traceback_only_for_unexpected_errors(auth_error, expect_traceback, expect_level, caplog):
     """Regression for LIT-6043: expected 4xx auth rejections must not format a
-    traceback via logger.exception; unexpected errors must keep it."""
+    traceback via logger.exception; malformed virtual keys log at WARNING."""
     handler = UserAPIKeyAuthExceptionHandler()
 
     with (
@@ -740,8 +747,8 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
         try:
             try:
                 raise auth_error
-            except (ProxyException, ValueError) as caught:
-                with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+            except (ProxyException, ValueError, HTTPException) as caught:
+                with caplog.at_level(expect_level, logger="LiteLLM Proxy"), pytest.raises((ProxyException, HTTPException)):
                     await handler._handle_authentication_error(
                         caught,
                         MagicMock(),
@@ -756,3 +763,6 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
     records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert (records[0].exc_info is not None) is expect_traceback
+    assert records[0].levelname == expect_level
+    expected_logger_name = "LiteLLM Proxy.stdout" if expect_level == "WARNING" else "LiteLLM Proxy"
+    assert records[0].name == expected_logger_name

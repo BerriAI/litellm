@@ -19,6 +19,7 @@ import fastapi
 import orjson
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from starlette.exceptions import WebSocketException
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -60,11 +61,13 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.auth_utils import (
+    INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     abbreviate_api_key,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
     get_request_route_template,
+    is_invalid_virtual_key_error,
     iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
@@ -539,6 +542,8 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     try:
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
+        if is_invalid_virtual_key_error(e):
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
         verbose_proxy_logger.exception(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
@@ -1870,7 +1875,7 @@ async def _user_api_key_auth_builder(
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail=(
-                            f"LiteLLM Virtual Key expected. Received={_masked_key}, "
+                            f"{INVALID_VIRTUAL_KEY_ERROR_MESSAGE}. Received={_masked_key}, "
                             f"expected to start with 'sk-'.{_hint}"
                         ),
                     )  # prevent token hashes from being used
