@@ -241,6 +241,7 @@ class Litellm_EntityType(enum.Enum):
     PROJECT = "project"
     TAG = "tag"
     AGENT = "agent"
+    ACCESS_GROUP = "access_group"
 
     # global proxy level entity
     PROXY = "proxy"
@@ -2886,6 +2887,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    matched_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
     created_by_user: Any | None = None  # Expanded created_by user when expand=user is used
@@ -4918,6 +4920,7 @@ class DBSpendUpdateTransactions(TypedDict):
     org_list_transactions: dict[str, float] | None
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
+    access_group_list_transactions: dict[str, float] | None
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):
