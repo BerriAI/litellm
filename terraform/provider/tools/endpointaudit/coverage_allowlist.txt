@@ -35,6 +35,7 @@ GET /user/spend/report
 
 # Admin UI helper endpoints; serve UI forms and caller-scoped views, not desired state
 GET /budget/settings
+GET /credentials/{credential_name}/jwks
 GET /router/fields
 GET /guardrails/ui/add_guardrail_settings
 GET /guardrails/ui/category_yaml/{category_name}
