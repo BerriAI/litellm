@@ -978,6 +978,79 @@ async def test_post_call_pipeline_managed_default_on_guardrail_runs_exactly_once
 
 
 @pytest.mark.asyncio
+async def test_post_call_hook_still_runs_guardrail_managed_only_by_pre_call_pipeline(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {"count": 0}
+
+    class DualStageGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            seen["count"] += 1
+            return None
+
+    pre_call_pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="gr-dual", on_pass="allow", on_fail="block")],
+    )
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [DualStageGuardrail(guardrail_name="gr-dual", event_hook=["pre_call", "post_call"], default_on=True)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "_guardrail_pipelines": [("request-governance", pre_call_pipeline)],
+            "_pipeline_managed_guardrails": {"gr-dual"},
+        },
+    }
+
+    await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert seen["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_still_runs_guardrail_managed_only_by_post_call_pipeline(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {"count": 0}
+
+    class DualStageGuardrail(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            seen["count"] += 1
+            return data
+
+    post_call_pipeline = GuardrailPipeline(
+        mode="post_call",
+        steps=[PipelineStep(guardrail="gr-dual", on_pass="allow", on_fail="block")],
+    )
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [DualStageGuardrail(guardrail_name="gr-dual", event_hook=["pre_call", "post_call"], default_on=True)],
+    )
+    data = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "_guardrail_pipelines": [("response-governance", post_call_pipeline)],
+            "_pipeline_managed_guardrails": {"gr-dual"},
+        },
+    }
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(), data=data, call_type="completion"
+    )
+
+    assert seen["count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_post_call_pipeline_replacement_response_reaches_caller(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
