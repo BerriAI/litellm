@@ -266,7 +266,7 @@ class SpendCounterReseed:
                     }
                 }
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # any read failure (DB, stale prisma client) must degrade to the aggregate path
             verbose_proxy_logger.exception(
                 "SpendCounterReseed.window_from_table: failed for %s=%s window=%s",
                 entity_type,
