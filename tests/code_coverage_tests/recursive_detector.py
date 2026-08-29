@@ -57,6 +57,7 @@ IGNORE_FUNCTIONS = [
     "_filter_argument_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by blocking the tool call at the cap.
     "_redact_scanned_content",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning "[REDACTED]" at the cap.
     "_iter_fallback_targets",  # max depth set (2 * ROUTER_MAX_FALLBACKS); fails closed by raising ValueError at the cap.
+    "_mergeable_branch",  # max depth set (_MAX_SCHEMA_FLATTEN_DEPTH=32) plus a seen_refs cycle guard; passes the schema through untouched at the cap.
     "json_string_leaves",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); fails closed by raising at the cap so nothing goes unscanned.
     "with_json_string_leaves",  # transitively bounded: only runs on a tree json_string_leaves already walked under the cap.
     "json_unrewritable_labels",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); returns the None sentinel at the cap so the caller blocks.

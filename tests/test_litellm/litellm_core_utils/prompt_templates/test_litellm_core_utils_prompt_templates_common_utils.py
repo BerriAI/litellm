@@ -1360,6 +1360,50 @@ class TestFlattenTopLevelSchemaCombinators:
         assert "anyOf" not in flatten_top_level_schema_combinators(shallow)
         assert flatten_top_level_schema_combinators(deep) is deep
 
+    @pytest.mark.parametrize(
+        "branches",
+        [
+            [{"required": ["enabled"]}, {"required": ["schedule"]}],
+            [{"type": "object", "required": ["enabled"]}, {"type": "object", "required": ["schedule"]}],
+        ],
+    )
+    def test_typeless_root_with_properties_flattens_branches_without_properties(self, branches):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}, "schedule": {"type": "string"}},
+            "required": ["id"],
+            "anyOf": branches,
+        }
+
+        result = flatten_top_level_schema_combinators(schema)
+
+        assert "anyOf" not in result
+        assert result["type"] == "object"
+        assert set(result["properties"]) == {"id", "enabled", "schedule"}
+        assert result["required"] == ["id"]
+
+    def test_typeless_root_flattens_typed_object_branches_without_properties(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        schema = {
+            "anyOf": [
+                {"type": "object", "properties": {"id": {"type": "string"}}},
+                {"type": "object", "required": ["id"]},
+            ]
+        }
+
+        result = flatten_top_level_schema_combinators(schema)
+
+        assert "anyOf" not in result
+        assert result["type"] == "object"
+        assert result["properties"] == {"id": {"type": "string"}}
+        assert "required" not in result
+
     def test_non_object_union_passes_through_unchanged(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             flatten_top_level_schema_combinators,
