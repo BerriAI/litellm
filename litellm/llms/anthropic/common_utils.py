@@ -1302,6 +1302,39 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok:
     return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
 
 
+def _normalized_cache_control(cache_control: dict) -> dict:  # mutable-ok: as sibling sanitizers
+    cache_type: Final = cache_control.get("type")
+    return {"type": cache_type if isinstance(cache_type, str) else "ephemeral"}  # mutable-ok: JSON wire format
+
+
+def _normalize_cache_control_value(value: object) -> object:
+    if isinstance(value, dict):
+        return normalize_cache_control_in_anthropic_payload(value)
+    if isinstance(value, list):
+        return [_normalize_cache_control_value(item) for item in value]  # mutable-ok: JSON wire format
+    return value
+
+
+def normalize_cache_control_in_anthropic_payload(payload: dict) -> dict:  # mutable-ok: as sibling sanitizers
+    """
+    Return a copy of an Anthropic /v1/messages payload with every
+    ``cache_control`` entry reduced to ``{"type": <its type, or "ephemeral">}``,
+    recursing through message content blocks, system blocks, and tools.
+
+    Anthropic itself accepts prompt-caching extensions such as ``ttl``, but
+    strict non-Anthropic implementations of the Messages API validate the field
+    literally and reject the whole request (``cache_control.ttl: 1h is not
+    supported``, ``cache_control.type is required``), which 400s clients like
+    Claude Code that always send cache hints. Non-dict ``cache_control`` values
+    are dropped entirely. The caller's payload is never mutated.
+    """
+    return {  # mutable-ok: JSON wire format, as sibling sanitizers
+        key: _normalized_cache_control(value) if key == "cache_control" else _normalize_cache_control_value(value)
+        for key, value in payload.items()
+        if key != "cache_control" or isinstance(value, dict)
+    }
+
+
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     openai_headers: Final = {}
     if "anthropic-ratelimit-requests-limit" in headers:
