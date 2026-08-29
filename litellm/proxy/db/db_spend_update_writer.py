@@ -56,6 +56,10 @@ from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdate
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
 )
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    WindowSpendTransaction,
+    WindowSpendUpdateQueue,
+)
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
@@ -195,6 +199,7 @@ class DBSpendUpdateWriter:
         self.daily_agent_spend_update_queue = DailySpendUpdateQueue()
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
+        self.window_spend_update_queue = WindowSpendUpdateQueue()
 
     async def update_database(
         # LiteLLM management object fields
@@ -210,7 +215,11 @@ class DBSpendUpdateWriter:
         start_time: datetime | None,
         end_time: datetime | None,
         response_cost: float | None,
-    ):
+    ) -> str | None:
+        """Returns the LiteLLM_SpendLogs request_id this call was recorded
+        under, so the caller can tell the budget-window writer which log rows
+        its increments already cover. None when the payload could not be built.
+        """
         from litellm.proxy.proxy_server import (
             disable_spend_logs,
             litellm_proxy_budget_name,
@@ -227,7 +236,7 @@ class DBSpendUpdateWriter:
                 team_id,
             )
             if ProxyUpdateSpend.disable_spend_updates() is True:
-                return
+                return None
             if token is not None and isinstance(token, str) and token.startswith("sk-"):
                 hashed_token = hash_token(token=token)
             else:
@@ -301,6 +310,7 @@ class DBSpendUpdateWriter:
             )
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
+            return payload.get("request_id")
         except Exception:
             spend_log_error(
                 "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
@@ -313,6 +323,7 @@ class DBSpendUpdateWriter:
                 org_id,
                 end_user_id,
             )
+            return None
 
     async def _enqueue_tool_usage_transaction(
         self,
@@ -999,6 +1010,7 @@ class DBSpendUpdateWriter:
             daily_org_spend_update_queue=self.daily_org_spend_update_queue,
             daily_end_user_spend_update_queue=self.daily_end_user_spend_update_queue,
             daily_agent_spend_update_queue=self.daily_agent_spend_update_queue,
+            window_spend_update_queue=self.window_spend_update_queue,
         )
 
         # Only commit from redis to db if this pod is the leader
@@ -1017,6 +1029,7 @@ class DBSpendUpdateWriter:
                     daily_org_spend_update_transactions,
                     daily_end_user_spend_update_transactions,
                     daily_agent_spend_update_transactions,
+                    window_spend_update_transactions,
                 ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
                 uncommitted = {  # mutable-ok: drives which popped categories still need re-queuing
@@ -1026,6 +1039,7 @@ class DBSpendUpdateWriter:
                     "daily_org_spend_update_transactions": daily_org_spend_update_transactions,
                     "daily_end_user_spend_update_transactions": daily_end_user_spend_update_transactions,
                     "daily_agent_spend_update_transactions": daily_agent_spend_update_transactions,
+                    "window_spend_update_transactions": window_spend_update_transactions,
                 }
 
                 if db_spend_update_transactions is not None:
@@ -1095,6 +1109,12 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_agent_spend_update_transactions,
                     )
                 uncommitted.pop("daily_agent_spend_update_transactions", None)
+                if window_spend_update_transactions is not None:
+                    await DBSpendUpdateWriter._commit_window_spend_updates(
+                        prisma_client=prisma_client,
+                        window_spend_transactions=window_spend_update_transactions,
+                    )
+                uncommitted.pop("window_spend_update_transactions", None)
             except Exception as e:
                 spend_log_error(
                     "Spend tracking - failed to commit spend updates from Redis to DB. "
@@ -1210,6 +1230,27 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_agent_spend_update_transactions,
         )
 
+        ################## Budget Window Spend Update Transactions ##################
+        # Aggregate all in memory budget window spend transactions and commit to db
+        window_spend_update_transactions: Final = (
+            await self.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+        )
+
+        try:
+            await DBSpendUpdateWriter._commit_window_spend_updates(
+                prisma_client=prisma_client,
+                window_spend_transactions=window_spend_update_transactions,
+            )
+        except Exception as e:  # noqa: BLE001  # the increments go back on the queue; the rest of the flush must run
+            spend_log_error(
+                "Spend tracking - failed to commit budget window spend updates. "
+                "Re-queued %d window increments for retry on next tick. Error: %s",
+                len(window_spend_update_transactions),
+                str(e),
+                exc=e,
+            )
+            await self.window_spend_update_queue.update_queue.put(window_spend_update_transactions)
+
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
 
@@ -1273,6 +1314,28 @@ class DBSpendUpdateWriter:
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
                 )
+
+    @staticmethod
+    async def _commit_window_spend_updates(
+        prisma_client: PrismaClient,
+        window_spend_transactions: Sequence[WindowSpendTransaction],
+    ) -> None:
+        """
+        Commit per-budget-window spend increments to LiteLLM_BudgetWindowSpend.
+
+        Raises on failure so the caller re-queues the increments: budget
+        enforcement trusts a current row without reconciling it against
+        LiteLLM_SpendLogs, so a dropped increment would let the entity spend
+        past its window limit after the next counter reseed.
+        """
+        from litellm.proxy.db.budget_window_spend_writer import (
+            commit_window_spend_updates,
+        )
+
+        await commit_window_spend_updates(
+            prisma_client=prisma_client,
+            transactions=window_spend_transactions,
+        )
 
     async def _drain_and_commit_daily_tag_spend_from_redis(
         self,

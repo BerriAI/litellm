@@ -833,6 +833,7 @@ def _make_reset_budget_windows_job(
         raise AssertionError(f"Unexpected query_raw call: {query}")
 
     prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
+    prisma_client.db.execute_raw = AsyncMock(return_value=1)
     prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
     prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
 
@@ -901,6 +902,145 @@ def test_reset_budget_windows_resets_expired_key_window(monkeypatch):
     assert new_reset_at > now
 
     # The spend counter for this key+window was cleared.
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-expired:window:1d", value=0.0)
+
+
+def _window_spend_rolls(prisma_client):
+    return [
+        call.args
+        for call in prisma_client.db.execute_raw.await_args_list
+        if "LiteLLM_BudgetWindowSpend" in call.args[0]
+    ]
+
+
+def test_reset_budget_windows_rolls_the_key_window_spend_row(monkeypatch):
+    """The maintained per-window total has to start the new window at zero
+    alongside the counter, or enforcement keeps reading the old window's spend."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=5)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-expired",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+
+    asyncio.run(job.reset_budget_windows())
+
+    rolls = _window_spend_rolls(prisma_client)
+    assert len(rolls) == 1
+    query, entity_type, entity_id, window_duration, new_window_start, _updated_at = rolls[0]
+    assert (entity_type, entity_id, window_duration) == ("key", "sk-expired", "1d")
+    assert "spend = 0" in " ".join(query.split())
+
+    # window_start is the start of the window that just began: new reset_at minus the duration.
+    written_windows = json.loads(
+        prisma_client.db.litellm_verificationtoken.update.await_args.kwargs["data"]["budget_limits"]
+    )
+    new_reset_at = datetime.fromisoformat(written_windows[0]["reset_at"].replace("Z", "+00:00")).replace(tzinfo=None)
+    assert new_window_start == pytest.approx(
+        new_reset_at - timedelta(days=1),
+        abs=timedelta(seconds=1),
+    )
+
+
+def test_reset_budget_windows_roll_is_conditional_on_an_older_stored_window(monkeypatch):
+    """Another pod may already have rolled the row; clobbering it would drop
+    spend that landed under the new window."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=5)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-expired",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+
+    asyncio.run(job.reset_budget_windows())
+
+    query = " ".join(_window_spend_rolls(prisma_client)[0][0].split())
+    assert "AND window_start < ($4::timestamptz AT TIME ZONE 'UTC')" in query
+
+
+def test_reset_budget_windows_rolls_the_team_window_spend_row(monkeypatch):
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+
+    team_rows = [
+        {
+            "team_id": "team-expired",
+            "budget_limits": [{"budget_duration": "30d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=[], team_rows=team_rows)
+
+    asyncio.run(job.reset_budget_windows())
+
+    rolls = _window_spend_rolls(prisma_client)
+    assert len(rolls) == 1
+    assert rolls[0][1:4] == ("team", "team-expired", "30d")
+
+
+def test_reset_budget_windows_does_not_roll_an_unexpired_window(monkeypatch):
+    now = datetime.utcnow()
+    future = (now + timedelta(hours=1)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-future",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": future}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+
+    asyncio.run(job.reset_budget_windows())
+
+    assert _window_spend_rolls(prisma_client) == []
+
+
+def test_reset_budget_windows_rolls_only_the_expired_window_of_a_key(monkeypatch):
+    now = datetime.utcnow()
+    key_rows = [
+        {
+            "token": "sk-mixed",
+            "budget_limits": [
+                {"budget_duration": "1d", "reset_at": (now - timedelta(minutes=5)).isoformat() + "Z"},
+                {"budget_duration": "30d", "reset_at": (now + timedelta(days=2)).isoformat() + "Z"},
+            ],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+
+    asyncio.run(job.reset_budget_windows())
+
+    rolls = _window_spend_rolls(prisma_client)
+    assert [roll[3] for roll in rolls] == ["1d"]
+
+
+def test_reset_budget_windows_survives_a_failed_window_spend_roll(monkeypatch):
+    """The row is an optimization over aggregating LiteLLM_SpendLogs; a DB
+    failure there must not stop the counter reset from being persisted."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=5)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-expired",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+    prisma_client.db.execute_raw = AsyncMock(side_effect=Exception("connection reset"))
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
     spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-expired:window:1d", value=0.0)
 
 
