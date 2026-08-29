@@ -89,13 +89,13 @@ async def _handle_completed_batch(
             usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
             models=[],  # mutable-ok: no output file means no model was ever priced; BatchCostUsageResult.models requires list[str]
             successful_requests=0,
-            failed_requests=await _count_error_file_failed_requests(
+            failed_requests=await count_error_file_failed_requests(
                 batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
             ),
         )
 
     file_content = await _fetch_batch_output_file_content(batch, custom_llm_provider, litellm_params=litellm_params)
-    error_file_failed_requests: Final = await _count_error_file_failed_requests(
+    error_file_failed_requests: Final = await count_error_file_failed_requests(
         batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
     )
 
@@ -450,7 +450,7 @@ async def _fetch_batch_output_file_content(
     )
 
 
-async def _count_error_file_failed_requests(
+async def count_error_file_failed_requests(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     litellm_params: dict | None,
