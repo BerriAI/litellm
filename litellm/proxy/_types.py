@@ -3574,6 +3574,8 @@ class SpendLogsMetadata(TypedDict):
     status: StandardLoggingPayloadStatus
     proxy_server_request: str | None
     batch_models: list[str] | None
+    batch_successful_requests: int | None  # writable-ok: built by assignment like every sibling key in this TypedDict
+    batch_failed_requests: int | None  # writable-ok: built by assignment like every sibling key in this TypedDict
     error_information: StandardLoggingPayloadErrorInformation | None
     usage_object: dict | None
     model_map_information: StandardLoggingModelInformation | None
