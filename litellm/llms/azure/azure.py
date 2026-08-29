@@ -846,6 +846,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_key: str,
         data: dict,
         headers: dict,
+        deployment_name: str | None = None,
     ) -> httpx.Response:
         """
         Implemented for azure dall-e-2 image gen calls
@@ -957,7 +958,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
-        request_json: Final = azure_deployment_image_generation_json_body(api_base, data)
+        request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
         return await async_handler.post(
             url=api_base,
             json=request_json,
@@ -973,6 +974,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_key: str,
         data: dict,
         headers: dict,
+        deployment_name: str | None = None,
     ) -> httpx.Response:
         """
         Implemented for azure dall-e-2 image gen calls
@@ -1073,7 +1075,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
-        request_json: Final = azure_deployment_image_generation_json_body(api_base, data)
+        request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
         return sync_handler.post(
             url=api_base,
             json=request_json,
@@ -1176,6 +1178,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_key=api_key,
                 data=data,
                 headers=headers,
+                deployment_name=model,
             )
 
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
@@ -1311,6 +1314,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_key=api_key or "",
                 data=data,
                 headers=headers,
+                deployment_name=model,
             )
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
             if isinstance(provider_config, AzureFoundryMAIImageGenerationConfig):
