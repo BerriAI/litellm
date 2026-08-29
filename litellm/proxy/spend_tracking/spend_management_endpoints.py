@@ -2625,7 +2625,7 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{error_message}%")
             p += 1
 
-        if group_by_session and not is_v2 and not is_request_id_lookup and sort_by == "startTime":
+        if group_by_session is True and not is_v2 and not is_request_id_lookup and sort_by == "startTime":
             return await _ui_session_grouped_spend_logs(
                 prisma_client=prisma_client,
                 sql_conditions=sql_conditions,
