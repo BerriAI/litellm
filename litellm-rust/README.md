@@ -55,3 +55,14 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+## Serialization Benchmark
+
+The Python bridge benchmark compares its former JSON-string round trip with the
+typed `pythonize` boundary using a 4 MiB OCR image payload in both directions.
+The benchmark disables the extension-module feature so its executable links the
+host Python interpreter normally.
+
+```bash
+cargo bench -p litellm-python-bridge --no-default-features --bench serialization
+```

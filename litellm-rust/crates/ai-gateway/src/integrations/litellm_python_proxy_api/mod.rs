@@ -41,7 +41,7 @@ impl LiteLLMPythonProxyAPILogger {
             base.trim_end_matches('/'),
             RUST_CONTROL_PLANE_LOGS_PATH
         );
-        let client = Client::new();
+        let client = litellm_core::http_utils::http_client().clone();
         tokio::spawn(worker_loop(
             receiver,
             client,

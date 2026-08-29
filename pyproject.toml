@@ -169,6 +169,7 @@ litellm-proxy = "litellm.proxy.client.cli:cli"
 [dependency-groups]
 dev = [
     "diff-cover==9.7.2",
+    "hypothesis==6.165.10",
     "basedpyright==1.39.7",
     "keyring==25.7.0",
     "pytest==9.0.3",

@@ -1,0 +1,5 @@
+disallowed-methods = [
+    { path = "reqwest::Client::new", reason = "reuse a shared client from http_utils so connections and TLS sessions stay pooled" },
+    { path = "reqwest::ClientBuilder::build", reason = "construct and cache HTTP clients only in http_utils" },
+    { path = "base64::Engine::encode", reason = "append with encode_string into a pre-sized destination instead of allocating an intermediate string" },
+]

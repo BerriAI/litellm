@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -72,17 +73,47 @@ impl CallbackTiming {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct CallbackValue {
-    pub object: String,
-    pub value: Value,
+pub enum CallbackPayload<'a> {
+    Borrowed(&'a Value),
+    Shared(Arc<Value>),
 }
 
-impl CallbackValue {
+#[derive(Clone, Debug, PartialEq)]
+pub struct CallbackValue<'a> {
+    pub object: String,
+    pub value: CallbackPayload<'a>,
+}
+
+impl std::ops::Deref for CallbackPayload<'_> {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(value) => value,
+            Self::Shared(value) => value,
+        }
+    }
+}
+
+impl CallbackValue<'static> {
     pub fn new(object: impl Into<String>, value: Value) -> Self {
+        CallbackValue {
+            object: object.into(),
+            value: CallbackPayload::Shared(Arc::new(value)),
+        }
+    }
+}
+
+impl<'a> CallbackValue<'a> {
+    pub fn borrowed(object: impl Into<String>, value: &'a Value) -> Self {
         Self {
             object: object.into(),
-            value,
+            value: CallbackPayload::Borrowed(value),
         }
+    }
+
+    pub fn value(&self) -> &Value {
+        &self.value
     }
 }
 
@@ -196,5 +227,32 @@ impl LogError {
             Self::ChannelFull => "ChannelFull",
             Self::ChannelClosed => "ChannelClosed",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn borrowed_callback_value_does_not_copy_payload() {
+        let value = json!({"pages": [{"image_base64": "large-payload"}]});
+        let callback = CallbackValue::borrowed("ocr", &value);
+
+        assert!(std::ptr::eq(callback.value(), &value));
+    }
+
+    #[test]
+    fn owned_callback_clones_share_payload() {
+        let callback = CallbackValue::new("ocr", json!({"pages": []}));
+        let clone = callback.clone();
+
+        let (CallbackPayload::Shared(value), CallbackPayload::Shared(clone)) =
+            (&callback.value, &clone.value)
+        else {
+            panic!("owned callback values should use shared storage");
+        };
+        assert!(Arc::ptr_eq(value, clone));
     }
 }

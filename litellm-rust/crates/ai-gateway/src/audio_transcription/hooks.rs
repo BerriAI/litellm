@@ -170,7 +170,7 @@ impl CallInterceptor<AudioTranscriptionCall> for AudioTranscriptionCallbackInter
                         &ModelCallDetails::from_standard_logging_payload(
                             self.logging_payload(context, timing),
                         ),
-                        &CallbackValue::new("audio_transcription", response.clone()),
+                        &CallbackValue::borrowed("audio_transcription", response),
                         CallbackTiming::new(timing.start_time, timing.end_time),
                     )
                     .await;

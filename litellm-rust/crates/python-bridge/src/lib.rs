@@ -19,6 +19,9 @@ use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
 
 mod gil;
+mod marshal;
+
+use marshal::{from_py, to_py};
 
 pyo3::create_exception!(
     _native,
@@ -41,35 +44,18 @@ type MarshaledOcrInputs = (
     Option<Duration>,
 );
 
-fn py_to_json(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Value> {
-    let json = py.import("json")?;
-    let encoded: String = json.call_method1("dumps", (value,))?.extract()?;
-    serde_json::from_str(&encoded).map_err(|err| PyValueError::new_err(err.to_string()))
-}
-
-fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
-    let json = py.import("json")?;
-    let encoded =
-        serde_json::to_string(&value).map_err(|err| PyValueError::new_err(err.to_string()))?;
-    Ok(json.call_method1("loads", (encoded,))?.unbind())
-}
-
 fn messages_response_to_py(
     py: Python<'_>,
     response: AnthropicMessagesResponse,
 ) -> PyResult<Py<PyAny>> {
-    let value =
-        serde_json::to_value(response).map_err(|err| PyValueError::new_err(err.to_string()))?;
-    json_to_py(py, value)
+    to_py(py, &response)
 }
 
 fn chat_completions_response_to_py(
     py: Python<'_>,
     response: ChatCompletionsResponse,
 ) -> PyResult<Py<PyAny>> {
-    let value =
-        serde_json::to_value(response).map_err(|err| PyValueError::new_err(err.to_string()))?;
-    json_to_py(py, value)
+    to_py(py, &response)
 }
 
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
@@ -116,7 +102,7 @@ fn optional_object_to_map(
     value: Option<Py<PyAny>>,
 ) -> PyResult<Map<String, Value>> {
     match value {
-        Some(value) => match py_to_json(py, value.bind(py))? {
+        Some(value) => match from_py(value.bind(py))? {
             Value::Object(map) => Ok(map),
             _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
         },
@@ -139,7 +125,7 @@ fn marshal_headers(
     headers: Option<Py<PyAny>>,
 ) -> PyResult<HashMap<String, String>> {
     let value = match headers {
-        Some(headers) => py_to_json(py, headers.bind(py))?,
+        Some(headers) => from_py(headers.bind(py))?,
         None => Value::Object(Map::new()),
     };
     let Value::Object(headers) = value else {
@@ -211,8 +197,7 @@ fn marshal_inputs(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<MarshaledOcrInputs> {
-    let document = py_to_json(py, document.bind(py))?;
-    let document = serde_json::from_value::<OcrDocument>(document)
+    let document = from_py::<OcrDocument>(document.bind(py))
         .map_err(|error| PyValueError::new_err(format!("invalid OCR document: {error}")))?;
     let extra_headers = match extra_headers {
         Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
@@ -261,7 +246,7 @@ fn ocr(
     });
 
     match result {
-        Ok(value) => json_to_py(py, value),
+        Ok(value) => to_py(py, &value),
         Err(err) => Err(core_error_to_pyerr(err)),
     }
 }
@@ -303,7 +288,7 @@ fn aocr(
         .await
         .map_err(core_error_to_pyerr)?;
 
-        Python::attach(|py| json_to_py(py, value))
+        Python::attach(|py| to_py(py, &value))
     })
 }
 
@@ -321,7 +306,7 @@ fn transcription(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
-    let audio = py_to_json(py, audio.bind(py))?;
+    let audio = from_py(audio.bind(py))?;
     let extra_headers = match extra_headers {
         Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
         None => None,
@@ -344,7 +329,7 @@ fn transcription(
         ))
     });
     match result {
-        Ok(value) => json_to_py(py, value),
+        Ok(value) => to_py(py, &value),
         Err(err) => Err(core_error_to_pyerr(err)),
     }
 }
@@ -363,7 +348,7 @@ fn atranscription(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Bound<'_, PyAny>> {
-    let audio = py_to_json(py, audio.bind(py))?;
+    let audio = from_py(audio.bind(py))?;
     let extra_headers = match extra_headers {
         Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
         None => None,
@@ -384,7 +369,7 @@ fn atranscription(
         })
         .await
         .map_err(core_error_to_pyerr)?;
-        Python::attach(|py| json_to_py(py, value))
+        Python::attach(|py| to_py(py, &value))
     })
 }
 
@@ -396,7 +381,7 @@ fn marshal_messages_inputs(
     extra_headers: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<MarshaledMessagesInputs> {
-    let body = py_to_json(py, body.bind(py))?;
+    let body: Value = from_py(body.bind(py))?;
     if !body.is_object() {
         return Err(PyValueError::new_err("body must be a dict"));
     }
@@ -488,7 +473,7 @@ fn marshal_chat_completions_inputs(
     extra_headers: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<MarshaledChatCompletionsInputs> {
-    let messages = py_to_json(py, messages.bind(py))?;
+    let messages: Value = from_py(messages.bind(py))?;
     if !messages.is_array() {
         return Err(PyValueError::new_err("messages must be a list"));
     }
@@ -517,7 +502,7 @@ fn chat_completions_decline(
     optional_params: Option<Py<PyAny>>,
     custom_llm_provider: Option<String>,
 ) -> PyResult<Option<String>> {
-    let messages = py_to_json(py, messages.bind(py))?;
+    let messages = from_py(messages.bind(py))?;
     let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
     Ok(chat_completions_decline_reason(
         &model,

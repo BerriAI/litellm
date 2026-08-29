@@ -162,14 +162,20 @@ fn deepseek_model_name(model: &str) -> String {
     }
 }
 
-fn first_choice_content(response: &Value) -> Result<Value, UpstreamError> {
-    response
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .cloned()
+fn first_choice_content(response: &mut Map<String, Value>) -> Result<Value, UpstreamError> {
+    let content = match response.remove("choices") {
+        Some(Value::Array(choices)) => choices.into_iter().next(),
+        _ => None,
+    }
+    .and_then(|choice| match choice {
+        Value::Object(mut choice) => choice.remove("message"),
+        _ => None,
+    })
+    .and_then(|message| match message {
+        Value::Object(mut message) => message.remove("content"),
+        _ => None,
+    });
+    content
         .filter(|content| match content {
             Value::String(value) => !value.is_empty(),
             Value::Object(_) => true,
@@ -178,31 +184,38 @@ fn first_choice_content(response: &Value) -> Result<Value, UpstreamError> {
         .ok_or_else(|| UpstreamError::InvalidResponse("No content in DeepSeek OCR response".into()))
 }
 
-fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> Value {
+fn ocr_data_from_content(content: Value, model: &str) -> (Value, Option<String>) {
     match content {
         Value::String(content) => {
             if content.trim_start().starts_with('{') {
-                serde_json::from_str(&content).unwrap_or_else(|_| {
+                match serde_json::from_str(&content) {
+                    Ok(parsed) => (parsed, Some(content)),
+                    Err(_) => (
+                        json!({
+                            "pages": [{"index": 0, "markdown": content}],
+                            "model": model,
+                        }),
+                        None,
+                    ),
+                }
+            } else {
+                (
                     json!({
                         "pages": [{"index": 0, "markdown": content}],
                         "model": model,
-                        "usage_info": usage.unwrap_or_else(|| json!({})),
-                    })
-                })
-            } else {
-                json!({
-                    "pages": [{"index": 0, "markdown": content}],
-                    "model": model,
-                    "usage_info": usage.unwrap_or_else(|| json!({})),
-                })
+                    }),
+                    None,
+                )
             }
         }
-        Value::Object(_) => content,
-        other => json!({
-            "pages": [{"index": 0, "markdown": other.to_string()}],
-            "model": model,
-            "usage_info": usage.unwrap_or_else(|| json!({})),
-        }),
+        Value::Object(_) => (content, None),
+        other => (
+            json!({
+                "pages": [{"index": 0, "markdown": other.to_string()}],
+                "model": model,
+            }),
+            None,
+        ),
     }
 }
 
@@ -223,9 +236,9 @@ impl OcrProviderConfig for VertexAiOcrConfig {
     fn transform_ocr_response(
         &self,
         model: &str,
-        response_json: Value,
+        response: Map<String, Value>,
     ) -> Result<OcrResponseData, UpstreamError> {
-        MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
+        MISTRAL_OCR_CONFIG.transform_ocr_response(model, response)
     }
 
     fn complete_url(
@@ -285,49 +298,49 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
     fn transform_ocr_response(
         &self,
         model: &str,
-        response_json: Value,
+        mut response: Map<String, Value>,
     ) -> Result<OcrResponseData, UpstreamError> {
-        let response = response_json
-            .as_object()
-            .ok_or_else(|| UpstreamError::invalid_type("object", json_type_name(&response_json)))?;
-        let usage = response.get("usage").cloned();
-        let content = first_choice_content(&response_json)?;
-        let mut ocr_data = ocr_data_from_content(content.clone(), usage.clone(), model);
+        let mut usage = response.remove("usage");
+        let content = first_choice_content(&mut response)?;
+        let (ocr_data, original_content) = ocr_data_from_content(content, model);
+        let Value::Object(mut ocr_data) = ocr_data else {
+            return Err(UpstreamError::InvalidResponse(
+                "DeepSeek OCR content must be an object".to_string(),
+            ));
+        };
 
         if !ocr_data.get("pages").is_some_and(Value::is_array) {
-            ocr_data = json!({
-                "pages": [{
-                    "index": 0,
-                    "markdown": match content {
-                        Value::String(value) => value,
-                        other => other.to_string(),
-                    }
-                }],
-                "model": ocr_data.get("model").and_then(Value::as_str).unwrap_or(model),
-                "usage_info": ocr_data.get("usage_info").cloned().or(usage).unwrap_or_else(|| json!({})),
-            });
+            let markdown = original_content
+                .unwrap_or_else(|| serde_json::to_string(&ocr_data).unwrap_or_default());
+            let response_model = match ocr_data.remove("model") {
+                Some(Value::String(model)) => model,
+                _ => model.to_string(),
+            };
+            let usage_info = ocr_data
+                .remove("usage_info")
+                .or(usage.take())
+                .unwrap_or_else(|| json!({}));
+            ocr_data.clear();
+            ocr_data.insert(
+                "pages".to_string(),
+                json!([{"index": 0, "markdown": markdown}]),
+            );
+            ocr_data.insert("model".to_string(), Value::String(response_model));
+            ocr_data.insert("usage_info".to_string(), usage_info);
         }
 
-        let object = ocr_data
-            .as_object()
-            .ok_or_else(|| UpstreamError::invalid_type("object", json_type_name(&ocr_data)))?;
-        let pages = object
-            .get("pages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let usage_info = object
-            .get("usage_info")
-            .cloned()
-            .or_else(|| response.get("usage").cloned());
+        let pages = match ocr_data.remove("pages") {
+            Some(Value::Array(pages)) => pages,
+            _ => Vec::new(),
+        };
+        let usage_info = ocr_data.remove("usage_info").or(usage);
         Ok(OcrResponseData {
             pages,
-            model: object
-                .get("model")
-                .and_then(Value::as_str)
-                .unwrap_or(model)
-                .to_string(),
-            document_annotation: object.get("document_annotation").cloned(),
+            model: match ocr_data.remove("model") {
+                Some(Value::String(model)) => model,
+                _ => model.to_string(),
+            },
+            document_annotation: ocr_data.remove("document_annotation"),
             usage_info,
             object: "ocr".to_string(),
         })
@@ -414,7 +427,10 @@ mod tests {
                 json!({
                     "choices": [{"message": {"content": "# OCR text"}}],
                     "usage": {"prompt_tokens": 1}
-                }),
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
             )
             .expect("response transforms");
 

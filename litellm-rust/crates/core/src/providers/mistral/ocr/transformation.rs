@@ -100,24 +100,18 @@ impl OcrProviderConfig for MistralOcrConfig {
     fn transform_ocr_response(
         &self,
         model: &str,
-        response_json: Value,
+        mut response: Map<String, Value>,
     ) -> Result<OcrResponseData, UpstreamError> {
-        let response_object = response_json
-            .as_object()
-            .ok_or_else(|| UpstreamError::invalid_type("object", json_type_name(&response_json)))?;
-
-        let pages = response_object
-            .get("pages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let model = response_object
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or(model)
-            .to_string();
-        let document_annotation = response_object.get("document_annotation").cloned();
-        let usage_info = response_object.get("usage_info").cloned();
+        let pages = match response.remove("pages") {
+            Some(Value::Array(pages)) => pages,
+            _ => Vec::new(),
+        };
+        let model = match response.remove("model") {
+            Some(Value::String(model)) => model,
+            _ => model.to_string(),
+        };
+        let document_annotation = response.remove("document_annotation");
+        let usage_info = response.remove("usage_info");
 
         Ok(OcrResponseData {
             pages,
@@ -151,7 +145,7 @@ pub fn supported_ocr_params() -> &'static [&'static str] {
     MISTRAL_OCR_CONFIG.supported_ocr_params()
 }
 
-pub fn map_ocr_params(non_default_params: &Map<String, Value>) -> Map<String, Value> {
+pub fn map_ocr_params(non_default_params: Map<String, Value>) -> Map<String, Value> {
     MISTRAL_OCR_CONFIG.map_ocr_params(non_default_params)
 }
 
@@ -167,7 +161,13 @@ pub fn transform_ocr_response(
     model: &str,
     response_json: Value,
 ) -> Result<OcrResponseData, UpstreamError> {
-    MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
+    let Value::Object(response) = response_json else {
+        return Err(UpstreamError::invalid_type(
+            "object",
+            json_type_name(&response_json),
+        ));
+    };
+    MISTRAL_OCR_CONFIG.transform_ocr_response(model, response)
 }
 
 #[cfg(test)]
@@ -204,7 +204,7 @@ mod tests {
             "unsupported_param": "value",
             "pages": [0, 1]
         });
-        let mapped = map_ocr_params(params.as_object().unwrap());
+        let mapped = map_ocr_params(params.as_object().unwrap().clone());
 
         assert_eq!(mapped.get("extract_header"), Some(&json!(true)));
         assert_eq!(mapped.get("pages"), Some(&json!([0, 1])));

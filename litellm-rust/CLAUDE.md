@@ -123,6 +123,8 @@ These rules apply to every module that executes network I/O, whether it is a
 
 - Set connect and full-request timeouts. No unbounded waits.
 - Reuse HTTP clients; do not construct clients per request.
+- Use `http_utils::safe_fetch` for externally supplied payload URLs; it binds
+  SSRF validation to the DNS answers used by the connector and bounds payloads.
 - Prefer rustls TLS for portable Python wheels and Linux images unless there is
   a documented reason not to.
 - Add request IDs and structured tracing at the host layer, without logging OCR
@@ -130,6 +132,9 @@ These rules apply to every module that executes network I/O, whether it is a
 - Do not echo raw upstream response bodies to callers. Sanitize and bound them.
 - Avoid `expect`/`unwrap` in server startup and request paths unless the panic is
   impossible by construction and documented.
+
+Python bridge serde conversion belongs in `python-bridge/src/marshal.rs`; route
+functions must use that typed boundary rather than JSON string round-trips.
 
 ## Rust Style Guide
 

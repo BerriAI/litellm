@@ -1,6 +1,6 @@
 use crate::CoreResult;
-use crate::error::CoreError;
-use crate::http_utils::{http_client, map_send_error, upstream_http};
+use crate::error::{CoreError, json_type_name};
+use crate::http_utils::{http_client, json_response, map_send_error};
 use crate::ocr::transformation::OcrResponseHandling;
 use crate::providers::azure_ai::ocr::poll_document_intelligence;
 use serde_json::Value;
@@ -41,23 +41,25 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Co
             request.timeout,
         )
         .await?;
+        let Value::Object(response_json) = response_json else {
+            return Err(CoreError::invalid_response(format!(
+                "invalid OCR response type: expected object, got {}",
+                json_type_name(&response_json)
+            )));
+        };
         return Ok(request
             .config
             .transform_ocr_response(&request.model, response_json)?
             .into_json());
     }
 
-    let text = response
-        .text()
-        .await
-        .map_err(|err| CoreError::network(err.to_string()))?;
-
-    if !status.is_success() {
-        return Err(upstream_http(status, &text));
-    }
-
-    let response_json: Value = serde_json::from_str(&text)
-        .map_err(|err| CoreError::invalid_response(format!("invalid OCR response JSON: {err}")))?;
+    let response_json = json_response(response, "invalid OCR response JSON").await?;
+    let Value::Object(response_json) = response_json else {
+        return Err(CoreError::invalid_response(format!(
+            "invalid OCR response type: expected object, got {}",
+            json_type_name(&response_json)
+        )));
+    };
 
     Ok(request
         .config

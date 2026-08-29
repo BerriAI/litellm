@@ -17,7 +17,7 @@ pub trait CustomLogger: Send + Sync {
     fn async_log_success_event<'a>(
         &'a self,
         _model_call_details: &'a ModelCallDetails,
-        _response_obj: &'a CallbackValue,
+        _response_obj: &'a CallbackValue<'_>,
         _timing: CallbackTiming,
     ) -> LogFuture<'a> {
         Box::pin(async { Ok(()) })
@@ -27,7 +27,7 @@ pub trait CustomLogger: Send + Sync {
     fn async_log_failure_event<'a>(
         &'a self,
         _model_call_details: &'a ModelCallDetails,
-        _response_obj: Option<&'a CallbackValue>,
+        _response_obj: Option<&'a CallbackValue<'_>>,
         _timing: CallbackTiming,
     ) -> LogFuture<'a> {
         Box::pin(async { Ok(()) })
@@ -50,7 +50,7 @@ impl CustomLoggerRunner {
     pub async fn async_log_success_event(
         &self,
         model_call_details: &ModelCallDetails,
-        response_obj: &CallbackValue,
+        response_obj: &CallbackValue<'_>,
         timing: CallbackTiming,
     ) -> CallbackDispatchReport {
         if self.loggers.is_empty() {
@@ -74,7 +74,7 @@ impl CustomLoggerRunner {
     pub async fn async_log_failure_event(
         &self,
         model_call_details: &ModelCallDetails,
-        response_obj: Option<&CallbackValue>,
+        response_obj: Option<&CallbackValue<'_>>,
         timing: CallbackTiming,
     ) -> CallbackDispatchReport {
         if self.loggers.is_empty() {
@@ -134,7 +134,7 @@ mod tests {
         fn async_log_success_event<'a>(
             &'a self,
             model_call_details: &'a ModelCallDetails,
-            response_obj: &'a CallbackValue,
+            response_obj: &'a CallbackValue<'_>,
             timing: CallbackTiming,
         ) -> LogFuture<'a> {
             Box::pin(async move {
@@ -162,7 +162,7 @@ mod tests {
         fn async_log_failure_event<'a>(
             &'a self,
             model_call_details: &'a ModelCallDetails,
-            response_obj: Option<&'a CallbackValue>,
+            response_obj: Option<&'a CallbackValue<'_>>,
             timing: CallbackTiming,
         ) -> LogFuture<'a> {
             Box::pin(async move {

@@ -37,6 +37,10 @@ Adding a crate fails crates/core/tests/workspace_crate_allowlist.rs until you up
 All Rust in `litellm-rust/` follows the official Rust Style Guide:
 https://doc.rust-lang.org/style-guide/
 
+Python/Rust serde conversion goes only through `python-bridge/src/marshal.rs`.
+Reusable HTTP clients and public-Internet payload fetching live under core's
+`http_utils`; `clippy.toml` and conformance tests reject bypasses.
+
 `rustfmt` implements its formatting by default, so run `cargo fmt` before committing; CI gates every PR on `cargo fmt --check`. Do not hand-format against rustfmt or add a `rustfmt.toml` that diverges from the default style.
 
 Beyond formatting, follow the guide's naming and idiom conventions rustfmt cannot auto-apply: `snake_case` items/functions/modules, `UpperCamelCase` types/traits/variants, `SCREAMING_SNAKE_CASE` constants/statics (acronyms as one word, e.g. `HttpClient`), and the import grouping and item ordering it prescribes. See CLAUDE.md for the detailed version.

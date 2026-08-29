@@ -1,5 +1,10 @@
 //! Header and upstream-body helpers shared by every route module.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "this module owns the workspace's bounded, reusable HTTP clients"
+)]
+
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -9,6 +14,8 @@ use crate::constants::{
     HTTP_CLIENT_CONNECT_TIMEOUT_SECS, HTTP_CLIENT_TIMEOUT_SECS, UPSTREAM_ERROR_BODY_MAX_CHARS,
 };
 use crate::error::{CoreError, CoreResult, json_type_name};
+
+pub mod safe_fetch;
 
 pub fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -47,6 +54,22 @@ pub fn map_send_error(err: reqwest::Error) -> CoreError {
 /// Build the canonical upstream-status error, truncating the provider body.
 pub fn upstream_http(status: reqwest::StatusCode, body: &str) -> CoreError {
     CoreError::http(status.as_u16(), truncate_error_body(body))
+}
+
+pub async fn json_response(
+    response: reqwest::Response,
+    invalid_json_context: &'static str,
+) -> CoreResult<Value> {
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| CoreError::network(error.to_string()))?;
+    if !status.is_success() {
+        return Err(upstream_http(status, &String::from_utf8_lossy(&bytes)));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|error| CoreError::invalid_response(format!("{invalid_json_context}: {error}")))
 }
 
 pub fn string_headers(

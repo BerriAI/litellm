@@ -4,6 +4,8 @@ pub const OPENAI_RESPONSES_PATH: &str = "/responses";
 
 pub(crate) const HTTP_CLIENT_TIMEOUT_SECS: u64 = 600;
 pub(crate) const HTTP_CLIENT_CONNECT_TIMEOUT_SECS: u64 = 10;
+pub(crate) const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
+pub(crate) const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
 
 /// Max characters of an upstream error body echoed across the call boundary
 /// before truncation, so provider bodies are bounded and data-minimized.

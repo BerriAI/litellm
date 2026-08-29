@@ -216,10 +216,10 @@ pub fn complete_document_intelligence_url(
     Ok(url)
 }
 
-fn document_url_from_mistral_document(document: &Value) -> CoreResult<&str> {
-    let object = document
-        .as_object()
-        .ok_or_else(|| CoreError::invalid_type("object", json_type_name(document)))?;
+fn document_url_from_mistral_document(document: Value) -> CoreResult<String> {
+    let Value::Object(mut object) = document else {
+        return Err(CoreError::invalid_type("object", json_type_name(&document)));
+    };
     let doc_type = object
         .get("type")
         .and_then(Value::as_str)
@@ -233,18 +233,17 @@ fn document_url_from_mistral_document(document: &Value) -> CoreResult<&str> {
             )));
         }
     };
-    object
-        .get(field_name)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or(CoreError::missing_field(field_name))
+    match object.remove(field_name) {
+        Some(Value::String(value)) if !value.is_empty() => Ok(value),
+        _ => Err(CoreError::missing_field(field_name)),
+    }
 }
 
-fn extract_base64_from_data_uri(data_uri: &str) -> &str {
+fn strip_data_uri_prefix(mut data_uri: String) -> String {
+    if let Some(comma) = data_uri.find(',') {
+        data_uri.drain(..=comma);
+    }
     data_uri
-        .split_once(',')
-        .map(|(_, data)| data)
-        .unwrap_or(data_uri)
 }
 
 fn page_markdown(page: &Map<String, Value>) -> String {
@@ -296,9 +295,9 @@ impl OcrProviderConfig for AzureAiOcrConfig {
     fn transform_ocr_response(
         &self,
         model: &str,
-        response_json: Value,
+        response: Map<String, Value>,
     ) -> Result<OcrResponseData, UpstreamError> {
-        MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
+        MISTRAL_OCR_CONFIG.transform_ocr_response(model, response)
     }
 
     fn complete_url(
@@ -335,18 +334,15 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         document: Value,
         _optional_params: Map<String, Value>,
     ) -> CoreResult<OcrRequestData> {
-        let document_url = document_url_from_mistral_document(&document)?;
+        let document_url = document_url_from_mistral_document(document)?;
         let mut data = Map::new();
         if document_url.starts_with("data:") {
             data.insert(
                 "base64Source".to_string(),
-                Value::String(extract_base64_from_data_uri(document_url).to_string()),
+                Value::String(strip_data_uri_prefix(document_url)),
             );
         } else {
-            data.insert(
-                "urlSource".to_string(),
-                Value::String(document_url.to_string()),
-            );
+            data.insert("urlSource".to_string(), Value::String(document_url));
         }
         Ok(OcrRequestData {
             data: Value::Object(data),
@@ -357,11 +353,8 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
     fn transform_ocr_response(
         &self,
         model: &str,
-        response_json: Value,
+        mut response: Map<String, Value>,
     ) -> Result<OcrResponseData, UpstreamError> {
-        let response = response_json
-            .as_object()
-            .ok_or_else(|| UpstreamError::invalid_type("object", json_type_name(&response_json)))?;
         let status = response
             .get("status")
             .and_then(Value::as_str)
@@ -372,12 +365,13 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
             )));
         }
 
-        let azure_pages = response
-            .get("analyzeResult")
-            .and_then(|result| result.get("pages"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let azure_pages = match response.remove("analyzeResult") {
+            Some(Value::Object(mut result)) => match result.remove("pages") {
+                Some(Value::Array(pages)) => pages,
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
 
         let pages = azure_pages
             .iter()
@@ -501,7 +495,10 @@ mod tests {
                             "lines": [{"content": "hello"}, {"content": "world"}]
                         }]
                     }
-                }),
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
             )
             .expect("response transforms");
 

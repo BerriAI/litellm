@@ -165,7 +165,7 @@ fn logging_values(
     payload: litellm_core::responses::instrumentation::ResponsesWsLogPayload,
     callback: ResponsesWsCallbackPayload,
     error: Option<LoggingError>,
-) -> (ModelCallDetails, CallbackValue, f64, f64) {
+) -> (ModelCallDetails, CallbackValue<'static>, f64, f64) {
     let start_time = payload.start_time;
     let end_time = payload.end_time;
     let callback = CallbackValue::new(callback.object, callback.value);

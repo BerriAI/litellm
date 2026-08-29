@@ -887,7 +887,7 @@ mod tests {
             &no_env,
         )
         .await?;
-        let client = reqwest::Client::new();
+        let client = crate::http_utils::http_client();
         let mut failures = Vec::new();
 
         for region in ["us-west-2", "us-east-1"] {

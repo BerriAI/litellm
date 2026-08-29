@@ -82,14 +82,13 @@ pub(crate) async fn prepare_provider_request(
         &optional_params,
         &env_lookup,
     )?;
-    let filtered_params = config.map_ocr_params(&optional_params);
+    let filtered_params = config.map_ocr_params(optional_params);
     let document = if config.requires_data_uri_document() {
         convert_document_url_to_data_uri(request.document).await?
     } else {
         request.document
     };
-    let document = serde_json::to_value(document)
-        .map_err(|error| CoreError::invalid_request(format!("invalid OCR document: {error}")))?;
+    let document = document.into_value();
     let body = config
         .transform_ocr_request(&request.model, document, filtered_params)?
         .data;

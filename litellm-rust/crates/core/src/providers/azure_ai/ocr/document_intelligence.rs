@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::CoreResult;
 use crate::error::CoreError;
-use crate::http_utils::truncate_error_body;
+use crate::http_utils::json_response;
 
 const POLL_TIMEOUT_SECS: u64 = 120;
 
@@ -87,17 +87,7 @@ pub(crate) async fn poll_document_intelligence(
             .await
             .map_err(|err| CoreError::network(err.to_string()))?;
         let retry_after = retry_after_secs(&response);
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|err| CoreError::network(err.to_string()))?;
-        if !status.is_success() {
-            return Err(CoreError::http(status.as_u16(), truncate_error_body(&text)));
-        }
-        let response_json: Value = serde_json::from_str(&text).map_err(|err| {
-            CoreError::invalid_response(format!("invalid Azure DI poll response JSON: {err}"))
-        })?;
+        let response_json = json_response(response, "invalid Azure DI poll response JSON").await?;
         if operation_status(&response_json)? == "succeeded" {
             return Ok(response_json);
         }

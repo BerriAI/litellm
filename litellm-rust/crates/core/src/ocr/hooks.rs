@@ -142,7 +142,7 @@ impl CallInterceptor<OcrCall> for OcrCallbackInterceptor {
                         &ModelCallDetails::from_standard_logging_payload(
                             self.standard_logging_payload(context, timing),
                         ),
-                        &CallbackValue::new("ocr", response.clone()),
+                        &CallbackValue::borrowed("ocr", response),
                         CallbackTiming::new(timing.start_time, timing.end_time),
                     )
                     .await;

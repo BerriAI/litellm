@@ -30,6 +30,19 @@ impl OcrDocument {
             Self::ImageUrl { image_url, .. } => ("image_url", image_url),
         }
     }
+
+    pub(crate) fn into_value(self) -> Value {
+        let (document_type, field_name, url, mut extra) = match self {
+            Self::DocumentUrl {
+                document_url,
+                extra,
+            } => ("document_url", "document_url", document_url, extra),
+            Self::ImageUrl { image_url, extra } => ("image_url", "image_url", image_url, extra),
+        };
+        extra.insert("type".to_string(), Value::String(document_type.to_string()));
+        extra.insert(field_name.to_string(), Value::String(url));
+        Value::Object(extra)
+    }
 }
 
 #[cfg(test)]
@@ -59,6 +72,23 @@ mod tests {
 
         let serialized = serde_json::to_value(document).expect("document should serialize");
         assert_eq!(serialized["guarded"], true);
+    }
+
+    #[test]
+    fn consuming_conversion_preserves_shape() {
+        let document = OcrDocument::ImageUrl {
+            image_url: "data:image/png;base64,abcd".to_string(),
+            extra: serde_json::Map::from_iter([("guarded".to_string(), json!(true))]),
+        };
+
+        assert_eq!(
+            document.into_value(),
+            json!({
+                "type": "image_url",
+                "image_url": "data:image/png;base64,abcd",
+                "guarded": true
+            })
+        );
     }
 
     #[test]
