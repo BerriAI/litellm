@@ -70,14 +70,16 @@ def test_get_llm_provider_aipg():
 def test_aipg_model_metadata():
     model_cost = litellm.get_model_cost_map(url="")
     expected = {
-        "aipg/gpt-oss-120b": (60000, 7.5e-08, 3e-07),
-        "aipg/deepseek-v4-flash-nvfp4": (262144, 7e-08, 1.4e-07),
-        "aipg/Smollm-135m": (2048, 5e-09, 1e-08),
+        "aipg/gpt-oss-120b": (60000, 32768, 7.5e-08, 3e-07),
+        "aipg/deepseek-v4-flash-nvfp4": (262144, 32768, 7e-08, 1.4e-07),
+        "aipg/Smollm-135m": (2048, 1024, 5e-09, 1e-08),
     }
-    for model, (context, input_cost, output_cost) in expected.items():
+    for model, (context, output_limit, input_cost, output_cost) in expected.items():
         info = model_cost[model]
         assert info["litellm_provider"] == "aipg"
         assert info["mode"] == "chat"
         assert info["max_input_tokens"] == context
+        assert info["max_output_tokens"] == output_limit
+        assert info["max_tokens"] == output_limit
         assert info["input_cost_per_token"] == input_cost
         assert info["output_cost_per_token"] == output_cost
