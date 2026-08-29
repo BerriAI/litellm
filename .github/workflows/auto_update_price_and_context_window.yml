@@ -34,7 +34,7 @@ jobs:
       - name: Update JSON Data
         if: steps.existing.outputs.open_pr == ''
         run: |
-          uv run --frozen --with 'aiohttp==3.13.3' python .github/scripts/auto_update_price_and_context_window_file.py
+          uv run --frozen python .github/scripts/auto_update_price_and_context_window_file.py
       - name: Regenerate JSON Schema
         if: steps.existing.outputs.open_pr == ''
         run: |
