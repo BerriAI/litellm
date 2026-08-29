@@ -33,6 +33,7 @@ else:
 
 _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
+_PROVIDERS_WITH_COMBINATOR_REJECTING_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -172,7 +173,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
         input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(model=model, tools=tools)
+        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(
+            model=model, tools=tools, litellm_params=litellm_params
+        )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
         final_request_params: Final = dict(
@@ -217,6 +220,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self,
         model: str,
         tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None,  # mutable-ok: request tools are a JSON list
+        litellm_params: GenericLiteLLMParams,
     ) -> list[ALL_RESPONSES_API_TOOL_PARAMS] | None:  # mutable-ok: request tools are a JSON list
         """Flatten top-level schema combinators only where OpenAI's validator rejects them.
 
@@ -224,10 +228,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Codex talks to natively) accept them, and so do GPT-5 and later models,
         which also call tools better with the union intact. Codex wraps MCP tools
         inside namespace entries, so nested ``tools`` arrays are walked too.
+        Azure OpenAI shares the validator but names deployments arbitrarily, so
+        the router's declared ``model_info.base_model`` wins over the deployment
+        name and an unrecognized name without one is left untouched.
         """
-        if tools is None or self.custom_llm_provider != LlmProviders.OPENAI:
+        if tools is None or self.custom_llm_provider not in _PROVIDERS_WITH_COMBINATOR_REJECTING_VALIDATOR:
             return tools
-        if not self._rejects_top_level_schema_combinators(model):
+        gate_model: Final = self._combinator_gate_model(model=model, litellm_params=litellm_params)
+        if not self._rejects_top_level_schema_combinators(gate_model):
             return tools
         flattened: Final = [  # mutable-ok: request tools are a JSON list
             self._flattened_tool_or_passthrough(tool) for tool in tools
@@ -243,6 +251,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         bare_model: Final = model.split("/")[-1]
         base_model: Final = bare_model.split(":")[1] if bare_model.startswith("ft:") else bare_model
         return base_model.startswith(_MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS)
+
+    @staticmethod
+    def _combinator_gate_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
+        model_info: Final[object] = getattr(litellm_params, "model_info", None)
+        base_model: Final[object] = model_info.get("base_model") if isinstance(model_info, dict) else None
+        return base_model if isinstance(base_model, str) and base_model else model
 
     @staticmethod
     def _flattened_tool_entry(
@@ -714,7 +728,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
         input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(model=model, tools=tools)
+        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(
+            model=model, tools=tools, litellm_params=litellm_params
+        )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
         data: Final = dict(ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params))
