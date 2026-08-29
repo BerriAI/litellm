@@ -119,7 +119,8 @@ def _convert_entry(name: str, entry: MCPConnectorEntry) -> ConvertedConnector | 
         return ConnectorConversionError(name=name, error=f"Unsupported connector type '{entry.type}'.")
 
     transport: Final = MCPTransport.sse if entry_type in _SSE_TYPES else MCPTransport.http
-    credentials: Final = _bearer_credentials(entry.authorization_token)
+    token: Final = entry.authorization_token or _header_bearer_token(entry.headers)
+    static_headers: Final = entry.headers if entry.authorization_token else _non_auth_headers(entry.headers)
     try:
         remote_request: Final = NewMCPServerRequest(
             server_name=sanitized_name,
@@ -128,9 +129,9 @@ def _convert_entry(name: str, entry: MCPConnectorEntry) -> ConvertedConnector | 
             approval_status=MCPApprovalStatus.active,
             transport=transport,
             url=entry.url,
-            auth_type=MCPAuth.bearer_token if entry.authorization_token else MCPAuth.none,
-            credentials=credentials,
-            static_headers=dict(entry.headers) if entry.headers is not None else None,
+            auth_type=MCPAuth.bearer_token if token else MCPAuth.none,
+            credentials=_bearer_credentials(token),
+            static_headers=dict(static_headers) if static_headers is not None else None,
         )
     except ValidationError as e:
         return ConnectorConversionError(name=name, error=_first_validation_message(e))
@@ -142,6 +143,24 @@ def _bearer_credentials(token: str | None) -> MCPCredentials | None:
         return None
     credentials: Final[MCPCredentials] = {"auth_value": token}
     return credentials
+
+
+_BEARER_PREFIX: Final = "bearer "
+
+
+def _header_bearer_token(headers: Mapping[str, str] | None) -> str | None:
+    values: Final = tuple(value for key, value in (headers or {}).items() if key.lower() == "authorization")
+    if not values:
+        return None
+    value: Final = values[0]
+    return value[len(_BEARER_PREFIX) :] if value.lower().startswith(_BEARER_PREFIX) else value
+
+
+def _non_auth_headers(headers: Mapping[str, str] | None) -> Mapping[str, str] | None:
+    if headers is None:
+        return None
+    remaining: Final = {key: value for key, value in headers.items() if key.lower() != "authorization"}
+    return remaining or None
 
 
 def _first_validation_message(error: ValidationError) -> str:
