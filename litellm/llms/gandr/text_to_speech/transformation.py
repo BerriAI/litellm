@@ -4,13 +4,12 @@ Gandr Text-to-Speech transformation
 Maps OpenAI TTS spec to the Gandr /v1/audio/speech OpenAI-compatible API.
 
 Gandr is a spoken-audio inference provider. Its HTTP lane accepts the OpenAI
-Chat Completions request shape and returns raw audio bytes, so the same
+Audio Speech request shape and returns raw audio bytes, so the same
 `sample` that works against `tts.gandr.ai/v1/audio/speech` with the official
 OpenAI SDK works here unchanged.
 """
 
 from typing import TYPE_CHECKING, Any, Final
-from urllib.parse import urlencode
 
 import httpx
 from httpx import Headers
@@ -51,7 +50,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
     DEFAULT_OUTPUT_FORMAT = "wav"
     SUPPORTED_MODES = ["audio_speech"]
 
-    #: Gandr's audible temperature range. The engine rests on 0.6-1.5.
+    #: Gandr's speed range. The engine clamps speed to 0.6-1.5.
     SUPPORTED_SPEED_RANGE = (0.6, 1.5)
 
     def get_supported_openai_params(self, model: str) -> list:
@@ -97,9 +96,8 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         if mapped_voice is None:
             raise ValueError("Gandr voice is required. Pass `voice` when calling `litellm.speech()`.")
 
-        # `response_format` is passed through under its OpenAI name; the door
-        # serves wav and pcm natively and returns an honest 400 for anything
-        # else, which surfaces the available formats to the caller directly.
+        # `response_format` is passed through under its OpenAI name; the
+        # endpoint serves mp3 (its default), wav and pcm.
         response_format: Final = params.get("response_format")
         if response_format is None:
             params["response_format"] = self.DEFAULT_OUTPUT_FORMAT
