@@ -121,7 +121,7 @@ class WindowSpendUpdateQueue(BaseUpdateQueue):
         )
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.update_queue: asyncio.Queue[tuple[WindowSpendTransaction, ...]] = asyncio.Queue(
             maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
