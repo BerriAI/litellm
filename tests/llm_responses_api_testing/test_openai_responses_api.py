@@ -1818,6 +1818,7 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
             input="Test",
             temperature=0.7,
             max_output_tokens=20,
+            reasoning={"effort": "none"},
             extra_body={
                 "custom_field": "custom_value",
             },
