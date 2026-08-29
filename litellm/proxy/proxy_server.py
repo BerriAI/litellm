@@ -263,6 +263,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -10975,15 +10976,11 @@ async def audio_speech(
         if callback_headers:
             custom_headers.update(callback_headers)
 
-        # Determine media type based on model type
-        media_type = "audio/mpeg"  # Default for OpenAI TTS
-        request_model: Final = data.get("model", "")
-        if request_model:
-            request_model_lower: Final = request_model.lower()
-            if "gemini" in request_model_lower and (
-                "tts" in request_model_lower or "preview-tts" in request_model_lower
-            ):
-                media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
+        requested_format: Final = data.get("response_format")
+        media_type: Final = resolve_speech_media_type(
+            upstream_content_type=response.response.headers.get("content-type"),
+            response_format=requested_format if isinstance(requested_format, str) else None,
+        )
 
         return StreamingResponse(
             _audio_speech_chunk_generator(response),
