@@ -48,8 +48,10 @@ class BaseLLMException(Exception):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         body: dict | None = None,
+        status_code_is_synthesized: bool = False,
     ):
         self.status_code = status_code
+        self.status_code_is_synthesized = status_code_is_synthesized
         self.message: str = message
         self.headers = headers
         if request:

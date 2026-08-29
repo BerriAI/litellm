@@ -42,6 +42,16 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
     def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         pass
 
+    @property
+    def supports_subtitle_synthesis(self) -> bool:
+        """
+        Opt-in for providers without a native srt/vtt response body: when True
+        and the user asked for response_format srt/vtt, the http handler
+        synthesizes the subtitle document from the word timestamps the
+        provider's TranscriptionResponse carries in `words`.
+        """
+        return False
+
     def get_complete_url(
         self,
         api_base: str | None,
