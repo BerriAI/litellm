@@ -13,6 +13,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -99,7 +100,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if aws_bedrock_runtime_endpoint:
             base_url = aws_bedrock_runtime_endpoint
         else:
-            base_url = f"https://bedrock-agentcore.{region}.amazonaws.com"
+            base_url = f"https://bedrock-agentcore.{region}.{get_aws_dns_suffix(region)}"
 
         # Based on boto3 client.invoke_agent_runtime, the path is:
         # /runtimes/{URL-ENCODED-ARN}/invocations?qualifier=<value>
