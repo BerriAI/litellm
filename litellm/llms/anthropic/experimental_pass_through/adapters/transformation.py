@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import os
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
@@ -867,6 +868,43 @@ class LiteLLMAnthropicMessagesAdapter:
             text_parts.append(self._add_prompt_cache_breakpoint_if_present(block, text_obj))
         return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
 
+    def _demote_midturn_system_messages(
+        self,
+        new_messages: list[AllMessageValues],  # mutable-ok: matches ChatCompletionRequest.messages
+    ) -> list[AllMessageValues]:  # mutable-ok: ChatCompletionRequest.messages requires a list
+        """Return the messages with system entries after index 0 rewritten or removed, opt-in.
+
+        Gated on LITELLM_DEMOTE_MIDTURN_SYSTEM: "true" (or "demote") rewrites
+        each in-sequence system row as a user row, "drop" removes them
+        entirely, anything else leaves the messages untouched. OpenAI accepts
+        system messages anywhere in the conversation, but many
+        OpenAI-compatible backends enforce chat templates that reject
+        non-leading system rows (e.g. Qwen3 served by vLLM: "System message
+        must be at the beginning."). Clients like Claude Code send mid-turn
+        system reminders, so without this those requests 400. Demoting to a
+        user row mirrors how such reminders were historically delivered;
+        dropping trades their content for a prompt the backend caches better.
+        """
+        mode: Final = os.environ.get("LITELLM_DEMOTE_MIDTURN_SYSTEM", "").strip().lower()
+        if mode not in ("true", "demote", "drop"):
+            return new_messages
+        if mode == "drop":
+            return [  # mutable-ok: ChatCompletionRequest.messages requires a list
+                message for index, message in enumerate(new_messages) if index == 0 or message.get("role") != "system"
+            ]
+        return [  # mutable-ok: ChatCompletionRequest.messages requires a list
+            ChatCompletionUserMessage(
+                role="user",
+                content=cast(  # cast-ok: the role == "system" guard narrows this row
+                    ChatCompletionSystemMessage, message
+                ).get("content")
+                or "",
+            )
+            if index > 0 and message.get("role") == "system"
+            else message
+            for index, message in enumerate(new_messages)
+        ]
+
     def _add_system_message_to_messages(
         self,
         new_messages: list[AllMessageValues],
@@ -1164,10 +1202,11 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
+        final_messages: Final = self._demote_midturn_system_messages(new_messages)
 
         new_kwargs: Final[ChatCompletionRequest] = {
             "model": anthropic_message_request["model"],
-            "messages": new_messages,
+            "messages": final_messages,
         }
         ## CONVERT METADATA (user_id + litellm metadata)
         self._translate_metadata_to_openai(
