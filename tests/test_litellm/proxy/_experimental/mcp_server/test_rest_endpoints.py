@@ -2954,11 +2954,15 @@ class TestConnectionErrorMessage:
         assert secret not in message
 
     def test_connect_error_points_at_reachability(self):
-        message = rest_endpoints._connection_error_message(httpx.ConnectError("All connection attempts failed"), "https://example.com", 30.0)
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectError("All connection attempts failed"), "https://example.com", 30.0
+        )
         assert "unreachable" in message.lower()
 
     def test_timeout_error_message(self):
-        message = rest_endpoints._connection_error_message(httpx.ConnectTimeout("timed out"), "https://example.com", 30.0)
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectTimeout("timed out"), "https://example.com", 30.0
+        )
         assert "unreachable" in message.lower()
 
     def test_http_status_error_includes_status_code(self):
