@@ -3167,8 +3167,14 @@ class ProxyLogging:
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
         if not caps.iterator_overrides:
-            async for chunk in response:
-                yield chunk
+            try:
+                async for chunk in response:
+                    yield chunk
+            except (GeneratorExit, asyncio.CancelledError):
+                raise
+            except Exception:
+                ProxyLogging._fire_deferred_stream_logging(request_data)
+                raise
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
 
@@ -3221,9 +3227,14 @@ class ProxyLogging:
                     ),
                 )
 
-        # Actually iterate through the chained async generator and yield chunks
-        async for chunk in current_response:
-            yield chunk
+        try:
+            async for chunk in current_response:
+                yield chunk
+        except (GeneratorExit, asyncio.CancelledError):
+            raise
+        except Exception:
+            ProxyLogging._fire_deferred_stream_logging(request_data)
+            raise
 
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
         # completed.  unified_guardrail writes guardrail_information during

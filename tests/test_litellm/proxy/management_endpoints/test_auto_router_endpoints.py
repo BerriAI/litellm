@@ -2385,9 +2385,11 @@ async def test_start_shadow_eval_seeds_a_zero_funnel_row_per_leg(monkeypatch: py
     separates 'nothing was skipped' from a job predating the funnel."""
     import litellm.proxy.proxy_server as proxy_server
 
+    _configure_anthropic_sdk_judge(monkeypatch)
     prisma = _shadow_prisma(legs=[])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    _configure_anthropic_sdk_judge(monkeypatch)
 
     await start_shadow_eval(_start_request(api_key_ids=("key-hash", "key-hash-2")), ADMIN)
 
