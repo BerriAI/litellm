@@ -16,6 +16,7 @@ longer signal it.
 
 ### Added
 
+- **jwt_key_mapping**: New `litellm_jwt_key_mapping` resource for the proxy's JWT to virtual key mappings, so JWT clients identified by a claim (`client_id`, `azp`, `sub`) map to virtual keys and inherit their models, budgets and rate limits. Supports `description` and `is_active`, rotating the mapped key in place, and forces replacement when the claim name or value changes
 - **team**: `soft_budget`, `tags`, and `soft_budget_alerting_emails` attributes on `litellm_team`, matching what `/team/new` and `/team/update` already accept; `soft_budget_alerting_emails` is sent under `metadata`, where the proxy reads it
 - **user**: New `litellm_user` resource and `litellm_user` / `litellm_users` data sources for managing internal users
 - **budget**: New `litellm_budget` resource and `litellm_budget` / `litellm_budgets` data sources for reusable budget objects
