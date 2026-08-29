@@ -2,7 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -739,6 +739,13 @@ def _get_provider_for_cost_calc(
     return custom_llm_provider
 
 
+def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None:
+    if not isinstance(hidden_params, Mapping):
+        return None
+    value: Final[object] = hidden_params.get(key)
+    return value if isinstance(value, str) and value else None
+
+
 def _select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -755,7 +762,6 @@ def _select_model_name_for_cost_calc(
     """
 
     return_model: str | None = None
-    region_name: str | None = None
     custom_llm_provider = _get_provider_for_cost_calc(model=model, custom_llm_provider=custom_llm_provider)
 
     completion_response_model: str | None = None
@@ -765,6 +771,14 @@ def _select_model_name_for_cost_calc(
         elif isinstance(completion_response, dict):
             completion_response_model = completion_response.get("model", None)
     hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
+    provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
+    explicit_pricing: Final = custom_pricing is True or base_model is not None
+    priced_from_response: Final = provider_response_model is not None or completion_response_model is not None
+    region_name: Final = (
+        _get_hidden_str_for_cost_calc(hidden_params, "region_name")
+        if not explicit_pricing and priced_from_response
+        else None
+    )
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
@@ -780,14 +794,12 @@ def _select_model_name_for_cost_calc(
         else:
             return_model = model
 
-    elif base_model is not None:
-        return_model = base_model
+    elif base_model is not None or provider_response_model is not None:
+        return_model = base_model if base_model is not None else provider_response_model
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
             return_model = hidden_params.get("model", model)
-    elif hidden_params is not None and hidden_params.get("region_name", None) is not None:
-        region_name = hidden_params.get("region_name", None)
 
     if return_model is None and completion_response_model is not None:
         return_model = completion_response_model

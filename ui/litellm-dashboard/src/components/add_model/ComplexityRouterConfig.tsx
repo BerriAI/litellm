@@ -197,10 +197,11 @@ const TierSetToolbar: React.FC<{
   isCustomSet: boolean;
   rowCount: number;
   rowsError: string | null;
+  keywordRulesError: string | null | undefined;
   onEditingChange: ((editing: boolean) => void) | undefined;
   onAdd: () => void;
   onRestore: () => void;
-}> = ({ editing, isCustomSet, rowCount, rowsError, onEditingChange, onAdd, onRestore }) => (
+}> = ({ editing, isCustomSet, rowCount, rowsError, keywordRulesError, onEditingChange, onAdd, onRestore }) => (
   <>
     <div className="mt-4 flex flex-wrap items-center gap-2">
       {editing ? (
@@ -232,6 +233,11 @@ const TierSetToolbar: React.FC<{
       <span className="block mt-1 text-xs text-muted-foreground">
         Add or remove tiers to define your own set. Every custom tier needs a definition the LLM classifier routes on,
         and an edited set requires the LLM classification method
+      </span>
+    )}
+    {editing && keywordRulesError && (
+      <span className="block mt-1 text-xs text-destructive">
+        {keywordRulesError}. Edit the rules under Advanced: Keyword/Semantic Matching, or bring the tier back
       </span>
     )}
   </>
@@ -373,6 +379,8 @@ export interface ComplexityRouterConfigValue {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  /** Opening instructions only; the router appends the tier bullets and the injection guard after them. */
+  classification_prompt?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
   session_affinity?: boolean;
@@ -417,6 +425,8 @@ interface ComplexityRouterConfigProps {
   // rules or semantic matching, so it renders this component without them.
   keywordTierRules?: KeywordTierRule[];
   onKeywordTierRulesChange?: (rules: KeywordTierRule[]) => void;
+  /** getKeywordTierRulesError's verdict, owned by the caller: importing it here would be an import cycle. */
+  keywordRulesError?: string | null;
   semanticMatchingEnabled?: boolean;
   onSemanticMatchingEnabledChange?: (enabled: boolean) => void;
   embeddingModel?: string;
@@ -567,6 +577,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onCustomTechnicalKeywordsChange,
   keywordTierRules = [],
   onKeywordTierRulesChange,
+  keywordRulesError,
   semanticMatchingEnabled = false,
   onSemanticMatchingEnabledChange,
   embeddingModel,
@@ -737,6 +748,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             isCustomSet={Boolean(customTierSet)}
             rowCount={tierRows.length}
             rowsError={tierRowsError}
+            keywordRulesError={keywordRulesError}
             onEditingChange={onEditingTiersChange}
             onAdd={addCustomTier}
             onRestore={exitToBuiltInTiers}

@@ -165,6 +165,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
     reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -543,6 +544,8 @@ CallTypesLiteral = Literal[
     "_arealtime",
     "create_batch",
     "acreate_batch",
+    "create_file",
+    "acreate_file",
     "pass_through_endpoint",
     "allm_passthrough_route",
     "anthropic_messages",

@@ -4106,6 +4106,53 @@ def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_ma
     assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
 
 
+def _bedrock_response_with_private_model(model: str, region_name: str) -> litellm.ModelResponse:
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model=model,
+    )
+    response._hidden_params = {"provider_response_model": model, "region_name": region_name}
+    return response
+
+
+def test_select_model_name_applies_region_to_private_provider_response_model(_local_model_cost_map):
+    """A Bedrock stream carries its requested model as the private provider model and must keep the
+    request's region in the cost key, exactly as the same request does without streaming."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=_bedrock_response_with_private_model("anthropic.claude-v2:1", "us-east-1"),
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
+def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
+    """An explicit base_model keeps pricing on that model's own key even when the request carries a
+    region with different regional rates, so the private provider model never widens region pricing."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    selected = _select_model_name_for_cost_calc(
+        model="my-bedrock-deployment",
+        completion_response=_bedrock_response_with_private_model("moonshotai.kimi-k2.5", "ap-northeast-1"),
+        base_model="moonshotai.kimi-k2.5",
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/moonshotai.kimi-k2.5"
+
+
 def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
     """End-to-end cost through a "/"-containing alias must price above zero (#38069)."""
 
@@ -4350,3 +4397,79 @@ def test_realtime_explicitly_free_session_model_still_bills_zero(
     )
 
     assert cost == 0.0
+
+
+def test_completion_cost_prefers_private_provider_response_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/selected-cost-model",
+        {
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000004,
+            "litellm_provider": "openai",
+        },
+    )
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="requested-route",
+    )
+    response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "provider_response_model": "selected-cost-model",
+    }
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="openai",
+    )
+
+    assert response.model == "requested-route"
+    assert cost == pytest.approx(100 * 0.000002 + 50 * 0.000004)
+
+
+@pytest.mark.parametrize(
+    ("base_model", "custom_pricing", "expected"),
+    [
+        ("openai/base-model", False, "openai/base-model"),
+        (None, True, "openai/requested-route"),
+    ],
+)
+def test_explicit_pricing_precedes_private_provider_response_model(
+    base_model: str | None,
+    custom_pricing: bool,
+    expected: str,
+) -> None:
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="requested-route",
+    )
+    response._hidden_params = {"provider_response_model": "selected-cost-model"}
+
+    selected = _select_model_name_for_cost_calc(
+        model="requested-route",
+        completion_response=response,
+        base_model=base_model,
+        custom_pricing=custom_pricing,
+        custom_llm_provider="openai",
+    )
+
+    assert selected == expected

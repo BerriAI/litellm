@@ -122,6 +122,32 @@ The following arguments are supported:
 
 * `team_member_permissions` - (Optional) List of permissions granted to team members. This controls what actions team members can perform within the team context.
 
+* `model_aliases` - (Optional) Map of alias names to model names, letting the team call models under stable alias names.
+
+* `guardrails` - (Optional) List of guardrails applied to every request made by this team.
+
+* `prompts` - (Optional) List of prompt IDs the team is allowed to use.
+
+* `team_member_budget` - (Optional) Budget (in USD) applied to each individual team member.
+
+* `team_member_budget_duration` - (Optional) Reset cycle for the per-member budget (e.g. `30d`, `1mo`).
+
+* `team_member_rpm_limit` - (Optional) Requests per minute limit applied to each individual team member.
+
+* `team_member_tpm_limit` - (Optional) Tokens per minute limit applied to each individual team member.
+
+* `team_member_key_duration` - (Optional) Lifetime for keys created by team members (e.g. `1d`, `1w`).
+
+* `model_rpm_limit` - (Optional) Map of model name to requests per minute limit for that model.
+
+* `model_tpm_limit` - (Optional) Map of model name to tokens per minute limit for that model.
+
+* `allowed_passthrough_routes` - (Optional) List of pass-through routes this team is allowed to call.
+
+* `rpm_limit_type` - (Optional) How the RPM limit is enforced: `guaranteed_throughput` or `best_effort_throughput`. Changing this forces a new team to be created.
+
+* `tpm_limit_type` - (Optional) How the TPM limit is enforced: `guaranteed_throughput` or `best_effort_throughput`. Changing this forces a new team to be created.
+
 ## Attribute Reference
 
 In addition to the arguments above, the following attributes are exported:

@@ -56,6 +56,7 @@ from .config import (
     ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
+    TierDefinition,
 )
 
 if TYPE_CHECKING:
@@ -195,6 +196,26 @@ def _custom_tier_prompt(entries: Sequence[tuple[str, str]], preamble: str | None
         f"{preamble or _CLASSIFICATION_RUBRIC_PREAMBLE_BODY}\n\nTiers:\n{bullets}\n\n"
         f"{_CLASSIFICATION_RUBRIC_TRUST_BOUNDARY}\n\n{closing}"
     )
+
+
+def custom_tier_classification_prompt(
+    definitions: Sequence[TierDefinition],
+    classification_prompt: str | None,
+    context_window_size: int,
+) -> str:
+    """The classifier's system role for an operator-defined tier set.
+
+    The single owner of the built-in-criteria substitution, so the dashboard's preview resolves a
+    blank description exactly as the live classifier does.
+    """
+    entries: Final = tuple(
+        (
+            definition.name,
+            definition.description or _CLASSIFICATION_TIER_CRITERIA[ComplexityTier[definition.name.upper()]],
+        )
+        for definition in definitions
+    )
+    return _custom_tier_prompt(entries, classification_prompt, _closing_line(context_window_size))
 
 
 def classification_system_prompt(
@@ -892,17 +913,10 @@ class ComplexityRouter(CustomLogger):
             raise ValueError("classifier_llm_config is not set")
         definitions: Final = self.config.tier_definitions
         if definitions is not None:
-            entries: Final = tuple(
-                (
-                    definition.name,
-                    definition.description or _CLASSIFICATION_TIER_CRITERIA[ComplexityTier[definition.name.upper()]],
-                )
-                for definition in definitions
-            )
-            return _custom_tier_prompt(
-                entries,
+            return custom_tier_classification_prompt(
+                definitions,
                 self.config.classification_prompt,
-                _closing_line(self.config.classifier_context_window_size),
+                self.config.classifier_context_window_size,
             )
         return classification_system_prompt(
             self.config.classifier_context_window_size,
@@ -933,17 +947,15 @@ class ComplexityRouter(CustomLogger):
     def savings_baseline(self) -> Baseline | None:
         """The derived counterfactual this router's savings are measured against.
 
-        ``None`` when `litellm_settings.autorouter_savings_baseline_model` is set (the
-        spend writer reads that setting directly and it wins) or when this router was
-        built with ``derive_savings_baseline=False``. Derived once on first use and
-        pinned for the instance's lifetime: creating or editing the router rebuilds
-        the instance, which re-derives. Deferred past ``__init__`` because during a
-        config load this router can be constructed before its tier deployments are.
+        ``None`` when this router was built with ``derive_savings_baseline=False``.
+        Derived once on first use and pinned for the instance's lifetime: creating or
+        editing the router rebuilds the instance, which re-derives. Deferred past
+        ``__init__`` because during a config load this router can be constructed
+        before its tier deployments are.
         """
-        import litellm
         from litellm.router_strategy.savings_baseline import resolve_baseline
 
-        if not self._derive_savings_baseline or litellm.autorouter_savings_baseline_model is not None:
+        if not self._derive_savings_baseline:
             return None
         if not self._savings_baseline_derived:
             self._savings_baseline = resolve_baseline(self.litellm_router_instance, self._hardest_tier_models())

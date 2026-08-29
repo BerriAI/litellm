@@ -7456,3 +7456,190 @@ def test_newrelic_vars_scoped_to_newrelic_callback_entry():
         None,
     )
     assert legit.callback_vars == {"newrelic_api_key": "REAL", "newrelic_region": "us"}
+
+
+def _reserved_stamp_request(path: str) -> MagicMock:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = path
+    request_mock.url.__str__.return_value = f"http://localhost{path}"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+def _reserved_stamp_key(key_metadata: dict | None = None) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata=key_metadata or {},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+
+_PLANTED_STAMPS = {"attempted_fallbacks": 99, "original_model_group": "spoofed-group", "client_key": "client_value"}
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_both_buckets():
+    """attempted_fallbacks and original_model_group are router-written facts the spend row
+    reads back; a client planting them in either bucket is dropped at the boundary so the
+    router never sees a reserved key it did not write."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": dict(_PLANTED_STAMPS),
+        "litellm_metadata": dict(_PLANTED_STAMPS),
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_reserved_stamp_request("/v1/chat/completions"),
+        user_api_key_dict=_reserved_stamp_key(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    for bucket in ("metadata", "litellm_metadata"):
+        assert "attempted_fallbacks" not in updated[bucket]
+        assert "original_model_group" not in updated[bucket]
+        assert updated[bucket]["client_key"] == "client_value"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_json_string_litellm_metadata():
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_metadata": json.dumps(_PLANTED_STAMPS),
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_reserved_stamp_request("/v1/chat/completions"),
+        user_api_key_dict=_reserved_stamp_key(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert isinstance(updated["litellm_metadata"], dict)
+    assert "attempted_fallbacks" not in updated["litellm_metadata"]
+    assert "original_model_group" not in updated["litellm_metadata"]
+    assert updated["litellm_metadata"]["client_key"] == "client_value"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_router_reserved_stamps_despite_pricing_override_opt_in():
+    """The pricing strip is gated on allow_client_pricing_override; the reserved-stamp strip
+    is not, because no key or team setting makes a client-written fallback count valid."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_metadata": {**_PLANTED_STAMPS, "model_info": {"input_cost_per_token": 0.0}},
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_reserved_stamp_request("/v1/chat/completions"),
+        user_api_key_dict=_reserved_stamp_key({"allow_client_pricing_override": True}),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["litellm_metadata"]["model_info"] == {"input_cost_per_token": 0.0}
+    assert "attempted_fallbacks" not in updated["litellm_metadata"]
+    assert "original_model_group" not in updated["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_router_reserved_stamps_on_responses_route():
+    """On the Responses family the proxy-owned bucket is litellm_metadata and the client's
+    OpenAI metadata param is the sibling; both lose the reserved keys."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "input": "hi",
+        "metadata": dict(_PLANTED_STAMPS),
+        "litellm_metadata": dict(_PLANTED_STAMPS),
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_reserved_stamp_request("/v1/responses"),
+        user_api_key_dict=_reserved_stamp_key(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    for bucket in ("metadata", "litellm_metadata"):
+        assert "attempted_fallbacks" not in updated[bucket]
+        assert "original_model_group" not in updated[bucket]
+        assert updated[bucket]["client_key"] == "client_value"
+
+
+@pytest.mark.asyncio
+async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_strip():
+    """Regression for the #38586 break: a client that planted a reserved key in
+    litellm_metadata made the router hand downstream a scrubbed copy, so the proxy's
+    post_call write-backs (guardrail telemetry, applied guardrails) landed in a dict the
+    spend row never read. After the boundary strip plus the in-place scrub, the object the
+    router forwards is the proxy's own request_data bucket."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_metadata": dict(_PLANTED_STAMPS),
+    }
+    request_data = await add_litellm_data_to_request(
+        data=data,
+        request=_reserved_stamp_request("/v1/chat/completions"),
+        user_api_key_dict=_reserved_stamp_key(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    proxy_bucket = request_data["litellm_metadata"]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    forwarded_buckets = []
+    original_acompletion = router._acompletion
+
+    async def _spy(*args, **spy_kwargs):
+        forwarded_buckets.append(spy_kwargs["litellm_metadata"])
+        return await original_acompletion(*args, **spy_kwargs)
+
+    router._acompletion = _spy
+
+    await router.acompletion(**request_data)
+
+    assert forwarded_buckets == [proxy_bucket]
+    assert forwarded_buckets[0] is proxy_bucket
+    assert "attempted_fallbacks" not in proxy_bucket
+    assert "original_model_group" not in proxy_bucket
+    proxy_bucket["standard_logging_guardrail_information"] = [{"guardrail_name": "postcall-guard"}]
+    assert forwarded_buckets[0]["standard_logging_guardrail_information"] == [{"guardrail_name": "postcall-guard"}]
