@@ -1380,20 +1380,17 @@ DB_READINESS_CHECK_TIMEOUT_SECONDS: Final = 2.0
 DB_READINESS_PROBE_DEADLINE_SECONDS: Final = 4.0
 
 
-async def _db_health_readiness_check():
-    global db_health_cache
-
+async def _db_health_readiness_check() -> DBHealthCache:
     try:
         return await asyncio.wait_for(
             _db_health_readiness_check_unbounded(),
             timeout=DB_READINESS_PROBE_DEADLINE_SECONDS,
         )
     except asyncio.TimeoutError:
-        db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
-        return db_health_cache
+        return {"status": "disconnected", "last_updated": db_health_cache["last_updated"]}
 
 
-async def _db_health_readiness_check_unbounded():
+async def _db_health_readiness_check_unbounded() -> DBHealthCache:
     from litellm.proxy.proxy_server import prisma_client
 
     global db_health_cache
