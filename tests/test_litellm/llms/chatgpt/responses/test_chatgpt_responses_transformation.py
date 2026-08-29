@@ -10,12 +10,11 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-
+from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
-from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 
 
 class TestChatGPTResponsesAPITransformation:
@@ -323,3 +322,128 @@ class TestChatGPTResponsesAPITransformation:
 
         assert "ChatGPT upstream failed" in str(exc_info.value)
         assert exc_info.value.status_code == 502
+
+    def test_transform_streaming_response_recovers_output_from_live_chunks(self):
+        """chatgpt.com always ships `response.completed.output: []` (see the
+        non-streaming recovery tests above) -- but this provider also always
+        forces `stream=True` upstream, so `transform_streaming_response`,
+        not `transform_response_api_response`, is what actually runs on
+        every real call (BerriAI/litellm#25429, #27175). Without accumulating
+        `output_item.done`/`output_text.done` chunks here, the completed
+        event's `output` stays empty and the Responses-to-Chat-Completions
+        bridge raises "Unknown items in responses API response: []".
+        """
+        config = ChatGPTResponsesAPIConfig()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+
+        streamed_item = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hello from stream!"}],
+        }
+        item_done_event = config.transform_streaming_response(
+            model="chatgpt/gpt-5.4",
+            parsed_chunk={
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": streamed_item,
+            },
+            logging_obj=logging_obj,
+        )
+        # Passthrough chunks are still forwarded to the base transform.
+        assert item_done_event.type == "response.output_item.done"
+
+        completed_event = config.transform_streaming_response(
+            model="chatgpt/gpt-5.4",
+            parsed_chunk={
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-5.4",
+                    "output": [],
+                },
+            },
+            logging_obj=logging_obj,
+        )
+
+        assert completed_event.response.output == [streamed_item]
+
+    def test_transform_streaming_response_leaves_populated_output_untouched(self):
+        """A completed event that already carries real output (the standard
+        OpenAI shape) must not be altered by the recovery logic."""
+        config = ChatGPTResponsesAPIConfig()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+
+        real_output_item = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Already there"}],
+        }
+        completed_event = config.transform_streaming_response(
+            model="chatgpt/gpt-5.4",
+            parsed_chunk={
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-5.4",
+                    "output": [real_output_item],
+                },
+            },
+            logging_obj=logging_obj,
+        )
+
+        assert completed_event.response.output == [real_output_item]
+
+    def test_transform_streaming_response_state_scoped_per_request(self):
+        """Accumulator state must live on `logging_obj.model_call_details`
+        (per-request), not on the shared, long-lived `ChatGPTResponsesAPIConfig`
+        instance -- otherwise output from one concurrent call could leak into
+        another call's completed event on a proxy serving multiple requests.
+        """
+        config = ChatGPTResponsesAPIConfig()
+
+        logging_obj_a = MagicMock()
+        logging_obj_a.model_call_details = {}
+        item_a = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "From request A"}],
+        }
+        config.transform_streaming_response(
+            model="chatgpt/gpt-5.4",
+            parsed_chunk={
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": item_a,
+            },
+            logging_obj=logging_obj_a,
+        )
+
+        # A second, independent request must not see request A's accumulated item.
+        logging_obj_b = MagicMock()
+        logging_obj_b.model_call_details = {}
+        completed_event_b = config.transform_streaming_response(
+            model="chatgpt/gpt-5.4",
+            parsed_chunk={
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_test_b",
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-5.4",
+                    "output": [],
+                },
+            },
+            logging_obj=logging_obj_b,
+        )
+
+        assert completed_event_b.response.output == []
