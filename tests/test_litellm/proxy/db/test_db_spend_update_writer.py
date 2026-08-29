@@ -2569,19 +2569,21 @@ async def test_window_spend_transactions_are_not_committed_without_the_pod_lock(
 
 
 @pytest.mark.asyncio
-async def test_failed_window_spend_commit_does_not_abort_the_rest_of_the_flush():
-    """Window rows are an optimization over aggregating LiteLLM_SpendLogs, so a
-    failure must not take the tool registry flush down with it."""
+async def test_failed_window_spend_commit_requeues_the_increments_and_continues_the_flush():
+    """Budget enforcement trusts a current window row without reconciling it
+    against LiteLLM_SpendLogs, so a dropped increment would let the key spend
+    past its limit after the next reseed. The increments must go back on the
+    queue, and the tool registry flush must still run."""
     db_writer = DBSpendUpdateWriter()
-    await db_writer.window_spend_update_queue.add_update(
-        build_window_spend_transaction(
-            entity_type="key",
-            entity_id="hashed-token",
-            window_duration="30d",
-            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
-            spend=0.5,
-        )
+    transaction = build_window_spend_transaction(
+        entity_type="key",
+        entity_id="hashed-token",
+        window_duration="30d",
+        window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        spend=0.5,
+        request_id="req-1",
     )
+    await db_writer.window_spend_update_queue.add_update(transaction)
     db = _WindowSpendFakeDB()
     db.query_raw = AsyncMock(side_effect=Exception("connection reset"))
     db_writer._flush_tool_discovery_queue = AsyncMock()
@@ -2593,6 +2595,47 @@ async def test_failed_window_spend_commit_does_not_abort_the_rest_of_the_flush()
     )
 
     db_writer._flush_tool_discovery_queue.assert_called_once()
+    requeued = await db_writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+    assert requeued == (transaction,)
+
+
+@pytest.mark.asyncio
+async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
+    """The Redis drain is destructive, so a failed window commit has to push
+    the popped increments back exactly like the other spend categories."""
+    db_writer = DBSpendUpdateWriter()
+    window_transactions = (
+        build_window_spend_transaction(
+            entity_type="team",
+            entity_id="team-1",
+            window_duration="7d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=2.0,
+            request_id="req-1",
+        ),
+    )
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, window_transactions)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    db = _WindowSpendFakeDB()
+    db.query_raw = AsyncMock(side_effect=Exception("connection reset"))
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert _window_spend_upserts(db) == []
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once_with(
+        window_spend_update_transactions=window_transactions
+    )
+    db_writer.pod_lock_manager.release_lock.assert_awaited_once()
 
 
 @pytest.mark.asyncio

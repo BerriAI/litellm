@@ -456,6 +456,7 @@ class RedisUpdateBuffer:
         daily_end_user_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
         daily_agent_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
         daily_tag_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        window_spend_update_transactions: Sequence[WindowSpendTransaction] | None = None,
     ) -> None:
         """
         Re-push transactions that were popped from Redis but not committed to the DB.
@@ -477,6 +478,7 @@ class RedisUpdateBuffer:
             (daily_end_user_spend_update_transactions, REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY),
             (daily_agent_spend_update_transactions, REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY),
             (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY),
+            (window_spend_update_transactions, REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY),
         )
 
         rpush_list: Final = tuple(
