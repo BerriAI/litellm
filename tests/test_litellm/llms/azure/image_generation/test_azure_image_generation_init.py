@@ -3,9 +3,12 @@ import traceback
 from typing import Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.image_generation.http_utils import (
     azure_deployment_image_generation_json_body,
@@ -489,3 +492,98 @@ def test_azure_image_generation_v1_api_version_uses_base_url_client_param():
         base_model=None,
     )
     assert url == "https://my-resource.openai.azure.com/openai/v1/images/generations?api-version=preview"
+
+
+def test_azure_v1_image_generation_json_body_sends_deployment_name():
+    """The v1 route ignores the URL and routes by body ``model``, which must be the deployment name."""
+    url = "https://my-resource.openai.azure.com/openai/v1/images/generations?api-version=preview"
+    data = {"model": "gpt-image-2", "prompt": "x", "n": 1}
+    out = azure_deployment_image_generation_json_body(url, data, deployment_name="img-dep")
+    assert out["model"] == "img-dep"
+    assert out["prompt"] == "x"
+    assert data["model"] == "gpt-image-2"
+    assert azure_deployment_image_generation_json_body(url, data) == data
+
+
+@pytest.mark.asyncio
+async def test_azure_aimage_generation_v1_route_sends_deployment_name_in_body(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    azure_chat_completion = AzureChatCompletion()
+    model = "img-dep"
+    base_model = "gpt-image-2"
+    data = {"model": base_model, "prompt": "A beautiful image of a cat", "n": 1}
+    azure_client_params = {
+        "azure_endpoint": "https://my-resource.openai.azure.com",
+        "api_version": "preview",
+    }
+
+    route = respx_mock.post("https://my-resource.openai.azure.com/openai/v1/images/generations").mock(
+        return_value=httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    logging_obj.post_call = MagicMock()
+
+    await azure_chat_completion.aimage_generation(
+        data=data,
+        model_response=None,
+        azure_client_params=azure_client_params,
+        api_key="test-api-key",
+        input=[],
+        logging_obj=logging_obj,
+        headers={},
+        model=model,
+        timeout=60.0,
+    )
+
+    request = route.calls.last.request
+    assert str(request.url) == ("https://my-resource.openai.azure.com/openai/v1/images/generations?api-version=preview")
+    sent_body = json.loads(request.content)
+    assert sent_body["model"] == model
+    assert sent_body["prompt"] == data["prompt"]
+
+
+def test_azure_image_generation_v1_route_base_model_vs_deployment_name(respx_mock: respx.MockRouter):
+    """On the v1 surface the body ``model`` must be the deployment name, never base_model."""
+    azure_chat_completion = AzureChatCompletion()
+    prompt = "A beautiful image of a cat"
+    model = "img-dep"
+    base_model = "gpt-image-2"
+    api_base = "https://my-resource.openai.azure.com"
+    api_version = "v1"
+    litellm_params = {
+        "base_model": base_model,
+        "api_base": api_base,
+        "api_version": api_version,
+    }
+
+    route = respx_mock.post(f"{api_base}/openai/v1/images/generations").mock(
+        return_value=httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    logging_obj.post_call = MagicMock()
+
+    azure_chat_completion.image_generation(
+        prompt=prompt,
+        timeout=60.0,
+        optional_params={"n": 1, "size": "1024x1024"},
+        logging_obj=logging_obj,
+        headers={},
+        model=model,
+        api_key="test-api-key",
+        api_base=api_base,
+        api_version=api_version,
+        litellm_params=litellm_params,
+    )
+
+    request = route.calls.last.request
+    assert str(request.url) == f"{api_base}/openai/v1/images/generations?api-version={api_version}"
+    sent_body = json.loads(request.content)
+    assert sent_body["model"] == model
+    assert sent_body["prompt"] == prompt
