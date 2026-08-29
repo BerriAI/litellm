@@ -3,24 +3,30 @@ from __future__ import annotations
 import hashlib
 import queue
 import threading
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, Generic, Protocol, TypeVar, cast
 
 import httpx
-from pydantic import ValidationError
+from hypothesis import given, settings
+from hypothesis.strategies import SearchStrategy
+from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 
 from tests.test_litellm._json_fs_cache import JsonFileCache, canonical_json
-from tests.test_litellm.ocr.fixture_models import (
+from tests.test_litellm._recorded_http import (
     HttpHeader,
-    MistralOcrSdkInput,
-    OcrParityCase,
     RecordedHttpResponse,
+    RecordedHttpStreamResponse,
+    RecordedResponse,
+    RecordedStreamChunk,
 )
+
+FIXTURE_SCHEMA_VERSION: Final = 1
 
 _HOP_BY_HOP_HEADERS: Final = frozenset(
     {
@@ -36,17 +42,31 @@ _HOP_BY_HOP_HEADERS: Final = frozenset(
 )
 
 
+class FixtureInput(Protocol):
+    def canonical_input(self) -> dict[str, object]: ...
+
+
+InputT = TypeVar("InputT", bound=FixtureInput)
+CaseT = TypeVar("CaseT", bound=BaseModel)
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderSpec:
-    model: str
     upstream_base: str
-    api_key: str
 
 
 @dataclass(frozen=True, slots=True)
-class RecorderResult:
-    case: OcrParityCase
+class RecorderResult(Generic[CaseT]):
+    case: CaseT
     cache_hit: bool
+
+
+class FixtureEnvelope(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int
+    recorded_at: AwareDatetime
+    case: dict[str, object]
 
 
 def _excluded_headers(headers: tuple[tuple[str, str], ...]) -> frozenset[str]:
@@ -69,13 +89,13 @@ class _RecordingProvider(ThreadingHTTPServer):
     def __init__(self, spec: ProviderSpec) -> None:
         super().__init__(("127.0.0.1", 0), _RecordingHandler)
         self.spec: Final = spec
-        self.responses: queue.Queue[RecordedHttpResponse] = queue.Queue()
+        self.responses: queue.Queue[RecordedResponse] = queue.Queue()
 
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_address[1]}"
 
-    def take_response(self) -> RecordedHttpResponse:
+    def take_response(self) -> RecordedResponse:
         try:
             return self.responses.get(timeout=5)
         except queue.Empty as error:
@@ -103,22 +123,59 @@ class _RecordingHandler(BaseHTTPRequestHandler):
                 content=request_body,
                 timeout=120,
             ) as upstream:
-                response_body: Final = b"".join(upstream.iter_bytes())
-                recorded_response: Final = RecordedHttpResponse.from_bytes(
-                    status_code=upstream.status_code,
-                    headers=_end_to_end_headers(upstream.headers),
-                    body=response_body,
-                )
+                headers: Final = _end_to_end_headers(upstream.headers)
+                recorded_response: Final = self._record_upstream_response(upstream, headers)
         except httpx.HTTPError as error:
             self._send_response(502, (), str(error).encode("utf-8"))
             return
 
         if 200 <= recorded_response.status_code < 300:
             provider.responses.put(recorded_response)
-        self._send_recorded_response(recorded_response)
+        if isinstance(recorded_response, RecordedHttpResponse):
+            self._send_response(recorded_response.status_code, recorded_response.headers, recorded_response.body_bytes())
 
-    def _send_recorded_response(self, response: RecordedHttpResponse) -> None:
-        self._send_response(response.status_code, response.headers, response.body_bytes())
+    def _record_upstream_response(
+        self,
+        upstream: httpx.Response,
+        headers: tuple[HttpHeader, ...],
+    ) -> RecordedResponse:
+        content_type: Final = cast(str, upstream.headers.get("content-type", ""))
+        if content_type.lower().startswith("text/event-stream"):
+            return self._record_stream(upstream, headers)
+        response_body: Final = b"".join(upstream.iter_bytes())
+        return RecordedHttpResponse.from_bytes(
+            status_code=upstream.status_code,
+            headers=headers,
+            body=response_body,
+        )
+
+    def _record_stream(
+        self,
+        upstream: httpx.Response,
+        headers: tuple[HttpHeader, ...],
+    ) -> RecordedHttpStreamResponse:
+        self.send_response_only(upstream.status_code)
+        for header in headers:
+            self.send_header(header.name, header.value)
+        self.send_header("transfer-encoding", "chunked")
+        self.end_headers()
+        chunks: Final = tuple(self._relay_chunks(upstream.iter_bytes()))
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+        return RecordedHttpStreamResponse(
+            kind="http_stream",
+            status_code=upstream.status_code,
+            headers=headers,
+            chunks=chunks,
+        )
+
+    def _relay_chunks(self, chunks: Iterable[bytes]) -> Generator[RecordedStreamChunk, None, None]:
+        for chunk in chunks:
+            self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
+            self.wfile.write(chunk)
+            self.wfile.write(b"\r\n")
+            self.wfile.flush()
+            yield RecordedStreamChunk.from_bytes(chunk)
 
     def _send_response(self, status_code: int, headers: tuple[HttpHeader, ...], body: bytes) -> None:
         self.send_response_only(status_code)
@@ -145,38 +202,72 @@ def _recording_provider(spec: ProviderSpec) -> Generator[_RecordingProvider]:
         thread.join(timeout=5)
 
 
-def fixture_cache_key(case_input: MistralOcrSdkInput) -> dict[str, object]:
+def generate_case_inputs(strategy: SearchStrategy[InputT], examples: int) -> tuple[InputT, ...]:
+    generated: Final[queue.SimpleQueue[InputT | None]] = queue.SimpleQueue()
+
+    @settings(max_examples=examples, deadline=None, derandomize=True)
+    @given(case_input=strategy)
+    def generate_case(case_input: InputT) -> None:
+        generated.put(case_input)
+
+    generate_case()
+    generated.put(None)
+    return tuple(iter(generated.get, None))
+
+
+def fixture_cache_key(case_input: FixtureInput) -> dict[str, object]:
     return case_input.canonical_input()
+
+
+def _load_fixture(raw_fixture: dict[str, object], path: Path, case_type: type[CaseT]) -> CaseT:
+    schema_version: Final = raw_fixture.get("schema_version")
+    if schema_version != FIXTURE_SCHEMA_VERSION:
+        raise ValueError(
+            f"fixture {path} has schema_version {schema_version!r}, expected {FIXTURE_SCHEMA_VERSION}; "
+            "delete it and regenerate the fixture bundle"
+        )
+    try:
+        envelope: Final = FixtureEnvelope.model_validate(raw_fixture)
+        return case_type.model_validate(envelope.case)
+    except ValidationError as error:
+        raise ValueError(f"invalid parity fixture {path} ({len(error.errors())} validation errors)") from error
 
 
 def record_case(
     spec: ProviderSpec,
     root: Path,
-    case_input: MistralOcrSdkInput,
-    sdk_call: Callable[..., object],
-) -> RecorderResult:
+    case_input: InputT,
+    sdk_call: Callable[[str, InputT], object],
+    case_type: type[CaseT],
+) -> RecorderResult[CaseT]:
     cache: Final = JsonFileCache(root)
     cache_key: Final = fixture_cache_key(case_input)
     cached: Final = cache.get(cache_key)
     if cached is not None:
-        return RecorderResult(case=OcrParityCase.model_validate(cached), cache_hit=True)
+        return RecorderResult(case=_load_fixture(cached, cache.path_for(cache_key), case_type), cache_hit=True)
 
     with _recording_provider(spec) as recorder:
-        sdk_call(api_base=recorder.url, api_key=spec.api_key, **case_input.as_sdk_kwargs())
+        sdk_call(recorder.url, case_input)
         upstream_response: Final = recorder.take_response()
 
-    case: Final = OcrParityCase(litellm_input=case_input, provider_response=upstream_response)
-    cache.put(cache_key, cast(dict[str, object], case.model_dump(mode="json", exclude_unset=True)))
+    case: Final = case_type.model_validate({"litellm_input": case_input, "provider_response": upstream_response})
+    envelope: Final = FixtureEnvelope(
+        schema_version=FIXTURE_SCHEMA_VERSION,
+        recorded_at=datetime.now(timezone.utc),
+        case=cast(dict[str, object], case.model_dump(mode="json", exclude_unset=True)),
+    )
+    cache.put(cache_key, cast(dict[str, object], envelope.model_dump(mode="json", exclude_unset=True)))
     return RecorderResult(case=case, cache_hit=False)
 
 
 def record_cases(
     spec: ProviderSpec,
     root: Path,
-    case_inputs: tuple[MistralOcrSdkInput, ...],
-    sdk_call: Callable[..., object],
+    case_inputs: tuple[InputT, ...],
+    sdk_call: Callable[[str, InputT], object],
+    case_type: type[CaseT],
     max_concurrency: int,
-) -> tuple[RecorderResult, ...]:
+) -> tuple[RecorderResult[CaseT], ...]:
     if max_concurrency < 1:
         raise ValueError("max_concurrency must be at least 1")
     unique_inputs: Final = tuple(
@@ -184,7 +275,7 @@ def record_cases(
     )
     with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
         futures: Final = tuple(
-            executor.submit(record_case, spec, root, case_input, sdk_call) for case_input in unique_inputs
+            executor.submit(record_case, spec, root, case_input, sdk_call, case_type) for case_input in unique_inputs
         )
         return tuple(future.result() for future in futures)
 
@@ -193,24 +284,12 @@ def fixture_directory(configured: Path | None, env_value: str | None, default: P
     return (configured or Path(env_value or default)).expanduser()
 
 
-def recorded_fixtures(directory: Path) -> tuple[OcrParityCase, ...]:
+def recorded_fixtures(directory: Path, case_type: type[CaseT]) -> tuple[CaseT, ...]:
     cache: Final = JsonFileCache(directory)
-    fixtures: list[OcrParityCase] = []
-    for path, raw_fixture in cache.values_with_paths():
-        try:
-            fixtures.append(OcrParityCase.model_validate(raw_fixture))
-        except ValidationError as error:
-            raise ValueError(
-                f"invalid OCR parity fixture {path}: expected exactly `litellm_input` and `provider_response` "
-                f"({len(error.errors())} validation errors)"
-            ) from error
-    return tuple(fixtures)
+    return tuple(_load_fixture(raw_fixture, path, case_type) for path, raw_fixture in cache.values_with_paths())
 
 
-def fixture_id(fixture: OcrParityCase) -> str:
-    input_json: Final = canonical_json(fixture.litellm_input.canonical_input())
+def fixture_id(case_input: FixtureInput, prefix: str) -> str:
+    input_json: Final = canonical_json(case_input.canonical_input())
     digest: Final = hashlib.sha256(input_json.encode("utf-8")).hexdigest()[:8]
-    model_id: Final = fixture.litellm_input.model.replace("/", "-")
-    provider: Final = fixture.litellm_input.custom_llm_provider
-    prefix: Final = f"{provider}-{model_id}" if provider and not model_id.startswith(f"{provider}-") else model_id
     return f"{prefix}-{digest}"

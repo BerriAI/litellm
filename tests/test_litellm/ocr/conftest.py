@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from tests.test_litellm._fixture_recorder import fixture_id, recorded_fixtures
+from tests.test_litellm.ocr.fixture_models import OcrParityCase
 
 FIXTURE_DIR_ENV: Final = "LITELLM_OCR_FIXTURE_DIR"
 
@@ -21,16 +22,24 @@ def _fixture_directory() -> Path:
     return Path(configured).expanduser()
 
 
+def _fixture_id(fixture: OcrParityCase) -> str:
+    case_input: Final = fixture.litellm_input
+    model_id: Final = case_input.model.replace("/", "-")
+    provider: Final = case_input.custom_llm_provider
+    prefix: Final = f"{provider}-{model_id}" if provider and not model_id.startswith(f"{provider}-") else model_id
+    return fixture_id(case_input, prefix)
+
+
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "ocr_fixture" not in metafunc.fixturenames:
         return
     directory: Final = _fixture_directory()
     try:
-        fixtures: Final = recorded_fixtures(directory)
+        fixtures: Final = recorded_fixtures(directory, OcrParityCase)
     except (ValidationError, ValueError) as error:
         raise pytest.UsageError(
             f"Invalid OCR parity fixture bundle at {directory}. "
-            "Each fixture must contain exactly `litellm_input` and `provider_response`. "
+            "Each fixture must use the current versioned envelope. "
             "Record fresh fixtures in an empty directory with: "
             f"`uv run python tests/test_litellm/ocr/generate_fixtures.py --fixture-dir {directory}`. "
             f"Validation details: {error}"
@@ -49,4 +58,4 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             ),
         )
         return
-    metafunc.parametrize("ocr_fixture", fixtures, ids=tuple(fixture_id(fixture) for fixture in fixtures))
+    metafunc.parametrize("ocr_fixture", fixtures, ids=tuple(_fixture_id(fixture) for fixture in fixtures))

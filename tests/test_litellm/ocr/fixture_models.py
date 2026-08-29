@@ -7,6 +7,8 @@ from typing import Annotated, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from typing_extensions import Self
 
+from tests.test_litellm._recorded_http import RecordedResponse
+
 JsonObject = dict[str, JsonValue]
 
 
@@ -283,34 +285,6 @@ class ReductoParseLegacySdkInput(OcrSdkInputBase):
         return self
 
 
-class HttpHeader(_FixtureModel):
-    name: str
-    value: str
-
-
-class RecordedHttpResponse(_FixtureModel):
-    kind: Literal["http"] = "http"
-    status_code: int
-    headers: tuple[HttpHeader, ...]
-    body_b64: str
-
-    @classmethod
-    def from_bytes(
-        cls,
-        status_code: int,
-        headers: tuple[HttpHeader, ...],
-        body: bytes,
-    ) -> RecordedHttpResponse:
-        return cls(
-            status_code=status_code,
-            headers=headers,
-            body_b64=base64.b64encode(body).decode("ascii"),
-        )
-
-    def body_bytes(self) -> bytes:
-        return base64.b64decode(self.body_b64, validate=True)
-
-
 class OcrParityCase(_FixtureModel):
     litellm_input: MistralOcrSdkInput
-    provider_response: RecordedHttpResponse
+    provider_response: RecordedResponse

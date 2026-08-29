@@ -13,6 +13,7 @@ from typing import Final, TextIO, cast
 
 from pydantic import TypeAdapter, ValidationError
 
+from tests.test_litellm._recorded_http import RecordedResponse
 from tests.test_litellm.parity.models import (
     Execution,
     SDKCommand,
@@ -69,14 +70,12 @@ class PythonScriptWorker:
         self,
         case_file: Path,
         route: str,
-        status_code: int,
-        headers: tuple[tuple[str, str], ...],
-        body: bytes,
+        response: RecordedResponse,
     ) -> Execution:
         stdin: Final = self.process.stdin
         if stdin is None or self.process.poll() is not None:
             raise AssertionError(f"{self.mode} OCR worker exited before processing {case_file}")
-        self.provider.enqueue_response(status_code, headers, body)
+        self.provider.enqueue_response(response)
         command: Final = SDKCommand(case_file=str(case_file), route=route)
         try:
             stdin.write(f"{command.model_dump_json()}\n")
@@ -153,8 +152,6 @@ def run_execution(
     worker: PythonScriptWorker,
     case_file: Path,
     route: str,
-    status_code: int,
-    headers: tuple[tuple[str, str], ...],
-    body: bytes,
+    response: RecordedResponse,
 ) -> Execution:
-    return worker.execute(case_file, route, status_code, headers, body)
+    return worker.execute(case_file, route, response)

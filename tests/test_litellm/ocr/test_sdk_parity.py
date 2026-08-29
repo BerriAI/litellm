@@ -80,24 +80,18 @@ def test_recorded_ocr_sdk_parity(
     case_file: Final = tmp_path / f"{route.value}-ocr-parity-case.json"
     case_file.write_text(ocr_fixture.model_dump_json(indent=2, exclude_unset=True), encoding="utf-8")
     response: Final = ocr_fixture.provider_response
-    response_body: Final = response.body_bytes()
-    response_headers: Final = tuple((header.name, header.value) for header in response.headers)
     python_worker, rust_worker = sdk_workers
     python: Final = run_execution(
         python_worker,
         case_file,
         route.value,
-        response.status_code,
-        response_headers,
-        response_body,
+        response,
     )
     rust: Final = run_execution(
         rust_worker,
         case_file,
         route.value,
-        response.status_code,
-        response_headers,
-        response_body,
+        response,
     )
 
     assert_parity(python, rust, PYTHON_HTTP_SENTINEL)

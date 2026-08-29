@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import queue
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +10,6 @@ from typing import Final, cast
 from urllib.parse import quote
 
 from dotenv import load_dotenv
-from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
 
@@ -20,14 +18,15 @@ from litellm.rust_bridge.ocr import use_litellm_rust
 from tests.test_litellm._fixture_recorder import (
     ProviderSpec,
     fixture_directory,
+    generate_case_inputs,
     record_cases,
 )
 from tests.test_litellm.ocr.fixture_models import (
     JsonSchemaDefinition,
     JsonSchemaResponseFormat,
     MistralImageUrlDocument,
-    MistralModel,
     MistralOcrSdkInput,
+    OcrParityCase,
     ReductoChunking,
     ReductoDocumentUrlDocument,
     ReductoFormatting,
@@ -42,13 +41,6 @@ LOGGER: Final = logging.getLogger(__name__)
 _TEXT: Final = st.just("invoice 123")
 _VALUE_TEXT: Final = st.just("case-1")
 _FONT_SIZE: Final = st.just(24)
-_MISTRAL_MODELS: Final = (
-    "mistral/mistral-ocr-2512",
-    "mistral/mistral-ocr-4-0",
-    "mistral/mistral-ocr-4-1",
-    "mistral/mistral-ocr-4",
-    "mistral/mistral-ocr-latest",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,21 +237,18 @@ def reducto_legacy_input_strategy() -> SearchStrategy[ReductoParseLegacySdkInput
 def _generate_examples(
     spec: ProviderSpec,
     root: Path,
+    model: str,
+    api_key: str,
     examples: int,
     concurrency: int,
     sdk_call: Callable[..., object],
 ) -> None:
-    generated: Final[queue.SimpleQueue[MistralOcrSdkInput | None]] = queue.SimpleQueue()
+    case_inputs: Final = generate_case_inputs(mistral_input_strategy(model), examples)
 
-    @settings(max_examples=examples, deadline=None, derandomize=True)
-    @given(case_input=mistral_input_strategy(spec.model))
-    def generate_case(case_input: MistralOcrSdkInput) -> None:
-        generated.put(case_input)
+    def invoke(api_base: str, case_input: MistralOcrSdkInput) -> object:
+        return sdk_call(api_base=api_base, api_key=api_key, **case_input.as_sdk_kwargs())
 
-    generate_case()
-    generated.put(None)
-    case_inputs: Final = tuple(iter(generated.get, None))
-    results: Final = record_cases(spec, root, case_inputs, sdk_call, concurrency)
+    results: Final = record_cases(spec, root, case_inputs, invoke, OcrParityCase, concurrency)
     for result in results:
         LOGGER.info("%s %s", "cached" if result.cache_hit else "recorded", result.case.litellm_input.model)
 
@@ -274,13 +263,13 @@ def _parse_args() -> GeneratorArgs:
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--examples", type=int, default=4)
     parser.add_argument("--fixture-dir", type=Path)
-    parser.add_argument("--model", choices=_MISTRAL_MODELS, default="mistral/mistral-ocr-latest")
+    parser.add_argument("--model", required=True)
     namespace: Final = parser.parse_args()
     return GeneratorArgs(
         concurrency=cast(int, namespace.concurrency),
         examples=cast(int, namespace.examples),
         fixture_dir=cast(Path | None, namespace.fixture_dir),
-        model=cast(MistralModel, namespace.model),
+        model=cast(str, namespace.model),
     )
 
 
@@ -296,9 +285,17 @@ def main() -> None:
         os.environ.get(FIXTURE_DIR_ENV),
         Path(__file__).with_name(".fixtures"),
     )
-    spec: Final = ProviderSpec(model=args.model, upstream_base=_mistral_upstream_base(), api_key=api_key)
+    spec: Final = ProviderSpec(upstream_base=_mistral_upstream_base())
     use_litellm_rust(False, ocr=None, aocr=None)
-    _generate_examples(spec, root, args.examples, args.concurrency, cast(Callable[..., object], litellm.ocr))
+    _generate_examples(
+        spec,
+        root,
+        args.model,
+        api_key,
+        args.examples,
+        args.concurrency,
+        cast(Callable[..., object], litellm.ocr),
+    )
 
 
 if __name__ == "__main__":
