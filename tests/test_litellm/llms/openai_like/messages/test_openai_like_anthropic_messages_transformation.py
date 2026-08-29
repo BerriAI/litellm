@@ -438,3 +438,65 @@ def test_json_provider_constraint_opts_into_cache_control_ttl():
 
     assert transform(strict)["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert transform(lenient)["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+
+def test_request_strips_ttl_only_where_the_messages_api_defines_cache_control(config):
+    """Regression: the sanitizer must only touch ``cache_control`` where the
+    Messages API defines it (request, system, tools, content blocks, tool_result
+    content), never application data such as ``tool_use.input`` or a tool's
+    ``input_schema`` that happens to contain a ``cache_control`` key."""
+    tool_input = {"cache_control": {"type": "ephemeral", "ttl": "1h"}, "query": "x"}
+    input_schema = {
+        "type": "object",
+        "properties": {"cache_control": {"type": "string", "ttl": "1h"}},
+    }
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": tool_input}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    "content": [
+                        {"type": "text", "text": "result", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+                    ],
+                },
+                {"type": "text", "text": "plain string content stays", "cache_control": {"ttl": "1h"}},
+            ],
+        },
+        {"role": "user", "content": "a plain string message"},
+    ]
+    optional_params = {
+        "max_tokens": 64,
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        "tools": [
+            {
+                "name": "lookup",
+                "input_schema": input_schema,
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ],
+    }
+
+    payload = config.transform_anthropic_messages_request(
+        model="some-model",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert payload["cache_control"] == {"type": "ephemeral"}
+    assert payload["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    assert payload["tools"][0]["input_schema"] == input_schema
+    assert payload["messages"][0]["content"][0]["input"] == tool_input
+    tool_result = payload["messages"][1]["content"][0]
+    assert tool_result["cache_control"] == {"type": "ephemeral"}
+    assert tool_result["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert payload["messages"][1]["content"][1]["cache_control"] == {"type": "ephemeral"}
+    assert payload["messages"][2] == {"role": "user", "content": "a plain string message"}
