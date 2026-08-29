@@ -485,7 +485,7 @@ class DBSpendUpdateWriter:
         request_model_access_groups: Sequence[str] = (),
     ):
         """
-        Runs all 12 spend-update helpers sequentially inside a single asyncio task.
+        Runs all 13 spend-update helpers sequentially inside a single asyncio task.
 
         Each helper is wrapped in try/except so one failure doesn't prevent the others.
 
@@ -557,19 +557,13 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
-        try:
-            await self._update_model_access_group_db(
-                response_cost=response_cost,
-                request_model_access_groups=request_model_access_groups,
-                served_model_id=payload_copy.get("model_id"),
-                prisma_client=prisma_client,
-                router=_get_llm_router(),
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_model_access_group_db failed: %s",
-                traceback.format_exc(),
-            )
+        await self._update_model_access_group_db(
+            response_cost=response_cost,
+            request_model_access_groups=request_model_access_groups,
+            served_model_id=payload_copy.get("model_id"),
+            prisma_client=prisma_client,
+            router=_get_llm_router(),
+        )
 
         _agent_id_for_spend: Final = payload_copy.get("agent_id")
         try:
@@ -887,7 +881,7 @@ class DBSpendUpdateWriter:
         served_model_id: str | None,
         prisma_client: PrismaClient | None,
         router: _DeploymentLookup | None = None,
-    ):
+    ) -> None:
         """
         Update spend for every model access group this request is billed against.
 
@@ -914,7 +908,7 @@ class DBSpendUpdateWriter:
                         response_cost=response_cost,
                     )
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # isolation: a helper failure must not stop the batch
             spend_log_error(
                 "Spend tracking - failed to enqueue model access group spend update. "
                 "model_access_groups=%s, response_cost=%s - %s",
@@ -923,7 +917,6 @@ class DBSpendUpdateWriter:
                 str(e),
                 exc=e,
             )
-            raise e
 
     async def _insert_spend_log_to_db(
         self,
