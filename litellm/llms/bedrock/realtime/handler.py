@@ -7,19 +7,66 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 import asyncio
 import contextlib
 import json
-from typing import Any, Final
+from typing import Final, Protocol
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.types.realtime import RealtimeResponseTransformInput
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
 
 _CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
+_CLIENT_MESSAGE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def _json_dict(value: JsonValue) -> dict[str, JsonValue]:
+    return value if isinstance(value, dict) else {}
+
+
+def _json_str(value: JsonValue) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+class RealtimeClientWebSocket(Protocol):
+    """The client-facing websocket surface the realtime bridge talks to."""
+
+    async def receive_text(self) -> str: ...
+
+    async def send_text(self, data: str) -> None: ...
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
+
+
+class BedrockInputStream(Protocol):
+    async def send(self, event: object) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+class BedrockPayloadPart(Protocol):
+    @property
+    def bytes_(self) -> bytes | None: ...
+
+
+class BedrockOutputChunk(Protocol):
+    @property
+    def value(self) -> BedrockPayloadPart | None: ...
+
+
+class BedrockOutputStream(Protocol):
+    async def receive(self) -> BedrockOutputChunk | None: ...
+
+
+class BedrockBidirectionalStream(Protocol):
+    @property
+    def input_stream(self) -> BedrockInputStream: ...
+
+    async def await_output(self) -> tuple[object, BedrockOutputStream]: ...
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -31,7 +78,7 @@ class BedrockRealtime(BaseAWSLLM):
     async def async_realtime(
         self,
         model: str,
-        websocket: Any,
+        websocket: RealtimeClientWebSocket,
         logging_obj: LiteLLMLogging,
         api_base: str | None = None,
         api_key: str | None = None,
@@ -133,7 +180,7 @@ class BedrockRealtime(BaseAWSLLM):
             verbose_proxy_logger.debug("Bedrock Realtime: sent session.created to client on connect")
 
             # Track state for transformation
-            session_state: Final = {
+            session_state: Final[RealtimeResponseTransformInput] = {
                 "current_output_item_id": None,
                 "current_response_id": None,
                 "current_conversation_id": None,
@@ -183,11 +230,11 @@ class BedrockRealtime(BaseAWSLLM):
 
     async def _forward_client_to_bedrock(
         self,
-        client_ws: Any,
-        bedrock_stream: Any,
+        client_ws: RealtimeClientWebSocket,
+        bedrock_stream: BedrockBidirectionalStream,
         transformation_config: BedrockRealtimeConfig,
         model: str,
-        session_state: dict,
+        session_state: RealtimeResponseTransformInput,
         logging_obj: LiteLLMLogging | None = None,
     ):
         """Forward messages from client WebSocket to Bedrock stream."""
@@ -224,11 +271,11 @@ class BedrockRealtime(BaseAWSLLM):
                     client_message_type: str | None = None
                     requested_modalities: list[str] | None = None
                     with contextlib.suppress(Exception):
-                        parsed_client_message = json.loads(message)
-                        client_message_type = parsed_client_message.get("type")
+                        parsed_client_message = _json_dict(_CLIENT_MESSAGE_ADAPTER.validate_json(message))
+                        client_message_type = _json_str(parsed_client_message.get("type"))
                         if client_message_type == "session.update":
                             requested_modalities = _CLIENT_MODALITIES_ADAPTER.validate_python(
-                                parsed_client_message.get("session", {}).get("modalities")
+                                _json_dict(parsed_client_message.get("session")).get("modalities")
                             )
                     if client_message_type == "session.update":
                         await client_ws.send_text(
@@ -247,12 +294,12 @@ class BedrockRealtime(BaseAWSLLM):
 
     async def _forward_bedrock_to_client(
         self,
-        bedrock_stream: Any,
-        client_ws: Any,
+        bedrock_stream: BedrockBidirectionalStream,
+        client_ws: RealtimeClientWebSocket,
         transformation_config: BedrockRealtimeConfig,
         model: str,
         logging_obj: LiteLLMLogging,
-        session_state: dict,
+        session_state: RealtimeResponseTransformInput,
     ):
         """Forward messages from Bedrock stream to client WebSocket."""
         try:
@@ -265,13 +312,12 @@ class BedrockRealtime(BaseAWSLLM):
                     verbose_proxy_logger.debug("Bedrock Realtime: Bedrock stream ended")
                     break
 
-                if result.value and result.value.bytes_:
-                    bedrock_response = result.value.bytes_.decode("utf-8")
+                payload_bytes = result.value.bytes_ if result.value else None
+                if payload_bytes:
+                    bedrock_response = payload_bytes.decode("utf-8")
                     verbose_proxy_logger.debug("Bedrock Realtime: Received from Bedrock: %s", bedrock_response[:200])
 
                     # Transform Bedrock format to OpenAI format
-                    from litellm.types.realtime import RealtimeResponseTransformInput
-
                     realtime_response_transform_input: RealtimeResponseTransformInput = {
                         "current_output_item_id": session_state.get("current_output_item_id"),
                         "current_response_id": session_state.get("current_response_id"),
