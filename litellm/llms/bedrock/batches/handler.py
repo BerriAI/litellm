@@ -71,13 +71,13 @@ def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: str | N
 
 def _record_counts_from_response(response: Mapping[str, object]) -> BatchRequestCounts | None:
     total_records: Final = response.get("totalRecordCount")
-    if not isinstance(total_records, int):
-        return None
     success_records: Final = response.get("successRecordCount")
+    if not isinstance(total_records, int) or not isinstance(success_records, int):
+        return None
     error_records: Final = response.get("errorRecordCount")
     return BatchRequestCounts(
         total=total_records,
-        completed=success_records if isinstance(success_records, int) else 0,
+        completed=success_records,
         failed=error_records if isinstance(error_records, int) else 0,
     )
 
