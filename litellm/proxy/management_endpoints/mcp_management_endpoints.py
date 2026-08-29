@@ -2135,6 +2135,28 @@ if MCP_AVAILABLE:
         """Persist the OAuth2 access token obtained by the calling user."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            global_mcp_server_manager as _manager,
+        )
+
+        # This endpoint accepts an opaque token with no upstream identity validation, so it must be
+        # closed for identity-bound servers or it becomes a bypass of the token-relay binding check.
+        registry_server: Final = _manager.get_mcp_server_by_id(server_id)
+        binding: Final = registry_server.oauth_identity_binding if registry_server else None
+        if binding is not None and binding.mode == "enforce":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "oauth_identity_binding_enforced",
+                    "error_description": (
+                        "Direct credential storage is disabled for this server: its OAuth identity "
+                        "binding is enforced and this endpoint cannot validate the token's principal. "
+                        "Complete the OAuth flow through the gateway instead."
+                    ),
+                    "server_id": server_id,
+                    "credential_stored": False,
+                },
+            )
         user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
