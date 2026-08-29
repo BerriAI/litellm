@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from typing import Any, Final, Literal
@@ -548,6 +549,37 @@ class BedrockGuardrailConfigModel(BaseModel):
         "still rejects is bisected automatically, so this value only trades round trips against "
         "batch size and cannot fail a request on its own.",
     )
+
+
+class BedrockGuardrailStreamingParams(BaseModel):
+    streaming_buffer_until_moderated: bool = Field(
+        default=True,
+        description="If True (default), withhold every streamed chunk until the end-of-stream "
+        "ApplyGuardrail scan passes, so no flagged content reaches the client before a block. "
+        "If False, chunks stream through unbuffered, so flagged content can reach the client "
+        "before the scan finishes; a flagged scan still ends the stream, with a block message "
+        "when disable_exception_on_block is true and an in-stream error frame otherwise.",
+    )
+    streaming_sampling_rate: int = Field(
+        default=5,
+        ge=1,
+        description="When not buffering and not end-of-stream-only, scan the accumulated response "
+        "every Nth streamed chunk. Each sampled scan is a full ApplyGuardrail call that delays "
+        "that chunk, so lower values add latency and AWS text-unit cost.",
+    )
+    streaming_end_of_stream_only: bool = Field(
+        default=False,
+        description="When not buffering, skip per-chunk sampling and run one ApplyGuardrail scan "
+        "on the assembled response at end of stream. Combined with "
+        "streaming_buffer_until_moderated=false the full response streams live before the scan "
+        "and the scan result lands in guardrail_information; a flagged response still ends the "
+        "stream with a block message (disable_exception_on_block=true) or an error frame.",
+    )
+
+    @classmethod
+    def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
+        source: Final[Mapping[str, object]] = extras or {}
+        return cls.model_validate({name: source[name] for name in cls.model_fields if source.get(name) is not None})
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):
