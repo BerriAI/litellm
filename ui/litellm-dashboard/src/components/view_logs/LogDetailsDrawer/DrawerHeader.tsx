@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, X } from "lucide-react";
 import moment from "moment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,8 @@ interface DrawerHeaderProps {
   statusLabel: string;
   statusColor: "error" | "success";
   environment: string;
+  isSidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
 }
 
 /**
@@ -40,6 +42,8 @@ export function DrawerHeader({
   statusLabel,
   statusColor,
   environment,
+  isSidebarCollapsed,
+  onToggleSidebar,
 }: DrawerHeaderProps) {
   const provider = log.custom_llm_provider || "";
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
@@ -56,13 +60,24 @@ export function DrawerHeader({
       }}
     >
       {/* Row 0: Model + Provider with Logo */}
-      <ModelProviderSection
-        model={log.model}
-        modelGroup={log.model_group}
-        internalCallOrigin={log.metadata?.internal_call_origin}
-        providerLogo={providerInfo?.logo}
-        providerName={providerInfo?.displayName}
-      />
+      <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={onToggleSidebar}
+          className="shrink-0"
+          aria-label={isSidebarCollapsed ? "Expand trace sidebar" : "Collapse trace sidebar"}
+        >
+          {isSidebarCollapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+        </Button>
+        <ModelProviderSection
+          model={log.model}
+          modelGroup={log.model_group}
+          internalCallOrigin={log.metadata?.internal_call_origin}
+          providerLogo={providerInfo?.logo}
+          providerName={providerInfo?.displayName}
+        />
+      </div>
 
       {/* Row 1: Request ID + Actions */}
       <div
@@ -95,7 +110,7 @@ function ModelProviderSection({
   providerName?: string;
 }) {
   return (
-    <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
+    <div className="flex min-w-0 items-center gap-2">
       {providerLogo && (
         <img
           src={providerLogo}
