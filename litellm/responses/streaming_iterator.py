@@ -422,15 +422,20 @@ class BaseResponsesAPIStreamingIterator:
 
         end_time: Final = datetime.now()
         if is_async:
-            asyncio.create_task(
-                self.logging_obj.dispatch_success_handlers(
-                    logging_response,
-                    start_time=self.start_time,
-                    end_time=end_time,
-                    cache_hit=self._completed_response_cache_hit,
-                    prefer_async_handlers=True,
-                )
+            logging_coroutine: Final = self.logging_obj.dispatch_success_handlers(
+                logging_response,
+                start_time=self.start_time,
+                end_time=end_time,
+                cache_hit=self._completed_response_cache_hit,
+                prefer_async_handlers=True,
             )
+            deferred_dispatch_armed: Final = getattr(self.logging_obj, "_on_deferred_stream_complete", None) is not None
+            if deferred_dispatch_armed:
+                # End-of-stream guardrail scans write guardrail_information after
+                # the terminal event; dispatching now would snapshot metadata early.
+                self.logging_obj._deferred_stream_complete_args = (logging_coroutine,)
+            else:
+                asyncio.create_task(logging_coroutine)
         else:
             run_async_function(
                 async_function=self.logging_obj.async_success_handler,
