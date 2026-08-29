@@ -1375,9 +1375,25 @@ db_health_cache: DBHealthCache = {"status": "unknown", "last_updated": datetime.
 # Bounds each DB round-trip on the probe path so a hung connection during a
 # failover cannot make the probe fail by timeout (k8s default timeoutSeconds: 5).
 DB_READINESS_CHECK_TIMEOUT_SECONDS: Final = 2.0
+# One deadline for the whole probe-path DB check (initial check + reconnect +
+# re-check, including reconnect lock waits), kept under timeoutSeconds: 5.
+DB_READINESS_PROBE_DEADLINE_SECONDS: Final = 4.0
 
 
 async def _db_health_readiness_check():
+    global db_health_cache
+
+    try:
+        return await asyncio.wait_for(
+            _db_health_readiness_check_unbounded(),
+            timeout=DB_READINESS_PROBE_DEADLINE_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+        return db_health_cache
+
+
+async def _db_health_readiness_check_unbounded():
     from litellm.proxy.proxy_server import prisma_client
 
     global db_health_cache
@@ -1402,6 +1418,7 @@ async def _db_health_readiness_check():
                 await prisma_client.attempt_db_reconnect(
                     reason="health_readiness_check",
                     timeout_seconds=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                    lock_timeout_seconds=DB_READINESS_CHECK_TIMEOUT_SECONDS,
                 )
                 await asyncio.wait_for(
                     prisma_client.health_check(),
