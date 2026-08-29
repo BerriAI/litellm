@@ -13,7 +13,9 @@ GEMINI_TTS_MODEL: Final = "gemini-3.1-flash-tts-preview"
 
 
 def _bridge_request(response_format: str | None) -> dict:
-    optional_params: Final = {"temperature": 0.4} if response_format is None else {"temperature": 0.4, "response_format": response_format}
+    optional_params: Final = (
+        {"temperature": 0.4} if response_format is None else {"temperature": 0.4, "response_format": response_format}
+    )
     return SpeechToCompletionBridgeTransformationHandler().transform_request(
         model=GEMINI_TTS_MODEL,
         input="Hello from LiteLLM",
