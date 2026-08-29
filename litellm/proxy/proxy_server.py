@@ -12785,10 +12785,8 @@ async def _fetch_db_models_for_search(
     filter for `team_public_model_name` instead and keep the DB cost
     bounded by `search`.
     """
-    exact_name_filter: Final[dict[str, Any]] = {} if model_name is None else {"AND": [{"model_name": model_name}]}
     db_where_condition: Final[dict[str, Any]] = {
-        "model_name": {"contains": search_lower, "mode": "insensitive"},
-        **exact_name_filter,
+        "model_name": {"contains": search_lower, "mode": "insensitive"} if model_name is None else model_name
     }
     if db_model_ids_in_router:
         db_where_condition["model_id"] = {"not": {"in": list(db_model_ids_in_router)}}
@@ -12858,9 +12856,10 @@ async def _apply_search_filter_to_models(
             full match set, so the DB fetch is capped at
             ``_SORTED_SEARCH_DB_FETCH_CAP`` instead of one page.
         model_name: Exact ``model_name`` the caller already narrowed
-            ``all_models`` to (``?model=``). The DB query honours it too,
-            otherwise rows from other model groups leak into the result
-            and the count.
+            ``all_models`` to (``?model=``). The DB query matches it
+            exactly instead of the substring, and is skipped when the
+            substring cannot occur in it, otherwise rows from other model
+            groups leak into the result and the count.
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
@@ -12918,7 +12917,8 @@ async def _apply_search_filter_to_models(
 
     # Query database for additional models with search term
     db_models: list[dict[str, Any]] = []
-    if prisma_client is not None:
+    exact_name_can_match: Final = model_name is None or search_lower in model_name.lower()
+    if prisma_client is not None and exact_name_can_match:
         try:
             db_models, db_models_total_count = await _fetch_db_models_for_search(
                 prisma_client=prisma_client,
