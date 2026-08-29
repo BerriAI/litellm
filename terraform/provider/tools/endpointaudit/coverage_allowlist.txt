@@ -117,6 +117,7 @@ DELETE /config/pass_through_endpoint              # known gap: pass-through endp
 POST /config/pass_through_endpoint/{endpoint_id}  # known gap: pass-through endpoint resource
 GET /config/pass_through_endpoint/team/{team_id}  # known gap: pass-through endpoint resource
 GET /vector_store/list                            # known gap: plural vector stores data source
+GET /jwt/key/mapping/list                         # known gap: plural jwt key mappings data source
 GET /customer/info                                # known gap: litellm_customer resource
 GET /customer/list                                # known gap: litellm_customer resource
 POST /customer/new                                # known gap: litellm_customer resource
@@ -125,4 +126,3 @@ POST /customer/delete                             # known gap: litellm_customer 
 GET /team/{team_id}/callback                      # known gap: team callback resource
 POST /team/{team_id}/callback                     # known gap: team callback resource
 DELETE /team/{team_id}/callback/{callback_name}   # known gap: team callback resource
-GET /jwt/key/mapping/list                         # known gap: litellm_jwt_key_mapping, in review (PR #36096)
