@@ -39,9 +39,9 @@ from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
 
-# Providers that are routed directly to the OpenAI Responses API instead of
+# Providers that are routed directly to a Responses API instead of
 # going through chat/completions.
-_RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+_RESPONSES_API_PROVIDERS: Final = frozenset({"apodex", "openai"})
 
 
 def _bridges_to_responses_api(model: str, custom_llm_provider: str) -> bool:
@@ -570,11 +570,13 @@ def anthropic_messages_handler(
 
         anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig()
     if anthropic_messages_provider_config is None:
-        # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
+        # Route to a Responses API for the providers that serve one, chat/completions
+        # for everything else.
+        downstream_model: Final = model if custom_llm_provider == "apodex" else original_model
         _shared_kwargs: Final = dict(
             max_tokens=max_tokens,
             messages=messages,
-            model=original_model,
+            model=downstream_model,
             metadata=metadata,
             stop_sequences=stop_sequences,
             stream=stream,

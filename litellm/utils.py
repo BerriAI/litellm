@@ -8147,6 +8147,7 @@ class ProviderConfigManager:
             ),
             LlmProviders.GRADIENT_AI: (lambda: litellm.GradientAIConfig(), False),
             LlmProviders.NSCALE: (lambda: litellm.NscaleConfig(), False),
+            LlmProviders.APODEX: (lambda: litellm.ApodexChatConfig(), False),
             LlmProviders.HEROKU: (lambda: litellm.HerokuChatConfig(), False),
             LlmProviders.OCI: (lambda: litellm.OCIChatConfig(), False),
             LlmProviders.HYPERBOLIC: (lambda: litellm.HyperbolicChatConfig(), False),
@@ -8474,6 +8475,17 @@ class ProviderConfigManager:
             )
 
             return DeepSeekAnthropicMessagesConfig()
+        elif litellm.LlmProviders.APODEX == provider:
+            from litellm.llms.apodex.common_utils import is_deep_research_model
+            from litellm.llms.apodex.messages.transformation import (
+                ApodexAnthropicMessagesConfig,
+            )
+
+            # Apodex only serves the core models on its native /v1/messages path; the
+            # deep research tiers get no config so they fall back to translation.
+            if is_deep_research_model(model):
+                return None
+            return ApodexAnthropicMessagesConfig()
         elif litellm.LlmProviders.TENCENT == provider:
             from litellm.llms.tencent.messages.transformation import (
                 TencentAnthropicMessagesConfig,
@@ -8665,6 +8677,8 @@ class ProviderConfigManager:
             return litellm.ManusResponsesAPIConfig()
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityResponsesConfig()
+        elif litellm.LlmProviders.APODEX == provider:
+            return litellm.ApodexResponsesConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
             # Databricks Responses API is only compatible with OpenAI GPT models
             if model and "gpt" in model.lower():

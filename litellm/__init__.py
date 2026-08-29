@@ -650,6 +650,7 @@ snowflake_models: Set = set()
 gradient_ai_models: Set = set()
 llama_models: Set = set()
 nscale_models: Set = set()
+apodex_models: Set = set()  # mutable-ok: provider model registry is populated during initialization
 nebius_models: Set = set()
 nebius_embedding_models: Set = set()
 aiml_models: Set = set()
@@ -842,6 +843,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             llama_models.add(key)
         elif value.get("litellm_provider") == "nscale":
             nscale_models.add(key)
+        elif value.get("litellm_provider") == "apodex":
+            apodex_models.add(key)
         elif value.get("litellm_provider") == "azure_ai":
             azure_ai_models.add(key)
         elif value.get("litellm_provider") == "voyage":
@@ -1066,6 +1069,7 @@ model_list = list(
     | llama_models
     | featherless_ai_models
     | nscale_models
+    | apodex_models
     | deepgram_models
     | elevenlabs_models
     | dashscope_models
@@ -1170,6 +1174,7 @@ def _build_models_by_provider() -> dict:
         "gradient_ai": gradient_ai_models,
         "meta_llama": llama_models,
         "nscale": nscale_models,
+        "apodex": apodex_models,
         "featherless_ai": featherless_ai_models,
         "deepgram": deepgram_models,
         "elevenlabs": elevenlabs_models,
@@ -1799,6 +1804,9 @@ if TYPE_CHECKING:
     from .llms.perplexity.responses.transformation import (
         PerplexityResponsesConfig as PerplexityResponsesConfig,
     )
+    from .llms.apodex.responses.transformation import (
+        ApodexResponsesConfig as ApodexResponsesConfig,
+    )
     from .llms.databricks.responses.transformation import (
         DatabricksResponsesAPIConfig as DatabricksResponsesAPIConfig,
     )
@@ -1875,6 +1883,7 @@ if TYPE_CHECKING:
         PerplexityChatConfig as _PerplexityChatConfig,
     )
     from .llms.nscale.chat.transformation import NscaleConfig as _NscaleConfig
+    from .llms.apodex.chat.transformation import ApodexChatConfig as _ApodexChatConfig
     from .llms.watsonx.chat.transformation import (
         IBMWatsonXChatConfig as _IBMWatsonXChatConfig,
     )
@@ -1910,6 +1919,7 @@ if TYPE_CHECKING:
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
     PerplexityChatConfig: Type[_PerplexityChatConfig]
     NscaleConfig: Type[_NscaleConfig]
+    ApodexChatConfig: Type[_ApodexChatConfig]
     IBMWatsonXChatConfig: Type[_IBMWatsonXChatConfig]
     IBMWatsonXAIConfig: Type[_IBMWatsonXAIConfig]
     LiteLLMProxyChatConfig: Type[_LiteLLMProxyChatConfig]
