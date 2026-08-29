@@ -627,6 +627,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "aipg",
 ]
 
 # Resolving these providers runs an OAuth device flow (their provider info IS the login), so any
@@ -808,6 +809,7 @@ openai_compatible_endpoints: Final[list] = [
 
 
 openai_compatible_providers: Final[list] = [
+    "aipg",  # AI Power Grid - JSON-configured provider
     "anyscale",
     "groq",
     "nvidia_nim",

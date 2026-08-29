@@ -54596,5 +54596,43 @@
         "output_cost_per_token_above_200k_tokens": 5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "supports_response_schema": true
+    },
+    "aipg/gpt-oss-120b": {
+        "input_cost_per_token": 7.5e-08,
+        "litellm_provider": "aipg",
+        "max_input_tokens": 60000,
+        "max_tokens": 60000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "source": "https://docs.aipowergrid.io/streaming-api",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "aipg/deepseek-v4-flash-nvfp4": {
+        "input_cost_per_token": 7e-08,
+        "litellm_provider": "aipg",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-07,
+        "source": "https://docs.aipowergrid.io/streaming-api",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "aipg/Smollm-135m": {
+        "input_cost_per_token": 5e-09,
+        "litellm_provider": "aipg",
+        "max_input_tokens": 2048,
+        "max_tokens": 2048,
+        "mode": "chat",
+        "output_cost_per_token": 1e-08,
+        "source": "https://docs.aipowergrid.io/streaming-api",
+        "supports_function_calling": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false
     }
 }
