@@ -38941,14 +38941,14 @@
         "source": "https://docs.together.ai/docs/serverless-models"
     },
     "together_ai/Qwen/Qwen3.8-2.4T-A95B": {
-        "cache_read_input_token_cost": 2.5e-07,
-        "input_cost_per_token": 2e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1010000,
         "max_output_tokens": 1010000,
         "max_tokens": 1010000,
         "mode": "chat",
-        "output_cost_per_token": 6e-06,
+        "output_cost_per_token": 6.25e-06,
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_prompt_caching": true
     },
@@ -39203,6 +39203,18 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "together_ai/zai-org/GLM-5.3": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1048575,
+        "max_output_tokens": 1048575,
+        "max_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.together.ai/docs/serverless-models",
+        "supports_prompt_caching": true
     },
     "tts-1": {
         "input_cost_per_character": 1.5e-05,
