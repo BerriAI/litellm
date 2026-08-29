@@ -4281,6 +4281,8 @@ class ProxyConfig:
         self.config: dict[str, Any] = {}
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
+        self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
+        self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
         self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
@@ -6764,9 +6766,18 @@ class ProxyConfig:
         - list: the rows (may be empty if no models exist)
         - None: signals a DB fetch *failure* — callers must not treat this
           as "all models deleted" and must not evict existing router deployments.
+
+        Pinned to the writer DB: this read reconciles the router against the rows a
+        model write just committed, and reading it through a lagging read replica
+        makes the write-triggered reload report its own durable write as missing
+        (#38556). It also keeps a stale replica snapshot from evicting a deployment
+        another pod just added. While the writer is degraded the pin yields to the
+        replica so reader-only mode keeps loading DB-backed models.
         """
         try:
-            new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(prisma_client).table.find_many()
+            new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(
+                WriterPinnedClient(prisma_client.db)
+            ).table.find_many()
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -6968,6 +6979,7 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="config_overrides"):
             await self._init_hashicorp_vault_config_override(prisma_client=prisma_client)
+            await self._init_cyberark_config_override(prisma_client=prisma_client)
 
         await self._apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
 
@@ -7129,6 +7141,64 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error loading Hashicorp Vault config override from DB: %s",
+                str(e),
+            )
+
+    async def _init_cyberark_config_override(self, prisma_client: PrismaClient) -> None:
+        """
+        Load CyberArk Conjur config override from DB.
+        Decrypts sensitive fields, sets CYBERARK_* env vars, and reinitializes the secret manager.
+        Called periodically via _init_non_llm_objects_in_db to sync config across pods.
+        """
+        from litellm.proxy.management_endpoints.config_override_endpoints import (
+            CYBERARK_ENV_VAR_MAPPING,
+            _clear_cyberark_state,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _get_current_env_values,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _parse_config_value,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _set_env_vars,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _snapshot_cyberark_boot_env,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+        )
+
+        try:
+            db_record: Final[_ConfigOverridesRow | None] = cast(  # cast-ok: prisma Json stub is `str`, runtime dict
+                "_ConfigOverridesRow | None",
+                await call_with_db_reconnect_retry(
+                    prisma_client,
+                    lambda: ConfigOverridesRepository(prisma_client).table.find_unique(
+                        where={"config_type": "cyberark"}  # mutable-ok: prisma where clause
+                    ),
+                    reason="init_cyberark_config_override_lookup_failure",
+                ),
+            )
+
+            if db_record is None or db_record.config_value is None:
+                if self._last_cyberark_config is not None:
+                    _clear_cyberark_state(self)
+                return
+
+            config_data: Final = _parse_config_value(db_record.config_value)
+
+            # Skip reinit if config hasn't changed since last poll
+            if self._last_cyberark_config == config_data:
+                return
+
+            decrypted_data: Final = self._decrypt_db_variables(config_data)
+
+            _snapshot_cyberark_boot_env(self)
+            previous_env: Final = _get_current_env_values(CYBERARK_ENV_VAR_MAPPING)
+            _set_env_vars(decrypted_data, CYBERARK_ENV_VAR_MAPPING)
+
+            try:
+                self.initialize_secret_manager(key_management_system="cyberark")
+            except Exception:
+                _set_env_vars(previous_env, CYBERARK_ENV_VAR_MAPPING)
+                raise
+
+            self._last_cyberark_config = config_data.copy()
+            verbose_proxy_logger.debug("CyberArk config override loaded from DB")
+        except Exception as e:  # noqa: BLE001  # any DB/decrypt/init failure must not break proxy boot
+            verbose_proxy_logger.exception(
+                "Error loading CyberArk config override from DB: %s",
                 str(e),
             )
 
@@ -12013,6 +12083,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (

@@ -1073,6 +1073,7 @@ async def test_key_metadata_enable_prompt_caching_promoted_to_request_root(key_v
         "_code_interpreter_interception_active",
         "_code_interpreter_interception_converted_stream",
         "_code_interpreter_interception_sandbox_key",
+        "_headroom_interception_converted_stream",
         "max_agentic_loops",
     ],
 )
@@ -1107,6 +1108,7 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
         "_code_interpreter_interception_active": True,
         "_code_interpreter_interception_converted_stream": True,
         "_code_interpreter_interception_sandbox_key": "forged-key",
+        "_headroom_interception_converted_stream": True,
         "max_agentic_loops": 9999,
     }
     sample_value = sample_values[control_field]
