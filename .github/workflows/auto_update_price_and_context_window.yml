@@ -2,8 +2,8 @@ name: Updates model_prices_and_context_window.json and Create Pull Request
 
 on:
   schedule:
-    - cron: "0 0 * * 0" # Run every Sundays at midnight
-    #- cron: "0 0 * * *" # Run daily at midnight
+    - cron: "0 0 * * 0"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,19 +21,44 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
-      - name: Update JSON Data
+      - name: Look for an already-open price map update PR
+        id: existing
         run: |
-          uv run --frozen --with 'aiohttp==3.13.3' python ".github/scripts/auto_update_price_and_context_window_file.py"
+          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json headRefName --jq '[.[].headRefName | select(startswith("litellm_price_map_auto_update_"))] | first // empty')"
+          if [ -n "$open_pr" ]; then
+            echo "Skipping the sync: the price map update PR on $open_pr is still open"
+          fi
+          echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+      - name: Update JSON Data
+        if: steps.existing.outputs.open_pr == ''
+        run: |
+          uv run --frozen --with 'aiohttp==3.13.3' python .github/scripts/auto_update_price_and_context_window_file.py
       - name: Regenerate JSON Schema
+        if: steps.existing.outputs.open_pr == ''
         run: |
           uv run --frozen python ci_cd/generate_model_prices_schema.py
       - name: Create Pull Request
+        if: steps.existing.outputs.open_pr == ''
         run: |
-          git add model_prices_and_context_window.json model_prices_and_context_window.schema.json
-          git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')" 
-          gh pr create --title "Update model_prices_and_context_window.json file" \
-            --body "Automated update for model_prices_and_context_window.json" \
-            --head auto-update-price-and-context-window-$(date +'%Y-%m-%d') \
-            --base main
+          if git diff --quiet; then
+            echo "Price map already in sync with the OpenRouter and Vercel AI Gateway catalogs; no PR needed."
+            exit 0
+          fi
+          today="$(date +'%Y-%m-%d')"
+          branch="litellm_price_map_auto_update_$today"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json model_prices_and_context_window.schema.json
+          git commit -m "chore(models): sync openrouter and vercel_ai_gateway prices $today"
+          gh auth setup-git
+          git push origin "$branch"
+          gh pr create \
+            --title "chore(models): sync openrouter and vercel_ai_gateway prices $today" \
+            --body "Automated sync of model_prices_and_context_window.json from the OpenRouter and Vercel AI Gateway model catalogs" \
+            --head "$branch" \
+            --base litellm_internal_staging
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
