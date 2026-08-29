@@ -1389,6 +1389,8 @@ async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
         )
 
     assert "Traceback" not in str(excinfo.value)
+
+
 @pytest.mark.asyncio
 async def test_anthropic_pass_through_drop_params(monkeypatch):
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
