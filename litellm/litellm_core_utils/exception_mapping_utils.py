@@ -28,27 +28,6 @@ from ..exceptions import (
 )
 
 
-_RATE_LIMIT_STRUCTURED_MARKERS: Final = frozenset(
-    {
-        "429",
-        "capacity_temporarily_exceeded",
-        "concurrency_limit_reached",
-        "concurrent_requests_limit_exceeded",
-        "insufficient_quota",
-        "provisioned_throughput_exceeded",
-        "quota_exceeded",
-        "rate_limit",
-        "rate_limit_error",
-        "request_rate_too_large",
-        "requests_per_day_exceeded",
-        "requests_per_minute_exceeded",
-        "resource_exhausted",
-        "throttling_exception",
-        "tokens_per_day_exceeded",
-        "tokens_per_minute_exceeded",
-        "too_many_requests",
-    }
-)
 _VALIDATION_STRUCTURED_MARKERS: Final = frozenset(
     {
         "bad_request",
@@ -67,7 +46,6 @@ _STRUCTURED_ERROR_SIGNAL_KEYS: Final = (
     "type",
     "error_type",
     "__type",
-    "reason",
 )
 
 
@@ -97,13 +75,13 @@ def _parse_structured_error_payload(error_text: str) -> dict[str, Any] | None:
     return None
 
 
-def _structured_rate_limit_signal(
+def _structured_validation_signal(
     *,
     error_str: str,
     response: httpx.Response | None = None,
     error_body: Any | None = None,
-) -> bool | None:
-    """Return an explicit rate-limit/validation signal when the provider supplies one."""
+) -> bool:
+    """Return whether the provider supplies an explicit validation signal."""
     payloads: list[dict[str, Any]] = []
     if isinstance(error_body, dict):
         payloads.append(error_body)
@@ -118,7 +96,6 @@ def _structured_rate_limit_signal(
     if parsed_error is not None:
         payloads.append(parsed_error)
 
-    saw_validation_signal = False
     for payload in payloads:
         error_objects = [payload]
         nested_error = payload.get("error")
@@ -131,19 +108,12 @@ def _structured_rate_limit_signal(
                 if value is None:
                     continue
                 marker = _normalise_structured_marker(value)
-                if marker in _RATE_LIMIT_STRUCTURED_MARKERS or any(
-                    rate_limit_marker in marker
-                    for rate_limit_marker in _RATE_LIMIT_STRUCTURED_MARKERS
-                    if rate_limit_marker != "429"
-                ):
+                if not marker:
+                    continue
+                if marker in _VALIDATION_STRUCTURED_MARKERS:
                     return True
-                if marker in _VALIDATION_STRUCTURED_MARKERS or any(
-                    validation_marker in marker
-                    for validation_marker in _VALIDATION_STRUCTURED_MARKERS
-                ):
-                    saw_validation_signal = True
 
-    return False if saw_validation_signal else None
+    return False
 
 
 class ExceptionCheckers:
@@ -182,13 +152,12 @@ class ExceptionCheckers:
         if re.search(r"\b429\b", error_str) and (not isinstance(status_code, int) or status_code == 429):
             return True
 
-        structured_signal = _structured_rate_limit_signal(
+        if _structured_validation_signal(
             error_str=error_str,
             response=response,
             error_body=error_body,
-        )
-        if structured_signal is not None:
-            return structured_signal
+        ):
+            return False
 
         _error_str_lower: Final = error_str.lower()
 

@@ -1162,7 +1162,7 @@ def test_structured_provider_rate_limit_reaches_dispatch_boundary(
         (
             "bedrock",
             '{"__type": "ValidationException", "message": "Invalid request: too many requests"}',
-            {"__type": "ValidationException", "reason": {"echo": "too many requests"}},
+            {"__type": "ValidationException", "status": {"echo": "too many requests"}},
         ),
         (
             "azure",
