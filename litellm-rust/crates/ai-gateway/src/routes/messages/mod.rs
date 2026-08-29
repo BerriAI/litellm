@@ -181,6 +181,7 @@ mod tests {
             )),
             metrics: Arc::new(crate::metrics::GatewayMetrics::new()),
             config: crate::state::GatewayConfig::from_env(),
+            global_rate_limiter: Arc::new(crate::hardening::GlobalRateLimiter::new(10_000, 60)),
         }
     }
 
