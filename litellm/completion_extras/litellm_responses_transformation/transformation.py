@@ -59,9 +59,11 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import (
         ALL_RESPONSES_API_TOOL_PARAMS,
         AllMessageValues,
+        ChatCompletionFileObject,
         ChatCompletionImageObject,
         ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
+        ChatCompletionToolReferenceObject,
         OpenAIMessageContentListBlock,
     )
     from litellm.types.utils import Choices
@@ -173,6 +175,16 @@ def _map_incomplete_reason_to_finish_reason(incomplete_reason: str | None) -> Li
     if incomplete_reason == "content_filter":
         return "content_filter"
     return "length"
+
+
+def _input_file_from_file_value(file_value: object) -> dict[str, object]:
+    if not isinstance(file_value, dict):
+        return {"type": "input_file"}
+    file_dict: Final = cast("dict[str, object]", file_value)  # cast-ok: runtime dict checked
+    return {
+        "type": "input_file",
+        **{key: file_dict[key] for key in ("file_id", "file_data", "filename") if key in file_dict},
+    }
 
 
 def _incomplete_reason_from_response_payload(response_payload: object) -> str | None:
@@ -958,7 +970,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         content: str
         | list[object]
         | Iterable[
-            Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]
+            Union[
+                "OpenAIMessageContentListBlock",
+                "ChatCompletionThinkingBlock",
+                "ChatCompletionRedactedThinkingBlock",
+                "ChatCompletionToolReferenceObject",
+            ]
         ]
         | None,
         role: str,
@@ -1007,17 +1024,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   image -> %s", converted)
                         elif item_type == "file":
-                            # Map Chat Completion file to Responses API input_file
-                            # {"type": "file", "file": {"file_data": "...", "filename": "..."}}
-                            # -> {"type": "input_file", "file_data": "...", "filename": "..."}
-                            file_data = item.get("file", {})
-                            converted = {"type": "input_file"}
-                            if isinstance(file_data, dict):
-                                for key in ["file_id", "file_data", "filename"]:
-                                    if key in file_data:
-                                        converted[key] = file_data[key]
+                            converted = _input_file_from_file_value(
+                                cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                            )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
+                        elif item_type == "tool_reference":
+                            verbose_logger.debug(
+                                "Chat provider:   tool_reference has no responses API equivalent; skipped"
+                            )
                         elif item_type in [
                             "input_text",
                             "input_image",

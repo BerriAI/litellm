@@ -2661,6 +2661,7 @@ class LiteLLMCompletionResponsesConfig:
             optional_output_details: Final[dict[str, int]] = {
                 field: value
                 for field, value in (
+                    ("audio_tokens", getattr(completion_details, "audio_tokens", None)),
                     ("text_tokens", getattr(completion_details, "text_tokens", None)),
                     ("image_tokens", getattr(completion_details, "image_tokens", None)),
                 )

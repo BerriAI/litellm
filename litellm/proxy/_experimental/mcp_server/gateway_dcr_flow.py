@@ -65,15 +65,16 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     SessionRefreshOpened,
+    SessionSigningConfigError,
+    active_session_signing_keys,
     open_session_refresh_bearer,
-    session_keys_from_master_key,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     SESSION_REFRESH_TTL_SECONDS,
     MintedSessionToken,
     SessionAudience,
-    SessionKeys,
     SessionPrincipal,
+    SessionSigningKeys,
     mint_session_refresh_token,
     mint_session_token,
 )
@@ -885,7 +886,7 @@ class _SingleUseGuard:
         return "first" if count == 1 else "replayed"
 
 
-def _session_token_pair(principal: SessionPrincipal, keys: SessionKeys, now: datetime) -> Response:
+def _session_token_pair(principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime) -> Response:
     access: Final = mint_session_token(principal, keys, now)
     refresh: Final = mint_session_refresh_token(principal, keys, now)
     if not isinstance(access, MintedSessionToken) or not isinstance(refresh, MintedSessionToken):
@@ -912,7 +913,7 @@ class _ProxyCredentialTokenResponse(TypedDict):
 
 
 def _proxy_credential_response(
-    minted: MintedProxyCredential, principal: SessionPrincipal, keys: SessionKeys, now: datetime
+    minted: MintedProxyCredential, principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime
 ) -> Response:
     """The proxy-API token response: the access token is the very credential ``lite
     login`` stores (accepted on every proxy route with user and team attribution), and
@@ -998,7 +999,10 @@ async def aggregate_token(
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr token grant rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys: Final = session_keys_from_master_key(master_key)
+    keys: Final = active_session_signing_keys(master_key)
+    if isinstance(keys, SessionSigningConfigError):
+        verbose_logger.error("mcp_gateway_dcr token grant rejected: %s", keys.detail)
+        return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     now: Final = datetime.now(timezone.utc)
     issue: Final = _GrantIssuer(
         request=request,
@@ -1043,7 +1047,7 @@ class _GrantIssuer:
         self,
         request: Request,
         resource: str | None,
-        keys: SessionKeys,
+        keys: SessionSigningKeys,
         now: datetime,
         reload_user: ReloadUser,
         mint_proxy_credential: MintProxyCredential,
@@ -1146,7 +1150,7 @@ async def _refresh_token_grant(
     refresh_token: str | None,
     client_id: str,
     resource: str | None,
-    keys: SessionKeys,
+    keys: SessionSigningKeys,
     now: datetime,
     issue: _GrantIssuer,
 ) -> Response:
@@ -1182,7 +1186,10 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr revoke rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys: Final = session_keys_from_master_key(master_key)
+    keys: Final = active_session_signing_keys(master_key)
+    if isinstance(keys, SessionSigningConfigError):
+        verbose_logger.error("mcp_gateway_dcr revoke rejected: %s", keys.detail)
+        return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     now: Final = datetime.now(timezone.utc)
     opened: Final = open_session_refresh_bearer(token, keys, now, expected_client_id=client_id)
     if isinstance(opened, SessionRefreshOpened):

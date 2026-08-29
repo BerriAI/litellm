@@ -2,7 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -76,7 +76,10 @@ from litellm.llms.perplexity.cost_calculator import (
 from litellm.llms.tencent.cost_calculator import (
     cost_per_token as tencent_cost_per_token,
 )
-from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
+from litellm.llms.together_ai.cost_calculator import (
+    get_model_params_and_category,
+    has_together_registry_pricing,
+)
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
 )
@@ -557,9 +560,10 @@ def cost_per_token(
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_usage_has_token_details(usage_block):
-            return openai_cost_per_token(
+            return generic_cost_per_token(
                 model=model_without_prefix,
                 usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
             )
@@ -735,6 +739,13 @@ def _get_provider_for_cost_calc(
     return custom_llm_provider
 
 
+def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None:
+    if not isinstance(hidden_params, Mapping):
+        return None
+    value: Final[object] = hidden_params.get(key)
+    return value if isinstance(value, str) and value else None
+
+
 def _select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -751,7 +762,6 @@ def _select_model_name_for_cost_calc(
     """
 
     return_model: str | None = None
-    region_name: str | None = None
     custom_llm_provider = _get_provider_for_cost_calc(model=model, custom_llm_provider=custom_llm_provider)
 
     completion_response_model: str | None = None
@@ -761,6 +771,14 @@ def _select_model_name_for_cost_calc(
         elif isinstance(completion_response, dict):
             completion_response_model = completion_response.get("model", None)
     hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
+    provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
+    explicit_pricing: Final = custom_pricing is True or base_model is not None
+    priced_from_response: Final = provider_response_model is not None or completion_response_model is not None
+    region_name: Final = (
+        _get_hidden_str_for_cost_calc(hidden_params, "region_name")
+        if not explicit_pricing and priced_from_response
+        else None
+    )
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
@@ -776,14 +794,12 @@ def _select_model_name_for_cost_calc(
         else:
             return_model = model
 
-    elif base_model is not None:
-        return_model = base_model
+    elif base_model is not None or provider_response_model is not None:
+        return_model = base_model if base_model is not None else provider_response_model
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
             return_model = hidden_params.get("model", model)
-    elif hidden_params is not None and hidden_params.get("region_name", None) is not None:
-        region_name = hidden_params.get("region_name", None)
 
     if return_model is None and completion_response_model is not None:
         return_model = completion_response_model
@@ -1568,10 +1584,9 @@ def completion_cost(
 
                     return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
                 # Calculate cost based on prompt_tokens, completion_tokens
-                if "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai":
-                    # together ai prices based on size of llm
-                    # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
-
+                if (
+                    "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
+                ) and not has_together_registry_pricing(model, litellm.model_cost):
                     model = get_model_params_and_category(model, call_type=CallTypes(call_type))
 
                 # replicate llms are calculate based on time for request running

@@ -7,7 +7,9 @@ from typing import Final, Literal
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
-from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    get_web_search_requests_from_usage,
+)
 from litellm.types.llms.openai import (
     FileSearchTool,
     ResponsesAPIResponse,
@@ -368,7 +370,7 @@ class StandardBuiltInToolCostTracking:
             get_anthropic_web_search_requests_from_response,
         )
 
-        if usage is not None and (get_web_search_requests(getattr(usage, "server_tool_use", None)) is not None):
+        if usage is not None and (get_web_search_requests_from_usage(usage) is not None):
             return usage
         web_search_requests: Final = get_anthropic_web_search_requests_from_response(response_object)
         if web_search_requests is None:
@@ -416,7 +418,7 @@ class StandardBuiltInToolCostTracking:
                 # Anthropic Claude (direct API and Vertex AI) uses server_tool_use.web_search_requests.
                 # Without this check, Claude ModelResponse always falls through to return False
                 # and _handle_web_search_cost() is never called.
-                if hasattr(usage, "server_tool_use") and get_web_search_requests(usage.server_tool_use) is not None:
+                if get_web_search_requests_from_usage(usage) is not None:
                     return True
                 # xAI reports usage.server_side_tool_usage_details.web_search_calls; a searched
                 # answer with no url_citation annotations has no other chat-path signal
@@ -429,16 +431,12 @@ class StandardBuiltInToolCostTracking:
                 response_object=response_object, output_type="web_search_call"
             )
         elif usage is not None:
-            if (
-                hasattr(usage, "server_tool_use")
-                and get_web_search_requests(usage.server_tool_use) is not None
-                or (
-                    hasattr(usage, "prompt_tokens_details")
-                    and usage.prompt_tokens_details is not None
-                    and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
-                    and hasattr(usage.prompt_tokens_details, "web_search_requests")
-                    and usage.prompt_tokens_details.web_search_requests is not None
-                )
+            if get_web_search_requests_from_usage(usage) is not None or (
+                hasattr(usage, "prompt_tokens_details")
+                and usage.prompt_tokens_details is not None
+                and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+                and hasattr(usage.prompt_tokens_details, "web_search_requests")
+                and usage.prompt_tokens_details.web_search_requests is not None
             ):
                 return True
             if _usage_reports_server_side_web_search_calls(usage):
