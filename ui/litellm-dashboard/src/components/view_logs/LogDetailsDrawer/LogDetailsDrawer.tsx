@@ -313,27 +313,15 @@ export function LogDetailsDrawer({
           {logEntry?.request_id ? `Request ${logEntry.request_id} details` : "Request details"}
         </SheetTitle>
         <div style={{ height: "100%" }} className="flex relative">
-          {!isSidebarCollapsed ? (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setIsSidebarCollapsed(true)}
-              className="absolute top-2 left-2 z-raised bg-card! border! border-border! rounded-md!"
-              aria-label="Collapse trace sidebar"
-            >
-              <ChevronLeft className="size-4" />
-            </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setIsSidebarCollapsed(false)}
-              className="absolute top-2 left-2 z-raised bg-card! border! border-border! rounded-md!"
-              aria-label="Expand trace sidebar"
-            >
-              <ChevronRight className="size-4" />
-            </Button>
-          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
+            className="absolute top-2 left-2 z-floating bg-card! border! border-border! rounded-md!"
+            aria-label={isSidebarCollapsed ? "Expand trace sidebar" : "Collapse trace sidebar"}
+          >
+            {isSidebarCollapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+          </Button>
           {!isSidebarCollapsed && (
             <div className="border-r border-border bg-muted flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
               <div className="pl-12 pr-3 py-2 border-b border-border bg-card">
