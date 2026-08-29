@@ -627,7 +627,7 @@ class CheckBatchCost:
         later poll.
         """
         from litellm.batches.batch_utils import (
-            _count_error_file_failed_requests,
+            count_error_file_failed_requests,
             _get_file_content_as_dictionary,
             calculate_batch_cost_and_usage,
         )
@@ -772,7 +772,7 @@ class CheckBatchCost:
             model_name=model_name,
             model_info=deployment_model_info,
         )
-        error_file_failed_requests: Final = await _count_error_file_failed_requests(
+        error_file_failed_requests: Final = await count_error_file_failed_requests(
             response,
             custom_llm_provider=batch_file_provider,
             litellm_params={
