@@ -15,10 +15,11 @@ env vars are deliberately absent from the gateway (they hijack RDS IAM auth).
 
 from __future__ import annotations
 
+import json
 import os
+from typing import Final
 
 import pytest
-
 from e2e_config import unique_marker
 from e2e_http import UnknownApiError
 from guardrails_client import (
@@ -27,8 +28,23 @@ from guardrails_client import (
     poll_until_blocked,
 )
 from lifecycle import ResourceManager
+from pydantic import JsonValue, TypeAdapter
 
 pytestmark = pytest.mark.e2e
+
+_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def _without_assessments(value: JsonValue) -> JsonValue:
+    """The assessments echo guardrail CONFIG, not content: the stage guardrail's
+    topic policy is itself named after the denied word, so its label lands in
+    every assessment listing and would trip a leak check aimed at model output."""
+    if isinstance(value, dict):
+        return {key: _without_assessments(child) for key, child in value.items() if key != "assessments"}
+    if isinstance(value, list):
+        return [_without_assessments(item) for item in value]
+    return value
+
 
 MODEL = "gemini-2.5-flash"
 # Matches the word/topic policy the guardrail this suite points at actually denies.
@@ -114,7 +130,7 @@ class TestBedrockGuardrail:
                 assert any(token in body_lower for token in ("violated", "blocked", "intervened")), (
                     f"block body should name the guardrail verdict; got: {body[:400]}"
                 )
-                assert blocked_word not in body, (
+                assert blocked_word not in json.dumps(_without_assessments(_JSON.validate_json(body))), (
                     f"the blocked model output must not leak into the error body; got: {body[:400]}"
                 )
             case _:
