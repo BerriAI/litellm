@@ -14,13 +14,16 @@ import hashlib
 import json
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import TYPE_CHECKING, Final, TypeAlias
 
-import jwt
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric import ec
 
 ALG: Final = "ES256"
+MISSING_SIGNING_DEPENDENCIES_MESSAGE: Final = (
+    "the internal_issuer identity source needs PyJWT and cryptography, which a base litellm install "
+    "does not include: pip install 'litellm[proxy]'"
+)
 _JWK_CURVE_NAME: Final = "P-256"
 _JWK_KEY_TYPE: Final = "EC"
 _COORDINATE_BYTE_LENGTH: Final = 32  # P-256 field element width, RFC 7518 6.2.1.2/6.2.1.3
@@ -29,8 +32,13 @@ Jwk: TypeAlias = Mapping[str, str]
 Jwks: TypeAlias = Mapping[str, tuple[Jwk, ...]]
 
 
-def load_es256_private_key(pem: str) -> ec.EllipticCurvePrivateKey:
+def load_es256_private_key(pem: str) -> "ec.EllipticCurvePrivateKey":
     """Parses an unencrypted PEM EC private key. Never echoes the key material in an error."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    except ImportError as e:
+        raise ImportError(MISSING_SIGNING_DEPENDENCIES_MESSAGE) from e
     try:
         key: Final = load_pem_private_key(pem.encode(), password=None)
     except (ValueError, TypeError) as e:
@@ -46,7 +54,7 @@ def _b64url_coordinate(value: int) -> str:
     return base64.urlsafe_b64encode(value.to_bytes(_COORDINATE_BYTE_LENGTH, "big")).rstrip(b"=").decode("ascii")
 
 
-def _jwk_thumbprint_members(public_key: ec.EllipticCurvePublicKey) -> Jwk:
+def _jwk_thumbprint_members(public_key: "ec.EllipticCurvePublicKey") -> Jwk:
     """RFC 7638 3.2's exact EC member set (crv, kty, x, y) and nothing else: an extra member
     here would change the thumbprint and desync it from the ``kid`` published in the JWKS."""
     numbers: Final = public_key.public_numbers()
@@ -60,7 +68,7 @@ def _jwk_thumbprint_members(public_key: ec.EllipticCurvePublicKey) -> Jwk:
     )
 
 
-def rfc7638_thumbprint(public_key: ec.EllipticCurvePublicKey) -> str:
+def rfc7638_thumbprint(public_key: "ec.EllipticCurvePublicKey") -> str:
     """RFC 7638: SHA-256 over the lexicographically member-ordered, whitespace-free JSON
     rendering of the thumbprint members, base64url-encoded without padding."""
     canonical: Final = json.dumps(
@@ -70,11 +78,11 @@ def rfc7638_thumbprint(public_key: ec.EllipticCurvePublicKey) -> str:
     return base64.urlsafe_b64encode(hashlib.sha256(canonical.encode()).digest()).rstrip(b"=").decode("ascii")
 
 
-def build_jwk(public_key: ec.EllipticCurvePublicKey, kid: str) -> Jwk:
+def build_jwk(public_key: "ec.EllipticCurvePublicKey", kid: str) -> Jwk:
     return MappingProxyType({**_jwk_thumbprint_members(public_key), "use": "sig", "alg": ALG, "kid": kid})
 
 
-def build_jwks(public_key: ec.EllipticCurvePublicKey) -> Jwks:
+def build_jwks(public_key: "ec.EllipticCurvePublicKey") -> Jwks:
     kid: Final = rfc7638_thumbprint(public_key)
     return MappingProxyType({"keys": (build_jwk(public_key, kid),)})
 
@@ -97,6 +105,10 @@ def jwks_document_json(pem: str) -> str:
 def sign_es256_jwt(pem: str, claims: Mapping[str, object]) -> str:
     """Signs ``claims`` with the PEM key, stamping ``kid`` as its RFC 7638 thumbprint so a
     verifier can look the signing key up in the published JWKS by ``kid`` alone."""
+    try:
+        import jwt
+    except ImportError as e:
+        raise ImportError(MISSING_SIGNING_DEPENDENCIES_MESSAGE) from e
     key: Final = load_es256_private_key(pem)
     kid: Final = rfc7638_thumbprint(key.public_key())
     headers: Final = {"kid": kid}  # mutable-ok: PyJWT requires a real dict, not a Mapping
