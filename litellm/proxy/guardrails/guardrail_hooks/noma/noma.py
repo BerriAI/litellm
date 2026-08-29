@@ -16,7 +16,6 @@ from typing import (
     Any,
     Final,
     Literal,
-    Union,
 )
 from urllib.parse import urljoin
 
@@ -54,7 +53,7 @@ SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector
 
 # Type aliases
 MessageRole = Literal["user", "assistant"]
-LLMResponse = Union[Any, ModelResponse, EmbeddingResponse, ImageResponse]
+LLMResponse = Any | ModelResponse | EmbeddingResponse | ImageResponse
 _LEGACY_NOMA_DEPRECATION_WARNED = False
 
 if TYPE_CHECKING:
@@ -179,7 +178,7 @@ class NomaGuardrail(CustomGuardrail):
         if not messages:
             return None
 
-        input_items, instructions = self._responses_transform_handler.convert_chat_completion_messages_to_responses_api(  # type: ignore[arg-type]
+        input_items, instructions = self._responses_transform_handler.convert_chat_completion_messages_to_responses_api(
             messages
         )
 

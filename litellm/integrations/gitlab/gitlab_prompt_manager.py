@@ -257,7 +257,7 @@ class GitLabTemplateManager:
                     and str(f.get("path", "")).endswith(".prompt")
                     and "path" in f
                 ):
-                    files.append(f["path"])  # type: ignore
+                    files.append(f["path"])
 
             return [self._repo_path_to_id(p) for p in files]
 
@@ -357,7 +357,7 @@ class GitLabPromptManager(CustomPromptManagement):
             if parsed_messages:
                 final_messages: list[AllMessageValues] = parsed_messages
             else:
-                final_messages = [{"role": "user", "content": rendered_prompt}] + messages  # type: ignore
+                final_messages = [{"role": "user", "content": rendered_prompt}] + messages
 
             if litellm_params is None:
                 litellm_params = {}
@@ -400,7 +400,7 @@ class GitLabPromptManager(CustomPromptManagement):
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
                         }
-                    )  # type: ignore
+                    )
                 current_role = "system"
                 current_content = [line[7:].strip()]
             elif low.startswith("user:"):
@@ -410,7 +410,7 @@ class GitLabPromptManager(CustomPromptManagement):
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
                         }
-                    )  # type: ignore
+                    )
                 current_role = "user"
                 current_content = [line[5:].strip()]
             elif low.startswith("assistant:"):
@@ -420,16 +420,16 @@ class GitLabPromptManager(CustomPromptManagement):
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
                         }
-                    )  # type: ignore
+                    )
                 current_role = "assistant"
                 current_content = [line[10:].strip()]
             else:
                 current_content.append(line)
 
         if current_role and current_content:
-            messages.append({"role": current_role, "content": "\n".join(current_content).strip()})  # type: ignore
+            messages.append({"role": current_role, "content": "\n".join(current_content).strip()})
         if not messages and prompt_content.strip():
-            messages = [{"role": "user", "content": prompt_content.strip()}]  # type: ignore
+            messages = [{"role": "user", "content": prompt_content.strip()}]
         return messages
 
     def post_call_hook(

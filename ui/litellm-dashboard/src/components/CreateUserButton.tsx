@@ -1,25 +1,23 @@
-import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from "@tremor/react";
-import {
-  Alert,
-  Button,
-  Checkbox,
-  Form,
-  Input,
-  Modal,
-  Select,
-  Select as Select2,
-  Space,
-  Tooltip,
-  Typography,
-} from "antd";
-import React, { useEffect, useMemo, useState } from "react";
-import BulkCreateUsers from "./bulk_create_users_button";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { FieldGroup } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { ChevronRight, CircleHelp, Info, UserPlus } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { useForm } from "react-hook-form";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   getProxyBaseUrl,
   getProxyUISettings,
@@ -28,8 +26,7 @@ import {
   userCreateCall,
 } from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
-const { Option } = Select;
-const { Text, Link, Title } = Typography;
+
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -46,7 +43,6 @@ const generateUUID = (): string => {
 interface CreateuserProps {
   userID: string;
   accessToken: string;
-  teams: any[] | null;
   possibleUIRoles: null | Record<string, Record<string, string>>;
   onUserCreated?: (userId: string) => void;
   isEmbedded?: boolean;
@@ -60,31 +56,120 @@ interface UISettings {
   SSO_ENABLED: boolean;
 }
 
+interface CreateUserFormValues {
+  user_email?: string;
+  user_role: string;
+  team_id?: string;
+  organization_ids?: string[];
+  metadata?: string;
+  send_invite_email: boolean;
+  models?: string[];
+}
+
+const EMBEDDED_DEFAULTS: CreateUserFormValues = {
+  user_email: undefined,
+  user_role: "internal_user_viewer",
+  team_id: undefined,
+  metadata: undefined,
+  send_invite_email: true,
+};
+
+const STANDALONE_DEFAULTS: CreateUserFormValues = {
+  user_email: undefined,
+  user_role: "internal_user_viewer",
+  team_id: undefined,
+  organization_ids: undefined,
+  metadata: undefined,
+  send_invite_email: true,
+};
+
+// antd reported only mounted fields, so a collapsed Personal Key Creation
+// section left `models` out of the request entirely even after the admin had
+// picked some and closed it again.
+const withoutCollapsedModels = (values: CreateUserFormValues, isPersonalKeyOpen: boolean): CreateUserFormValues => {
+  if (isPersonalKeyOpen) {
+    return values;
+  }
+  const { models, ...rest } = values;
+  return rest;
+};
+
+const buildCreatePayload = (values: CreateUserFormValues): CreateUserFormValues & { organizations?: string[] } => {
+  const withModels =
+    (!values.models || values.models.length === 0) && values.user_role !== "proxy_admin"
+      ? { ...values, models: ["no-default-models"] }
+      : values;
+  if (!withModels.organization_ids) {
+    return withModels;
+  }
+  const { organization_ids, ...rest } = withModels;
+  return { ...rest, organizations: organization_ids };
+};
+
+const SSO_INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+
+const buildSsoInvitationLink = (userId: string, createdBy: string): InvitationLink => {
+  const now = new Date();
+  return {
+    id: generateUUID(),
+    user_id: userId,
+    is_accepted: false,
+    accepted_at: null,
+    expires_at: new Date(now.getTime() + SSO_INVITE_LIFETIME_MS),
+    created_at: now,
+    created_by: createdBy,
+    updated_at: now,
+    updated_by: createdBy,
+    has_user_setup_sso: true,
+  };
+};
+
+const labelWithHint = (label: string, hint: string): React.ReactNode => (
+  <>
+    {label}
+    <Tooltip>
+      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  </>
+);
+
+const EmailInvitationsNotice: React.FC = () => (
+  <Alert variant="info" className="mb-4">
+    <Info />
+    <AlertTitle>Email invitations</AlertTitle>
+    <AlertDescription>
+      New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.{" "}
+      <a href="https://docs.litellm.ai/docs/proxy/email" target="_blank" rel="noreferrer">
+        Learn how to set up email notifications
+      </a>
+    </AlertDescription>
+  </Alert>
+);
+
 export const CreateUserButton: React.FC<CreateuserProps> = ({
   userID,
   accessToken,
-  teams,
   possibleUIRoles,
   onUserCreated,
   isEmbedded = false,
 }) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
-  const [form] = Form.useForm();
+  const defaultValues = isEmbedded ? EMBEDDED_DEFAULTS : STANDALONE_DEFAULTS;
+  const form = useForm<CreateUserFormValues>({ defaultValues });
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<boolean>(false);
   const [userModels, setUserModels] = useState<string[]>([]);
+  const [isPersonalKeyOpen, setIsPersonalKeyOpen] = useState(false);
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const { data: organizations = [] } = useOrganizations();
-
-  // Derive teams from the user's organizations, falling back to the teams prop
-  const availableTeams = useMemo(() => {
-    const orgTeams = organizations.flatMap((org) => org.teams || []);
-    if (orgTeams.length > 0) return orgTeams;
-    return teams || [];
-  }, [organizations, teams]);
+  const organizationOptions = organizations.map((org) => ({
+    label: `${org.organization_alias} (${org.organization_id})`,
+    value: org.organization_id ?? "",
+  }));
 
   useEffect(() => {
     const fetchData = async () => {
@@ -108,45 +193,27 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     fetchData();
   }, []);
 
-  const handleOk = () => {
-    setIsModalVisible(false);
-    form.resetFields();
-  };
-
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiuser(false);
-    form.resetFields();
+    form.reset(defaultValues);
   };
 
-  const handleCreate = async (formValues: {
-    user_id: string;
-    models?: string[];
-    user_role: string;
-    organization_ids?: string[];
-    organizations?: string[];
-    send_invite_email?: boolean;
-  }) => {
+  const handleCreate = async (formValues: CreateUserFormValues) => {
     try {
-      NotificationsManager.info("Making API Call");
+      toast.info("Making API Call");
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
-      if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
-        formValues.models = ["no-default-models"];
-      }
-      if (formValues.organization_ids) {
-        formValues.organizations = formValues.organization_ids;
-        delete formValues.organization_ids;
-      }
-      const response = await userCreateCall(accessToken, null, formValues);
+      const payload = buildCreatePayload(withoutCollapsedModels(formValues, isPersonalKeyOpen));
+      const response = await userCreateCall(accessToken, null, payload);
       await queryClient.invalidateQueries({ queryKey: ["userList"] });
       setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;
 
       if (onUserCreated && isEmbedded) {
         onUserCreated(user_id);
-        form.resetFields();
+        form.reset(defaultValues);
         return;
       }
 
@@ -157,237 +224,212 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           setIsInvitationLinkModalVisible(true);
         });
       } else {
-        // create an InvitationLink Object for this user for the SSO flow
-        // for SSO the invite link is the proxy base url since the User just needs to login
-        const invitationLink: InvitationLink = {
-          id: generateUUID(), // Generate a unique ID
-          user_id: user_id,
-          is_accepted: false,
-          accepted_at: null,
-          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Set expiry to 7 days from now
-          created_at: new Date(),
-          created_by: userID, // Assuming userID is the current user creating the invitation
-          updated_at: new Date(),
-          updated_by: userID,
-          has_user_setup_sso: true,
-        };
-        setInvitationLinkData(invitationLink);
+        setInvitationLinkData(buildSsoInvitationLink(user_id, userID));
         setIsInvitationLinkModalVisible(true);
       }
 
-      NotificationsManager.success("API user Created");
-      form.resetFields();
+      toast.success("API user Created");
+      form.reset(defaultValues);
       localStorage.removeItem("userData" + userID);
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
-      NotificationsManager.fromBackend(errorMessage);
+      toast.fromError(errorMessage);
       console.error("Error creating the user:", error);
     }
   };
 
+  const roleOptions = Object.entries(possibleUIRoles ?? {}).map(([role, { ui_label, description }]) => ({
+    value: role,
+    label: ui_label,
+    description,
+  }));
+
+  const userEmailField = (
+    <FormField control={form.control} name="user_email" label="User Email">
+      {({ ref, value, ...control }) => <Input {...control} ref={ref} value={value ?? ""} />}
+    </FormField>
+  );
+
+  const teamField = (
+    <FormField
+      control={form.control}
+      name="team_id"
+      label="Team"
+      description="If selected, user will be added as a 'user' role to the team."
+    >
+      {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
+    </FormField>
+  );
+
+  const metadataField = (
+    <FormField control={form.control} name="metadata" label="Metadata">
+      {({ ref, value, ...control }) => (
+        <Textarea {...control} ref={ref} value={value ?? ""} rows={4} placeholder="Enter metadata as JSON" />
+      )}
+    </FormField>
+  );
+
+  const sendInviteEmailField = (
+    <FormField control={form.control} name="send_invite_email" label="Send invitation email">
+      {({ id, value, onChange, onBlur }) => (
+        <Checkbox id={id} checked={value} onCheckedChange={onChange} onBlur={onBlur} />
+      )}
+    </FormField>
+  );
+
+  const roleField = (label: React.ReactNode) => (
+    <FormField control={form.control} name="user_role" label={label}>
+      {({ id, value, onChange }) => (
+        <Select
+          items={roleOptions}
+          value={value === undefined || value === "" ? null : value}
+          onValueChange={(selected: string | null) => onChange(selected ?? undefined)}
+        >
+          <SelectTrigger id={id} className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {roleOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                <span>{option.label}</span>
+                <span className="ml-2 text-xs text-muted-foreground">{option.description}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </FormField>
+  );
+
   // Modify the return statement to handle embedded mode
   if (isEmbedded) {
     return (
-      <Form
-        form={form}
-        onFinish={handleCreate}
-        labelCol={{ span: 8 }}
-        wrapperCol={{ span: 16 }}
-        labelAlign="left"
-        initialValues={{ user_role: "internal_user_viewer", send_invite_email: true }}
-      >
-        <Alert
-          message="Email invitations"
-          description={
-            <>
-              New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is
-              configured.{" "}
-              <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
-                Learn how to set up email notifications
-              </Link>
-            </>
-          }
-          type="info"
-          showIcon
-          className="mb-4"
-        />
-        <Form.Item label="User Email" name="user_email">
-          <TextInput placeholder="" />
-        </Form.Item>
-        <Form.Item label="User Role" name="user_role">
-          <Select2>
-            {possibleUIRoles &&
-              Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
-                <SelectItem key={role} value={role} title={ui_label}>
-                  <div className="flex">
-                    {ui_label}{" "}
-                    <Text className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
-                      {description}
-                    </Text>
-                  </div>
-                </SelectItem>
-              ))}
-          </Select2>
-        </Form.Item>
-        <Form.Item label="Team" name="team_id">
-          <TeamDropdown />
-        </Form.Item>
-
-        <Form.Item label="Metadata" name="metadata">
-          <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
-        </Form.Item>
-
-        <Form.Item label="Send invitation email" name="send_invite_email" valuePropName="checked">
-          <Checkbox />
-        </Form.Item>
-
-        <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button htmlType="submit">Create User</Button>
-        </div>
-      </Form>
+      <TooltipProvider>
+        <form onSubmit={form.handleSubmit(handleCreate)}>
+          <EmailInvitationsNotice />
+          <FieldGroup>
+            {userEmailField}
+            {roleField("User Role")}
+            {teamField}
+            {metadataField}
+            {sendInviteEmailField}
+          </FieldGroup>
+          <div className="mt-4 text-right">
+            <Button type="submit">Create User</Button>
+          </div>
+        </form>
+      </TooltipProvider>
     );
   }
 
   // Original return for standalone mode
   return (
-    <div className="flex gap-2">
-      <Button type="primary" className="mb-0" onClick={() => setIsModalVisible(true)}>
+    <>
+      <Button type="button" onClick={() => setIsModalVisible(true)}>
         + Invite User
       </Button>
-      <BulkCreateUsers accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
-      <Modal
-        title="Invite User"
-        open={isModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleOk}
-        onCancel={handleCancel}
-      >
-        <Space direction="vertical" size="middle">
-          <Text className="mb-1">Create a User who can own keys</Text>
-          <Alert
-            message="Email invitations"
-            description={
-              <>
-                New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is
-                configured.{" "}
-                <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
-                  Learn how to set up email notifications
-                </Link>
-              </>
-            }
-            type="info"
-            showIcon
-            className="mb-4"
-          />
-        </Space>
-        <Form
-          form={form}
-          onFinish={handleCreate}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-          initialValues={{ user_role: "internal_user_viewer", send_invite_email: true }}
-        >
-          <Form.Item label="User Email" name="user_email">
-            <Input />
-          </Form.Item>
-          <Form.Item
-            label={
-              <span>
-                Global Proxy Role{" "}
-                <Tooltip title="This role is independent of any team/org specific roles. Configure Team / Organization Admins in the Settings">
-                  <InfoCircleOutlined />
-                </Tooltip>
-              </span>
-            }
-            name="user_role"
-          >
-            <Select2>
-              {possibleUIRoles &&
-                Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
-                  <SelectItem key={role} value={role} title={ui_label}>
-                    <Text>{ui_label}</Text>
-                    <Text type="secondary">
-                      {" - "}
-                      {description}
-                    </Text>
-                  </SelectItem>
-                ))}
-            </Select2>
-          </Form.Item>
-
-          <Form.Item
-            label="Team"
-            className="gap-2"
-            name="team_id"
-            help="If selected, user will be added as a 'user' role to the team."
-          >
-            <TeamDropdown />
-          </Form.Item>
-
-          <Form.Item
-            label="Organization"
-            name="organization_ids"
-            help="The user will be added to the selected organization(s)."
-          >
-            <Select mode="multiple" placeholder="Select Organization" style={{ width: "100%" }}>
-              {organizations.map((org) => (
-                <Option key={org.organization_id} value={org.organization_id}>
-                  {org.organization_alias} ({org.organization_id})
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item label="Metadata" name="metadata">
-            <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
-          </Form.Item>
-          <Form.Item label="Send invitation email" name="send_invite_email" valuePropName="checked">
-            <Checkbox />
-          </Form.Item>
-          <Accordion>
-            <AccordionHeader>
-              <Text strong>Personal Key Creation</Text>
-            </AccordionHeader>
-            <AccordionBody>
-              <Form.Item
-                className="gap-2"
-                label={
-                  <span>
-                    Models{" "}
-                    <Tooltip title="Models user has access to, outside of team scope.">
-                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                    </Tooltip>
-                  </span>
-                }
-                name="models"
-                help="Models user has access to, outside of team scope."
-              >
-                <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-                  <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                    All Proxy Models
-                  </Select2.Option>
-                  <Select2.Option key="no-default-models" value="no-default-models">
-                    No Default Models
-                  </Select2.Option>
-                  {userModels.map((model) => (
-                    <Select2.Option key={model} value={model}>
-                      {getModelDisplayName(model)}
-                    </Select2.Option>
-                  ))}
-                </Select2>
-              </Form.Item>
-            </AccordionBody>
-          </Accordion>
-
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button type="primary" icon={<UserAddOutlined />} htmlType="submit">
-              Invite User
-            </Button>
+      <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+          <DialogHeader>
+            <DialogTitle>Invite User</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <p className="mb-1 text-sm text-foreground">Create a User who can own keys</p>
+            <EmailInvitationsNotice />
           </div>
-        </Form>
-      </Modal>
+          <TooltipProvider>
+            <form onSubmit={form.handleSubmit(handleCreate)}>
+              <FieldGroup>
+                {userEmailField}
+                {roleField(
+                  labelWithHint(
+                    "Global Proxy Role",
+                    "This role is independent of any team/org specific roles. Configure Team / Organization Admins in the Settings",
+                  ),
+                )}
+                {teamField}
+
+                <FormField
+                  control={form.control}
+                  name="organization_ids"
+                  label="Organization"
+                  description="The user will be added to the selected organization(s)."
+                >
+                  {({ id, value, onChange }) => (
+                    <Select
+                      multiple
+                      items={organizationOptions}
+                      value={value ?? []}
+                      onValueChange={(selected: string[]) => onChange(selected.length === 0 ? undefined : selected)}
+                    >
+                      <SelectTrigger id={id} className="w-full">
+                        <SelectValue placeholder="Select Organization">
+                          {(selected: string[]) =>
+                            selected.length === 0
+                              ? "Select Organization"
+                              : organizationOptions
+                                  .filter((option) => selected.includes(option.value))
+                                  .map((option) => option.label)
+                                  .join(", ")
+                          }
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {organizationOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </FormField>
+
+                {metadataField}
+                {sendInviteEmailField}
+
+                <Collapsible open={isPersonalKeyOpen} onOpenChange={setIsPersonalKeyOpen}>
+                  <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm font-semibold text-foreground">
+                    <ChevronRight
+                      className={`size-4 transition-transform ${isPersonalKeyOpen ? "rotate-90" : ""}`}
+                      aria-hidden
+                    />
+                    Personal Key Creation
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="pt-4">
+                    <FormField
+                      control={form.control}
+                      name="models"
+                      label={labelWithHint("Models", "Models user has access to, outside of team scope.")}
+                      description="Models user has access to, outside of team scope."
+                    >
+                      {({ value, onChange }) => (
+                        <MultiSelect
+                          options={[
+                            { label: "All Proxy Models", value: "all-proxy-models" },
+                            { label: "No Default Models", value: "no-default-models" },
+                            ...userModels.map((model) => ({ label: getModelDisplayName(model), value: model })),
+                          ]}
+                          value={value ?? []}
+                          onValueChange={onChange}
+                          placeholder="Select models"
+                        />
+                      )}
+                    </FormField>
+                  </CollapsibleContent>
+                </Collapsible>
+              </FieldGroup>
+
+              <div className="mt-4 text-right">
+                <Button type="submit">
+                  <UserPlus />
+                  Invite User
+                </Button>
+              </div>
+            </form>
+          </TooltipProvider>
+        </DialogContent>
+      </Dialog>
       {apiuser && (
         <OnboardingModal
           isInvitationLinkModalVisible={isInvitationLinkModalVisible}
@@ -396,6 +438,6 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           invitationLinkData={invitationLinkData}
         />
       )}
-    </div>
+    </>
   );
 };

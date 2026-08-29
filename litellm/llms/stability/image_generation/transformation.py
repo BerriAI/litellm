@@ -26,6 +26,8 @@ from litellm.types.llms.stability import (
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -192,7 +194,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
                 "strength",
                 "style_preset",
             ]:
-                stability_request[key] = value  # type: ignore
+                stability_request[key] = value
 
         return dict(stability_request)
 
@@ -205,7 +207,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:

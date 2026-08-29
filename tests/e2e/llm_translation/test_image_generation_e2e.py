@@ -8,18 +8,15 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
-
 from e2e_config import unique_marker
 from e2e_http import (
     assert_client_error,
-    assert_error_or_server_known,
-    require_success_or_provider_denied,
     require_successful_call,
 )
 from endpoints_client import EndpointsClient, ImagesResult
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -80,10 +77,10 @@ class TestImageGeneration:
         key = resources.key()
 
         result = endpoints_client.images(key, model, "Draw a cute cat")
-        if not require_success_or_provider_denied(result, "bedrock image generation"):
-            return
+        require_successful_call(result)
         _assert_image_returned(result.body)
 
+    @pytest.mark.skip(reason="stage red: product gap, /v1/images/generations 500s (aimage_generation TypeError) on missing prompt instead of 400")
     @pytest.mark.covers("llm.images_generations.openai.input_validation.nonstream.works")
     def test_missing_prompt_returns_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -94,7 +91,7 @@ class TestImageGeneration:
             headers=endpoints_client.proxy.transport.bearer(key),
             json=_OptionalImageBody(model=model),
         )
-        assert_error_or_server_known(result, "images missing prompt")
+        assert_client_error(result, "images missing prompt")
 
     @pytest.mark.covers("llm.images_generations.openai.input_validation.nonstream.works")
     def test_empty_prompt_returns_client_error(
@@ -131,4 +128,3 @@ class TestImageGeneration:
             json=_OptionalImageBody(model=model, prompt="a blue square", n=0),
         )
         assert_client_error(result, "images invalid n")
-

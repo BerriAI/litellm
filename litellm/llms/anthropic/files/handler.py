@@ -22,19 +22,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import CallTypes, LlmProviders, ModelResponse
 
 from ..chat.transformation import AnthropicConfig
-from ..common_utils import AnthropicModelInfo
-
-# Map Anthropic error types to HTTP status codes
-ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = {
-    "invalid_request_error": 400,
-    "authentication_error": 401,
-    "permission_error": 403,
-    "not_found_error": 404,
-    "rate_limit_error": 429,
-    "api_error": 500,
-    "overloaded_error": 503,
-    "timeout_error": 504,
-}
+from ..common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP, AnthropicModelInfo
 
 
 class AnthropicFilesHandler:
@@ -296,7 +284,7 @@ class AnthropicFilesHandler:
                     index=0,
                     message=litellm.Message(content="", role="assistant"),
                 )
-            ]  # type: ignore
+            ]
 
             # Create a logging object for transformation
             logging_obj: Final = Logging(

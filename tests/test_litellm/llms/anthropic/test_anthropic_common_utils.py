@@ -10,15 +10,15 @@ Verifies that:
 - ANTHROPIC_API_KEY / ANTHROPIC_API_BASE take precedence over their aliases.
 """
 
+import json
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 # Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
@@ -29,21 +29,37 @@ FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
 class TestOptionallyHandleAnthropicOAuth:
     """Tests for optionally_handle_anthropic_oauth function."""
 
-    def test_oauth_token_in_authorization_header(self):
+    @pytest.mark.parametrize("header_name", ["authorization", "Authorization", "AUTHORIZATION"])
+    def test_oauth_token_in_authorization_header(self, header_name):
         """OAuth token in Authorization header should be detected and headers set correctly."""
         from litellm.llms.anthropic.common_utils import (
             optionally_handle_anthropic_oauth,
         )
 
-        headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
-        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
-            headers, None
-        )
+        headers = {header_name: f"Bearer {FAKE_OAUTH_TOKEN}"}
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(headers, None)
 
         assert extracted_api_key == FAKE_OAUTH_TOKEN
         assert updated_headers["anthropic-beta"] == "oauth-2025-04-20"
         assert updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
         assert "x-api-key" not in updated_headers
+        assert [name for name in updated_headers if name.lower() == "authorization"] == ["authorization"]
+        assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+
+    @pytest.mark.parametrize("api_key_header_name", ["x-api-key", "X-Api-Key"])
+    def test_oauth_removes_x_api_key_any_casing(self, api_key_header_name):
+        """When OAuth wins, a client x-api-key header is removed whatever its casing."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {api_key_header_name: FAKE_REGULAR_KEY, "Authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(headers, None)
+
+        assert extracted_api_key == FAKE_OAUTH_TOKEN
+        assert [name for name in updated_headers if name.lower() == "x-api-key"] == []
+        assert [name for name in updated_headers if name.lower() == "authorization"] == ["authorization"]
+        assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
     def test_oauth_token_in_api_key_directly(self):
         """OAuth token passed as api_key should set Authorization: Bearer header."""
@@ -52,9 +68,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, FAKE_OAUTH_TOKEN
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, FAKE_OAUTH_TOKEN)
 
         assert returned_api_key == FAKE_OAUTH_TOKEN
         assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
@@ -69,9 +83,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {"x-api-key": FAKE_OAUTH_TOKEN}
-        updated_headers, _ = optionally_handle_anthropic_oauth(
-            headers, FAKE_OAUTH_TOKEN
-        )
+        updated_headers, _ = optionally_handle_anthropic_oauth(headers, FAKE_OAUTH_TOKEN)
 
         assert "x-api-key" not in updated_headers
         assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
@@ -83,9 +95,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, FAKE_REGULAR_KEY
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, FAKE_REGULAR_KEY)
 
         assert returned_api_key == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
@@ -99,9 +109,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {"authorization": f"Bearer {FAKE_REGULAR_KEY}"}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, FAKE_REGULAR_KEY
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, FAKE_REGULAR_KEY)
 
         assert returned_api_key == FAKE_REGULAR_KEY
         assert "anthropic-dangerous-direct-browser-access" not in updated_headers
@@ -113,9 +121,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, None
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, None)
 
         assert returned_api_key is None
         assert "authorization" not in updated_headers
@@ -537,22 +543,18 @@ class TestProxyOAuthHeaderForwarding:
         )
 
         # Should preserve OAuth even with flag=False
-        cleaned_without_flag = clean_headers(
-            raw_headers, forward_llm_provider_auth_headers=False
-        )
+        cleaned_without_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
         assert "authorization" in cleaned_without_flag
         assert cleaned_without_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
         # Should also preserve OAuth with flag=True
-        cleaned_with_flag = clean_headers(
-            raw_headers, forward_llm_provider_auth_headers=True
-        )
+        cleaned_with_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
         assert "authorization" in cleaned_with_flag
         assert cleaned_with_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
     def test_add_provider_specific_headers_forwards_oauth(self):
         """add_provider_specific_headers_to_request should forward OAuth Authorization
-        as a ProviderSpecificHeader scoped to Anthropic-compatible providers."""
+        as a ProviderSpecificHeader scoped to Anthropic and nothing else."""
         from litellm.proxy.litellm_pre_call_utils import (
             add_provider_specific_headers_to_request,
         )
@@ -567,9 +569,7 @@ class TestProxyOAuthHeaderForwarding:
 
         assert "provider_specific_header" in data
         psh = data["provider_specific_header"]
-        assert "anthropic" in psh["custom_llm_provider"]
-        assert "bedrock" in psh["custom_llm_provider"]
-        assert "vertex_ai" in psh["custom_llm_provider"]
+        assert psh["custom_llm_provider"] == "anthropic"
         assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
     def test_add_provider_specific_headers_ignores_non_oauth(self):
@@ -591,7 +591,10 @@ class TestProxyOAuthHeaderForwarding:
 
     def test_add_provider_specific_headers_combines_anthropic_and_oauth(self):
         """When both anthropic-beta and OAuth Authorization are present, both
-        should be included in the ProviderSpecificHeader."""
+        reach Anthropic."""
+        from litellm.litellm_core_utils.get_provider_specific_headers import (
+            ProviderSpecificHeaderUtils,
+        )
         from litellm.proxy.litellm_pre_call_utils import (
             add_provider_specific_headers_to_request,
         )
@@ -606,9 +609,12 @@ class TestProxyOAuthHeaderForwarding:
         add_provider_specific_headers_to_request(data=data, headers=headers)
 
         assert "provider_specific_header" in data
-        psh = data["provider_specific_header"]
-        assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
-        assert psh["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
+        anthropic_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=data["provider_specific_header"],
+            custom_llm_provider="anthropic",
+        )
+        assert anthropic_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert anthropic_headers["anthropic-beta"] == "oauth-2025-04-20"
 
     def test_clean_headers_forwards_x_api_key_when_authenticated_with_litellm_key(self):
         """clean_headers should forward x-api-key when user authenticated with x-litellm-api-key and forward_llm_provider_auth_headers=True."""
@@ -926,9 +932,7 @@ class TestValidateEnvironmentAuthToken:
 
         config = AnthropicModelInfo()
         with mock_patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(
-                Exception, match="ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
-            ):
+            with pytest.raises(Exception, match=r"ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"):
                 config.validate_environment(
                     headers={},
                     model="claude-sonnet-4-5-20250929",
@@ -974,9 +978,7 @@ class TestGetAuthToken:
 
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        with mock_patch.dict(
-            "os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True
-        ):
+        with mock_patch.dict("os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True):
             assert AnthropicModelInfo.get_auth_token() == FAKE_AUTH_TOKEN
 
     def test_returns_none_when_not_set(self):
@@ -1100,7 +1102,9 @@ class TestGetAuthHeader:
         """Non-standard API key and custom api_base returns Bearer when use_bearer_for_custom_base=True."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        result = AnthropicModelInfo.get_auth_header(api_key="my-custom-key", api_base="https://custom-gateway.com", use_bearer_for_custom_base=True)
+        result = AnthropicModelInfo.get_auth_header(
+            api_key="my-custom-key", api_base="https://custom-gateway.com", use_bearer_for_custom_base=True
+        )
         assert result == {"authorization": "Bearer my-custom-key"}
 
     def test_custom_api_base_get_auth_header_uses_x_api_key_when_standard(self):
@@ -1118,10 +1122,7 @@ class TestGetApiBaseFallbackChain:
         """Explicit api_base param takes precedence over all env vars."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert (
-            AnthropicModelInfo.get_api_base("https://explicit.example.com")
-            == "https://explicit.example.com"
-        )
+        assert AnthropicModelInfo.get_api_base("https://explicit.example.com") == "https://explicit.example.com"
 
     def test_defaults_to_anthropic_api(self):
         """get_api_base returns the default Anthropic API base when no env vars are set."""
@@ -1174,9 +1175,7 @@ class TestPassthroughAuthToken:
         )
 
         config = AnthropicMessagesConfig()
-        with mock_patch.dict(
-            "os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True
-        ):
+        with mock_patch.dict("os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True):
             updated_headers, _ = config.validate_anthropic_messages_environment(
                 headers={},
                 model="claude-sonnet-4-5-20250929",
@@ -1221,6 +1220,52 @@ class TestPassthroughAuthToken:
         assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
 
+    def test_passthrough_missing_credentials_raises_authentication_error(self):
+        """Passthrough endpoint should raise locally instead of forwarding an unauthenticated request."""
+        from unittest.mock import patch as mock_patch
+
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(litellm.AuthenticationError, match="Missing Anthropic API Key"):
+                config.validate_anthropic_messages_environment(
+                    headers={},
+                    model="claude-sonnet-4-5-20250929",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={},
+                    api_key=None,
+                    api_base=None,
+                )
+
+    @pytest.mark.parametrize("header_name", ["x-api-key", "X-Api-Key", "X-API-KEY"])
+    def test_passthrough_client_x_api_key_header_is_kept(self, header_name):
+        """A client-forwarded x-api-key header, whatever its casing, should satisfy validation without env credentials."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict("os.environ", {}, clear=True):
+            updated_headers, _ = config.validate_anthropic_messages_environment(
+                headers={header_name: FAKE_REGULAR_KEY},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+        assert [name for name in updated_headers if name.lower() == "x-api-key"] == [header_name]
+        assert updated_headers[header_name] == FAKE_REGULAR_KEY
+
     def test_passthrough_get_complete_url_honours_base_url_env(self):
         """get_complete_url should use ANTHROPIC_BASE_URL when api_base is None."""
         from unittest.mock import patch as mock_patch
@@ -1247,11 +1292,12 @@ class TestPassthroughAuthToken:
 
 
 class TestAnthropicThinkingSignatureSelfHeal:
-    """Helpers for retrying after invalid encrypted thinking signatures."""
+    """Helpers for retrying after invalid thinking blocks in replayed history:
+    invalid encrypted signatures, and blocks with empty thinking text."""
 
-    def test_is_anthropic_invalid_thinking_signature_error_positive(self):
+    def test_is_anthropic_invalid_thinking_block_error_positive(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
         raw = (
@@ -1259,40 +1305,97 @@ class TestAnthropicThinkingSignatureSelfHeal:
             '"message":"messages.3.content.3: Invalid `signature` in `thinking` block"},'
             '"request_id":"req_011Ca2EtQDxp7x6RGUY2jVn9"}'
         )
-        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_signature_error_positive_bedrock(self):
+    def test_is_anthropic_invalid_thinking_block_error_positive_bedrock(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
         # Real user-reported Bedrock scenario
         raw = '{"message":"messages.2.content.0.thinking.signature.str: Input should be a valid string"}'
-        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_signature_error_positive_vertex(self):
+    def test_is_anthropic_invalid_thinking_block_error_positive_vertex(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
         raw = "messages.4.content.1.thinking.signature.str: Input should be a valid string"
-        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_signature_error_negative(self):
+    def test_is_anthropic_invalid_thinking_block_error_negative(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
-        assert is_anthropic_invalid_thinking_signature_error("") is False
-        assert (
-            is_anthropic_invalid_thinking_signature_error("rate limit exceeded")
-            is False
+        assert is_anthropic_invalid_thinking_block_error("") is False
+        assert is_anthropic_invalid_thinking_block_error("rate limit exceeded") is False
+        assert is_anthropic_invalid_thinking_block_error("invalid_request_error: model not found") is False
+        assert is_anthropic_invalid_thinking_block_error("thinking signature is malformed") is False
+
+    def test_is_anthropic_invalid_thinking_block_error_positive_empty_thinking(self):
+        """LIT-6357: replayed history holding {"type": "thinking", "thinking": ""}
+        (produced when a non-Anthropic reasoning model's turn is bridged to the
+        Anthropic surface with no reasoning text) 400s with a message that names
+        no signature, so the pre-rename matcher missed it and the strip-and-retry
+        never fired. Raw string captured live on 2026-08-27."""
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_invalid_thinking_block_error,
         )
-        assert (
-            is_anthropic_invalid_thinking_signature_error("invalid_request_error: model not found")
-            is False
+
+        raw = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.1.content.0.thinking: each thinking block must contain thinking"},'
+            '"request_id":"req_011CeUTxhJj2rTUkK61qtbJ8"}'
         )
-        assert is_anthropic_invalid_thinking_signature_error("thinking signature is malformed") is False
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
+
+    def test_is_empty_thinking_block(self):
+        from litellm.llms.anthropic.common_utils import is_empty_thinking_block
+
+        assert is_empty_thinking_block({"type": "thinking", "thinking": ""}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": " \n\t "}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": None}) is True
+        assert is_empty_thinking_block({"type": "thinking"}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": "", "signature": "sig_abc"}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": "plan", "signature": "sig"}) is False
+        assert is_empty_thinking_block({"type": "redacted_thinking", "data": "opaque"}) is False
+        assert is_empty_thinking_block({"type": "text", "text": ""}) is False
+        assert is_empty_thinking_block("not a dict") is False
+
+    def test_strip_empty_content_blocks_drops_empty_thinking_blocks(self):
+        """LIT-6357 ingestion half: an assistant tool-loop turn carrying an
+        empty (even signed) thinking block keeps its tool_use blocks and loses
+        the poison; whitespace-only counts as empty; a non-empty thinking block
+        and redacted_thinking are untouched."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
+        msgs = [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": "sig_abc"}, tu],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": " \n "},
+                    {"type": "thinking", "thinking": "real plan", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                ],
+            },
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": ""}]},
+        ]
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
+        assert len(out) == 3
+        assert [b["type"] for b in out[1]["content"]] == ["tool_use"]
+        assert [b["type"] for b in out[2]["content"]] == ["thinking", "redacted_thinking"]
+        assert out[2]["content"][0]["thinking"] == "real plan"
+        assert len(msgs[1]["content"]) == 2
 
     def test_strip_thinking_blocks_from_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1359,14 +1462,14 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
-    def test_strip_empty_text_blocks_from_anthropic_messages(self):
+    def test_strip_empty_content_blocks_from_anthropic_messages(self):
         """Covers #22930.  The core regression scenario: an assistant message
         with an empty text block alongside ``tool_use`` loses the empty block
         and keeps the ``tool_use``; a whole message that reduces to no blocks
         is dropped; whitespace-only text counts as empty; the caller's list
         is never mutated."""
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         tu = {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}
@@ -1375,14 +1478,14 @@ class TestAnthropicThinkingSignatureSelfHeal:
             {"role": "assistant", "content": [{"type": "text", "text": "  \n "}, tu]},
             {"role": "assistant", "content": [{"type": "text", "text": ""}]},
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert len(out) == 2 and out[0] is msgs[0]
         assert [b["type"] for b in out[1]["content"]] == ["tool_use"]
         assert len(msgs[1]["content"]) == 2  # caller's content unchanged
 
     def test_strip_empty_text_blocks_preserves_thinking_blocks(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1394,12 +1497,12 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["thinking"]
 
     def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1411,12 +1514,12 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_strip_empty_text_blocks_treats_missing_text_key_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1428,21 +1531,21 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_strip_empty_text_blocks_leaves_non_empty_text_alone(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert out[0] is msgs[0]  # untouched messages keep identity
 
     def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1454,8 +1557,192 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+
+    def test_flatten_unencrypted_web_search_results_keeps_snippet_evidence(self):
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        msgs = [
+            {"role": "user", "content": "latest litellm version?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {"query": "latest litellm version"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_1",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://github.com/BerriAI/litellm/releases",
+                                "title": "Releases",
+                                "page_age": None,
+                                "encrypted_content": "",
+                                "snippet": "Latest release v1.95.0",
+                            }
+                        ],
+                    },
+                    {"type": "text", "text": "v1.95.0"},
+                ],
+            },
+        ]
+
+        out = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+
+        assert out[0] is msgs[0]
+        assert [b["type"] for b in out[1]["content"]] == ["text", "text"]
+        flattened = out[1]["content"][0]["text"]
+        assert "Web search results for 'latest litellm version':" in flattened
+        assert "URL: https://github.com/BerriAI/litellm/releases" in flattened
+        assert "Snippet: Latest release v1.95.0" in flattened
+        assert msgs[1]["content"][0]["type"] == "server_tool_use"
+
+    @pytest.mark.parametrize("results", [[], None], ids=["empty_list", "search_raised"])
+    def test_flatten_unencrypted_web_search_results_flattens_a_resultless_search(self, results):
+        """A search that found nothing, or that raised, still has to be flattened.
+
+        Both cases reach the client as ``content: []``, and leaving that block in
+        place ships an unsupported tag to Bedrock on the next turn just as surely
+        as a populated one does.
+        """
+        from litellm.integrations.websearch_interception.transformation import (
+            WebSearchTransformation,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        block = WebSearchTransformation.build_web_search_tool_result_block(
+            tool_use_id="srvtoolu_1",
+            search_response=None if results is None else SimpleNamespace(results=results),
+        )
+        assert block["content"] == [], "fixture drifted from what the interceptor emits"
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {"query": "who won"},
+                    },
+                    block,
+                    {"type": "text", "text": "I could not find that."},
+                ],
+            }
+        ]
+
+        out = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+
+        assert [b["type"] for b in out[0]["content"]] == ["text", "text"]
+        assert out[0]["content"][0]["text"] == ("Web search results for 'who won':\n\nNo results were returned.")
+
+    @pytest.mark.parametrize("results", [[SimpleNamespace(title="Rome", url="u", snippet="s", date=None)], []])
+    def test_flatten_unencrypted_web_search_results_is_idempotent(self, results):
+        """Flattening twice must equal flattening once.
+
+        The agentic loop re-enters the same entry point for its follow-up call and
+        hands it the original history, so this runs again on already-flattened
+        messages once per iteration. A pass that appended instead of replacing
+        would duplicate the evidence on every loop.
+        """
+        from litellm.integrations.websearch_interception.transformation import (
+            WebSearchTransformation,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "when"}},
+                    WebSearchTransformation.build_web_search_tool_result_block(
+                        tool_use_id="srvtoolu_1",
+                        search_response=SimpleNamespace(results=results),
+                    ),
+                    {"type": "text", "text": "753 BC."},
+                ],
+            }
+        ]
+
+        once = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+        twice = flatten_unencrypted_web_search_results_in_anthropic_messages(once)
+
+        assert [b["type"] for b in once[0]["content"]] == ["text", "text"]
+        assert json.dumps(twice) == json.dumps(once)
+
+    def test_flatten_unencrypted_web_search_results_preserves_real_anthropic_blocks(self):
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {"query": "q"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_1",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://example.com",
+                                "title": "Example",
+                                "page_age": None,
+                                "encrypted_content": "EqgfCioIARgBIiQ4",
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+
+        out = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+
+        assert out[0] is msgs[0]
+
+    def test_flatten_unencrypted_web_search_results_leaves_error_blocks_alone(self):
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_1",
+                        "content": {
+                            "type": "web_search_tool_result_error",
+                            "error_code": "max_uses_exceeded",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        out = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+
+        assert out[0] is msgs[0]
 
     def test_sanitize_tool_use_ids_in_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1498,10 +1785,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
         base = "call_abc123"
         sig = "CiIBDDnWx+/a=="
-        assert (
-            normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}")
-            == base
-        )
+        assert normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}") == base
 
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
@@ -1525,15 +1809,11 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
         resp_bad = httpx.Response(400, request=req, text="rate limit exceeded")
         err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)
-        assert (
-            config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
-        )
+        assert config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
 
         resp_500 = httpx.Response(500, request=req, text=err_text)
         err_500 = httpx.HTTPStatusError("bad", request=req, response=resp_500)
-        assert (
-            config.should_retry_anthropic_messages_on_http_error(err_500, {}) is False
-        )
+        assert config.should_retry_anthropic_messages_on_http_error(err_500, {}) is False
 
         data = {
             "model": "claude-sonnet-4-20250514",
@@ -1554,23 +1834,6 @@ class TestAnthropicThinkingSignatureSelfHeal:
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
         assert data["messages"] == []
-
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so detection doesn't depend on the
-    network-fetched ``main`` copy (which lacks this branch's flags until merge)."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
 
 
 class TestClaudeOpus48AdaptiveThinking:
@@ -1602,9 +1865,7 @@ class TestClaudeOpus48AdaptiveThinking:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
-    def test_resolver_reads_flag_through_bedrock_invoke_prefix(
-        self, local_model_cost_map
-    ):
+    def test_resolver_reads_flag_through_bedrock_invoke_prefix(self, local_model_cost_map):
         """The resolver fix: ``bedrock/invoke/...`` resolves to the flagged
         Bedrock entry. Pure ``_supports_factory`` without prefix-stripping
         returns False here, which is why the data-only fix alone was not enough."""
@@ -1654,9 +1915,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "claude-sonnet-4.6",
         ],
     )
-    def test_adaptive_thinking_detected_for_opus_4_6_4_7_and_sonnet_4_6(
-        self, local_model_cost_map, model
-    ):
+    def test_adaptive_thinking_detected_for_opus_4_6_4_7_and_sonnet_4_6(self, local_model_cost_map, model):
         """Opus 4.6/4.7 and Sonnet 4.6 carry the ``supports_adaptive_thinking`` flag,
         so detection holds purely from the cost map with no version-rule
         fallback. Each alias form the Bedrock/anthropic paths see resolves to a flagged
@@ -1676,9 +1935,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "claude-fable-preview",
         ],
     )
-    def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(
-        self, local_model_cost_map, model
-    ):
+    def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(self, local_model_cost_map, model):
         """An alias absent from the map, not matched by any ``fallback_generalizations``
         rule, and without any parseable family version stays non-adaptive. ``fable``
         without a major version matches neither the core-family 4.6+ gate nor the
@@ -1704,9 +1961,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "us.anthropic.claude-fable-5-preview",
         ],
     )
-    def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(
-        self, local_model_cost_map, model
-    ):
+    def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(self, local_model_cost_map, model):
         """Provider-prefixed or suffixed Claude names that resolve to no mapped entry
         still resolve to adaptive when the id carries claude-<family>- at version 4.6
         or higher, bare 5+ majors included. The version gate is the declarative
@@ -1727,9 +1982,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "us.anthropic.claude-opus-4-20250514",
         ],
     )
-    def test_adaptive_thinking_not_detected_for_unmapped_low_versions(
-        self, local_model_cost_map, model
-    ):
+    def test_adaptive_thinking_not_detected_for_unmapped_low_versions(self, local_model_cost_map, model):
         """Unmapped Claude names below 4.6 stay non-adaptive through the declarative path.
         The eight-digit dated Opus 4.0 id (``...-4-20250514``) is the date-safety case: the
         version rule caps the minor at two digits, so the date is not misread as a >= 4.6
@@ -1768,14 +2021,11 @@ class TestDefaultSuffixAdaptiveThinking:
             "vertex_ai/claude-fable-5@default",
         ],
     )
-    def test_default_suffix_models_are_adaptive_thinking(
-        self, local_model_cost_map, model: str
-    ) -> None:
+    def test_default_suffix_models_are_adaptive_thinking(self, local_model_cost_map, model: str) -> None:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True, (
-            f"{model} not classified as adaptive thinking. "
-            "Check _model_map_lookup_candidates strips @default suffix."
+            f"{model} not classified as adaptive thinking. Check _model_map_lookup_candidates strips @default suffix."
         )
 
     @pytest.mark.parametrize(
@@ -1785,15 +2035,11 @@ class TestDefaultSuffixAdaptiveThinking:
             ("vertex_ai/claude-sonnet-4-6@default", "claude-sonnet-4-6"),
         ],
     )
-    def test_lookup_candidates_include_bare_name(
-        self, model: str, expected_bare: str
-    ) -> None:
+    def test_lookup_candidates_include_bare_name(self, model: str, expected_bare: str) -> None:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
-        assert expected_bare in candidates, (
-            f"Expected '{expected_bare}' in candidates for '{model}', got: {candidates}"
-        )
+        assert expected_bare in candidates, f"Expected '{expected_bare}' in candidates for '{model}', got: {candidates}"
 
 
 class TestCapabilityProbeUsesCallerProvider:
@@ -1806,39 +2052,109 @@ class TestCapabilityProbeUsesCallerProvider:
 
     BEDROCK_MODEL = "global.anthropic.claude-opus-4-8"
 
-    def test_exact_bedrock_entry_flag_is_authoritative_for_bedrock_caller(
-        self, local_model_cost_map, monkeypatch
-    ):
+    def test_exact_bedrock_entry_flag_is_authoritative_for_bedrock_caller(self, local_model_cost_map, monkeypatch):
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert (
-            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
-            is True
-        )
+        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is True
 
-        monkeypatch.setitem(
-            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
-        )
+        monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
         litellm.get_model_info.cache_clear()
 
-        assert (
-            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
-            is False
-        )
+        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is False
 
-    def test_native_anthropic_probe_still_reads_anthropic_entry(
-        self, local_model_cost_map, monkeypatch
-    ):
+    def test_native_anthropic_probe_still_reads_anthropic_entry(self, local_model_cost_map, monkeypatch):
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        monkeypatch.setitem(
-            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
-        )
+        monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
         litellm.get_model_info.cache_clear()
 
-        assert (
-            AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic")
-            is True
-        )
+        assert AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic") is True
+
+
+def test_create_anthropic_model_list_response_shape():
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {"id": "claude-opus-4-6", "object": "model", "created": 0, "owned_by": "openai"},
+            {"id": "gpt-4o", "object": "model", "created": 0, "owned_by": "openai"},
+            {"id": "claude-haiku-4-5", "object": "model", "created": 0, "owned_by": "openai"},
+        ]
+    )
+
+    assert "object" not in response
+    assert response["has_more"] is False
+    assert response["first_id"] == "claude-opus-4-6"
+    assert response["last_id"] == "claude-haiku-4-5"
+    assert [m["id"] for m in response["data"]] == [
+        "claude-opus-4-6",
+        "gpt-4o",
+        "claude-haiku-4-5",
+    ]
+    for entry in response["data"]:
+        assert entry["type"] == "model"
+        assert entry["display_name"] == entry["id"]
+        # ISO 8601 with a Z suffix, as the Anthropic Models API returns.
+        assert entry["created_at"].endswith("Z")
+        assert "+00:00" not in entry["created_at"]
+        assert entry["max_input_tokens"] is None
+        assert entry["max_tokens"] is None
+
+
+def test_create_anthropic_model_list_response_carries_token_limits():
+    """max_input_tokens and max_tokens are nullable in the Anthropic Models shape,
+    not optional, so both keys are emitted for every entry and carry null when the
+    limit is unknown."""
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {
+                "id": "claude-opus-4-6",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+                "max_input_tokens": 200000,
+                "max_output_tokens": 64000,
+            },
+            {
+                "id": "input-only",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+                "max_input_tokens": 8192,
+            },
+            {"id": "unknown-limits", "object": "model", "created": 0, "owned_by": "openai"},
+        ]
+    )
+
+    opus, input_only, unknown = response["data"]
+    assert opus["max_input_tokens"] == 200000
+    assert opus["max_tokens"] == 64000
+    assert "max_output_tokens" not in opus
+    assert input_only["max_input_tokens"] == 8192
+    assert input_only["max_tokens"] is None
+    assert unknown["max_input_tokens"] is None
+    assert unknown["max_tokens"] is None
+    for entry in response["data"]:
+        assert "max_input_tokens" in entry
+        assert "max_tokens" in entry
+
+
+def test_create_anthropic_model_list_response_empty():
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response([])
+
+    assert response["data"] == []
+    assert response["has_more"] is False
+    assert response["first_id"] is None
+    assert response["last_id"] is None

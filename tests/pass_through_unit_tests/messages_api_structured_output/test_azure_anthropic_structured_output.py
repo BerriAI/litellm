@@ -8,10 +8,8 @@ Requires Azure AI credentials and model deployment.
 """
 
 import os
-import sys
 from typing import Optional
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from .base_anthropic_messages_structured_output_test import (
     BaseAnthropicMessagesStructuredOutputTest,

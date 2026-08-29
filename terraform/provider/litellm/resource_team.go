@@ -26,6 +26,9 @@ func ResourceLiteLLMTeam() *schema.Resource {
 		Read:   resourceLiteLLMTeamRead,
 		Update: resourceLiteLLMTeamUpdate,
 		Delete: resourceLiteLLMTeamDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"team_alias": {
@@ -53,6 +56,11 @@ func ResourceLiteLLMTeam() *schema.Resource {
 				Type:     schema.TypeFloat,
 				Optional: true,
 			},
+			"soft_budget": {
+				Type:        schema.TypeFloat,
+				Optional:    true,
+				Description: "Spend threshold that triggers a soft budget alert without blocking requests",
+			},
 			"budget_duration": {
 				Type:     schema.TypeString,
 				Optional: true,
@@ -72,6 +80,81 @@ func ResourceLiteLLMTeam() *schema.Resource {
 				Elem:        &schema.Schema{Type: schema.TypeString},
 				Description: "List of permissions granted to team members",
 			},
+			"tags": {
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Description: "Tags for spend tracking and tag-based routing",
+			},
+			"soft_budget_alerting_emails": {
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Description: "Email addresses alerted when the team crosses soft_budget",
+			},
+			"model_aliases": {
+				Type:     schema.TypeMap,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"guardrails": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"prompts": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"team_member_budget": {
+				Type:        schema.TypeFloat,
+				Optional:    true,
+				Description: "Budget applied to every team member",
+			},
+			"team_member_budget_duration": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"team_member_rpm_limit": {
+				Type:     schema.TypeInt,
+				Optional: true,
+			},
+			"team_member_tpm_limit": {
+				Type:     schema.TypeInt,
+				Optional: true,
+			},
+			"team_member_key_duration": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"model_rpm_limit": {
+				Type:     schema.TypeMap,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeInt},
+			},
+			"model_tpm_limit": {
+				Type:     schema.TypeMap,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeInt},
+			},
+			"allowed_passthrough_routes": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"rpm_limit_type": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				ForceNew:    true,
+				Description: "One of 'guaranteed_throughput' or 'best_effort_throughput'; only settable at creation",
+			},
+			"tpm_limit_type": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				ForceNew:    true,
+				Description: "One of 'guaranteed_throughput' or 'best_effort_throughput'; only settable at creation",
+			},
 		},
 	}
 }
@@ -81,6 +164,13 @@ func resourceLiteLLMTeamCreate(d *schema.ResourceData, m interface{}) error {
 
 	teamID := uuid.New().String()
 	teamData := buildTeamData(d, teamID)
+
+	// Throughput limit types are only accepted by /team/new, not /team/update.
+	for _, key := range []string{"rpm_limit_type", "tpm_limit_type"} {
+		if v, ok := d.GetOk(key); ok {
+			teamData[key] = v
+		}
+	}
 
 	log.Printf("[DEBUG] Create team request payload: %+v", teamData)
 
@@ -117,21 +207,20 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 		return nil
 	}
 
-	var teamResp TeamResponse
-	if err := json.NewDecoder(resp.Body).Decode(&teamResp); err != nil {
+	var infoResp TeamInfoResponse
+	if err := json.NewDecoder(resp.Body).Decode(&infoResp); err != nil {
 		return fmt.Errorf("error decoding team info response: %w", err)
 	}
+	teamResp := infoResp.TeamInfo
 
 	// Update the state with values from the response or fall back to the data passed in during creation
 	d.Set("team_alias", GetStringValue(teamResp.TeamAlias, d.Get("team_alias").(string)))
 	d.Set("organization_id", GetStringValue(teamResp.OrganizationID, d.Get("organization_id").(string)))
 
-	// Handle metadata separately as it's a map
-	if teamResp.Metadata != nil {
-		d.Set("metadata", teamResp.Metadata)
-	} else {
-		d.Set("metadata", d.Get("metadata"))
-	}
+	metadata, tags, alertEmails := splitTeamMetadata(teamResp.Metadata)
+	d.Set("metadata", metadata)
+	d.Set("tags", tags)
+	d.Set("soft_budget_alerting_emails", alertEmails)
 
 	if teamResp.TPMLimit != nil {
 		d.Set("tpm_limit", *teamResp.TPMLimit)
@@ -142,6 +231,7 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	if teamResp.MaxBudget != nil {
 		d.Set("max_budget", *teamResp.MaxBudget)
 	}
+	d.Set("soft_budget", teamResp.SoftBudget)
 	d.Set("budget_duration", GetStringValue(teamResp.BudgetDuration, d.Get("budget_duration").(string)))
 
 	// Handle models separately as it's a list
@@ -152,6 +242,36 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	}
 
 	d.Set("blocked", GetBoolValue(teamResp.Blocked, d.Get("blocked").(bool)))
+
+	if teamResp.ModelAliases != nil {
+		d.Set("model_aliases", teamResp.ModelAliases)
+	}
+	if teamResp.Guardrails != nil {
+		d.Set("guardrails", teamResp.Guardrails)
+	}
+	if teamResp.Prompts != nil {
+		d.Set("prompts", teamResp.Prompts)
+	}
+	if teamResp.TeamMemberBudget != nil {
+		d.Set("team_member_budget", *teamResp.TeamMemberBudget)
+	}
+	d.Set("team_member_budget_duration", GetStringValue(teamResp.TeamMemberBudgetDuration, d.Get("team_member_budget_duration").(string)))
+	if teamResp.TeamMemberRPMLimit != nil {
+		d.Set("team_member_rpm_limit", *teamResp.TeamMemberRPMLimit)
+	}
+	if teamResp.TeamMemberTPMLimit != nil {
+		d.Set("team_member_tpm_limit", *teamResp.TeamMemberTPMLimit)
+	}
+	d.Set("team_member_key_duration", GetStringValue(teamResp.TeamMemberKeyDuration, d.Get("team_member_key_duration").(string)))
+	if teamResp.ModelRPMLimit != nil {
+		d.Set("model_rpm_limit", teamResp.ModelRPMLimit)
+	}
+	if teamResp.ModelTPMLimit != nil {
+		d.Set("model_tpm_limit", teamResp.ModelTPMLimit)
+	}
+	if teamResp.AllowedPassthroughRoutes != nil {
+		d.Set("allowed_passthrough_routes", teamResp.AllowedPassthroughRoutes)
+	}
 
 	// Explicitly fetch the current permissions from the API
 	permResp, err := getTeamPermissions(client, d.Id())
@@ -240,13 +360,81 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 		"team_alias": d.Get("team_alias").(string),
 	}
 
-	for _, key := range []string{"organization_id", "metadata", "tpm_limit", "rpm_limit", "max_budget", "budget_duration", "models", "blocked", "team_member_permissions"} {
+	for _, key := range []string{
+		"organization_id", "tpm_limit", "rpm_limit", "max_budget", "budget_duration", "models",
+		"blocked", "team_member_permissions", "model_aliases", "guardrails", "prompts",
+		"team_member_budget", "team_member_budget_duration", "team_member_rpm_limit",
+		"team_member_tpm_limit", "team_member_key_duration", "model_rpm_limit",
+		"model_tpm_limit", "allowed_passthrough_routes",
+	} {
 		if v, ok := d.GetOk(key); ok {
 			teamData[key] = v
 		}
 	}
 
+	if v, ok := d.GetOk("soft_budget"); ok {
+		teamData["soft_budget"] = v
+	} else if d.HasChange("soft_budget") {
+		teamData["soft_budget"] = nil
+	}
+
+	if v, ok := d.GetOk("tags"); ok || d.HasChange("tags") {
+		teamData["tags"] = v
+	}
+
+	if metadata := buildTeamMetadata(d); metadata != nil {
+		teamData["metadata"] = metadata
+	}
+
 	return teamData
+}
+
+// /team/update replaces metadata wholesale, so the full map must go out whenever either half changed.
+func buildTeamMetadata(d *schema.ResourceData) map[string]interface{} {
+	metadata := map[string]interface{}{}
+	for k, v := range d.Get("metadata").(map[string]interface{}) {
+		metadata[k] = v
+	}
+	if v, ok := d.GetOk("soft_budget_alerting_emails"); ok {
+		metadata["soft_budget_alerting_emails"] = v
+	}
+	if len(metadata) == 0 && !d.HasChange("metadata") && !d.HasChange("soft_budget_alerting_emails") {
+		return nil
+	}
+	return metadata
+}
+
+func splitTeamMetadata(raw map[string]interface{}) (map[string]string, []string, []string) {
+	metadata := map[string]string{}
+	var tags, alertEmails []string
+	for k, v := range raw {
+		switch k {
+		case "tags":
+			tags = toStringSlice(v)
+		case "soft_budget_alerting_emails":
+			alertEmails = toStringSlice(v)
+		case "team_member_budget_id":
+		default:
+			if s, ok := v.(string); ok {
+				metadata[k] = s
+			}
+		}
+	}
+	return metadata, tags, alertEmails
+}
+
+func toStringSlice(v interface{}) []string {
+	items, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func handleResponse(resp *http.Response, action string) error {

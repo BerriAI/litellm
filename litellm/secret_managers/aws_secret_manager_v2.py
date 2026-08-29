@@ -22,12 +22,14 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.proxy._types import KeyManagementSystem
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.secret_managers.main import KeyManagementSettings
 
@@ -281,7 +283,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 tags_list = tags
             else:
                 raise ValueError("Tags must be a dict or list of {Key, Value} pairs")
-            data["Tags"] = tags_list  # type: ignore[assignment]
+            data["Tags"] = tags_list
 
         endpoint_url, headers, body = self._prepare_request(
             action="CreateSecret",
@@ -556,13 +558,15 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
 
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params)
 
-        # Get endpoint
-        _, endpoint_url = self.get_runtime_endpoint(
-            api_base=None,
-            aws_bedrock_runtime_endpoint=boto3_credentials_info.aws_bedrock_runtime_endpoint,
-            aws_region_name=boto3_credentials_info.aws_region_name,
+        region_name: Final = boto3_credentials_info.aws_region_name
+        explicit_runtime_endpoint: Final = boto3_credentials_info.aws_bedrock_runtime_endpoint or get_secret_str(
+            "AWS_BEDROCK_RUNTIME_ENDPOINT"
         )
-        endpoint_url = endpoint_url.replace("bedrock-runtime", "secretsmanager")
+        endpoint_url: Final = (
+            explicit_runtime_endpoint.replace("bedrock-runtime", "secretsmanager")
+            if explicit_runtime_endpoint
+            else f"https://secretsmanager.{region_name}.{get_aws_dns_suffix(region_name)}"
+        )
 
         # Use provided request_data if available, otherwise build default data
         if request_data:

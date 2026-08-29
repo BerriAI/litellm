@@ -25,7 +25,13 @@ from e2e_http import (
 
 class Transport(Protocol):
     def post[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]: ...
 
     def stream(
@@ -58,6 +64,7 @@ class Transport(Protocol):
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]: ...
 
     def delete[R: BaseModel](
@@ -92,6 +99,7 @@ class Transport(Protocol):
         file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]: ...
 
     def download(self, path: str, *, headers: BaseModel) -> StreamingResponse: ...
@@ -119,14 +127,22 @@ class HttpTransport:
         return self.bearer(self.master_key)
 
     def post[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
+        """`timeout` overrides the transport-wide request_timeout for this call, for
+        provider operations that legitimately outlive it (image edits, OCR)."""
         return e2e_http.post(
             self._url(path),
             headers=headers,
             json=json,
             response_type=response_type,
-            timeout=self.request_timeout,
+            timeout=self.request_timeout if timeout is None else timeout,
         )
 
     def get[R: BaseModel](
@@ -136,13 +152,16 @@ class HttpTransport:
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
+        """`timeout` overrides the transport-wide request_timeout for this call, for
+        pollers whose own deadline is shorter than it."""
         return e2e_http.get(
             self._url(path),
             headers=headers,
             params=params,
             response_type=response_type,
-            timeout=self.request_timeout,
+            timeout=self.request_timeout if timeout is None else timeout,
         )
 
     def delete[R: BaseModel](
@@ -246,6 +265,7 @@ class HttpTransport:
         file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return e2e_http.upload(
             self._url(path),
@@ -257,7 +277,7 @@ class HttpTransport:
             file_field=file_field,
             params=params,
             response_type=response_type,
-            timeout=self.request_timeout,
+            timeout=self.request_timeout if timeout is None else timeout,
         )
 
     def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:
@@ -323,10 +343,16 @@ class SplitTransport:
         return self.data.master
 
     def post[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return self._route(path).post(
-            path, headers=headers, json=json, response_type=response_type
+            path, headers=headers, json=json, response_type=response_type, timeout=timeout
         )
 
     def get[R: BaseModel](
@@ -336,9 +362,14 @@ class SplitTransport:
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return self._route(path).get(
-            path, headers=headers, params=params, response_type=response_type
+            path,
+            headers=headers,
+            params=params,
+            response_type=response_type,
+            timeout=timeout,
         )
 
     def delete[R: BaseModel](
@@ -417,6 +448,7 @@ class SplitTransport:
         file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return self._route(path).upload(
             path,
@@ -428,6 +460,7 @@ class SplitTransport:
             file_field=file_field,
             params=params,
             response_type=response_type,
+            timeout=timeout,
         )
 
     def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:

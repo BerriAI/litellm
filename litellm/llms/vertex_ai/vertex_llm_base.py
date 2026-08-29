@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import threading
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlparse
 
@@ -68,7 +69,8 @@ class VertexBase:
         # re-acquire it without deadlocking the current thread.
         self._sync_refresh_lock = threading.RLock()
 
-    def get_vertex_region(self, vertex_region: str | None, model: str) -> str:
+    @staticmethod
+    def get_vertex_region(vertex_region: str | None, model: str) -> str:
         import litellm
 
         # Try to get supported_regions directly from model_cost
@@ -342,7 +344,7 @@ class VertexBase:
     def refresh_auth(self, credentials: Any) -> None:
         try:
             from google.auth.transport.requests import (
-                Request,  # type: ignore[import-untyped]
+                Request,
             )
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
@@ -643,7 +645,7 @@ class VertexBase:
                         "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                     )
                 if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+                    auth_header = {"x-goog-api-key": gemini_api_key}
             else:
                 # For Vertex AI
                 if use_psc_endpoint_format:
@@ -707,7 +709,7 @@ class VertexBase:
                 model=model,
                 stream=stream,
             )
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            auth_header = {"x-goog-api-key": gemini_api_key}
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,
@@ -1191,7 +1193,18 @@ class VertexBase:
         )
 
     @staticmethod
-    def safe_get_vertex_ai_location(litellm_params: dict) -> str | None:
+    def explicit_vertex_ai_location(params: Mapping[str, object]) -> str | None:
+        """
+        The location explicitly configured in the given params, without any
+        module-level or environment fallback. None when not configured.
+        """
+        for configured in (params.get("vertex_location"), params.get("vertex_ai_location")):
+            if isinstance(configured, str) and configured:
+                return configured
+        return None
+
+    @staticmethod
+    def safe_get_vertex_ai_location(litellm_params: Mapping[str, object]) -> str | None:
         """
         Safely get Vertex AI location without mutating the litellm_params dict.
 
@@ -1205,8 +1218,7 @@ class VertexBase:
             Vertex AI location/region or None
         """
         return (
-            litellm_params.get("vertex_location")
-            or litellm_params.get("vertex_ai_location")
+            VertexBase.explicit_vertex_ai_location(litellm_params)
             or litellm.vertex_location
             or get_secret_str("VERTEXAI_LOCATION")
             or get_secret_str("VERTEX_LOCATION")
