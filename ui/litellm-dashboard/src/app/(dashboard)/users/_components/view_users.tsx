@@ -1,21 +1,21 @@
-import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Button } from "antd";
 import BulkEditUserModal from "./BulkEditUsers";
+import BulkCreateUsersButton from "@/components/bulk_create_users_button";
 import { CreateUserButton } from "@/components/CreateUserButton";
-import EditUserModal from "./edit_user";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getPossibleUserRoles,
   getProxyBaseUrl,
   invitationCreateCall,
   userListCall,
   UserListResponse,
-  userUpdateUserCall,
 } from "@/components/networking";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
-import { updateExistingKeys } from "@/utils/dataUtils";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
@@ -28,13 +28,12 @@ import {
   SortingState,
 } from "@tanstack/react-table";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { modelAvailableCall, userDeleteCall } from "@/components/networking";
 import { DefaultUserSettingsForm } from "./default-user-settings/DefaultUserSettingsForm";
 import { UsersTable } from "./view_users/UsersTable";
 import UserInfoView from "./view_users/user_info_view";
 import { UserInfo } from "@/components/networking";
-import { Skeleton } from "antd";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -72,11 +71,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectionMode, setSelectionMode] = useState(false);
   const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
 
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedUserId, setSelectedUserId] = useQueryState("user", parseAsString.withOptions({ history: "push" }));
   const [openInEditMode, setOpenInEditMode] = useState(false);
 
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
@@ -139,15 +136,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setRowSelection({});
   }, []);
 
-  const handleUserClick = useCallback((userId: string, openInEdit: boolean = false) => {
-    setSelectedUserId(userId);
-    setOpenInEditMode(openInEdit);
-  }, []);
+  const handleUserClick = useCallback(
+    (userId: string, openInEdit: boolean = false) => {
+      void setSelectedUserId(userId);
+      setOpenInEditMode(openInEdit);
+    },
+    [setSelectedUserId],
+  );
 
   const handleCloseUserInfo = useCallback(() => {
-    setSelectedUserId(null);
+    void setSelectedUserId(null);
     setOpenInEditMode(false);
-  }, []);
+  }, [setSelectedUserId]);
 
   const handleDelete = useCallback((user: UserInfo) => {
     setUserToDelete(user);
@@ -157,16 +157,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const handleResetPassword = useCallback(
     async (userId: string) => {
       if (!accessToken) {
-        NotificationsManager.fromBackend("Access token not found");
+        toast.fromError("Access token not found");
         return;
       }
       try {
-        NotificationsManager.success("Generating password reset link...");
+        toast.success("Generating password reset link...");
         const data = await invitationCreateCall(accessToken, userId);
         setInvitationLinkData(data);
         setIsInvitationLinkModalVisible(true);
       } catch (error) {
-        NotificationsManager.fromBackend("Failed to generate password reset link");
+        toast.fromError("Failed to generate password reset link");
       }
     },
     [accessToken],
@@ -185,10 +185,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           return { ...previousData, users: updatedUsers };
         });
 
-        NotificationsManager.success("User deleted successfully");
+        toast.success("User deleted successfully");
       } catch (error) {
         console.error("Error deleting user:", error);
-        NotificationsManager.fromBackend("Failed to delete user");
+        toast.fromError("Failed to delete user");
       } finally {
         setIsDeleteModalOpen(false);
         setUserToDelete(null);
@@ -200,39 +200,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const cancelDelete = () => {
     setIsDeleteModalOpen(false);
     setUserToDelete(null);
-  };
-
-  const handleEditCancel = async () => {
-    setSelectedUser(null);
-    setEditModalVisible(false);
-  };
-
-  const handleEditSubmit = async (editedUser: any) => {
-    if (!accessToken || !token || !userRole || !userID) {
-      return;
-    }
-
-    try {
-      const response = await userUpdateUserCall(accessToken, editedUser, null);
-      queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
-        if (previousData === undefined) return previousData;
-        const updatedUsers = previousData.users.map((user) => {
-          if (user.user_id === response.data.user_id) {
-            return updateExistingKeys(user, response.data);
-          }
-          return user;
-        });
-
-        return { ...previousData, users: updatedUsers };
-      });
-
-      NotificationsManager.success(`User ${editedUser.user_id} updated successfully`);
-    } catch (error) {
-      console.error("There was an error updating the user", error);
-    }
-    setSelectedUser(null);
-    setEditModalVisible(false);
-    // Close the modal
   };
 
   const handleToggleSelectionMode = () => {
@@ -348,32 +315,31 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   );
 
   return (
-    <div className="w-full p-8 overflow-hidden">
-      <div className="flex items-center justify-between mb-4">
+    <div className="w-full overflow-hidden p-8">
+      <div className="mb-4 flex items-center justify-between">
         <div className="flex space-x-3">
           {userListQuery.isLoading && (
             <>
-              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
-              <Skeleton.Button active size="default" shape="default" style={{ width: 145, height: 36 }} />
-              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
+              <Skeleton className="h-9 w-28" />
+              <Skeleton className="h-9 w-36" />
+              <Skeleton className="h-9 w-28" />
             </>
           )}
           {!userListQuery.isLoading && userID && accessToken && (
             <>
               {isProxyAdmin && (
-                <CreateUserButton
-                  userID={userID}
-                  accessToken={accessToken}
-                  teams={teams}
-                  possibleUIRoles={possibleUIRoles}
-                />
+                <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
+              )}
+
+              {isProxyAdmin && (
+                <BulkCreateUsersButton accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
               )}
 
               {isProxyAdmin && (
                 <Button
+                  type="button"
                   onClick={handleToggleSelectionMode}
-                  type={selectionMode ? "primary" : "default"}
-                  className="flex items-center"
+                  variant={selectionMode ? "default" : "outline"}
                   data-testid="toggle-user-selection"
                 >
                   {selectionMode ? "Cancel Selection" : "Select Users"}
@@ -382,10 +348,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
               {isProxyAdmin && selectionMode && (
                 <Button
-                  type="primary"
+                  type="button"
                   onClick={() => setIsBulkEditModalVisible(true)}
                   disabled={selectedUsers.length === 0}
-                  className="flex items-center"
                   data-testid="bulk-edit-users"
                 >
                   Bulk Edit ({selectedUsers.length} selected)
@@ -397,39 +362,44 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       </div>
 
       {isProxyAdmin ? (
-        <TabGroup defaultIndex={0}>
-          <TabList className="mb-4">
-            <Tab>Users</Tab>
-            <Tab>Default User Settings</Tab>
-          </TabList>
+        <Tabs defaultValue="users" className="gap-0">
+          <TabsList variant="line" className="mb-4">
+            <TabsTrigger value="users" className="flex-none data-active:text-primary after:bg-primary">
+              Users
+            </TabsTrigger>
+            <TabsTrigger value="default-settings" className="flex-none data-active:text-primary after:bg-primary">
+              Default User Settings
+            </TabsTrigger>
+          </TabsList>
 
-          <TabPanels>
-            <TabPanel>{usersTable}</TabPanel>
+          <TabsContent value="users" keepMounted>
+            {usersTable}
+          </TabsContent>
 
-            <TabPanel>
-              {!userID || !userRole || !accessToken ? (
-                <div className="flex justify-center items-center h-64">
-                  <Skeleton active paragraph={{ rows: 4 }} />
+          <TabsContent value="default-settings" keepMounted>
+            {!userID || !userRole || !accessToken ? (
+              <div
+                className="flex h-64 items-center justify-center"
+                role="status"
+                aria-label="Loading default user settings"
+              >
+                <div className="w-full max-w-lg space-y-3">
+                  <Skeleton className="h-5 w-1/3" />
+                  <Skeleton className="h-5 w-full" />
+                  <Skeleton className="h-5 w-full" />
+                  <Skeleton className="h-5 w-2/3" />
                 </div>
-              ) : (
-                <DefaultUserSettingsForm possibleUIRoles={possibleUIRoles} />
-              )}
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+              </div>
+            ) : (
+              <DefaultUserSettingsForm possibleUIRoles={possibleUIRoles} />
+            )}
+          </TabsContent>
+        </Tabs>
       ) : (
         usersTable
       )}
 
       {/* Existing Modals */}
-      <EditUserModal
-        visible={editModalVisible}
-        possibleUIRoles={possibleUIRoles}
-        onCancel={handleEditCancel}
-        user={selectedUser}
-        onSubmit={handleEditSubmit}
-      />
-
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
         title="Delete User?"

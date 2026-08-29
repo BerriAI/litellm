@@ -19,6 +19,8 @@ class _PROXY_AzureContentSafety(
 ):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
 
+    enforces_request_content: bool = True
+
     def __init__(self, endpoint, api_key, thresholds=None):
         try:
             from azure.ai.contentsafety.aio import ContentSafetyClient

@@ -11,7 +11,6 @@ import time
 import uuid as uuid_module
 from collections.abc import Coroutine
 from functools import partial
-from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 
 import httpx
@@ -24,16 +23,20 @@ FileCreateProvider = Literal[
     "vertex_ai",
     "bedrock",
     "hosted_vllm",
+    "litellm_proxy",
     "manus",
     "anthropic",
 ]
-FileRetrieveProvider = Literal["openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic"]
-FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic"]
-FileListProvider = Literal["openai", "azure", "manus", "anthropic"]
+FileRetrieveProvider = Literal[
+    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "litellm_proxy", "manus", "anthropic"
+]
+FileDeleteProvider = Literal["openai", "azure", "gemini", "litellm_proxy", "manus", "anthropic"]
+FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic"]
 import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentProvider, FileContentStreamingResult
+from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
@@ -85,14 +88,6 @@ bedrock_files_instance: Final = BedrockFilesHandler()
 #################################################
 
 
-def _add_trusted_model_credentials_to_litellm_params(
-    litellm_params_dict: dict[str, Any], kwargs: dict[str, Any]
-) -> None:
-    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
-    if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
-        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials
-
-
 @client
 async def acreate_file(
     file: FileTypes,
@@ -131,7 +126,7 @@ async def acreate_file(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         return response
     except Exception as e:
@@ -176,7 +171,7 @@ def create_file(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -252,7 +247,7 @@ def create_file(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_file", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="create_file", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -328,7 +323,7 @@ def file_retrieve(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -372,7 +367,7 @@ def file_retrieve(
             )
             if provider_config is not None:
                 litellm_params_dict: Final = get_litellm_params(**kwargs)
-                _add_trusted_model_credentials_to_litellm_params(
+                add_trusted_model_credentials_to_litellm_params(
                     litellm_params_dict=litellm_params_dict,
                     kwargs=kwargs,
                 )
@@ -419,7 +414,7 @@ def file_retrieve(
                         request=httpx.Request(
                             method="create_thread",
                             url="https://github.com/BerriAI/litellm",
-                        ),  # type: ignore
+                        ),
                     ),
                 )
 
@@ -465,9 +460,9 @@ async def afile_delete(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
-        return cast(FileDeleted, response)  # type: ignore
+        return cast(FileDeleted, response)
     except Exception as e:
         raise e
 
@@ -494,7 +489,7 @@ def file_delete(
             pass
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        _add_trusted_model_credentials_to_litellm_params(
+        add_trusted_model_credentials_to_litellm_params(
             litellm_params_dict=litellm_params_dict,
             kwargs=kwargs,
         )
@@ -511,7 +506,7 @@ def file_delete(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
         _is_async: Final = kwargs.pop("is_async", False) is True
@@ -596,7 +591,7 @@ def file_delete(
                         request=httpx.Request(
                             method="create_thread",
                             url="https://github.com/BerriAI/litellm",
-                        ),  # type: ignore
+                        ),
                     ),
                 )
         return cast(FileDeleted, response)
@@ -639,7 +634,7 @@ async def afile_list(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         return response
     except Exception as e:
@@ -673,7 +668,7 @@ def file_list(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -755,7 +750,7 @@ def file_list(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="file_list", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="file_list", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -803,7 +798,7 @@ async def afile_content(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         return response
     except Exception as e:
@@ -834,7 +829,7 @@ def file_content(
     try:
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        _add_trusted_model_credentials_to_litellm_params(
+        add_trusted_model_credentials_to_litellm_params(
             litellm_params_dict=litellm_params_dict,
             kwargs=kwargs,
         )
@@ -857,7 +852,7 @@ def file_content(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -987,7 +982,7 @@ def file_content(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -1065,7 +1060,7 @@ def file_content_streaming(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
             ),
         )
 

@@ -214,25 +214,25 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         if status_code == 400:
-            return BadRequestError(  # type: ignore[return-value]
+            return BadRequestError(
                 message=error_message,
                 model="",
                 llm_provider="modelscope",
             )
         elif status_code == 401:
-            return AuthenticationError(  # type: ignore[return-value]
+            return AuthenticationError(
                 message=error_message,
                 model="",
                 llm_provider="modelscope",
             )
         elif status_code >= 500:
-            return InternalServerError(  # type: ignore[return-value]
+            return InternalServerError(
                 message=error_message,
                 model="",
                 llm_provider="modelscope",
             )
         else:
-            return BadRequestError(  # type: ignore[return-value]
+            return BadRequestError(
                 message=error_message,
                 model="",
                 llm_provider="modelscope",

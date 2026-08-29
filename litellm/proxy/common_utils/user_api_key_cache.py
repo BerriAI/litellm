@@ -57,7 +57,7 @@ class UserApiKeyCache(DualCache):
         **kwargs: Any,
     ) -> Any: ...
 
-    def get_cache(  # type: ignore[override]
+    def get_cache(
         self,
         key,
         parent_otel_span=None,
@@ -102,7 +102,7 @@ class UserApiKeyCache(DualCache):
         **kwargs: Any,
     ) -> Any: ...
 
-    async def async_get_cache(  # type: ignore[override]
+    async def async_get_cache(
         self,
         key,
         parent_otel_span=None,
@@ -129,19 +129,17 @@ class UserApiKeyCache(DualCache):
             return None
         return decoded
 
-    def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
+    def set_cache(self, key, value, local_only: bool = False, **kwargs):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final = CacheCodec.serialize(value, model_type=model_type)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
+    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final = CacheCodec.serialize(value, model_type=model_type)
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache_pipeline(  # type: ignore[override]
-        self, cache_list: list, local_only: bool = False, **kwargs
-    ) -> None:
+    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs) -> None:
         """
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
@@ -170,6 +168,51 @@ def user_object_permission_id_cache_key(user_id: str) -> str:
 def object_permission_cache_key(object_permission_id: str) -> str:
     """Cache key ``get_object_permission`` stores a permission row under."""
     return f"object_permission_id:{object_permission_id}"
+
+
+#: Cached under ``tag_registry_cache_key`` when the table exceeds ``TAG_REGISTRY_MAX_SIZE``:
+#: registry unusable, fall back to the per-tag lookup.
+TAG_REGISTRY_OVERFLOW_SENTINEL: Final = "__tag_registry_overflow__"
+
+
+def tag_cache_key(tag_name: str) -> str:
+    """Cache key one tag row is stored under; shared so its five reader/writer modules cannot drift."""
+    return f"tag:{tag_name}"
+
+
+def tag_registry_cache_key() -> str:
+    """Cache key for the set of tag names that exist in ``LiteLLM_TagTable``."""
+    return "tag_registry"
+
+
+#: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds
+#: ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-id fetch.
+END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_registry_overflow__"
+
+
+def end_user_cache_key(end_user_id: str) -> str:
+    """Cache key one end-user row is stored under; shared so auth and spend tracking cannot drift."""
+    return f"end_user_id:{end_user_id}"
+
+
+def end_user_restricted_registry_cache_key() -> str:
+    """Cache key for the set of end-user ids whose row carries a restriction auth enforces."""
+    return "end_user_restricted_registry"
+
+
+def team_membership_auth_cache_key(team_id: str, user_id: str) -> str:
+    """Cache key one team member's ``LiteLLM_TeamMembership`` row is stored under for the admission check."""
+    return f"{team_id}_{user_id}"
+
+
+def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
+    """Cache key the pre-call budget reservation stores the same ``LiteLLM_TeamMembership`` row under.
+
+    Deliberately not unified with ``team_membership_auth_cache_key``: the two readers wrote independent
+    keys before this file existed, so a fix that invalidates one must invalidate both explicitly rather
+    than assume a single write is visible to both.
+    """
+    return f"team_membership:{user_id}:{team_id}"
 
 
 def get_management_object_ttl(cache: DualCache) -> float:

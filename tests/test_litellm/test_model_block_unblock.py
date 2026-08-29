@@ -7,6 +7,7 @@ from litellm.proxy._types import (
     BlockModelRequest,
     LitellmUserRoles,
     ProxyException,
+    ReconcileOutcome,
     UserAPIKeyAuth,
 )
 from litellm.types.router import RouterRateLimitError
@@ -36,7 +37,12 @@ def _setup_model_block_mocks(monkeypatch, *, updated_blocked: bool):
     mock_router = MagicMock()
     mock_router.get_model_ids.return_value = [model_id]
 
-    mock_clear_cache = AsyncMock(return_value=None)
+    # No reconcile ran in these tests, so both fields are None and the verdict falls
+    # back to reading the router live -- which is what the get_model_ids side_effects
+    # below drive.
+    mock_clear_cache = AsyncMock(
+        return_value=ReconcileOutcome(still_desired=None, live_after=None)
+    )
     mock_audit_log = AsyncMock(return_value=None)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)

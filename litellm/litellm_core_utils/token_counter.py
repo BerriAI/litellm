@@ -3,7 +3,7 @@
 import base64
 import io
 import struct
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Final, Literal, cast
 
 import tiktoken
@@ -19,19 +19,27 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
+    AnthropicContentParamSource,
+    AnthropicContentParamSourceFileId,
+    AnthropicContentParamSourceUrl,
+    AnthropicMessagesDocumentParam,
+    AnthropicMessagesImageParam,
+    AnthropicMessagesTextParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionDocumentObject,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
-    OpenAIMessageContent,
+    OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import Message, SelectTokenizerResponse
 
@@ -305,6 +313,16 @@ Type for a function that counts tokens in a string.
 """
 
 
+def _get_tiktoken_count_function(
+    encode_length: Callable[[str], int],
+    chunk_size: int = TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
+) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        return sum(encode_length(text[start : start + chunk_size]) for start in range(0, len(text), chunk_size))
+
+    return count_tokens
+
+
 class _MessageCountParams:
     """
     A class to hold the parameters for counting tokens in messages.
@@ -335,7 +353,7 @@ def token_counter(
     model="",
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: list[AllMessageValues | Message] | None = None,
+    messages: Sequence[AllMessageValues | Message] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
@@ -524,15 +542,16 @@ def _get_count_function(
     from litellm.utils import _select_tokenizer, print_verbose
 
     if model is not None or custom_tokenizer is not None:
-        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)  # type: ignore
+        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
 
             def count_tokens(text: str) -> int:
                 enc: Final = tokenizer_json["tokenizer"].encode(text)
                 return len(enc.ids)
 
+            return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":
-            model_to_use: Final = _fix_model_name(model)  # type: ignore
+            model_to_use: Final = _fix_model_name(model)
             try:
                 if "gpt-4o" in model_to_use:
                     encoding = tiktoken.get_encoding("o200k_base")
@@ -542,17 +561,18 @@ def _get_count_function(
                 print_verbose("Warning: model not found. Using cl100k_base encoding.")
                 encoding = tiktoken.get_encoding("cl100k_base")
 
-            def count_tokens(text: str) -> int:
+            def encode_length(text: str) -> int:
                 return len(encoding.encode(text, disallowed_special=()))
 
+            return _get_tiktoken_count_function(encode_length)
         else:
             raise ValueError("Unsupported tokenizer type")
     else:
 
-        def count_tokens(text: str) -> int:
+        def encode_length(text: str) -> int:
             return len(default_encoding.encode(text, disallowed_special=()))
 
-    return count_tokens
+        return _get_tiktoken_count_function(encode_length)
 
 
 def _fix_model_name(model: str) -> str:
@@ -561,7 +581,7 @@ def _fix_model_name(model: str) -> str:
         # azure llms use gpt-35-turbo instead of gpt-3.5-turbo 🙃
         return model.replace("-35", "-3.5")
     elif model in litellm.open_ai_chat_completion_models:
-        return model  # type: ignore
+        return model
     else:
         return "gpt-3.5-turbo"
 
@@ -592,7 +612,7 @@ def _count_image_tokens(
             raise ValueError("Missing required key 'url' in image_url dict.")
         return calculate_img_tokens(
             data=url,
-            mode=detail,  # type: ignore
+            mode=detail,
             use_default_image_token_count=use_default_image_token_count,
         )
     elif isinstance(image_url, str):
@@ -633,6 +653,46 @@ def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
     return expected_cls
 
 
+def _anthropic_image_source_data(
+    source: AnthropicContentParamSource | AnthropicContentParamSourceUrl | AnthropicContentParamSourceFileId,
+) -> str:
+    if source["type"] == "base64":
+        data: Final = source.get("data")
+        if not data:
+            return ""
+        media_type: Final = source.get("media_type") or "image/png"
+        return f"data:{media_type};base64,{data}"
+    if source["type"] == "url":
+        return source.get("url") or ""
+    return ""
+
+
+def _count_document_tokens(
+    document: ChatCompletionDocumentObject | AnthropicMessagesDocumentParam,
+    count_function: TokenCounterFunction,
+    use_default_image_token_count: bool,
+    default_token_count: int | None,
+) -> int:
+    source: Final = document["source"]
+    metadata_tokens: Final = sum(
+        count_function(text) for text in (document.get("title"), document.get("context")) if text
+    )
+    if source["type"] == "text":
+        return metadata_tokens + count_function(source["data"])
+    if source["type"] == "content":
+        content: Final = source["content"]
+        if isinstance(content, str):
+            return metadata_tokens + count_function(content)
+        return metadata_tokens + _count_content_list(
+            count_function, content, use_default_image_token_count, default_token_count
+        )
+    return metadata_tokens + calculate_img_tokens(
+        data=_anthropic_image_source_data(source),
+        mode="auto",
+        use_default_image_token_count=use_default_image_token_count,
+    )
+
+
 def _count_anthropic_content(
     content: Mapping[str, Any],
     count_function: TokenCounterFunction,
@@ -669,7 +729,7 @@ def _count_anthropic_content(
             elif isinstance(field_value, list):
                 tokens += _count_content_list(
                     count_function,
-                    field_value,  # type: ignore
+                    field_value,
                     use_default_image_token_count,
                     default_token_count,
                 )
@@ -684,13 +744,17 @@ def _count_anthropic_content(
 
 def _count_content_list(
     count_function: TokenCounterFunction,
-    content_list: OpenAIMessageContent,
+    content_list: str
+    | Iterable[
+        OpenAIMessageContentListBlock
+        | AnthropicMessagesTextParam
+        | AnthropicMessagesImageParam
+        | AnthropicMessagesDocumentParam
+    ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
 ) -> int:
-    """
-    Recursively count tokens from a list of content blocks.
-    """
+    """Recursively count tokens from a list of content blocks."""
     try:
         num_tokens = 0
         for c in content_list:
@@ -701,6 +765,19 @@ def _count_content_list(
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
+            elif c["type"] == "image":
+                num_tokens += calculate_img_tokens(
+                    data=_anthropic_image_source_data(c["source"]),
+                    mode="auto",
+                    use_default_image_token_count=use_default_image_token_count,
+                )
+            elif c["type"] == "document":
+                num_tokens += _count_document_tokens(
+                    c,
+                    count_function,
+                    use_default_image_token_count,
+                    default_token_count,
+                )
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -729,7 +806,8 @@ def _count_content_list(
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
+                    f"Expected str or dict with 'type' field "
+                    f"(text, image_url, image, document, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:

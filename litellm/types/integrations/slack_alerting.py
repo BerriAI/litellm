@@ -2,7 +2,7 @@ import os
 import time
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, Final, List, Literal, Optional, Set, Union
+from typing import Any, Final, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -18,7 +18,7 @@ HANGING_ALERT_BUFFER_TIME_SECONDS: Final = 60
 
 
 class BaseOutageModel(TypedDict):
-    alerts: List[int]
+    alerts: list[int]
     minor_alert_sent: bool
     major_alert_sent: bool
     last_updated_at: float
@@ -30,7 +30,7 @@ class OutageModel(BaseOutageModel):
 
 class ProviderRegionOutageModel(BaseOutageModel):
     provider_region_id: str
-    deployment_ids: Set[str]
+    deployment_ids: set[str]  # mutable-ok: outage state accumulates ids via .add() and round-trips the cache as a list
 
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
@@ -106,7 +106,7 @@ class DeploymentMetrics(LiteLLMPydanticObjectBase):
     failed_request: bool
     """did it fail the request?"""
 
-    latency_per_output_token: Optional[float]
+    latency_per_output_token: float | None
     """latency/output token of deployment"""
 
     updated_at: dt
@@ -121,6 +121,7 @@ class SlackAlertingCacheKeys(Enum):
     failed_requests_key = "failed_requests_daily_metrics"
     latency_key = "latency_daily_metrics"
     report_sent_key = "daily_metrics_report_sent"
+    deprecation_alert_sent_key = "model_deprecation_alert_sent"
 
 
 class AlertType(str, Enum):
@@ -147,6 +148,7 @@ class AlertType(str, Enum):
     # Deployment alerts
     cooldown_deployment = "cooldown_deployment"
     new_model_added = "new_model_added"
+    model_deprecation_warnings = "model_deprecation_warnings"
 
     # Outage alerts
     outage_alerts = "outage_alerts"
@@ -171,7 +173,7 @@ class AlertType(str, Enum):
     internal_user_deleted = "internal_user_deleted"
 
 
-DEFAULT_ALERT_TYPES: Final[List[AlertType]] = [
+DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     # LLM related alerts
     AlertType.llm_exceptions,
     AlertType.llm_too_slow,
@@ -187,6 +189,7 @@ DEFAULT_ALERT_TYPES: Final[List[AlertType]] = [
     # Deployment alerts
     AlertType.cooldown_deployment,
     AlertType.new_model_added,
+    AlertType.model_deprecation_warnings,
     # Outage alerts
     AlertType.outage_alerts,
     AlertType.region_outage_alerts,
@@ -198,10 +201,10 @@ DEFAULT_ALERT_TYPES: Final[List[AlertType]] = [
 class HangingRequestData(BaseModel):
     request_id: str
     model: str
-    api_base: Optional[str] = None
-    key_alias: Optional[str] = None
-    team_alias: Optional[str] = None
-    alerting_metadata: Optional[dict] = None
+    api_base: str | None = None
+    key_alias: str | None = None
+    team_alias: str | None = None
+    alerting_metadata: dict | None = None
     created_at: float = Field(default_factory=time.time)
     alerted: bool = False
 
@@ -230,4 +233,4 @@ class DigestEntry(TypedDict):
     count: int
     start_time: dt
     last_time: dt
-    webhook_url: Union[str, List[str]]
+    webhook_url: str | list[str]

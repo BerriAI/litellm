@@ -21,8 +21,64 @@ variable "env" {
 }
 
 variable "azs" {
-  description = "Availability zones for subnets. At least 2 (RDS + ALB)."
+  description = "Availability zones for the subnets the module creates. At least 2 (RDS + ALB). Unused when vpc_id is set."
   type        = list(string)
+  default     = []
+}
+
+# Bring-your-own networking. Leave vpc_id empty to have the module create the
+# VPC, subnets, NAT gateway, and route tables.
+variable "vpc_id" {
+  description = "Existing VPC to deploy into. Empty → module creates its own networking."
+  type        = string
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  description = "Existing public subnets for the ALB (≥ 2 AZs). Required with vpc_id."
+  type        = list(string)
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  description = "Existing private subnets for tasks, Aurora, and Redis. Required with vpc_id."
+  type        = list(string)
+  default     = []
+}
+
+variable "additional_task_security_group_ids" {
+  description = "Extra security groups for the tasks, e.g. one an existing database already allows."
+  type        = list(string)
+  default     = []
+}
+
+# Bring-your-own data stores. create_* false with an empty URL runs without
+# that component: no DB means no key management or spend tracking, no Redis
+# means per-task rate limits instead of cluster-wide.
+variable "create_database" {
+  description = "Create the Aurora Postgres cluster. False → use database_url, or run DB-less."
+  type        = bool
+  default     = true
+}
+
+variable "database_url" {
+  description = "Postgres connection string for an existing database. Read only when create_database = false."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "create_redis" {
+  description = "Create the ElastiCache Redis group. False → use redis_url, or run without Redis."
+  type        = bool
+  default     = true
+}
+
+variable "redis_url" {
+  description = "Connection string for an existing Redis. Read only when create_redis = false."
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 # Sensitive — prefer TF_VAR_litellm_master_key / TF_VAR_litellm_license /

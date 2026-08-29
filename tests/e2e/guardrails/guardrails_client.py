@@ -9,9 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
-
-from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation, unique_marker
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from lifecycle import ResourceManager
 from models import (
@@ -30,6 +28,7 @@ from models import (
     TeamNewResponse,
 )
 from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 GuardrailMode = Literal["pre_call", "post_call", "during_call", "logging_only"]
 BlockedWordAction = Literal["BLOCK", "MASK"]
@@ -69,11 +68,27 @@ class BlockCodeExecutionParamsBody(GuardrailParamsBase):
     guardrail: Literal["block_code_execution"] = "block_code_execution"
 
 
+class PresidioParamsBody(GuardrailParamsBase):
+    """Presidio PII guardrail params. `presidio_filter_scope="input"` keeps the
+    registration to a single callback on the configured mode; the default
+    ("both") also registers a second post_call output-masking callback, which a
+    pre_call- or logging_only-scoped test must not drag in. `output_parse_pii`
+    stays unset/False: True would unmask the response back to the caller."""
+
+    guardrail: Literal["presidio"] = "presidio"
+    presidio_analyzer_api_base: str
+    presidio_anonymizer_api_base: str
+    presidio_filter_scope: Literal["input", "output", "both"] | None = None
+    presidio_language: str | None = None
+    output_parse_pii: bool | None = None
+
+
 GuardrailParamsBody = (
     ContentFilterParamsBody
     | BedrockGuardrailParamsBody
     | OpenAIModerationParamsBody
     | BlockCodeExecutionParamsBody
+    | PresidioParamsBody
 )
 
 
@@ -112,25 +127,14 @@ class GuardrailsClient:
     proxy: ProxyClient
 
     def create_content_filter_guardrail(self, name: str, blocked_keyword: str) -> str:
-        return unwrap(
-            self.proxy.transport.post(
-                "/guardrails",
-                headers=self.proxy.transport.master,
-                json=GuardrailCreateBody(
-                    guardrail=GuardrailSpecBody(
-                        guardrail_name=name,
-                        litellm_params=ContentFilterParamsBody(
-                            mode="pre_call",
-                            default_on=True,
-                            blocked_words=[
-                                BlockedWordBody(keyword=blocked_keyword, action="BLOCK")
-                            ],
-                        ),
-                    )
-                ),
-                response_type=GuardrailCreateResponse,
-            )
-        ).guardrail_id
+        return self.register(
+            name,
+            ContentFilterParamsBody(
+                mode="pre_call",
+                default_on=True,
+                blocked_words=[BlockedWordBody(keyword=blocked_keyword, action="BLOCK")],
+            ),
+        )
 
     def create_bedrock_guardrail(
         self,
@@ -149,24 +153,15 @@ class GuardrailsClient:
         test takes out whatever else is running. Callers select the guardrail
         per-request instead, which keeps the blast radius to the test that wants it.
         """
-        return unwrap(
-            self.proxy.transport.post(
-                "/guardrails",
-                headers=self.proxy.transport.master,
-                json=GuardrailCreateBody(
-                    guardrail=GuardrailSpecBody(
-                        guardrail_name=name,
-                        litellm_params=BedrockGuardrailParamsBody(
-                            mode="pre_call",
-                            default_on=default_on,
-                            guardrailIdentifier=identifier,
-                            guardrailVersion=version,
-                        ),
-                    )
-                ),
-                response_type=GuardrailCreateResponse,
-            )
-        ).guardrail_id
+        return self.register(
+            name,
+            BedrockGuardrailParamsBody(
+                mode="pre_call",
+                default_on=default_on,
+                guardrailIdentifier=identifier,
+                guardrailVersion=version,
+            ),
+        )
 
     def create_backend_model(
         self,
@@ -189,11 +184,19 @@ class GuardrailsClient:
         return model_name
 
     def register(self, name: str, params: GuardrailParamsBody) -> str:
-        """Register any guardrail via POST /guardrails and return its id. New
-        built-ins register with default_on=False and are opted into per request
-        via the chat body's `guardrails` list, so one guardrail under test never
-        intercepts unrelated traffic on the shared proxy."""
-        return unwrap(
+        """Register any guardrail via POST /guardrails and return its id, once every
+        replica can be expected to serve it. New built-ins register with
+        default_on=False and are opted into per request via the chat body's
+        `guardrails` list, so one guardrail under test never intercepts unrelated
+        traffic on the shared proxy.
+
+        /guardrails is a control-plane route and guardrails reach the data plane on
+        the config reload, so a request naming this guardrail the instant the POST
+        returns can 404 with "Guardrail not found" on a replica that has not
+        reloaded. There is no data-plane read that lists guardrails, so unlike
+        ProxyClient.create_model this settles on the propagation budget alone with
+        nothing to poll first."""
+        guardrail_id = unwrap(
             self.proxy.transport.post(
                 "/guardrails",
                 headers=self.proxy.transport.master,
@@ -203,6 +206,8 @@ class GuardrailsClient:
                 response_type=GuardrailCreateResponse,
             )
         ).guardrail_id
+        settle_propagation(time.monotonic())
+        return guardrail_id
 
     def delete_guardrail(self, guardrail_id: str) -> None:
         _ = self.proxy.transport.delete(
@@ -260,6 +265,30 @@ class GuardrailsClient:
                 model=model,
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
+                guardrails=guardrails,
+            ),
+        )
+
+    def chat_stream_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        """Drive /chat/completions with stream=true, returning the raw HTTP
+        outcome (status, headers, SSE events) via the shared ProxyClient stream
+        sender - a streamed guardrail block is judged on status and stream
+        shape, not a typed body."""
+        return self.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                stream=True,
                 guardrails=guardrails,
             ),
         )
@@ -329,7 +358,7 @@ def build_client(proxy: ProxyClient) -> GuardrailsClient:
     return GuardrailsClient(proxy=proxy)
 
 
-def poll_until_blocked(call: Callable[[], Result[ChatResponse]]) -> Result[ChatResponse]:
+def poll_until_blocked[R: BaseModel](call: Callable[[], Result[R]]) -> Result[R]:
     """Retry a call that a guardrail should reject until it is, returning the last result.
 
     Registering a guardrail is a control-plane write; the data-plane worker that
@@ -344,6 +373,28 @@ def poll_until_blocked(call: Callable[[], Result[ChatResponse]]) -> Result[ChatR
     last = call()
     while time.monotonic() < deadline:
         if not isinstance(last, Success):
+            return last
+        time.sleep(POLL_INTERVAL)
+        last = call()
+    return last
+
+
+#: Statuses a stream poll keeps retrying through instead of returning as "the
+#: block": network failures (-1), key propagation (401), rate limits (429) -
+#: transient rig noise, not a guardrail verdict.
+_TRANSIENT_STREAM_STATUSES = frozenset({-1, 401, 429})
+
+
+def poll_until_blocked_stream(call: Callable[[], StreamingResponse]) -> StreamingResponse:
+    """poll_until_blocked for raw/streamed sends, which return a StreamingResponse
+    instead of a Result: retry while the call still succeeds (the data-plane worker
+    has not picked the new guardrail up yet) or fails with a transient status,
+    returning the first guardrail-shaped non-2xx outcome or the last result at
+    the deadline."""
+    deadline = time.monotonic() + POLL_TIMEOUT
+    last = call()
+    while time.monotonic() < deadline:
+        if not last.ok and last.status_code not in _TRANSIENT_STREAM_STATUSES:
             return last
         time.sleep(POLL_INTERVAL)
         last = call()

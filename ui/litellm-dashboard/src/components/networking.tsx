@@ -18,19 +18,70 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
+export const getAutoRouterClassifierDefaultPromptCall = async (
+  accessToken: string,
+  contextWindowSize: number,
+  tierLabels?: Record<string, string>,
+  classificationRubric?: string,
+): Promise<string> => {
+  /**
+   * Get the built-in system prompt an auto-router's LLM classifier uses when none is configured,
+   * so the prompt editor prefills what the proxy actually sends rather than a frontend copy.
+   *
+   * tierLabels names the rubric's tier bullets, so a router that renamed its tiers prefills the
+   * rubric it sends rather than one using the canonical names. rubric selects which calibration
+   * examples it carries, for the same reason.
+   */
+  try {
+    const response = await apiClient.get<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+      accessToken,
+      query: {
+        context_window_size: contextWindowSize,
+        ...(tierLabels && Object.keys(tierLabels).length > 0 ? { tier_labels: JSON.stringify(tierLabels) } : {}),
+        ...(classificationRubric ? { classification_rubric: classificationRubric } : {}),
+      },
+    });
+    return response.system_prompt;
+  } catch (error) {
+    console.error("Failed to get the default classifier prompt:", error);
+    throw error;
+  }
+};
+
+export const getAutoRouterCustomTierPromptCall = async (
+  accessToken: string,
+  contextWindowSize: number,
+  tierDefinitions: { name: string; description?: string }[],
+  classificationPrompt?: string,
+): Promise<string> => {
+  /**
+   * Assembled by the proxy, because a built-in name with no description inherits criteria that live
+   * only in the backend. POSTed so the operator's prompt does not reach access logs through a URL.
+   */
+  const response = await apiClient.post<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+    accessToken,
+    body: {
+      context_window_size: contextWindowSize,
+      tier_definitions: tierDefinitions,
+      ...(classificationPrompt?.trim() ? { classification_prompt: classificationPrompt } : {}),
+    },
+  });
+  return response.system_prompt;
+};
+
 /**
  * Helper file for calls being made to proxy
  */
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { ObjectPermission } from "./object_permission_types";
 import { jsonFields } from "./common_components/check_openapi_schema";
-import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import type {
   CoordinationRedisSettings,
@@ -38,7 +89,15 @@ import type {
   CoordinationRedisTestResponse,
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
-import { createApiClient, deriveErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
+import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
+import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
+import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
+import {
+  createApiClient,
+  deriveErrorMessage,
+  extractProxyErrorMessage,
+  unwrapProxyErrorMessage,
+} from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import {
   registerAuthHeaderNameGetter,
@@ -302,7 +361,7 @@ export const handleError = async (errorData: string | any) => {
     // Convert errorData to string if it isn't already
     const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
     if (errorString.includes("Authentication Error - Expired Key")) {
-      NotificationsManager.info("UI Session Expired. Logging out.");
+      toast.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
       clearTokenCookies();
       const browserLocation = getWindowLocation();
@@ -334,6 +393,21 @@ export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]>
   return jsonData;
 };
 
+export interface ComplexityScorerDefaults {
+  tier_boundaries: Record<string, number>;
+  token_thresholds: Record<string, number>;
+  dimension_weights: Record<string, number>;
+}
+
+export const getComplexityScorerDefaults = async (): Promise<ComplexityScorerDefaults> => {
+  /**
+   * Fetch the complexity router's shipped heuristic scorer defaults from the proxy's public endpoint.
+   * The Advanced scoring controls prefill from these rather than from a copy in the dashboard, so a
+   * recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+   */
+  return await apiClient.get(`/public/complexity_router/scorer_defaults`);
+};
+
 export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
   /**
    * Fetch agent type metadata from the proxy's public endpoint.
@@ -356,7 +430,6 @@ export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
 
 // Global variable for the header name
 let globalLitellmHeaderName: string = "Authorization";
-const MCP_AUTH_HEADER: string = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
@@ -557,10 +630,10 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
     });
 
     // Close any existing messages before showing new ones
-    MessageManager.destroy();
+    toast.dismiss();
 
     // Sequential success messages
-    NotificationsManager.success(`Model ${formValues.model_name} created successfully`);
+    toast.success(`Model ${formValues.model_name} created successfully`);
 
     return data;
   } catch (error) {
@@ -994,6 +1067,8 @@ export interface UserInfoV2Response {
   sso_user_id: string | null;
   teams: string[];
   object_permission?: ObjectPermission | null;
+  model_max_budget?: ModelMaxBudget | null;
+  model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
 }
 
 /**
@@ -1355,6 +1430,8 @@ export const userDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   userId: string | null = null,
+  includeCurrentUtcDay: boolean = false,
+  apiKey: string | null = null,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1367,6 +1444,8 @@ export const userDailyActivityCall = async (
     page,
     extraQueryParams: {
       user_id: userId,
+      include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
+      api_key: apiKey,
     },
   });
 };
@@ -1414,6 +1493,32 @@ export const teamDailyActivityCall = async (
       exclude_team_ids: "litellm-dashboard",
     },
   });
+};
+
+export const teamDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  teamIds: string[] | null = null,
+) => {
+  /**
+   * Get aggregated daily team activity with per-team breakdown (no pagination)
+   */
+  try {
+    return await apiClient.get(`/team/daily/activity/aggregated`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
+        exclude_team_ids: "litellm-dashboard",
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch aggregated team daily activity:", error);
+    throw error;
+  }
 };
 
 export const organizationDailyActivityCall = async (
@@ -1572,6 +1677,7 @@ export const modelInfoCall = async (
   sortBy?: string,
   sortOrder?: string,
   excludeAutoRouters?: boolean,
+  modelName?: string,
 ) => {
   /**
    * Get all models on proxy
@@ -1584,6 +1690,9 @@ export const modelInfoCall = async (
     params.append("size", size.toString());
     if (search && search.trim()) {
       params.append("search", search.trim());
+    }
+    if (modelName && modelName.trim()) {
+      params.append("model", modelName.trim());
     }
     if (modelId && modelId.trim()) {
       params.append("modelId", modelId.trim());
@@ -1604,7 +1713,6 @@ export const modelInfoCall = async (
       url += `?${params.toString()}`;
     }
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1620,7 +1728,7 @@ export const modelInfoCall = async (
         if (errorData.includes("No model list passed")) {
           errorData = "No Models Exist. Click Add Model to get started.";
         }
-        NotificationsManager.info(errorData);
+        toast.info(errorData);
         ModelListerrorShown = true;
 
         if (errorTimer) clearTimeout(errorTimer);
@@ -1633,7 +1741,6 @@ export const modelInfoCall = async (
     }
 
     const data = await response.json();
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1736,9 +1843,7 @@ export const modelHubCall = async (accessToken: string) => {
    * Get all models on proxy
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(`/model_group/info`, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1922,6 +2027,7 @@ interface UiSpendLogsParams {
   user_id?: string;
   end_user?: string;
   status_filter?: string;
+  cache_hit_filter?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
   /** Filter by model ID (litellm model deployment id) */
@@ -1933,6 +2039,7 @@ interface UiSpendLogsParams {
   sort_order?: "asc" | "desc";
   min_spend?: number;
   max_spend?: number;
+  exclude_internal_health_checks?: boolean;
 }
 
 interface UiSpendLogsCallOptions {
@@ -1967,6 +2074,8 @@ export const uiSpendLogsCall = async ({
       if (value == null) continue;
       if (key === "min_spend" || key === "max_spend") {
         queryParams.append(key, value.toString());
+      } else if (typeof value === "boolean") {
+        if (value) queryParams.append(key, "true");
       } else if (typeof value === "string" && value !== "") {
         queryParams.append(key, String(value));
       }
@@ -2002,9 +2111,7 @@ export const uiSpendLogsCall = async ({
 
 export const adminSpendLogsCall = async (accessToken: string) => {
   try {
-    //NotificationsManager.info("Making spend logs request");
     const data = await apiClient.get(`/global/spend/logs`, { accessToken });
-    //NotificationsManager.success("Spend Logs received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2016,7 +2123,6 @@ export const adminTopKeysCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
 
-    //NotificationsManager.info("Making spend keys request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2032,7 +2138,6 @@ export const adminTopKeysCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    //NotificationsManager.success("Spend Logs received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2051,9 +2156,7 @@ export const adminTopEndUsersCall = async (
       ? { api_key: keyToken, startTime: startTime, endTime: endTime }
       : { startTime: startTime, endTime: endTime };
 
-    //NotificationsManager.info("Making top end users request");
     const data = await apiClient.post(`/global/spend/end_users`, { accessToken, body });
-    //NotificationsManager.success("Top End users received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2063,7 +2166,6 @@ export const adminTopEndUsersCall = async (
 
 export const adminspendByProvider = async (
   accessToken: string,
-  keyToken: string | null,
   startTime: string | undefined,
   endTime: string | undefined,
 ) => {
@@ -2072,7 +2174,6 @@ export const adminspendByProvider = async (
       accessToken,
       query: {
         ...(startTime && endTime ? { start_date: startTime, end_date: endTime } : {}),
-        ...(keyToken ? { api_key: keyToken } : {}),
       },
     });
     return data;
@@ -2139,7 +2240,6 @@ export const adminTopModelsCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/models?limit=5` : `/global/spend/models?limit=5`;
 
-    //NotificationsManager.info("Making top models request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2155,7 +2255,6 @@ export const adminTopModelsCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    //NotificationsManager.success("Top Models received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2291,6 +2390,63 @@ export const testModelGroupConnection = async (
   }
 };
 
+export interface AutoRouterRoutingTestRequest {
+  prompt: string;
+  complexity_router_config: ComplexityRouterConfigPayload;
+  default_model?: string;
+  router_name?: string;
+  team_id?: string;
+}
+
+export interface AutoRouterRoutingTestResult {
+  routed_model: string;
+  routed_model_configured: boolean;
+  routing_decision: RoutingDecision;
+}
+
+export type AutoRouterRoutingTestResponse =
+  | { status: "success"; result: AutoRouterRoutingTestResult }
+  | { status: "error"; error: string };
+
+export const testAutoRouterRouting = async (
+  accessToken: string,
+  request: AutoRouterRoutingTestRequest,
+): Promise<AutoRouterRoutingTestResponse> => {
+  try {
+    const result = await apiClient.post<AutoRouterRoutingTestResult>("/auto_router/test_routing", {
+      accessToken,
+      body: request,
+    });
+    return { status: "success", result };
+  } catch (error) {
+    return { status: "error", error: extractProxyErrorMessage(error) };
+  }
+};
+
+export interface ComplexityRouterConfigValidation {
+  valid: boolean;
+  error?: string | null;
+}
+
+// Dry-runs the same write gate /model/new and /model/update apply, so a save that would come back
+// as a raw 400 shows the backend's own message inline first. Transport failures fail open: the
+// write gate stays authoritative.
+export const validateAutoRouterConfig = async (
+  accessToken: string,
+  complexityRouterConfig: Record<string, unknown>,
+  teamId?: string,
+): Promise<ComplexityRouterConfigValidation> => {
+  try {
+    return await apiClient.post<ComplexityRouterConfigValidation>("/auto_router/validate_complexity_router_config", {
+      accessToken,
+      body: { complexity_router_config: complexityRouterConfig, ...(teamId && { team_id: teamId }) },
+    });
+  } catch (error) {
+    console.warn("Could not dry-run the complexity router config; the save will be validated server side", error);
+    return { valid: true };
+  }
+};
+
 // ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {
@@ -2309,7 +2465,7 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      NotificationsManager.fromBackend("Failed to fetch key info - " + errorData);
+      toast.fromError("Failed to fetch key info - " + errorData);
     }
 
     const data = await response.json();
@@ -2404,11 +2560,12 @@ export const userDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  userId: string | null = null,
+  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean, apiKey?: string | null]
 ) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
+  const [userId = null, includeCurrentUtcDay = false, apiKey = null] = options;
   try {
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -2422,11 +2579,41 @@ export const userDailyActivityAggregatedCall = async (
         start_date: formatDate(startTime),
         end_date: formatDate(endTime),
         timezone: new Date().getTimezoneOffset().toString(),
-        user_id: userId || undefined,
+        // Passed raw, matching the paginated caller: both serializers drop null and undefined,
+        // and both keep "". An empty filter must not vanish, or a request scoped to one user or
+        // key would silently widen into an unscoped, proxy-wide read.
+        user_id: userId,
+        include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
+        api_key: apiKey,
       },
     });
   } catch (error) {
     console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
+
+export const gatewayDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date) => {
+  /**
+   * Get gateway request counts (SGR) recorded by the proxy middleware.
+   * Deployment-wide and admin-only; carries no per-key or per-user dimension.
+   */
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    return await apiClient.get(`/gateway/daily/activity`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch gateway daily activity:", error);
     throw error;
   }
 };
@@ -2643,7 +2830,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      NotificationsManager.fromBackend("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
+      toast.fromError("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
@@ -2985,7 +3172,6 @@ export const userUpdateUserCall = async (
       user_id: string;
       data: UserInfo;
     };
-    //NotificationsManager.success("User role updated");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3037,7 +3223,6 @@ export const userBulkUpdateUserCall = async (
       successful_updates: number;
       failed_updates: number;
     };
-    //NotificationsManager.success("User role updated");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3081,9 +3266,7 @@ export const getBudgetList = async (accessToken: string) => {
    * Get all configurable params for setting a budget
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(`/budget/list`, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3096,9 +3279,7 @@ export const getCallbacksCall = async (accessToken: string, userID: string, user
    * Get all the models user has access to
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(`/get/config/callbacks`, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3113,7 +3294,6 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
       ? `${proxyBaseUrl}/config/list?config_type=general_settings`
       : `/config/list?config_type=general_settings`;
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -3130,7 +3310,6 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3238,9 +3417,7 @@ export const getPassThroughEndpointsCall = async (accessToken: string, teamId?: 
       path += `/team/${teamId}`;
     }
 
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(path, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3255,7 +3432,6 @@ export const getConfigFieldSetting = async (accessToken: string, fieldName: stri
       ? `${proxyBaseUrl}/config/field/info?field_name=${fieldName}`
       : `/config/field/info?field_name=${fieldName}`;
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -3285,14 +3461,12 @@ export const createPassThroughEndpoint = async (accessToken: string, formValues:
    * Set callbacks on proxy
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/pass_through_endpoint`, {
       accessToken,
       body: {
         ...formValues, // Include formValues in the request body
       },
     });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3308,10 +3482,8 @@ export const updateConfigFieldSetting = async (accessToken: string, fieldName: s
       field_value: fieldValue,
       config_type: "general_settings",
     };
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/field/update`, { accessToken, body: formData });
-    //NotificationsManager.info("Received model data");
-    NotificationsManager.success("Successfully updated value!");
+    toast.success("Successfully updated value!");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3326,9 +3498,8 @@ export const deleteConfigFieldSetting = async (accessToken: string, fieldName: s
       field_name: fieldName,
       config_type: "general_settings",
     };
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/field/delete`, { accessToken, body: formData });
-    NotificationsManager.success("Field reset on proxy");
+    toast.success("Field reset on proxy");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3343,7 +3514,6 @@ export const deletePassThroughEndpointsCall = async (accessToken: string, endpoi
       ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${endpointId}`
       : `/config/pass_through_endpoint?endpoint_id=${endpointId}`;
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "DELETE",
       headers: {
@@ -3360,7 +3530,6 @@ export const deletePassThroughEndpointsCall = async (accessToken: string, endpoi
     }
 
     const data = await response.json();
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3374,14 +3543,12 @@ export const setCallbacksCall = async (accessToken: string, formValues: Record<s
    * Set callbacks on proxy
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/update`, {
       accessToken,
       body: {
         ...formValues, // Include formValues in the request body
       },
     });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3429,7 +3596,6 @@ export const cachingHealthCheckCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/ping` : `/cache/ping`;
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -3445,7 +3611,6 @@ export const cachingHealthCheckCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3488,9 +3653,7 @@ export const getProxyUISettings = async (accessToken: string) => {
    * Get all the models user has access to
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(`/sso/get/ui_settings`, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -5529,6 +5692,20 @@ export const vectorStoreListCall = async (
   }
 };
 
+export interface IndexesListResponse {
+  object: string;
+  data: VectorStoreIndex[];
+}
+
+export const indexesListCall = async (accessToken: string): Promise<IndexesListResponse> => {
+  try {
+    return await apiClient.get<IndexesListResponse>(`/v1/indexes`, { accessToken });
+  } catch (error) {
+    console.error("Error listing indexes:", error);
+    throw error;
+  }
+};
+
 export const vectorStoreDeleteCall = async (accessToken: string, vectorStoreId: string): Promise<void> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/vector_store/delete` : `/vector_store/delete`;
@@ -6515,7 +6692,7 @@ export const updatePassThroughEndpoint = async (
     }
 
     const data = await response.json();
-    NotificationsManager.success("Pass through endpoint updated successfully");
+    toast.success("Pass through endpoint updated successfully");
     return data;
   } catch (error) {
     console.error("Failed to update pass through endpoint:", error);
@@ -7236,7 +7413,8 @@ export const getClaudeCodePluginDetails = async (accessToken: string, pluginName
 };
 
 /**
- * Register or update a Claude Code plugin (admin only)
+ * Register a new Claude Code plugin (admin only). Create-only: the proxy returns
+ * 409 if a plugin with the same name already exists.
  * @param accessToken - Admin access token
  * @param pluginData - Plugin registration data
  */

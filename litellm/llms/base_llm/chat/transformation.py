@@ -5,7 +5,7 @@ Common base config for all LLM providers
 import types
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 from pydantic import BaseModel
@@ -21,6 +21,8 @@ from litellm.types.llms.openai import (
 )
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.types.utils import ModelResponse
 
@@ -46,8 +48,10 @@ class BaseLLMException(Exception):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         body: dict | None = None,
+        status_code_is_synthesized: bool = False,
     ):
         self.status_code = status_code
+        self.status_code_is_synthesized = status_code_is_synthesized
         self.message: str = message
         self.headers = headers
         if request:
@@ -90,9 +94,9 @@ class BaseConfig(ABC):
         return type_to_response_format_param(response_format=response_format)
 
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
-        return (non_default_params.get("thinking") or {}).get("type") == "enabled" or non_default_params.get(
-            "reasoning_effort"
-        ) is not None
+        thinking: Final = non_default_params.get("thinking")
+        thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
+        return thinking is True or thinking_type == "enabled" or non_default_params.get("reasoning_effort") is not None
 
     def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
         """
@@ -112,7 +116,10 @@ class BaseConfig(ABC):
         if is_thinking_enabled and (
             "max_tokens" not in non_default_params and "max_completion_tokens" not in non_default_params
         ):
-            thinking_token_budget: Final = cast(dict, optional_params["thinking"]).get("budget_tokens", None)
+            thinking_value: Final = optional_params.get("thinking")
+            thinking_token_budget: Final = (
+                thinking_value.get("budget_tokens") if isinstance(thinking_value, dict) else None
+            )
             if thinking_token_budget is not None:
                 optional_params["max_tokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
 
@@ -337,7 +344,7 @@ class BaseConfig(ABC):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":

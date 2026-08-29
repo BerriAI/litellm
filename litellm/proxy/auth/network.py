@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import Any, Final, Union
+from typing import Any, Final
 
 from fastapi import Request
 from pydantic import BaseModel, Field
 
 from litellm._logging import verbose_proxy_logger
 
-TrustedProxyNetwork = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+TrustedProxyNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
 class NetworkContext(BaseModel):

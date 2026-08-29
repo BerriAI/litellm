@@ -14,7 +14,9 @@ export enum Role {
   TeamAdmin = "team_admin",
 }
 
-export const users: Record<Role, { email: string; password: string }> = {
+export type SeedApiRole = "proxy_admin_viewer" | "internal_user" | "internal_user_viewer";
+
+export const users: Record<Role, { email: string; password: string; seedApiRole?: SeedApiRole }> = {
   [Role.ProxyAdmin]: {
     email: "admin",
     password: process.env.LITELLM_MASTER_KEY || "sk-1234",
@@ -22,18 +24,22 @@ export const users: Record<Role, { email: string; password: string }> = {
   [Role.ProxyAdminViewer]: {
     email: "adminviewer@test.local",
     password: "test",
+    seedApiRole: "proxy_admin_viewer",
   },
   [Role.InternalUser]: {
     email: "internal@test.local",
     password: "test",
+    seedApiRole: "internal_user",
   },
   [Role.InternalUserViewer]: {
     email: "viewer@test.local",
     password: "test",
+    seedApiRole: "internal_user_viewer",
   },
   [Role.TeamAdmin]: {
     email: "teamadmin@test.local",
     password: "test",
+    seedApiRole: "internal_user",
   },
 };
 
