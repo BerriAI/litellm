@@ -57,6 +57,9 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
 }
 
 
+_CUSTOM_RATE_KEYS: Final = ("input_cost_per_token", "output_cost_per_token")
+
+
 class _CounterReservationUnavailable(Exception):
     def __init__(
         self,
@@ -1042,6 +1045,21 @@ def _estimate_request_max_cost_for_model(
     return max(valid_estimates) if valid_estimates else None
 
 
+_TIER_OUTPUT_RATE_KEYS: Final = ("output_cost_per_token", "output_cost_per_reasoning_token")
+
+
+def _tier_output_rate(tier: Mapping[str, object], model_info: Mapping[str, object]) -> float:
+    """Output rate to reserve for a request billed at ``tier``.
+
+    A tier table that prices only input falls back to the model's own output rates when
+    the request is billed, so reserving the tier's missing rate as 0 leaves every
+    completion under-reserved. The reasoning-token share is unknown before the request
+    runs, so the higher of the two rates is used either way.
+    """
+    rates: Final = tier if any(key in tier for key in _TIER_OUTPUT_RATE_KEYS) else model_info
+    return max(_to_float(rates.get(key)) or 0.0 for key in _TIER_OUTPUT_RATE_KEYS)
+
+
 def _max_cost_for_cost_info(
     request_body: dict,
     route: str,
@@ -1076,12 +1094,8 @@ def _max_cost_for_cost_info(
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
-            output_rate = max(
-                tier_rate(tier, "output_cost_per_token"),
-                tier_rate(tier, "output_cost_per_reasoning_token"),
-            )
             return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
-                output_tokens * output_multiplier * output_rate
+                output_tokens * output_multiplier * _tier_output_rate(tier=tier, model_info=model_info)
             )
 
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
@@ -1182,10 +1196,26 @@ def _get_model_cost_infos(
     return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
 
 
+def _deployment_declares_own_rates(deployment: Mapping[str, Any]) -> bool:
+    """Whether a deployment's own config replaces the backend model's pricing.
+
+    A deployment that spells out per-token rates and no tier table of its own is
+    billed at those rates, so the backend model's published tier table must not be
+    used to estimate it: a deployment priced at 0 would otherwise reserve, and
+    reject on, budget it can never spend.
+    """
+    sources: Final = (deployment.get("litellm_params") or {}, deployment.get("model_info") or {})
+    if any(source.get("tiered_pricing") for source in sources):
+        return False
+    return any(source.get(key) is not None for source in sources for key in _CUSTOM_RATE_KEYS)
+
+
 def _deployment_tiered_pricing_table(
     deployment: dict[str, Any],
     llm_router: Router,
 ) -> list[dict] | None:
+    if _deployment_declares_own_rates(deployment):
+        return None
     model_id: Final = deployment.get("model_info", {}).get("id")
     backend_model: Final = deployment.get("litellm_params", {}).get("model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
