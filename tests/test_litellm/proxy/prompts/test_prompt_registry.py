@@ -2,7 +2,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
-from litellm.proxy.prompts.prompt_registry import InMemoryPromptRegistry
+from litellm.proxy.prompts.prompt_registry import InMemoryPromptRegistry, parse_prompt_version
 from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
 
 
@@ -214,3 +214,11 @@ def test_remove_prompt_is_a_no_op_for_an_unknown_registry_key(isolated_callbacks
 
     assert registry.resolve_prompt_spec("greeting") is not None
     assert len(isolated_callbacks) == 1
+
+
+@pytest.mark.parametrize(
+    ("raw_version", "expected"),
+    [(2, 2), ("2", 2), (None, None), ("v2", None), (True, None), (2.0, None)],
+)
+def test_parse_prompt_version_accepts_integers_and_json_strings(raw_version: object, expected: int | None) -> None:
+    assert parse_prompt_version(raw_version) == expected

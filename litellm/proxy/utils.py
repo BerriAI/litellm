@@ -1749,7 +1749,6 @@ class ProxyLogging:
 
         litellm_logging_obj: Final = cast(Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None))
         prompt_id: Final[str | None] = data.get("prompt_id", None)
-        prompt_version: Final[int | None] = data.get("prompt_version", None)
 
         ## PROMPT TEMPLATE CHECK ##
 
@@ -1759,11 +1758,13 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion" or call_type == "aresponses")
         ):
+            from litellm.proxy.prompts.prompt_registry import parse_prompt_version
+
             await self._process_prompt_template(
                 data=data,
                 litellm_logging_obj=litellm_logging_obj,
                 prompt_id=prompt_id,
-                prompt_version=prompt_version,
+                prompt_version=parse_prompt_version(data.get("prompt_version", None)),
                 call_type=call_type,
             )
 

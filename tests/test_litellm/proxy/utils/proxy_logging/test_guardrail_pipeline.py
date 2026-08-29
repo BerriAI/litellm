@@ -859,6 +859,41 @@ async def test_process_prompt_template_resolves_the_requested_environment(proxy_
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_matches_a_prompt_version_sent_as_a_json_string(proxy_logging, monkeypatch):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.prompts import prompt_registry
+
+    prompt_spec = MagicMock()
+    prompt_spec.litellm_params = MagicMock(prompt_id="greeting")
+    resolve_calls: list[dict] = []
+
+    def fake_resolve(prompt_id, version=None, environment=None):
+        resolve_calls.append({"prompt_id": prompt_id, "version": version, "environment": environment})
+        return prompt_spec
+
+    monkeypatch.setattr(prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "resolve_prompt_spec", fake_resolve)
+    monkeypatch.setattr(
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_callback_for_prompt", lambda *a, **kw: MagicMock()
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_get_chat_completion_prompt = AsyncMock(
+        return_value=("m", [{"role": "user", "content": "rendered"}], {})
+    )
+    data: Dict[str, Any] = {
+        "messages": [{"role": "user", "content": "orig"}],
+        "model": "m",
+        "prompt_id": "greeting",
+        "prompt_version": "2",
+        "litellm_logging_obj": logging_obj,
+    }
+
+    result = await proxy_logging.pre_call_hook(user_api_key_dict=UserAPIKeyAuth(), data=data, call_type="completion")
+
+    assert resolve_calls == [{"prompt_id": "greeting", "version": 2, "environment": None}]
+    assert result["messages"] == [{"role": "user", "content": "rendered"}]
+
+
+@pytest.mark.asyncio
 async def test_process_prompt_template_aresponses_swaps_model_and_merges_input(proxy_logging, monkeypatch):
     from litellm.proxy.prompts import prompt_registry
 

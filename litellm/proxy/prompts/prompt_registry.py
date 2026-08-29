@@ -74,6 +74,16 @@ def registry_key_for_prompt(prompt: PromptSpec) -> str:
     return f"{prompt.prompt_id}::{prompt_environment_or_default(prompt.environment)}"
 
 
+def parse_prompt_version(raw_version: object) -> int | None:
+    if isinstance(raw_version, bool):
+        return None
+    if isinstance(raw_version, int):
+        return raw_version
+    if isinstance(raw_version, str) and raw_version.isdigit():
+        return int(raw_version)
+    return None
+
+
 def _spec_version(prompt: PromptSpec) -> int:
     return prompt.version if prompt.version is not None else get_version_number(prompt_id=prompt.prompt_id)
 
