@@ -382,6 +382,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
     get_management_object_ttl,
+    model_access_group_cache_key,
+    model_access_group_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.config_resolvers import resolve_fields
@@ -2648,6 +2650,7 @@ async def increment_spend_counters(
     budget_reservation: dict | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
+    model_access_groups: Sequence[str] | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2777,6 +2780,13 @@ async def increment_spend_counters(
             )
             if end_user_id is not None or tags is not None
             else None,
+            _increment_model_access_group_spend_counters(
+                model_access_groups=model_access_groups,
+                response_cost=cost,
+                reserved_counter_keys=reserved_counter_keys,
+            )
+            if model_access_groups
+            else None,
             _increment_org_spend_counter(
                 org_id=org_id,
                 response_cost=cost,
@@ -2860,6 +2870,33 @@ async def _increment_end_user_and_tag_spend_counters(
         await _init_and_increment_unreserved_spend_counter(
             counter_key=f"spend:tag:{tag_name}",
             source_cache_key=tag_cache_key(tag_name),
+            increment=response_cost,
+            reserved_counter_keys=reserved_counter_keys,
+        )
+
+
+async def _increment_model_access_group_spend_counters(
+    model_access_groups: Sequence[object],
+    response_cost: float,
+    reserved_counter_keys: set[str],
+) -> None:
+    """Charge the model access groups that authorized this request.
+
+    Without this the counter auth reads is written only by the reservation path, so
+    ``disable_budget_reservation`` would leave ``_model_access_group_max_budget_check`` enforcing
+    against the DB row's spend, which lags by up to the cache TTL.
+
+    Typed ``object`` rather than ``str`` because the names reach the cost callback out of request
+    metadata, which the coercion upstream filters to a list but not to strings. A non-string that
+    slipped through would build a counter key nothing else ever reads.
+    """
+    unique_groups: Final = tuple(
+        dict.fromkeys(group for group in model_access_groups if group and isinstance(group, str))
+    )
+    for group in unique_groups:
+        await _init_and_increment_unreserved_spend_counter(
+            counter_key=model_access_group_spend_counter_key(group),
+            source_cache_key=model_access_group_cache_key(group),
             increment=response_cost,
             reserved_counter_keys=reserved_counter_keys,
         )

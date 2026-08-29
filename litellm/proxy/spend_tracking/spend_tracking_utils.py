@@ -24,7 +24,11 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
-from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
+from litellm.litellm_core_utils.litellm_logging import (
+    coerce_model_access_groups,
+    is_valid_sha256_hash,
+    request_model_access_groups_from_litellm_params,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -267,6 +271,23 @@ def _extract_usage_for_ocr_call(response_obj: object, response_obj_dict: dict) -
             }
     else:
         return {}
+
+
+def get_request_model_access_groups(kwargs: Mapping[str, object] | None) -> tuple[str, ...]:
+    """Model access groups that authorized this request, as stamped onto request metadata at auth time."""
+    if kwargs is None:
+        return ()
+
+    standard_logging_payload: Final = kwargs.get("standard_logging_object")
+    if isinstance(standard_logging_payload, Mapping):
+        from_payload: Final = coerce_model_access_groups(standard_logging_payload.get("request_model_access_groups"))
+        if from_payload:
+            return from_payload
+
+    litellm_params: Final = kwargs.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return ()
+    return request_model_access_groups_from_litellm_params(litellm_params)
 
 
 def _sl_attribution_fallback(
