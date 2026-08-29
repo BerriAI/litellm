@@ -455,6 +455,30 @@ def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[s
     )
 
 
+def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object]) -> None:
+    if data.get("stream") is not True:
+        return
+    post_call_policies: Final = tuple(
+        policy_name for policy_name, pipeline in _policy_pipelines(data) if pipeline.mode == "post_call"
+    )
+    if not post_call_policies:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": {
+                "message": (
+                    "Policies with post_call guardrail pipelines cannot govern streaming responses yet: "
+                    f"{', '.join(post_call_policies)}. Retry with stream=false, or move these policies' output "
+                    "guardrails from pipeline steps to guardrails.add, which scans streamed output."
+                ),
+                "type": "guardrail_pipeline_error",
+                "policies": list(post_call_policies),
+            }
+        },
+    )
+
+
 def _prompt_block_text(block: object) -> str:
     if isinstance(block, str):
         return block
@@ -1578,6 +1602,7 @@ class ProxyLogging:
         call_type: str,
         event_hook: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        response: LLMResponseTypes | None = None,
     ) -> dict:
         """
         Execute guardrail pipelines if any are configured for this request.
@@ -1596,6 +1621,8 @@ class ProxyLogging:
         if not pipelines:
             return data
 
+        step_input: Final = {**data, "response": response} if response is not None else data
+
         for policy_name, pipeline in pipelines:
             if pipeline.mode != event_hook:
                 continue
@@ -1603,7 +1630,7 @@ class ProxyLogging:
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,
                 mode=pipeline.mode,
-                data=data,
+                data=step_input,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 policy_name=policy_name,
@@ -1614,6 +1641,7 @@ class ProxyLogging:
                 result=result,
                 data=data,
                 policy_name=policy_name,
+                original_response=response,
             )
 
         return data
@@ -1623,14 +1651,18 @@ class ProxyLogging:
         result: PipelineExecutionResult,
         data: dict,
         policy_name: str,
+        original_response: LLMResponseTypes | None = None,
     ) -> dict:
         """
         Handle a PipelineExecutionResult — allow, block, or modify_response.
 
         Returns data dict if allowed, raises on block/modify_response.
+        ``original_response`` is set on the post_call path, where allowed
+        modifications land on the response object in place, so the request
+        payload (already sent upstream) is left untouched.
         """
         if result.terminal_action == "allow":
-            if result.modified_data is not None:
+            if result.modified_data is not None and original_response is None:
                 data.update(result.modified_data)
             return data
 
@@ -1671,6 +1703,7 @@ class ProxyLogging:
                 request_data=data,
                 guardrail_name=f"pipeline:{policy_name}",
                 detection_info=None,
+                original_response=original_response,
             )
 
         return data
@@ -1786,6 +1819,8 @@ class ProxyLogging:
         )
 
         try:
+            _raise_for_streaming_post_call_pipelines(data)
+
             # Execute guardrail pipelines before the normal callback loop
             data = await self._maybe_execute_pipelines(
                 data=data,
@@ -2773,6 +2808,14 @@ class ProxyLogging:
 
         from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
+
+        await self._maybe_execute_pipelines(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            call_type=getattr(data.get("litellm_logging_obj"), "call_type", None) or "acompletion",
+            event_hook="post_call",
+            response=response,
+        )
 
         guardrail_callbacks: Final[list[CustomGuardrail]] = []
         other_callbacks: Final[list[CustomLogger]] = []
