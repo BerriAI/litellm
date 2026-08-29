@@ -2341,52 +2341,13 @@ class ProxyBaseLLMRequestProcessing:
                 if requested_model_from_client:
                     self.data["_litellm_client_requested_model"] = requested_model_from_client
 
-                # Streaming: attach a closure that fires after all guardrail
-                # end-of-stream blocks complete.  CSW.__anext__ stores the
-                # assembled response on logging_obj; the outer consumer
-                # (ProxyLogging._fire_deferred_stream_logging) fires the
-                # closure after the full streaming pipeline finishes.
-                # The closure runs non-apply_guardrail hooks on the
-                # assembled response, then fires success logging.
-                # Only for CustomStreamWrapper — raw async generators from
-                # passthrough routes bypass CSW and would orphan the closure.
-                from litellm.litellm_core_utils.streaming_handler import (
-                    CustomStreamWrapper,
-                )
-
-                if _post_call_guardrails_active and isinstance(response, CustomStreamWrapper):
-                    # Intentionally a live reference (not a copy) — mirrors
-                    # ProxyLogging.post_call_success_hook which also mutates
-                    # data["guardrail_to_apply"] during iteration.
-                    _captured_data: Final = self.data
-                    _captured_user_api_key_dict: Final = user_api_key_dict
-                    _captured_logging_obj: Final = logging_obj
-
-                    async def _on_deferred_stream_complete(assembled_response: object, cache_hit: object) -> None:
-                        await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
-                            captured_data=_captured_data,
-                            captured_user_api_key_dict=_captured_user_api_key_dict,
-                            captured_logging_obj=_captured_logging_obj,
-                            assembled_response=assembled_response,
-                            cache_hit=cache_hit,
-                        )
-
-                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
-                elif (
-                    _post_call_guardrails_active
-                    and route_type in ("anthropic_messages", "aresponses")
-                    and self._is_streaming_response(response)
-                ):
-                    from litellm.litellm_core_utils.logging_worker import (
-                        GLOBAL_LOGGING_WORKER,
+                if _post_call_guardrails_active:
+                    self._arm_deferred_stream_dispatch(
+                        response=response,
+                        route_type=route_type,
+                        user_api_key_dict=user_api_key_dict,
+                        logging_obj=logging_obj,
                     )
-
-                    async def _on_deferred_native_stream_complete(
-                        logging_coroutine: Coroutine[object, object, object],
-                    ) -> None:
-                        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
-
-                    logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
 
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
@@ -3056,6 +3017,87 @@ class ProxyBaseLLMRequestProcessing:
             _enqueue_fn()
         except Exception as e:
             verbose_proxy_logger.exception("Error firing deferred logging: %s", e)
+
+    def _arm_deferred_stream_dispatch(
+        self,
+        response: object,
+        route_type: str,
+        user_api_key_dict: "UserAPIKeyAuth",
+        logging_obj: LiteLLMLoggingObj,
+    ) -> None:
+        """
+        Streaming with post-call guardrails active: attach a closure that
+        ProxyLogging._fire_deferred_stream_logging fires after all guardrail
+        end-of-stream blocks complete, so the spend log sees
+        guardrail_information.
+
+        Three closure shapes, matching who owns logging for the stream:
+        - CustomStreamWrapper (chat completions) stores
+          (assembled_response, cache_hit); the closure also runs
+          non-apply_guardrail post-call hooks via
+          _run_deferred_stream_guardrails.
+        - Bridged /v1/responses (LiteLLMCompletionStreamingIterator) shares
+          its inner CustomStreamWrapper's logging_obj, so it stores the same
+          (assembled_response, cache_hit) shape; the closure only dispatches
+          success logging, matching the route's pre-existing hook surface.
+        - Native anthropic_messages/aresponses iterators store a single
+          ready-made logging coroutine to enqueue.
+
+        Raw async generators from passthrough routes bypass all three and
+        would orphan the closure, so they are not armed here.
+        """
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+        if isinstance(response, CustomStreamWrapper):
+            # Intentionally a live reference (not a copy) — mirrors
+            # ProxyLogging.post_call_success_hook which also mutates
+            # data["guardrail_to_apply"] during iteration.
+            _captured_data: Final = self.data
+            _captured_user_api_key_dict: Final = user_api_key_dict
+            _captured_logging_obj: Final = logging_obj
+
+            async def _on_deferred_stream_complete(assembled_response: object, cache_hit: object) -> None:
+                await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                    captured_data=_captured_data,
+                    captured_user_api_key_dict=_captured_user_api_key_dict,
+                    captured_logging_obj=_captured_logging_obj,
+                    assembled_response=assembled_response,
+                    cache_hit=cache_hit,
+                )
+
+            logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
+            return
+
+        if route_type not in ("anthropic_messages", "aresponses") or not self._is_streaming_response(response):
+            return
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        if isinstance(response, LiteLLMCompletionStreamingIterator):
+            _captured_bridge_logging_obj: Final = logging_obj
+
+            async def _on_deferred_bridged_stream_complete(assembled_response: object, cache_hit: object) -> None:
+                await _as_success_dispatcher(_captured_bridge_logging_obj).dispatch_success_handlers(
+                    assembled_response,
+                    cache_hit=cache_hit,
+                    start_time=None,
+                    end_time=None,
+                    prefer_async_handlers=True,
+                )
+
+            logging_obj._on_deferred_stream_complete = _on_deferred_bridged_stream_complete
+            return
+
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        async def _on_deferred_native_stream_complete(
+            logging_coroutine: Coroutine[object, object, object],
+        ) -> None:
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+
+        logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
 
     @staticmethod
     async def _run_deferred_stream_guardrails(

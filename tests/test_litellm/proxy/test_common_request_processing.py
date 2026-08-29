@@ -1656,7 +1656,7 @@ class TestCommonRequestProcessingHelpers:
         assert payload["error"]["message"] == "MCP request blocked: no rewritable argument field present"
         assert payload["error"]["provider_specific_fields"]["error"]["code"] == "panw_prisma_airs_blocked"
 
-    async def testserialize_http_exception_detail_helper(self):
+    async def test_serialize_http_exception_detail_helper(self):
         """Direct unit coverage for the L1 helper across all branches."""
         from litellm.proxy.common_request_processing import (
             serialize_http_exception_detail,
