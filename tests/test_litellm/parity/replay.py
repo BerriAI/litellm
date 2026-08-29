@@ -4,12 +4,12 @@ import queue
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
 from pydantic import JsonValue, TypeAdapter
 
+from tests.test_litellm._recorded_http import RecordedHttpResponse, RecordedHttpStreamResponse, RecordedResponse
 from tests.test_litellm.parity.models import CapturedRequest
 
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -31,15 +31,15 @@ class ReplayServer(ThreadingHTTPServer):
 
     def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), _ReplayHandler)
-        self.responses: queue.Queue[ReplayResponse] = queue.Queue()
+        self.responses: queue.Queue[RecordedResponse] = queue.Queue()
         self.requests: queue.Queue[CapturedRequest] = queue.Queue()
 
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_address[1]}"
 
-    def enqueue_response(self, status_code: int, headers: tuple[tuple[str, str], ...], body: bytes) -> None:
-        self.responses.put(ReplayResponse(status_code=status_code, headers=headers, body=body))
+    def enqueue_response(self, response: RecordedResponse) -> None:
+        self.responses.put(response)
 
     def take_request(self) -> CapturedRequest:
         request_count: Final = self.requests.qsize()
@@ -52,13 +52,6 @@ class ReplayServer(ThreadingHTTPServer):
             self.responses.get_nowait()
         while not self.requests.empty():
             self.requests.get_nowait()
-
-
-@dataclass(frozen=True, slots=True)
-class ReplayResponse:
-    status_code: int
-    headers: tuple[tuple[str, str], ...]
-    body: bytes
 
 
 class _ReplayHandler(BaseHTTPRequestHandler):
@@ -91,12 +84,26 @@ class _ReplayHandler(BaseHTTPRequestHandler):
             self.send_error(500, "no replay response queued")
             return
         self.send_response_only(response.status_code)
-        for name, value in response.headers:
-            if name.lower() not in EXCLUDED_RESPONSE_HEADERS:
-                self.send_header(name, value)
-        self.send_header("content-length", str(len(response.body)))
+        for header in response.headers:
+            if header.name.lower() not in EXCLUDED_RESPONSE_HEADERS:
+                self.send_header(header.name, header.value)
+        if isinstance(response, RecordedHttpResponse):
+            response_body: Final = response.body_bytes()
+            self.send_header("content-length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+            return
+        assert isinstance(response, RecordedHttpStreamResponse)
+        self.send_header("transfer-encoding", "chunked")
         self.end_headers()
-        self.wfile.write(response.body)
+        for chunk in response.chunks:
+            data = chunk.data_bytes()
+            self.wfile.write(f"{len(data):X}\r\n".encode("ascii"))
+            self.wfile.write(data)
+            self.wfile.write(b"\r\n")
+            self.wfile.flush()
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
 
     def log_message(self, format: str, *args: object) -> None:
         return
