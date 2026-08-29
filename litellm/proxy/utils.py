@@ -1527,7 +1527,7 @@ class ProxyLogging:
     async def _process_prompt_template(
         self,
         data: dict,
-        litellm_logging_obj: Any,
+        litellm_logging_obj: "LiteLLMLoggingObj",
         prompt_id: str,
         prompt_version: int | None,
         call_type: CallTypesLiteral,
@@ -3262,8 +3262,14 @@ class ProxyLogging:
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
         if not caps.iterator_overrides:
-            async for chunk in response:
-                yield chunk
+            try:
+                async for chunk in response:
+                    yield chunk
+            except (GeneratorExit, asyncio.CancelledError):
+                raise
+            except Exception:
+                ProxyLogging._fire_deferred_stream_logging(request_data)
+                raise
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
 
@@ -3316,9 +3322,14 @@ class ProxyLogging:
                     ),
                 )
 
-        # Actually iterate through the chained async generator and yield chunks
-        async for chunk in current_response:
-            yield chunk
+        try:
+            async for chunk in current_response:
+                yield chunk
+        except (GeneratorExit, asyncio.CancelledError):
+            raise
+        except Exception:
+            ProxyLogging._fire_deferred_stream_logging(request_data)
+            raise
 
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
         # completed.  unified_guardrail writes guardrail_information during
@@ -5664,12 +5675,8 @@ class PrismaClient:
             return True
 
         acquire_task: Final = asyncio.create_task(_acquire_reconnect_lock())
-        done, _pending = await asyncio.wait(
-            {acquire_task},
-            timeout=lock_timeout_seconds,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if acquire_task not in done:
+
+        async def _abandon_acquire_task() -> None:
             acquire_task.cancel()
             try:
                 await acquire_task
@@ -5684,6 +5691,18 @@ class PrismaClient:
                     self._db_reconnect_lock.release()
                 except RuntimeError:
                     pass
+
+        try:
+            done, _pending = await asyncio.wait(
+                {acquire_task},
+                timeout=lock_timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            await asyncio.shield(_abandon_acquire_task())
+            raise
+        if acquire_task not in done:
+            await _abandon_acquire_task()
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt due to lock acquisition timeout. reason=%s timeout=%ss",
                 reason,
