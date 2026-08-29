@@ -4,11 +4,16 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { GET, PUT, DELETE } = vi.hoisted(() => ({ GET: vi.fn(), PUT: vi.fn(), DELETE: vi.fn() }));
+const { GET, PUT, DELETE, userRole } = vi.hoisted(() => ({
+  GET: vi.fn(),
+  PUT: vi.fn(),
+  DELETE: vi.fn(),
+  userRole: { current: "Admin" },
+}));
 vi.mock("@/lib/http/api", () => ({ fetchClient: { GET, PUT, DELETE } }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => ({ accessToken: "sk-test", userRole: "Admin" }),
+  default: () => ({ accessToken: "sk-test", userRole: userRole.current }),
 }));
 
 import AccessGroupBudgetsPanel from "./AccessGroupBudgetsPanel";
@@ -51,6 +56,7 @@ const openActions = async (accessGroup: string) => {
 describe("AccessGroupBudgetsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    userRole.current = "Admin";
     GET.mockResolvedValue({ data: { access_groups: [BUDGETED_GROUP, FREE_GROUP] } });
     PUT.mockResolvedValue({ data: { access_group: "shared", spend: 0, budget: null } });
     DELETE.mockResolvedValue({ data: { access_group: "premium", budget_deleted: true, message: "ok" } });
@@ -118,6 +124,27 @@ describe("AccessGroupBudgetsPanel", () => {
 
     expect(await screen.findByText(/Set at least one of max budget/)).toBeInTheDocument();
     expect(PUT).not.toHaveBeenCalled();
+  });
+
+  it("offers an admin viewer no way to start a write the proxy would reject with a 403", async () => {
+    userRole.current = "Admin Viewer";
+    renderPanel();
+
+    expect(await screen.findByText("premium")).toBeInTheDocument();
+
+    await openActions("premium");
+
+    expect(await screen.findByTestId("access-group-action-set-budget")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("access-group-action-clear-budget")).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("does not offer a budget on a group whose name a path segment cannot carry", async () => {
+    GET.mockResolvedValue({ data: { access_groups: [{ ...FREE_GROUP, access_group: "openai/prod" }] } });
+    renderPanel();
+
+    await openActions("openai/prod");
+
+    expect(await screen.findByTestId("access-group-action-set-budget")).toHaveAttribute("aria-disabled", "true");
   });
 
   it("clears a budget only after the confirmation is accepted", async () => {

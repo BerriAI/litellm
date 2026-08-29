@@ -19,14 +19,30 @@ import { ModelAccessGroup } from "@/app/(dashboard)/hooks/modelAccessGroups/useM
 const budgetDecimals = (maxBudget: number | null | undefined): number =>
   maxBudget != null && maxBudget > 0 && maxBudget < 0.01 ? 5 : 2;
 
+/**
+ * A group name is a free-text path segment on the budget routes, so a `/` in it splits the path and
+ * no encoding recovers it. Such a group is listed but its budget is unreachable.
+ */
+export const isBudgetAddressable = (accessGroup: string): boolean => !accessGroup.includes("/");
+
+const writeBlockedReason = (accessGroup: ModelAccessGroup, canWrite: boolean): string | undefined => {
+  if (!canWrite) return "Only a proxy admin can change an access group budget";
+  if (!isBudgetAddressable(accessGroup.access_group)) {
+    return "A budget cannot be set on a group whose name contains a slash";
+  }
+  return undefined;
+};
+
 interface AccessGroupRowActionsProps {
   accessGroup: ModelAccessGroup;
+  canWrite: boolean;
   onSetBudget: (accessGroup: ModelAccessGroup) => void;
   onClearBudget: (accessGroup: ModelAccessGroup) => void;
 }
 
-function AccessGroupRowActions({ accessGroup, onSetBudget, onClearBudget }: AccessGroupRowActionsProps) {
+function AccessGroupRowActions({ accessGroup, canWrite, onSetBudget, onClearBudget }: AccessGroupRowActionsProps) {
   const hasBudget = accessGroup.budget != null;
+  const blocked = writeBlockedReason(accessGroup, canWrite);
 
   return (
     <DropdownMenu>
@@ -38,15 +54,20 @@ function AccessGroupRowActions({ accessGroup, onSetBudget, onClearBudget }: Acce
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem data-testid="access-group-action-set-budget" onClick={() => onSetBudget(accessGroup)}>
+        <DropdownMenuItem
+          disabled={blocked !== undefined}
+          title={blocked}
+          data-testid="access-group-action-set-budget"
+          onClick={() => onSetBudget(accessGroup)}
+        >
           <Wallet />
           {hasBudget ? "Edit budget" : "Set budget"}
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="destructive"
-          disabled={!hasBudget}
+          disabled={blocked !== undefined || !hasBudget}
           data-testid="access-group-action-clear-budget"
-          title={hasBudget ? undefined : "This access group has no budget to clear"}
+          title={blocked ?? (hasBudget ? undefined : "This access group has no budget to clear")}
           onClick={() => onClearBudget(accessGroup)}
         >
           <Trash2 />
@@ -58,11 +79,13 @@ function AccessGroupRowActions({ accessGroup, onSetBudget, onClearBudget }: Acce
 }
 
 interface AccessGroupBudgetColumnsDeps {
+  canWrite: boolean;
   onSetBudget: (accessGroup: ModelAccessGroup) => void;
   onClearBudget: (accessGroup: ModelAccessGroup) => void;
 }
 
 export const getAccessGroupBudgetColumns = ({
+  canWrite,
   onSetBudget,
   onClearBudget,
 }: AccessGroupBudgetColumnsDeps): ColumnDef<ModelAccessGroup>[] => [
@@ -132,7 +155,12 @@ export const getAccessGroupBudgetColumns = ({
     enableHiding: false,
     cell: ({ row }) => (
       <div className="flex justify-end">
-        <AccessGroupRowActions accessGroup={row.original} onSetBudget={onSetBudget} onClearBudget={onClearBudget} />
+        <AccessGroupRowActions
+          accessGroup={row.original}
+          canWrite={canWrite}
+          onSetBudget={onSetBudget}
+          onClearBudget={onClearBudget}
+        />
       </div>
     ),
   },

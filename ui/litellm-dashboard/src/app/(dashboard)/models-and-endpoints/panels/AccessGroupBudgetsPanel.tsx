@@ -7,6 +7,8 @@ import React, { useMemo, useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { DataTable } from "@/components/shared/DataTable";
 import { toast } from "@/lib/toast";
+import { isProxyAdminRole } from "@/utils/roles";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { ModelAccessGroup, useModelAccessGroups } from "@/app/(dashboard)/hooks/modelAccessGroups/useModelAccessGroups";
 import { useDeleteModelAccessGroupBudget } from "@/app/(dashboard)/hooks/modelAccessGroups/useDeleteModelAccessGroupBudget";
 import {
@@ -33,6 +35,7 @@ function EmptyState() {
 }
 
 export default function AccessGroupBudgetsPanel() {
+  const { userRole } = useAuthorized();
   const { data: accessGroups, isLoading } = useModelAccessGroups();
   const setBudget = useSetModelAccessGroupBudget();
   const clearBudget = useDeleteModelAccessGroupBudget();
@@ -41,9 +44,10 @@ export default function AccessGroupBudgetsPanel() {
   const [editing, setEditing] = useState<ModelAccessGroup | null>(null);
   const [clearing, setClearing] = useState<ModelAccessGroup | null>(null);
 
+  const canWrite = isProxyAdminRole(userRole ?? "");
   const columns = useMemo(
-    () => getAccessGroupBudgetColumns({ onSetBudget: setEditing, onClearBudget: setClearing }),
-    [],
+    () => getAccessGroupBudgetColumns({ canWrite, onSetBudget: setEditing, onClearBudget: setClearing }),
+    [canWrite],
   );
 
   const handleSubmit = (params: SetModelAccessGroupBudgetParams) => {
