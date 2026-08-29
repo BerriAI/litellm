@@ -115,9 +115,9 @@ def test_bad_request_error():
 def test_bad_request_bad_param_error():
     client = get_test_client()
     with pytest.raises(BadRequestError):
-        # Trigger error with invalid model name
+        # needs a non-reasoning model so drop_params keeps temperature for OpenAI to reject
         client.responses.create(
-            model="gpt-5.5", input="This should fail", temperature=2000
+            model="gpt-4.1-mini", input="This should fail", temperature=2000
         )
 
 
