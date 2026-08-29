@@ -27,7 +27,8 @@ from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.utils import ProxyLogging, _raise_for_streaming_post_call_pipelines
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
     PipelineStep,
@@ -1459,6 +1460,37 @@ async def test_pre_call_hook_rejects_streaming_when_pipeline_guardrail_rewrites_
     assert info.value.detail["error"]["guardrails"] == ("gr-post",)
     assert "rewrite streamed content" in info.value.detail["error"]["message"]
     assert seen.get("count") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action, rejected", [(ContentFilterAction.MASK, True), (ContentFilterAction.BLOCK, False)])
+async def test_pre_call_hook_rejects_streaming_only_when_content_filter_step_masks(
+    proxy_logging, make_user_api_key_auth, monkeypatch, action, rejected
+):
+    guardrail = ContentFilterGuardrail(
+        guardrail_name="gr-post",
+        event_hook=GuardrailEventHooks.post_call,
+        blocked_words=[BlockedWord(keyword="persimmon", action=action)],
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    data = _post_call_pipeline_data(stream=True)
+    user_api_key_dict = make_user_api_key_auth(request_route="/v1/chat/completions")
+
+    if not rejected:
+        out = await proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict, data=data, call_type="completion", guardrails_only=True
+        )
+        assert out is not None and out.get("stream") is True
+        return
+
+    with pytest.raises(HTTPException) as info:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict, data=data, call_type="completion", guardrails_only=True
+        )
+
+    assert info.value.status_code == 400
+    assert info.value.detail["error"]["guardrails"] == ("gr-post",)
+    assert "a MASK action" in info.value.detail["error"]["message"]
 
 
 @pytest.mark.asyncio

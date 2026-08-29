@@ -3068,3 +3068,39 @@ class TestContentFilterToolCallArguments:
                 request_data={},
                 input_type="response",
             )
+
+
+class TestRewritesStreamedOutput:
+    def test_block_only_rules_do_not_rewrite(self):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            patterns=[ContentFilterPattern(pattern_type="prebuilt", pattern_name="us_ssn", action=ContentFilterAction.BLOCK)],
+            blocked_words=[BlockedWord(keyword="kumquat", action=ContentFilterAction.BLOCK)],
+        )
+
+        assert guardrail.rewrites_streamed_output() is False
+
+    def test_mask_blocked_word_rewrites(self):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            blocked_words=[BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK)],
+        )
+
+        assert guardrail.rewrites_streamed_output() is True
+
+    def test_mask_pattern_rewrites(self):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            patterns=[ContentFilterPattern(pattern_type="prebuilt", pattern_name="us_ssn", action=ContentFilterAction.MASK)],
+        )
+
+        assert guardrail.rewrites_streamed_output() is True
+
+    def test_mask_response_content_rewrites(self):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="cf",
+            blocked_words=[BlockedWord(keyword="kumquat", action=ContentFilterAction.BLOCK)],
+            mask_response_content=True,
+        )
+
+        assert guardrail.rewrites_streamed_output() is True
