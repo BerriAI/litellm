@@ -125,8 +125,4 @@ POST /customer/delete                             # known gap: litellm_customer 
 GET /team/{team_id}/callback                      # known gap: team callback resource
 POST /team/{team_id}/callback                     # known gap: team callback resource
 DELETE /team/{team_id}/callback/{callback_name}   # known gap: team callback resource
-GET /jwt/key/mapping/info                         # known gap: litellm_jwt_key_mapping, in review (PR #36096)
 GET /jwt/key/mapping/list                         # known gap: litellm_jwt_key_mapping, in review (PR #36096)
-POST /jwt/key/mapping/new                         # known gap: litellm_jwt_key_mapping, in review (PR #36096)
-POST /jwt/key/mapping/update                      # known gap: litellm_jwt_key_mapping, in review (PR #36096)
-POST /jwt/key/mapping/delete                      # known gap: litellm_jwt_key_mapping, in review (PR #36096)
