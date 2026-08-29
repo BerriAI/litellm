@@ -6,13 +6,16 @@ import datetime
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -844,6 +847,17 @@ class GenericBudgetWindowDetails(BaseModel):
     spend_key: str
     start_time_key: str
     ttl_seconds: int
+
+
+class FallbackAccessCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` may be served by fallback `model`.
+
+    The router runs it before every cross-model-group fallback attempt and skips targets it
+    rejects, so a fallback can never reach a model the caller could not have requested directly.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
 
 
 OptionalPreCallChecks = list[
