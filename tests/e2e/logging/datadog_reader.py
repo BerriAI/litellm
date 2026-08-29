@@ -97,15 +97,22 @@ class DdLogsReader:
         indexed ``message`` empty, so a plain full-text query matches nothing;
         ``*:`` extends the scan to every attribute (the marker sits in the
         prompt, e.g. ``messages.content``, wherever the route's payload puts
-        it). More than one hit for one call IS the duplicate-delivery bug, so
-        this never collapses to a single event. A 429 backs off and retries -
-        the search budget is org-wide, so another consumer can empty it under
-        us - while any other failure stays a hard fail."""
+        it)."""
+        return self.events_for_query(f"*:*{marker}*")
+
+    def events_for_query(self, query: str) -> list[DdLogEvent]:
+        """Every ingested event the search query matches (failure payloads
+        carry no prompt to mark, so failure scenarios query indexed attributes
+        like ``@model_group:...`` instead of a body marker). More than one hit
+        for one call IS the duplicate-delivery bug, so this never collapses to
+        a single event. A 429 backs off and retries - the search budget is
+        org-wide, so another consumer can empty it under us - while any other
+        failure stays a hard fail."""
         for _ in range(_RATE_LIMIT_RETRIES):
             result = post(
                 URL(f"https://api.{self.site}/api/v2/logs/events/search"),
                 headers=_DdAuthHeaders(api_key=self.api_key, app_key=self.app_key),
-                json=_SearchRequest(filter=_SearchFilter(query=f"*:*{marker}*")),
+                json=_SearchRequest(filter=_SearchFilter(query=query)),
                 response_type=_SearchResponse,
                 timeout=30.0,
             )
@@ -123,6 +130,10 @@ class DdLogsReader:
         )
 
     def poll_events_for_marker(self, marker: str) -> list[DdLogEvent]:
+        """``poll_events_for_query`` over the every-attribute marker scan."""
+        return self.poll_events_for_query(f"*:*{marker}*")
+
+    def poll_events_for_query(self, query: str) -> list[DdLogEvent]:
         """Poll until at least one matching event is searchable (the callback
         flushes in periodic batches and DataDog ingestion adds seconds of lag),
         then keep re-reading for DD_SETTLE_SECONDS so a late duplicate cannot
@@ -132,15 +143,13 @@ class DdLogsReader:
         request budget. At the deadline the last result is returned as-is."""
         deadline = time.monotonic() + POLL_TIMEOUT
         while time.monotonic() < deadline:
-            events = self.events_for_marker(marker)
+            events = self.events_for_query(query)
             if events:
-                return self._settled_events_for_marker(marker, events)
+                return self._settled_events_for_query(query, events)
             time.sleep(DD_SEARCH_INTERVAL)
-        return self.events_for_marker(marker)
+        return self.events_for_query(query)
 
-    def _settled_events_for_marker(
-        self, marker: str, events: list[DdLogEvent]
-    ) -> list[DdLogEvent]:
+    def _settled_events_for_query(self, query: str, events: list[DdLogEvent]) -> list[DdLogEvent]:
         """Re-read at every search interval until the settle window closes; a
         duplicate ends the watch early because more waiting cannot clear it.
 
@@ -151,7 +160,7 @@ class DdLogsReader:
         last_nonempty = events
         while time.monotonic() < settle_deadline:
             time.sleep(DD_SEARCH_INTERVAL)
-            latest = self.events_for_marker(marker)
+            latest = self.events_for_query(query)
             if not latest:
                 continue
             if len(latest) > 1:
