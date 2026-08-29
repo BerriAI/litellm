@@ -6,7 +6,13 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Value, json};
 
-const PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
+const PAYLOAD_SIZES: &[(&str, usize)] = &[
+    ("1_KiB", 1024),
+    ("64_KiB", 64 * 1024),
+    ("1_MiB", 1024 * 1024),
+    ("4_MiB", 4 * 1024 * 1024),
+    ("16_MiB", 16 * 1024 * 1024),
+];
 
 fn former_json_roundtrip_from_py(py: Python<'_>, value: &Bound<'_, PyAny>) -> Value {
     let json = py.import("json").expect("Python json module should import");
@@ -39,55 +45,60 @@ fn pythonize_to_py(py: Python<'_>, value: &Value) -> Py<PyAny> {
 fn serialization(c: &mut Criterion) {
     Python::initialize();
     Python::attach(|py| {
-        let data_uri = format!("data:image/png;base64,{}", "A".repeat(PAYLOAD_BYTES));
-        let document = PyDict::new(py);
-        document
-            .set_item("type", "image_url")
-            .expect("document type should be set");
-        document
-            .set_item("image_url", &data_uri)
-            .expect("document URL should be set");
-
-        let response = json!({
-            "pages": [{
-                "index": 0,
-                "markdown": "OCR text",
-                "images": [{"image_base64": data_uri}],
-            }],
-            "model": "mistral-ocr-latest",
-            "document_annotation": null,
-            "usage_info": {"pages_processed": 1},
-            "object": "ocr",
-        });
-
         let mut inbound = c.benchmark_group("python_to_rust_payload");
-        inbound.throughput(Throughput::Bytes(PAYLOAD_BYTES as u64));
-        inbound.bench_with_input(
-            BenchmarkId::new("former_json_roundtrip", "4_MiB"),
-            &document,
-            |b, document| {
-                b.iter(|| former_json_roundtrip_from_py(py, black_box(document.as_any())))
-            },
-        );
-        inbound.bench_with_input(
-            BenchmarkId::new("pythonize", "4_MiB"),
-            &document,
-            |b, document| b.iter(|| pythonize_from_py(black_box(document.as_any()))),
-        );
+        for &(label, payload_bytes) in PAYLOAD_SIZES {
+            let data_uri = format!("data:image/png;base64,{}", "A".repeat(payload_bytes));
+            let document = PyDict::new(py);
+            document
+                .set_item("type", "image_url")
+                .expect("document type should be set");
+            document
+                .set_item("image_url", data_uri)
+                .expect("document URL should be set");
+
+            inbound.throughput(Throughput::Bytes(payload_bytes as u64));
+            inbound.bench_with_input(
+                BenchmarkId::new("former_json_roundtrip", label),
+                &document,
+                |b, document| {
+                    b.iter(|| former_json_roundtrip_from_py(py, black_box(document.as_any())))
+                },
+            );
+            inbound.bench_with_input(
+                BenchmarkId::new("pythonize", label),
+                &document,
+                |b, document| b.iter(|| pythonize_from_py(black_box(document.as_any()))),
+            );
+        }
         inbound.finish();
 
         let mut outbound = c.benchmark_group("rust_to_python_payload");
-        outbound.throughput(Throughput::Bytes(PAYLOAD_BYTES as u64));
-        outbound.bench_with_input(
-            BenchmarkId::new("former_json_roundtrip", "4_MiB"),
-            &response,
-            |b, response| b.iter(|| former_json_roundtrip_to_py(py, black_box(response))),
-        );
-        outbound.bench_with_input(
-            BenchmarkId::new("pythonize", "4_MiB"),
-            &response,
-            |b, response| b.iter(|| pythonize_to_py(py, black_box(response))),
-        );
+        for &(label, payload_bytes) in PAYLOAD_SIZES {
+            let data_uri = format!("data:image/png;base64,{}", "A".repeat(payload_bytes));
+            let response = json!({
+                "pages": [{
+                    "index": 0,
+                    "markdown": "OCR text",
+                    "images": [{"image_base64": data_uri}],
+                }],
+                "model": "mistral-ocr-latest",
+                "document_annotation": null,
+                "usage_info": {"pages_processed": 1},
+                "object": "ocr",
+            });
+
+            outbound.throughput(Throughput::Bytes(payload_bytes as u64));
+            outbound.bench_with_input(
+                BenchmarkId::new("former_json_roundtrip", label),
+                &response,
+                |b, response| b.iter(|| former_json_roundtrip_to_py(py, black_box(response))),
+            );
+            outbound.bench_with_input(
+                BenchmarkId::new("pythonize", label),
+                &response,
+                |b, response| b.iter(|| pythonize_to_py(py, black_box(response))),
+            );
+        }
         outbound.finish();
     });
 }
