@@ -3468,8 +3468,11 @@ class ProxyLogging:
         pipeline allows it), then runs each pipeline's steps against the
         assembled output through the endpoint guardrail translation, the same
         machinery flat post_call guardrails use at end of stream. An allow
-        releases the buffered chunks verbatim; a block or modify_response
-        terminates with the translation's block chunks or the raised error.
+        releases the buffered chunks as that machinery left them (the
+        Responses and A2A translations write guardrail output back into the
+        final chunk, exactly as they do for flat guardrails); a block or
+        modify_response terminates with the translation's block chunks or the
+        raised error.
         """
         buffered: Final[list[object]] = []  # mutable-ok: accumulates the stream before the pipeline verdict
         async for item in response:
