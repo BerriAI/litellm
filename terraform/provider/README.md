@@ -1,6 +1,6 @@
 # LiteLLM Terraform Provider
 
-This Terraform provider allows you to manage LiteLLM resources through Infrastructure as Code. It provides support for managing models, teams, team members, and API keys via the LiteLLM REST API.
+This Terraform provider allows you to manage LiteLLM resources through Infrastructure as Code. It provides support for managing models, teams, team members, API keys, users, organizations, budgets, tags, projects, guardrails, prompts, agents, search tools, access groups, fallbacks, MCP servers, credentials and vector stores via the LiteLLM REST API, along with read-only data sources for each of them.
 
 ## Source of truth
 
@@ -151,6 +151,7 @@ For full details on the <code>litellm_key</code> resource, see the [key resource
 - <code>litellm_mcp_server</code>: Manage MCP (Model Context Protocol) servers. [Documentation](docs/resources/mcp_server.md)
 - <code>litellm_credential</code>: Manage credentials for secure authentication. [Documentation](docs/resources/credential.md)
 - <code>litellm_vector_store</code>: Manage vector stores for embeddings and RAG. [Documentation](docs/resources/vector_store.md)
+- <code>litellm_jwt_key_mapping</code>: Map JWT claim values to virtual keys for per-client budgets and limits. [Documentation](docs/resources/jwt_key_mapping.md)
 
 ### Available Data Sources
 
