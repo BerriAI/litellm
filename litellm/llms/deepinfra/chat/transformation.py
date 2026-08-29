@@ -1,12 +1,22 @@
 import json
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
+
+import httpx
 
 import litellm
 from litellm.constants import MIN_NON_ZERO_TEMPERATURE
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    import tiktoken
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObj,
+    )
 
 
 class DeepInfraConfig(OpenAIGPTConfig):
@@ -197,3 +207,62 @@ class DeepInfraConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("DEEPINFRA_API_BASE") or "https://api.deepinfra.com/v1/openai"
         dynamic_api_key: Final = api_key or get_secret_str("DEEPINFRA_API_KEY")
         return api_base, dynamic_api_key
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ModelResponse:
+        """
+        Transform the response from DeepInfra.
+
+        DeepInfra reports the charge it actually applied as
+        ``usage.estimated_cost``, which already reflects the delivered
+        ``service_tier``. Pricing from the static map instead under-reports
+        priority-tier traffic, so the reported value is treated as
+        authoritative, matching how OpenRouter's ``usage.cost`` is handled.
+        """
+        model_response = super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
+        try:
+            response_json: Final = raw_response.json()
+            usage: Final = response_json.get("usage") or {}
+            reported_cost: Final = usage.get("estimated_cost")
+            service_tier: Final = response_json.get("service_tier")
+
+            if reported_cost is not None:
+                if not hasattr(model_response, "_hidden_params"):
+                    model_response._hidden_params = {}
+                if "additional_headers" not in model_response._hidden_params:
+                    model_response._hidden_params["additional_headers"] = {}
+                model_response._hidden_params["additional_headers"][
+                    "llm_provider-x-litellm-response-cost"
+                ] = float(reported_cost)
+
+            if service_tier is not None:
+                setattr(model_response, "service_tier", service_tier)
+        except Exception:
+            pass
+
+        return model_response
