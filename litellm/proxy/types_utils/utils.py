@@ -41,13 +41,13 @@ def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
             module_file_path = os.path.join(directory, *module_name.split(".")) + ".py"
 
         if module_file_path is not None and os.path.exists(module_file_path):
-            spec: Final = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
+            spec: Final = importlib.util.spec_from_file_location(module_name, module_file_path)
             if spec is None:
                 raise ImportError(f"Could not find a module specification for {module_file_path}")
-            module = importlib.util.module_from_spec(spec)  # type: ignore
+            module = importlib.util.module_from_spec(spec)
             if spec.loader is None:
                 raise ImportError(f"Could not find a module loader for {module_file_path}")
-            spec.loader.exec_module(module)  # type: ignore
+            spec.loader.exec_module(module)
         else:
             module = importlib.import_module(module_name)
 

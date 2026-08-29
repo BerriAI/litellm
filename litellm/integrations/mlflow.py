@@ -54,8 +54,8 @@ class MlflowLogger(CustomLogger):
     def _extract_and_set_chat_attributes(self, span, kwargs, response_obj):
         try:
             from mlflow.tracing.utils import (
-                set_span_chat_messages,  # type: ignore
-                set_span_chat_tools,  # type: ignore
+                set_span_chat_messages,
+                set_span_chat_tools,
             )
         except ImportError:
             return
@@ -88,7 +88,7 @@ class MlflowLogger(CustomLogger):
 
             # Record exception info as event
             if exception := kwargs.get("exception"):
-                span.add_event(SpanEvent.from_exception(exception))  # type: ignore
+                span.add_event(SpanEvent.from_exception(exception))
 
             self._extract_and_set_chat_attributes(span, kwargs, response_obj)
             self._end_span_or_trace(
@@ -244,7 +244,7 @@ class MlflowLogger(CustomLogger):
         inputs: Final = self._construct_input(kwargs)
         attributes: Final = self._extract_attributes(kwargs)
 
-        if active_span := mlflow.get_current_active_span():  # type: ignore
+        if active_span := mlflow.get_current_active_span():
             return self._client.start_span(
                 name=span_name,
                 trace_id=active_span.request_id,

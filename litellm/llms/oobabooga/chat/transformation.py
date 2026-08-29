@@ -11,6 +11,8 @@ from litellm.types.utils import ModelResponse, Usage
 from ..common_utils import OobaboogaError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
@@ -37,7 +39,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -61,7 +63,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
             )
         else:
             try:
-                model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]  # type: ignore
+                model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]
             except Exception as e:
                 raise OobaboogaError(
                     message=str(e),

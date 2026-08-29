@@ -18,14 +18,11 @@ from __future__ import annotations
 
 import base64
 import json
-import sys
-import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.llms.base_llm.managed_resources.utils import (
@@ -1258,6 +1255,48 @@ class TestRewriteBodyIds:
         assert result["files"][1] == "raw-string"  # type: ignore[index]
 
     @pytest.mark.asyncio
+    async def test_top_level_list_body_resolved(self):
+        """A request body that is a JSON array (not an object) is still walked,
+        so managed IDs inside it are resolved instead of raising."""
+        mid = encode("openai", "u", "file-top-level")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "user-1"
+        file_row.team_id = "team-1"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+        body = [{"input_file_id": mid}, "raw-string"]
+
+        result = await rewrite_body_ids(body, "openai", _user(), None, hook)
+
+        assert result is not body
+        assert result == [{"input_file_id": "file-top-level"}, "raw-string"]
+
+    @pytest.mark.asyncio
+    async def test_scalar_body_passes_through_unchanged(self):
+        """A truthy scalar JSON body (bare string/number/bool) must pass through
+        unchanged instead of raising while walking a non-container body."""
+        hook = _managed_files_hook()
+
+        for body in ("plain-string-body", 42, 3.14, True):
+            result = await rewrite_body_ids(body, "openai", _user(), None, hook)
+            assert result is body
+
+    @pytest.mark.asyncio
+    async def test_top_level_managed_id_string_body_resolved(self):
+        """A bare managed-ID string body is resolved to the raw provider ID,
+        matching how the same string is resolved when nested in a dict."""
+        mid = encode("openai", "u", "file-scalar")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "user-1"
+        file_row.team_id = "team-1"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+
+        result = await rewrite_body_ids(mid, "openai", _user(), None, hook)
+
+        assert result == "file-scalar"
+
+    @pytest.mark.asyncio
     async def test_forged_managed_id_raises_404(self):
         """An unknown managed ID in the body raises 404 (not passed to upstream)."""
         mid = encode("openai", "u", "file-forged")
@@ -1852,6 +1891,32 @@ class TestListPassthroughIdsFromDb:
         assert result is not None
         assert result["data"] == []
         assert result["has_more"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_missing_managed_table_returns_empty_not_error(self):
+        """A generated prisma client whose db has no managed tables must fail
+        closed with an empty list. Opening the table raises AttributeError, and
+        letting it escape turns an empty 200 into a 500 at the passthrough
+        endpoint."""
+
+        class _DbWithoutManagedTables:
+            pass
+
+        pc = MagicMock()
+        pc.db = _DbWithoutManagedTables()
+
+        for route in ("/openai/v1/files", "/openai/v1/batches"):
+            result = await list_passthrough_ids_from_db(
+                provider="openai",
+                route=route,
+                user_api_key_dict=_admin_user(),
+                prisma_client=pc,
+            )
+
+            assert result is not None
+            assert result["object"] == "list"
+            assert result["data"] == []
+            assert result["has_more"] is False
 
     @pytest.mark.asyncio
     async def test_list_returns_empty_for_caller_without_identity(self):

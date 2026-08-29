@@ -4,7 +4,7 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
 from litellm import LlmProviders

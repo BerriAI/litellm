@@ -7,7 +7,7 @@ litellm_content_retrieve tool calls server-side via the typed agentic loop plan.
 
 import time
 import uuid
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.compression import compress
@@ -21,6 +21,9 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopRequestPatch,
 )
 from litellm.types.utils import CallTypes
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 LITELLM_CONTENT_RETRIEVE_TOOL_NAME: Final = "litellm_content_retrieve"
 _CACHE_TTL_SECONDS: Final = 15 * 60
@@ -71,6 +74,8 @@ class CompressionInterceptionLogger(CustomLogger):
     3. Detect retrieval tool_use blocks in first model response.
     4. Build typed rerun plan with tool_result blocks from the compressed cache.
     """
+
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({LITELLM_CONTENT_RETRIEVE_TOOL_NAME})
 
     def __init__(
         self,
@@ -133,7 +138,7 @@ class CompressionInterceptionLogger(CustomLogger):
 
         self._prune_expired_cache()
 
-        compressed: Final = compress(  # type: ignore
+        compressed: Final = compress(
             messages=messages,
             model=model,
             call_type=CallTypes.anthropic_messages,
@@ -220,7 +225,7 @@ class CompressionInterceptionLogger(CustomLogger):
         response: Any,
         anthropic_messages_provider_config: Any,
         anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:

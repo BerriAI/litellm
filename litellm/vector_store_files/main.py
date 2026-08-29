@@ -4,7 +4,7 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Final, Union
+from typing import Any, Final
 
 import httpx
 
@@ -28,7 +28,7 @@ from litellm.vector_store_files.utils import VectorStoreFileRequestUtils
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 
-VectorStoreFileAttributeValue = Union[str, int, float, bool]
+VectorStoreFileAttributeValue = str | int | float | bool
 VectorStoreFileAttributes = dict[str, VectorStoreFileAttributeValue]
 
 
@@ -119,7 +119,7 @@ def create(
 ) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("acreate", False) is True
 
@@ -248,7 +248,7 @@ def list(
 ) -> VectorStoreFileListResponse | Coroutine[Any, Any, VectorStoreFileListResponse]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("alist", False) is True
 
@@ -358,7 +358,7 @@ def retrieve(
 ) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("aretrieve", False) is True
 
@@ -466,7 +466,7 @@ def retrieve_content(
 ) -> VectorStoreFileContentResponse | Coroutine[Any, Any, VectorStoreFileContentResponse]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("aretrieve_content", False) is True
 
@@ -580,7 +580,7 @@ def update(
 ) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("aupdate", False) is True
 
@@ -695,7 +695,7 @@ def delete(
 ) -> VectorStoreFileDeleteResponse | Coroutine[Any, Any, VectorStoreFileDeleteResponse]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("adelete", False) is True
 

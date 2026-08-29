@@ -6,6 +6,7 @@ import httpx
 import litellm
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.types.utils import ModelResponse, TextCompletionResponse
 
@@ -19,7 +20,7 @@ class BaseLLM:
         response: httpx.Response,
         model_response: "ModelResponse",
         stream: bool,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         api_key: str,
         data: dict | str,
@@ -38,7 +39,7 @@ class BaseLLM:
         response: httpx.Response,
         model_response: "TextCompletionResponse",
         stream: bool,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         api_key: str,
         data: dict | str,
@@ -73,7 +74,7 @@ class BaseLLM:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if hasattr(self, "_aclient_session"):
-            await self._aclient_session.aclose()  # type: ignore
+            await self._aclient_session.aclose()
 
     def validate_environment(self, *args, **kwargs) -> Any | None:  # set up the environment required to run the model
         return None

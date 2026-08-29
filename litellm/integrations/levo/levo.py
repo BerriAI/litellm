@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.integrations.opentelemetry import OpenTelemetry
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Protocol = Any
     OpenTelemetryConfig = Any

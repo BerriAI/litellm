@@ -229,6 +229,137 @@ class TestPrometheusQueueTimeMetric:
         ), "Queue time metric should not be recorded for negative values"
 
 
+class TestPrometheusTotalLatencyMetric:
+    """litellm_request_total_latency_metric must be true end-to-end latency: start_time
+    (set after auth already completed, see LIT-6012) plus queue_time_seconds (the
+    auth + pre-call setup window queue_time_seconds itself covers), not start_time alone."""
+
+    @staticmethod
+    def _enum_values() -> UserAPIKeyLabelValues:
+        return UserAPIKeyLabelValues(
+            end_user=None,
+            hashed_api_key="test-key",
+            api_key_alias="test-alias",
+            requested_model="gpt-3.5-turbo",
+            model_group="gpt-3.5-turbo",
+            team=None,
+            team_alias=None,
+            user=None,
+            user_email=None,
+            status_code="200",
+            model="gpt-3.5-turbo",
+            litellm_model_name="gpt-3.5-turbo",
+            tags=[],
+            model_id="gpt-3.5-turbo",
+            api_base="https://api.openai.com",
+            api_provider="openai",
+            exception_status=None,
+            exception_class=None,
+            custom_metadata_labels={},
+            route=None,
+        )
+
+    def test_total_latency_includes_queue_time_when_present(self):
+        """The observed total-latency value must be (end_time - start_time) + queue_time_seconds,
+        so auth/pre-call time (queue_time_seconds) is not silently excluded from "total" latency."""
+        prometheus_logger = PrometheusLogger()
+
+        mock_metric = MagicMock()
+        mock_labeled_metric = MagicMock()
+        mock_metric.labels.return_value = mock_labeled_metric
+        prometheus_logger.litellm_request_total_latency_metric = mock_metric
+
+        start_time = datetime(2024, 1, 1, 0, 0, 0)
+        end_time = datetime(2024, 1, 1, 0, 0, 2)  # 2.0s of LLM-call/post-call time
+        queue_time_seconds = 0.5  # auth + pre-call setup time
+
+        kwargs = {
+            "litellm_params": {"metadata": {"queue_time_seconds": queue_time_seconds}},
+            "model": "gpt-3.5-turbo",
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+
+        prometheus_logger._set_latency_metrics(
+            kwargs=kwargs,
+            model="gpt-3.5-turbo",
+            user_api_key="test-key",
+            user_api_key_alias="test-alias",
+            user_api_team=None,
+            user_api_team_alias=None,
+            enum_values=self._enum_values(),
+        )
+
+        observed_value = mock_labeled_metric.observe.call_args_list[0][0][0]
+        assert observed_value == pytest.approx(2.5)
+
+    def test_total_latency_falls_back_to_start_end_delta_without_queue_time(self):
+        """Without queue_time_seconds (e.g. a non-proxy caller), the metric must still
+        observe the plain end_time - start_time delta rather than erroring or dropping it."""
+        prometheus_logger = PrometheusLogger()
+
+        mock_metric = MagicMock()
+        mock_labeled_metric = MagicMock()
+        mock_metric.labels.return_value = mock_labeled_metric
+        prometheus_logger.litellm_request_total_latency_metric = mock_metric
+
+        start_time = datetime(2024, 1, 1, 0, 0, 0)
+        end_time = datetime(2024, 1, 1, 0, 0, 2)
+
+        kwargs = {
+            "litellm_params": {"metadata": {}},
+            "model": "gpt-3.5-turbo",
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+
+        prometheus_logger._set_latency_metrics(
+            kwargs=kwargs,
+            model="gpt-3.5-turbo",
+            user_api_key="test-key",
+            user_api_key_alias="test-alias",
+            user_api_team=None,
+            user_api_team_alias=None,
+            enum_values=self._enum_values(),
+        )
+
+        observed_value = mock_labeled_metric.observe.call_args_list[0][0][0]
+        assert observed_value == pytest.approx(2.0)
+
+    def test_total_latency_ignores_negative_queue_time(self):
+        """A negative queue_time_seconds (clock skew / bad data) must not be added in --
+        matches the existing >= 0 guard on the standalone queue-time metric."""
+        prometheus_logger = PrometheusLogger()
+
+        mock_metric = MagicMock()
+        mock_labeled_metric = MagicMock()
+        mock_metric.labels.return_value = mock_labeled_metric
+        prometheus_logger.litellm_request_total_latency_metric = mock_metric
+
+        start_time = datetime(2024, 1, 1, 0, 0, 0)
+        end_time = datetime(2024, 1, 1, 0, 0, 2)
+
+        kwargs = {
+            "litellm_params": {"metadata": {"queue_time_seconds": -0.1}},
+            "model": "gpt-3.5-turbo",
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+
+        prometheus_logger._set_latency_metrics(
+            kwargs=kwargs,
+            model="gpt-3.5-turbo",
+            user_api_key="test-key",
+            user_api_key_alias="test-alias",
+            user_api_team=None,
+            user_api_team_alias=None,
+            enum_values=self._enum_values(),
+        )
+
+        observed_value = mock_labeled_metric.observe.call_args_list[0][0][0]
+        assert observed_value == pytest.approx(2.0)
+
+
 class TestPrometheusGuardrailMetrics:
     """Test guardrail metrics recording"""
 

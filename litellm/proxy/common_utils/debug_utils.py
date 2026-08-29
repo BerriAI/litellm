@@ -87,7 +87,7 @@ async def get_active_tasks_stats():
 
 if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
     try:
-        import objgraph  # type: ignore
+        import objgraph
 
         print("growth of objects")  # noqa: T201
         objgraph.show_growth()
@@ -418,7 +418,7 @@ def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, r
             try:
                 if hasattr(redis_usage_cache, "redis_client") and redis_usage_cache.redis_client:
                     if hasattr(redis_usage_cache.redis_client, "connection_pool"):
-                        pool_info: Final = redis_usage_cache.redis_client.connection_pool  # type: ignore
+                        pool_info: Final = redis_usage_cache.redis_client.connection_pool
                         cache_stats["redis_usage_cache"]["connection_pool"] = {
                             "max_connections": (
                                 pool_info.max_connections if hasattr(pool_info, "max_connections") else None
@@ -687,7 +687,7 @@ async def get_otel_spans():
 
     otel_exporter: Final = open_telemetry_logger.OTEL_EXPORTER
     if hasattr(otel_exporter, "get_finished_spans"):
-        recorded_spans = otel_exporter.get_finished_spans()  # type: ignore
+        recorded_spans = otel_exporter.get_finished_spans()
     else:
         recorded_spans = []
 

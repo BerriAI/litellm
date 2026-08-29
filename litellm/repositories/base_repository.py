@@ -4,9 +4,11 @@ Base repository class with common functionality.
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Final, Generic, Protocol, TypeVar, Union, runtime_checkable
+from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
+
+from litellm.repositories.prisma_protocols import TableActions
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -21,12 +23,7 @@ class SupportsDict(Protocol):
     def dict(self) -> dict[str, object]: ...
 
 
-DbRecord = Union[
-    Mapping[str, object],
-    SupportsModelDump,
-    SupportsDict,
-    Sequence[tuple[str, object]],
-]
+DbRecord = Mapping[str, object] | SupportsModelDump | SupportsDict | Sequence[tuple[str, object]]
 
 
 def record_to_dict(record: DbRecord) -> Mapping[str, object]:
@@ -54,7 +51,7 @@ class BaseRepository(ABC, Generic[T]):
 
     @property
     @abstractmethod
-    def table(self) -> Any:  # any-ok: Prisma table actions are reached through the untyped client wrapper
+    def table(self) -> TableActions[DbRecord]:
         """Return the Prisma table for this repository."""
         ...
 
@@ -81,33 +78,28 @@ class BaseRepository(ABC, Generic[T]):
 
     async def find_many(
         self,
-        where: dict[str, Any] | None = None,
+        where: Mapping[str, object] | None = None,
         skip: int | None = None,
         take: int | None = None,
-        order: dict[str, str] | None = None,
+        order: Mapping[str, str] | None = None,
     ) -> list[T]:
         """Find multiple records matching the criteria."""
-        kwargs: Final[dict[str, Any]] = {}
-        if where:
-            kwargs["where"] = where
-        if skip is not None:
-            kwargs["skip"] = skip
-        if take is not None:
-            kwargs["take"] = take
-        if order:
-            kwargs["order"] = order
-
-        records: Final = await self.table.find_many(**kwargs)
+        records: Final = await self.table.find_many(
+            take=take,
+            skip=skip,
+            where=where or None,
+            order=order or None,
+        )
         return self._to_model_list(records)
 
-    async def create(self, data: dict[str, Any]) -> T:
+    async def create(self, data: Mapping[str, object]) -> T:
         """Create a new record."""
         record: Final = await self.table.create(data=data)
         model: Final = self._to_model(record)
         assert model is not None
         return model
 
-    async def update(self, id_value: str, data: dict[str, Any], id_field: str = "id") -> T | None:
+    async def update(self, id_value: str, data: Mapping[str, object], id_field: str = "id") -> T | None:
         """Update an existing record."""
         record: Final = await self.table.update(where={id_field: id_value}, data=data)
         return self._to_model(record)
@@ -117,7 +109,7 @@ class BaseRepository(ABC, Generic[T]):
         record: Final = await self.table.delete(where={id_field: id_value})
         return self._to_model(record)
 
-    async def count(self, where: dict[str, Any] | None = None) -> int:
+    async def count(self, where: Mapping[str, object] | None = None) -> int:
         """Count records matching the criteria."""
         return await self.table.count(where=where)
 

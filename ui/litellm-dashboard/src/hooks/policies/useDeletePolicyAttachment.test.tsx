@@ -3,19 +3,12 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useDeletePolicyAttachment } from "./useDeletePolicyAttachment";
 import { deletePolicyAttachmentCall } from "@/components/networking";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { vi, describe, beforeEach, it, expect } from "vitest";
 
 // Mock dependencies
 vi.mock("@/components/networking", () => ({
   deletePolicyAttachmentCall: vi.fn(),
-}));
-
-vi.mock("@/components/molecules/message_manager", () => ({
-  default: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
 }));
 
 describe("useDeletePolicyAttachment", () => {
@@ -50,7 +43,7 @@ describe("useDeletePolicyAttachment", () => {
     });
 
     expect(deletePolicyAttachmentCall).toHaveBeenCalledWith("test-token", "attachment-1");
-    expect(MessageManager.success).toHaveBeenCalledWith("Attachment deleted successfully");
+    expect(toast.success).toHaveBeenCalledWith("Attachment deleted successfully");
     expect(mockOnSuccess).toHaveBeenCalled();
   });
 
@@ -75,7 +68,7 @@ describe("useDeletePolicyAttachment", () => {
     });
 
     expect(deletePolicyAttachmentCall).toHaveBeenCalledWith("test-token", "attachment-1");
-    expect(MessageManager.error).toHaveBeenCalledWith("Failed to delete attachment");
+    expect(toast.error).toHaveBeenCalledWith("Failed to delete attachment");
     expect(mockOnError).toHaveBeenCalledWith(error);
   });
 });

@@ -436,6 +436,8 @@ def build_tracer_provider(
     # ``config._normalize`` guarantees at least one spec (it folds the top-level
     # ``exporter``/``endpoint``/``headers`` fields in when ``exporters`` is empty).
     for spec in config.exporters:
+        if spec.requires_headers and not spec.headers:
+            continue
         exp = _exporter_from_spec(spec)
         provider.add_span_processor(
             _processor_for(
