@@ -15,6 +15,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import independent_snapshot
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -41,6 +42,7 @@ class PipelineExecutor:
         user_api_key_dict: Any,
         call_type: str,
         policy_name: str,
+        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
     ) -> PipelineExecutionResult:
         """
         Execute pipeline steps sequentially with conditional actions.
@@ -52,6 +54,11 @@ class PipelineExecutor:
             user_api_key_dict: User API key auth
             call_type: Type of call (completion, etc.)
             policy_name: Name of the owning policy (for logging)
+            raw_request_snapshot: pristine pre-pipeline, pre-guardrail request
+                (taken by the caller before any guardrail or pipeline ran), so a
+                step whose guardrail opted into ``scan_raw_request`` evaluates
+                the original request instead of whatever an earlier
+                ``pass_data`` step in this same pipeline already rewrote.
 
         Returns:
             PipelineExecutionResult with terminal action and step results
@@ -75,6 +82,7 @@ class PipelineExecutor:
                 data=working_data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
+                raw_request_snapshot=raw_request_snapshot,
             )
 
             duration = time.perf_counter() - start_time
@@ -143,6 +151,7 @@ class PipelineExecutor:
         data: dict,
         user_api_key_dict: Any,
         call_type: str,
+        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
     ) -> tuple[
         Literal["pass", "fail", "error"],
         dict | None,
@@ -172,20 +181,33 @@ class PipelineExecutor:
                 data["metadata"] = {}
             data["metadata"]["guardrails"] = [step.guardrail]
 
+            # A scan_raw_request step evaluates the pristine pre-pipeline
+            # snapshot instead of `data` (which earlier pass_data steps in
+            # this same pipeline may have already rewritten), same reason
+            # the normal sequential/parallel guardrail loops do this.
+            scans_raw_request: Final = callback.scan_raw_request
+            hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
+                independent_snapshot(raw_request_snapshot)
+                if scans_raw_request and raw_request_snapshot is not None
+                else data
+            )
+            if hook_input is not data:
+                hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
+
             # Use unified_guardrail path if callback implements apply_guardrail
             target: CustomLogger = callback
             use_unified: Final = (
                 "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
             )
             if use_unified:
-                data["guardrail_to_apply"] = callback
+                hook_input["guardrail_to_apply"] = callback
                 target = UnifiedLLMGuardrails()
 
             if mode == "pre_call":
                 response = await target.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
                     cache=None,
-                    data=data,
+                    data=hook_input,
                     call_type=call_type,
                 )
                 if isinstance(callback, CustomGuardrail):
@@ -201,9 +223,13 @@ class PipelineExecutor:
             else:
                 return ("error", None, f"Unsupported pipeline mode: {mode}", None)
 
-            # Normal return means pass
+            # Normal return means pass. A scan_raw_request step is block-only,
+            # same contract as run_in_parallel/scan_raw_request elsewhere: any
+            # data it returned is discarded, since applying it on top of the
+            # raw snapshot would silently undo whatever an earlier step in
+            # this pipeline already did.
             modified_data = None
-            if response is not None and isinstance(response, dict):
+            if response is not None and isinstance(response, dict) and not scans_raw_request:
                 modified_data = response
             return ("pass", modified_data, None, None)
 

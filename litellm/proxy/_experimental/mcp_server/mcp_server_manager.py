@@ -34,6 +34,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, BaseModel
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -72,6 +73,7 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     MCPPerUserTokenCache,
     mcp_per_user_token_cache,
     resolve_mcp_auth,
+    resolved_token_header,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
@@ -99,6 +101,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
     build_token_exchanger,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    DEFAULT_CREDENTIAL_HEADER,
     AuthorizationCodeConfig,
     ClientCredentialsConfig,
     CredError,
@@ -153,6 +156,8 @@ from litellm.types.mcp import (
     MCPAuth,
     MCPStdioConfig,
     MCPTokenEndpointAuthMethod,
+    has_header,
+    without_header,
 )
 from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
@@ -349,6 +354,7 @@ class MCPServerConfig(TypedDict, total=False):
     audience: str
     subject_token_type: str
     upstream_resource: str
+    upstream_token_header: ReadOnly[str]
     id_jag_resource_token_endpoint: str
     id_jag_resource: str
     client_private_key: str
@@ -523,7 +529,7 @@ def _oauth_endpoints_unresolved(server: MCPServer) -> bool:
         # can come from resource discovery, so a server that resolved its endpoints but no scopes is
         # still unresolved for its flow.
         return True
-    if server.is_dcr_bridge and not server.client_id and server.registration_url is None:
+    if server.is_dcr_bridge and not server.client_id and server.effective_registration_url is None:
         # A DCR bridge with no admin-configured client can only register callers through the
         # upstream's registration endpoint, so a build that resolved the authorize and token
         # endpoints but not registration_endpoint (partial metadata) is still unresolved for its
@@ -535,8 +541,8 @@ def _oauth_endpoints_unresolved(server: MCPServer) -> bool:
     return _flow_endpoints_missing(
         server.auth_type,
         MCPServerManager.effective_oauth2_flow(server),
-        server.authorization_url,
-        server.token_url,
+        server.effective_authorization_url,
+        server.effective_token_url,
         server.token_exchange_endpoint,
     )
 
@@ -828,18 +834,6 @@ def _should_strip_caller_authorization(
     )
 
 
-def _without_authorization(
-    headers: dict[str, str] | None,
-) -> dict[str, str] | None:
-    """A copy of ``headers`` with any ``Authorization`` key removed (case-insensitive), or
-    None if nothing remains. Drops only the credential, keeping other forwarded headers.
-    """
-    if not headers:
-        return None
-    filtered: Final = {k: v for k, v in headers.items() if k.lower() != "authorization"}
-    return filtered or None
-
-
 def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
     """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection.
 
@@ -914,7 +908,9 @@ def _resolve_openapi_tool_auth(
 
     if isinstance(per_server, dict):
         authorization: Final = next((v for k, v in per_server.items() if k.lower() == "authorization"), None)
-        merged: Final = merge_mcp_headers(extra_headers=forwarded, static_headers=_without_authorization(per_server))
+        merged: Final = merge_mcp_headers(
+            extra_headers=forwarded, static_headers=without_header(per_server, DEFAULT_CREDENTIAL_HEADER)
+        )
         if authorization is None:
             byok: Final = _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
             return byok, merged, mcp_auth_header
@@ -981,7 +977,7 @@ def _client_forwarded_authorization_headers(
         raw_headers=raw_headers,
         user_api_key_auth=user_api_key_auth,
     ):
-        return _without_authorization(extra_headers)
+        return without_header(extra_headers, DEFAULT_CREDENTIAL_HEADER)
     return extra_headers
 
 
@@ -994,7 +990,7 @@ def _take_forwarded_authorization(
     if not headers:
         return None, headers
     value: Final = next((v for k, v in headers.items() if k.lower() == "authorization"), None)
-    return value, _without_authorization(headers)
+    return value, without_header(headers, DEFAULT_CREDENTIAL_HEADER)
 
 
 def _passthrough_token_from_mcp_auth_header(
@@ -2166,6 +2162,7 @@ class MCPServerManager:
                     DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
                 upstream_resource=server_config.get("upstream_resource", None),
+                upstream_token_header=server_config.get("upstream_token_header", None),
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
@@ -2698,6 +2695,7 @@ class MCPServerManager:
             or (credentials_dict.get("subject_token_type") if credentials_dict else None)
             or DEFAULT_SUBJECT_TOKEN_TYPE,
             upstream_resource=(credentials_dict.get("upstream_resource") if credentials_dict else None),
+            upstream_token_header=(credentials_dict.get("upstream_token_header") if credentials_dict else None),
             # ID-JAG fields — read from credentials JSON blob
             id_jag_resource_token_endpoint=(
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
@@ -3525,10 +3523,9 @@ class MCPServerManager:
             case Ok(auth):
                 # NoOpAuth has no header_name and so never conflicts.
                 header_name: Final[str | None] = getattr(auth, "header_name", None)
-                conflicts: Final = bool(
-                    header_name and extra_headers and any(key.lower() == header_name.lower() for key in extra_headers)
-                )
-                if not conflicts:
+                if header_name is None or not extra_headers:
+                    return auth, extra_headers
+                if not has_header(extra_headers, header_name):
                     return auth, extra_headers
                 if isinstance(
                     spec.config,
@@ -3540,9 +3537,10 @@ class MCPServerManager:
                     # guardrail such as MCPJWTSigner, static_headers, or any other injected
                     # Authorization must NOT shadow it (otherwise the upstream gets e.g. the
                     # signer's JWT instead of the minted token and rejects it, and for M2M the
-                    # one-shot 401 refetch is lost with it). Drop the conflicting header so the
-                    # resolved token reaches upstream.
-                    return auth, _without_authorization(extra_headers)
+                    # one-shot 401 refetch is lost with it). Drop only the header the resolved
+                    # credential is about to occupy, so a static credential the operator aimed at a
+                    # DIFFERENT header still reaches upstream.
+                    return auth, without_header(extra_headers, header_name)
                 # Other modes: an Authorization already supplied via extra_headers (a forwarded caller
                 # header or static_headers) is intentional and wins; v1 applies those last.
                 return None, extra_headers
@@ -3650,6 +3648,7 @@ class MCPServerManager:
         ):
             spec = None
         auth_value: Final = await resolve_mcp_auth(resolved_server, mcp_auth_header) if spec is None else None
+        auth_header_name: Final = resolved_token_header(resolved_server, mcp_auth_header) if spec is None else None
 
         # Create sampling and elicitation callbacks for this client
         sampling_cb = (
@@ -3758,6 +3757,7 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=resolved_server.auth_type,
                 auth_value=auth_value,
+                auth_header_name=auth_header_name,
                 timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
                 extra_headers=extra_headers,
                 aws_auth=aws_auth,
@@ -5256,7 +5256,9 @@ class MCPServerManager:
             proxy_logging_obj: Optional ProxyLogging object for hook integration
             host_progress_callback: Optional callback for progress updates
             hook_extra_headers: Optional headers injected by pre_mcp_call guardrail
-                hooks. Merged last (highest priority) into outbound request headers.
+                hooks. Merged last into outbound request headers, except a hook
+                Authorization header is dropped when an upstream credential already
+                occupies the Authorization slot.
 
         Returns:
             CallToolResult from the MCP server
@@ -5304,7 +5306,7 @@ class MCPServerManager:
                     raw_headers=raw_headers,
                     user_api_key_auth=user_api_key_auth,
                 ):
-                    extra_headers = _without_authorization(extra_headers)
+                    extra_headers = without_header(extra_headers, DEFAULT_CREDENTIAL_HEADER)
         elif mcp_server.is_client_forwarded_token:
             extra_headers = _client_forwarded_authorization_headers(
                 mcp_server=mcp_server,
@@ -5347,27 +5349,26 @@ class MCPServerManager:
         if hook_extra_headers:
             if extra_headers is None:
                 extra_headers = {}
-            if "Authorization" in hook_extra_headers:
-                if "Authorization" in extra_headers:
-                    verbose_logger.warning(
-                        "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
-                        "the existing Authorization header from static_headers. "
-                        "The hook JWT will take precedence."
-                    )
-                elif server_auth_header is not None:
-                    # server_auth_header is passed separately to _create_mcp_client as
-                    # auth_value.  Both will reach the upstream server — warn so admins
-                    # know two Authorization credentials are being sent.
-                    verbose_logger.warning(
-                        "MCPServerManager: hook_extra_headers injects 'Authorization' while "
-                        "server '%s' already has a configured authentication_token. "
-                        "Both credentials will be sent; the hook header is in extra_headers "
-                        "and the server token is in auth_value — the upstream server decides "
-                        "which one wins.  Consider unsetting authentication_token if you want "
-                        "the hook JWT to be the sole credential.",
-                        mcp_server.server_name or mcp_server.name,
-                    )
-            extra_headers.update(hook_extra_headers)
+            hook_has_authorization: Final = any(k.lower() == "authorization" for k in hook_extra_headers)
+            existing_has_authorization: Final = any(k.lower() == "authorization" for k in extra_headers)
+            server_auth_occupies_authorization: Final = (
+                any(k.lower() == "authorization" for k in server_auth_header)
+                if isinstance(server_auth_header, dict)
+                else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+            )
+            if hook_has_authorization and (existing_has_authorization or server_auth_occupies_authorization):
+                # Mirror the tools/list signer guard: an upstream credential (user OAuth,
+                # static header, or configured authentication_token) already occupies the
+                # Authorization slot, so the hook must not replace it.
+                verbose_logger.warning(
+                    "MCPServerManager: dropping hook-injected 'Authorization' header for "
+                    "server '%s' because an upstream credential already occupies the "
+                    "Authorization slot; the existing credential is kept.",
+                    mcp_server.server_name or mcp_server.name,
+                )
+                extra_headers.update({k: v for k, v in hook_extra_headers.items() if k.lower() != "authorization"})
+            else:
+                extra_headers.update(hook_extra_headers)
 
         # Reset to None if no headers were actually added
         if extra_headers is not None and len(extra_headers) == 0:
@@ -6204,14 +6205,6 @@ class MCPServerManager:
                     return None
                 return server
         return None
-
-    async def get_resolved_mcp_server_by_name(
-        self,
-        server_name: str,
-        client_ip: str | None = None,
-    ) -> MCPServer | None:
-        server: Final = self.get_mcp_server_by_name(server_name, client_ip=client_ip)
-        return await self.ensure_oauth_metadata_discovered(server) if server is not None else None
 
     def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
         """

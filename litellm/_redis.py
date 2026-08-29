@@ -12,8 +12,9 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 import redis
 import redis.asyncio as async_redis
@@ -50,6 +51,7 @@ def _get_redis_kwargs():
     include_args: Final = {
         "url",
         "redis_connect_func",
+        "credential_provider",
         "gcp_service_account",
         "gcp_ssl_ca_certs",
         "azure_redis_ad_token",
@@ -155,7 +157,8 @@ def _get_redis_cluster_kwargs(client=None):
 def _get_redis_env_kwarg_mapping():
     PREFIX: Final = "REDIS_"
 
-    return {f"{PREFIX}{x.upper()}": x for x in _get_redis_kwargs()}
+    exclude_from_environment: Final = frozenset({"credential_provider"})
+    return {f"{PREFIX}{x.upper()}": x for x in _get_redis_kwargs() if x not in exclude_from_environment}
 
 
 def _redis_kwargs_from_environment():
@@ -353,6 +356,12 @@ def get_redis_url_from_environment():
     return f"{redis_protocol}://{auth_part}{os.environ['REDIS_HOST']}:{os.environ['REDIS_PORT']}"
 
 
+def _url_without_userinfo(url: str) -> str:
+    parts: Final = urlsplit(url)
+    netloc: Final = parts.netloc.rsplit("@", 1)[-1]
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
 def _get_redis_client_logic(**env_overrides):
     """
     Common functionality across sync + async redis client implementations
@@ -410,60 +419,71 @@ def _get_redis_client_logic(**env_overrides):
     if _service_name is not None:
         redis_kwargs["service_name"] = _service_name
 
-    # Handle GCP IAM authentication
-    _gcp_service_account: Final = redis_kwargs.get("gcp_service_account") or get_secret_str("REDIS_GCP_SERVICE_ACCOUNT")
-    _gcp_ssl_ca_certs: Final = redis_kwargs.get("gcp_ssl_ca_certs") or get_secret_str("REDIS_GCP_SSL_CA_CERTS")
-
-    if _gcp_service_account is not None:
-        verbose_logger.debug("Setting up GCP IAM authentication for Redis with service account.")
-        redis_kwargs["redis_connect_func"] = create_gcp_iam_redis_connect_func(
-            service_account=_gcp_service_account, ssl_ca_certs=_gcp_ssl_ca_certs
+    if redis_kwargs.get("credential_provider") is None:
+        # Handle GCP IAM authentication
+        _gcp_service_account: Final = redis_kwargs.get("gcp_service_account") or get_secret_str(
+            "REDIS_GCP_SERVICE_ACCOUNT"
         )
-        # Store GCP service account in redis_connect_func for async cluster access
-        redis_kwargs["redis_connect_func"]._gcp_service_account = _gcp_service_account
+        _gcp_ssl_ca_certs: Final = redis_kwargs.get("gcp_ssl_ca_certs") or get_secret_str("REDIS_GCP_SSL_CA_CERTS")
 
-        # Remove GCP-specific kwargs that shouldn't be passed to Redis client
-        redis_kwargs.pop("gcp_service_account", None)
-        redis_kwargs.pop("gcp_ssl_ca_certs", None)
+        if _gcp_service_account is not None:
+            verbose_logger.debug("Setting up GCP IAM authentication for Redis with service account.")
+            redis_kwargs["redis_connect_func"] = create_gcp_iam_redis_connect_func(
+                service_account=_gcp_service_account, ssl_ca_certs=_gcp_ssl_ca_certs
+            )
+            # Store GCP service account in redis_connect_func for async cluster access
+            redis_kwargs["redis_connect_func"]._gcp_service_account = _gcp_service_account
 
-        # Only enable SSL if explicitly requested AND SSL CA certs are provided
-        if _gcp_ssl_ca_certs and redis_kwargs.get("ssl", False):
-            redis_kwargs["ssl_ca_certs"] = _gcp_ssl_ca_certs
+            # Only enable SSL if explicitly requested AND SSL CA certs are provided
+            if _gcp_ssl_ca_certs and redis_kwargs.get("ssl", False):
+                redis_kwargs["ssl_ca_certs"] = _gcp_ssl_ca_certs
 
-    # Handle Azure AD authentication (after GCP IAM block)
-    _azure_redis_ad_token: Final = redis_kwargs.get("azure_redis_ad_token") or get_secret("REDIS_AZURE_AD_TOKEN")
+        # Handle Azure AD authentication (after GCP IAM block)
+        _azure_redis_ad_token: Final = redis_kwargs.get("azure_redis_ad_token") or get_secret("REDIS_AZURE_AD_TOKEN")
 
-    _azure_ad_enabled: Final = _azure_redis_ad_token is not None and str(_azure_redis_ad_token).lower() == "true"
+        _azure_ad_enabled: Final = _azure_redis_ad_token is not None and str(_azure_redis_ad_token).lower() == "true"
 
-    if _azure_ad_enabled and _gcp_service_account is not None:
-        verbose_logger.warning(
-            "Both GCP IAM (gcp_service_account) and Azure AD (azure_redis_ad_token) are configured for Redis. "
-            "Using GCP IAM. Remove one to avoid misconfiguration."
-        )
+        if _azure_ad_enabled and _gcp_service_account is not None:
+            verbose_logger.warning(
+                "Both GCP IAM (gcp_service_account) and Azure AD (azure_redis_ad_token) are configured for Redis. "
+                "Using GCP IAM. Remove one to avoid misconfiguration."
+            )
 
-    if _azure_ad_enabled and _gcp_service_account is None:
-        _azure_client_id: Final = redis_kwargs.get("azure_client_id") or get_secret_str("AZURE_CLIENT_ID")
-        _azure_tenant_id: Final = redis_kwargs.get("azure_tenant_id") or get_secret_str("AZURE_TENANT_ID")
-        _azure_client_secret: Final = redis_kwargs.get("azure_client_secret") or get_secret_str("AZURE_CLIENT_SECRET")
+        if _azure_ad_enabled and _gcp_service_account is None:
+            _azure_client_id: Final = redis_kwargs.get("azure_client_id") or get_secret_str("AZURE_CLIENT_ID")
+            _azure_tenant_id: Final = redis_kwargs.get("azure_tenant_id") or get_secret_str("AZURE_TENANT_ID")
+            _azure_client_secret: Final = redis_kwargs.get("azure_client_secret") or get_secret_str(
+                "AZURE_CLIENT_SECRET"
+            )
 
-        verbose_logger.debug("Setting up Azure AD authentication for Redis.")
-        redis_kwargs["redis_connect_func"] = create_azure_ad_redis_connect_func(
-            azure_client_id=_azure_client_id,
-            azure_tenant_id=_azure_tenant_id,
-            azure_client_secret=_azure_client_secret,
-        )
-        # Marker for async paths to detect Azure AD auth. The live credential
-        # object is attached separately as `_azure_credential` by
-        # `create_azure_ad_redis_connect_func`; the raw client_id/tenant_id/secret
-        # are intentionally NOT exposed on the function to avoid leaking
-        # credentials via inspection or logging.
-        redis_kwargs["redis_connect_func"]._azure_redis_ad_token = True
+            verbose_logger.debug("Setting up Azure AD authentication for Redis.")
+            redis_kwargs["redis_connect_func"] = create_azure_ad_redis_connect_func(
+                azure_client_id=_azure_client_id,
+                azure_tenant_id=_azure_tenant_id,
+                azure_client_secret=_azure_client_secret,
+            )
+            # Marker for async paths to detect Azure AD auth. The live credential
+            # object is attached separately as `_azure_credential` by
+            # `create_azure_ad_redis_connect_func`; the raw client_id/tenant_id/secret
+            # are intentionally NOT exposed on the function to avoid leaking
+            # credentials via inspection or logging.
+            redis_kwargs["redis_connect_func"]._azure_redis_ad_token = True
+
+    redis_kwargs.pop("gcp_service_account", None)
+    redis_kwargs.pop("gcp_ssl_ca_certs", None)
 
     # Always remove Azure-specific kwargs that shouldn't be passed to Redis client
     redis_kwargs.pop("azure_redis_ad_token", None)
     redis_kwargs.pop("azure_client_id", None)
     redis_kwargs.pop("azure_tenant_id", None)
     redis_kwargs.pop("azure_client_secret", None)
+
+    if redis_kwargs.get("credential_provider") is not None:
+        redis_kwargs.pop("redis_connect_func", None)
+        redis_kwargs.pop("username", None)
+        redis_kwargs.pop("password", None)
+        if redis_kwargs.get("url") is not None:
+            redis_kwargs["url"] = _url_without_userinfo(redis_kwargs["url"])
 
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         # Only strip host/port/db/password when not routing to a cluster.
@@ -532,8 +552,7 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
     connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
-    sentinel_kwargs: Final = dict(connection_kwargs)
-    sentinel_kwargs["password"] = sentinel_password
+    sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:
         raise ValueError("Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel.")
@@ -605,7 +624,12 @@ def _async_credential_provider(redis_connect_func: object | None) -> CredentialP
 def _async_auth_kwargs(redis_kwargs: dict) -> dict:
     """Swaps a connect func an async path cannot run for the equivalent credential provider,
     which supersedes any static username or password redis-py would otherwise reject it with."""
-    credential_provider: Final = _async_credential_provider(redis_kwargs.get("redis_connect_func"))
+    explicit_provider: Final = redis_kwargs.get("credential_provider")
+    credential_provider: Final = (
+        explicit_provider
+        if explicit_provider is not None
+        else _async_credential_provider(redis_kwargs.get("redis_connect_func"))
+    )
     if credential_provider is None:
         return redis_kwargs
 
@@ -738,8 +762,20 @@ def get_redis_connection_pool(
     return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
 
 
+def _redis_kwargs_for_logging(redis_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        key: "<credential provider>"
+        if key == "credential_provider" and value is not None
+        else "<redis connect function>"
+        if key == "redis_connect_func" and value is not None
+        else value
+        for key, value in redis_kwargs.items()
+    }
+
+
 def _pretty_print_redis_config(redis_kwargs: dict) -> None:
     """Pretty print the Redis configuration using rich with sensitive data masking"""
+    redis_kwargs_for_logging: Final = _redis_kwargs_for_logging(redis_kwargs)
     try:
         import logging
 
@@ -757,7 +793,7 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
         masker = SensitiveDataMasker()
 
         # Mask sensitive data in redis_kwargs
-        masked_redis_kwargs = masker.mask_dict(redis_kwargs)
+        masked_redis_kwargs = masker.mask_dict(redis_kwargs_for_logging)
 
         # Create main panel title
         title: Final = Text("Redis Configuration", style="bold blue")
@@ -820,7 +856,7 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
     except ImportError:
         # Fallback to simple logging if rich is not available
         masker = SensitiveDataMasker()
-        masked_redis_kwargs = masker.mask_dict(redis_kwargs)
+        masked_redis_kwargs = masker.mask_dict(redis_kwargs_for_logging)
         verbose_logger.info("Redis configuration: %s", masked_redis_kwargs)
     except Exception as e:
         verbose_logger.error("Error pretty printing Redis configuration: %s", e)

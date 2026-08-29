@@ -70,9 +70,15 @@ def _vertex_params(model: str, location: str) -> LiteLLMParamsBody:
 
 
 def _cacheable_system_block(marker: str) -> TextBlock:
-    """A system prompt comfortably above the 1024-token minimum cacheable size,
-    unique per run so no other run's cache entry can satisfy the read."""
-    text = " ".join(f"Reference paragraph {index} for run {marker}." for index in range(300))
+    """A system prompt at roughly twice the 4096-token minimum cacheable size of
+    Haiku 4.5 (the smallest model here), unique per run so no other run's cache
+    entry can satisfy the read. The marker appears once instead of in every
+    paragraph: repeating it swung the block's size by ~1800 tokens with the
+    marker's own tokenization and left it under the minimum on ~15% of runs, so
+    the system breakpoint went uncached and the priming loop never saw a read."""
+    text = f"Run {marker}.\n" + " ".join(
+        f"Reference paragraph {index}." for index in range(1500)
+    )
     return TextBlock(text=text, cache_control=CacheControl())
 
 
@@ -110,8 +116,8 @@ def _first_turn_user_text(marker: str) -> str:
     """A first user turn heavy enough (hundreds of tokens) that losing its cache
     entry is unambiguous in the usage numbers, unique per attempt so priming
     retries never depend on the proxy's response cache behavior."""
-    notes = " ".join(f"Session note {index} for attempt {marker}." for index in range(100))
-    return f"Reply with one word.\n{notes}"
+    notes = " ".join(f"Session note {index}." for index in range(100))
+    return f"Reply with one word. Attempt {marker}.\n{notes}"
 
 
 class PrimedCache(BaseModel):

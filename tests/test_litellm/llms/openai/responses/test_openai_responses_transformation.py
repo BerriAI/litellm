@@ -1593,3 +1593,36 @@ class TestPromptCacheOptionsOnResponsesPath:
             "text": "hi",
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
+
+
+class TestResponsesSurfaceSharesTheEffortRule:
+    """The Responses API reaches the same gpt-5 models over a different wire, and the default
+    /v1/messages bridge for openai models routes through it. It carried its own copy of the
+    temperature rule, so fixing chat completions alone left this surface still forwarding
+    temperature to a model that rejects it.
+    """
+
+    @pytest.mark.parametrize(
+        "model, effort, temperature_survives",
+        [
+            ("gpt-5.1", None, True),
+            ("gpt-5.4", None, True),
+            ("gpt-5.5", None, False),
+            ("gpt-5.6-terra", None, False),
+            ("gpt-5.6-sol", None, False),
+            ("gpt-5.6-terra", "none", True),
+            ("gpt-5.6-terra", "medium", False),
+        ],
+    )
+    def test_temperature_follows_the_resolved_effort(
+        self, local_model_cost_map, model, effort, temperature_survives
+    ):
+        params = {"temperature": 0}
+        if effort is not None:
+            params["reasoning"] = {"effort": effort}
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=params,
+            model=model,
+            drop_params=True,
+        )
+        assert ("temperature" in mapped) is temperature_survives

@@ -12,7 +12,8 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EntityLink } from "@/components/shared/EntityLink";
-import { teamDetailHref } from "@/utils/entityLinks";
+import { modelGroupHref, teamDetailHref } from "@/utils/entityLinks";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import KeySavingsTab from "./KeySavingsTab";
 import { useEffect, useState } from "react";
@@ -660,9 +661,9 @@ export default function KeyInfoView({
                 <div className="mt-2 flex flex-wrap gap-2">
                   {currentKeyData.models && currentKeyData.models.length > 0 ? (
                     currentKeyData.models.map((model, index) => (
-                      <Badge key={index} variant="secondary" className="min-w-0 break-words">
+                      <BadgeLink key={index} href={modelGroupHref(model)} className="min-w-0 break-words">
                         {model}
-                      </Badge>
+                      </BadgeLink>
                     ))
                   ) : (
                     <p className="text-sm">No models specified</p>
@@ -996,9 +997,9 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
                         currentKeyData.models.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
+                          <BadgeLink key={index} href={modelGroupHref(model)} className="min-w-0 break-words">
                             {model}
-                          </span>
+                          </BadgeLink>
                         ))
                       ) : (
                         <p className="text-sm">No models specified</p>

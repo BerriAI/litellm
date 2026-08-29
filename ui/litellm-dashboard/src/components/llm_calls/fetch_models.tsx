@@ -7,6 +7,7 @@ export interface ModelGroup {
   model_group: string;
   mode?: string;
   supports_reasoning?: boolean;
+  supported_reasoning_efforts?: string[];
 }
 
 interface AvailableModel {
@@ -15,7 +16,18 @@ interface AvailableModel {
   id?: string | null;
   mode?: string | null;
   supports_reasoning?: boolean | null;
+  supported_reasoning_efforts?: string[] | null;
 }
+
+const toModelGroup = (item: AvailableModel): ModelGroup => {
+  const groupName = (item.model_group || item.id || item.model_name) ?? "";
+  return {
+    model_group: groupName,
+    ...(item.mode && { mode: item.mode }),
+    ...(item.supports_reasoning === true && { supports_reasoning: true }),
+    ...(item.supported_reasoning_efforts && { supported_reasoning_efforts: item.supported_reasoning_efforts }),
+  };
+};
 
 export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
   const response = await modelAvailableCall(accessToken, "", "", false, teamId);
@@ -32,20 +44,12 @@ export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: s
 export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
   try {
     const fetchedModels = await modelHubCall(accessToken);
-
-    if (fetchedModels?.data.length > 0) {
-      const models: ModelGroup[] = fetchedModels.data
-        .map((item: AvailableModel) => ({
-          model_group: item.model_group || item.id || item.model_name || "",
-          mode: item.mode || undefined,
-          supports_reasoning: item.supports_reasoning === true || undefined,
-        }))
-        .filter((model: ModelGroup) => model.model_group !== "");
-
-      models.sort((a, b) => a.model_group.localeCompare(b.model_group));
-      return Array.from(new Map(models.map((model) => [model.model_group, model])).values());
-    }
-    return [];
+    const fetchedData: unknown = fetchedModels?.data;
+    const models: ModelGroup[] = (Array.isArray(fetchedData) ? fetchedData : [])
+      .map(toModelGroup)
+      .filter((model: ModelGroup) => model.model_group !== "")
+      .sort((a: ModelGroup, b: ModelGroup) => a.model_group.localeCompare(b.model_group));
+    return Array.from(new Map(models.map((model) => [model.model_group, model])).values());
   } catch (error) {
     console.error("Error fetching model info:", error);
     throw error;
