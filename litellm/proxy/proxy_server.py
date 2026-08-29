@@ -40,7 +40,7 @@ import anyio
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json, JsonValue
-from typing_extensions import NotRequired, assert_never
+from typing_extensions import NotRequired, ReadOnly, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -115,6 +115,11 @@ from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
+)
+from litellm.router_utils.auto_router_model_naming import (
+    STRATEGY_ROUTER_PARAM_FIELDS,
+    carries_complexity_router_settings,
+    validate_complexity_router_config_placement,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -290,6 +295,7 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
     warn_once_if_custom_auth_skips_common_checks,
 )
+from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
@@ -381,6 +387,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.config_resolvers import resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
     EMAIL_DESCRIPTORS,
+    MS_TEAMS_DESCRIPTORS,
     SLACK_DESCRIPTORS,
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
@@ -425,6 +432,11 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
+from litellm.proxy.list_api.common import (
+    PROBLEM_TYPE_BASE,
+    ManagementProblem,
+    problem_response,
+)
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
@@ -481,12 +493,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.management_v1 import (
     router as management_v1_router,
 )
-from litellm.proxy.management_endpoints.management_v1.common import (
-    MANAGEMENT_V1_PREFIX,
-    PROBLEM_TYPE_BASE,
-    ManagementProblem,
-    problem_response,
-)
+from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     router as model_access_group_management_router,
 )
@@ -593,6 +600,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
 from litellm.proxy.public_endpoints import router as public_endpoints_router
+from litellm.proxy.public_endpoints.public_v1 import router as public_v1_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
@@ -665,7 +673,12 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseUsageBlock,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionSystemMessage,
+    ChatCompletionToolParam,
+    HttpxBinaryResponseContent,
+)
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
@@ -4150,6 +4163,28 @@ def validate_deployment_max_agentic_loops(model: Mapping[str, object]) -> None:
     )
 
 
+def validate_deployment_complexity_router_placement(model: Mapping[str, object]) -> None:
+    """
+    Reject a complexity-router setting written one level above `complexity_router_config`.
+
+    Checked here rather than on `LiteLLM_Params` for the same reason as
+    `max_agentic_loops`: the proxy builds its router with
+    `ignore_invalid_deployments=True`, so a rejection further down turns a bad
+    deployment into a silently missing model instead of a refusal to start.
+    """
+    litellm_params: Final = model.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return
+    present_fields: Final = frozenset(
+        field for field in STRATEGY_ROUTER_PARAM_FIELDS if litellm_params.get(field) is not None
+    )
+    if not carries_complexity_router_settings(str(litellm_params.get("model") or ""), present_fields):
+        return
+    violation: Final = validate_complexity_router_config_placement(litellm_params)
+    if violation is not None:
+        raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
+
+
 def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
     """
     Stamps `model_info.id` from the raw litellm_params before plugin resolution swaps
@@ -5498,6 +5533,7 @@ class ProxyConfig:
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
                 validate_deployment_max_agentic_loops(model)
+                validate_deployment_complexity_router_placement(model)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
@@ -5580,6 +5616,7 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
+            fallback_access_check=router_fallback_access_check,
         )
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
@@ -6039,6 +6076,7 @@ class ProxyConfig:
                         ),
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
+                        fallback_access_check=router_fallback_access_check,
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
             else:
@@ -12094,6 +12132,13 @@ async def _try_provider_token_count(
     return result
 
 
+def _system_message(system: object) -> ChatCompletionSystemMessage | None:
+    if not isinstance(system, (str, list)) or not system:
+        return None
+    message: Final[ChatCompletionSystemMessage] = {"role": "system", "content": system}
+    return message
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -12192,10 +12237,21 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     _tokenizer_used: Final = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
 
     tokenizer_used: Final = str(_tokenizer_used["type"])
+    system_message: Final = _system_message(system)
+    typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
+        Sequence[AllMessageValues] | None, messages
+    )
+    counted_messages: Final = (
+        typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
+    )
+    counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
+        list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
+    )
     total_tokens: Final = await asyncify(litellm.token_counter)(
         model=model_to_use,
         text=prompt,
-        messages=messages,
+        messages=counted_messages,
+        tools=counted_tools,
         custom_tokenizer=_tokenizer_used,
     )
     return TokenCountResponse(
@@ -16300,6 +16356,11 @@ def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
     return [{**entry, "variables": _redact_callback_env_vars(entry.get("variables") or {})} for entry in entries]
 
 
+class _AlertingDestinationEntry(TypedDict):
+    name: ReadOnly[str]
+    variables: ReadOnly[Mapping[str, str | None]]
+
+
 def _apply_alerting_env_role_gate(env_vars: dict, is_full_admin: bool) -> dict:
     if is_full_admin:
         return mask_sensitive_keys(env_vars, _ALERTING_SENSITIVE_VARS)
@@ -16949,6 +17010,17 @@ async def get_config(
             }
         )
 
+        _ms_teams_values, _ = resolve_fields(
+            MS_TEAMS_DESCRIPTORS, environment_variables, os.environ, empty_db_is_set=True
+        )
+        _ms_teams_env_vars: Final = _apply_alerting_env_role_gate(_ms_teams_values, is_full_admin)
+
+        ms_teams_alerting_entry: Final[_AlertingDestinationEntry] = {
+            "name": "ms_teams",
+            "variables": _ms_teams_env_vars,
+        }
+        alerting_data.append(ms_teams_alerting_entry)
+
         if llm_router is None:
             _router_settings = {}
         else:
@@ -16958,6 +17030,7 @@ async def get_config(
             "status": "success",
             "callbacks": _data_to_return,
             "alerts": alerting_data,
+            "active_alerting_destinations": tuple(_alerting),
             "router_settings": _router_settings,
             "available_callbacks": all_available_callbacks,
         }
@@ -17612,6 +17685,7 @@ async def get_routes():
 app.include_router(router)
 app.include_router(response_router)
 app.include_router(public_endpoints_router)
+app.include_router(public_v1_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
 app.include_router(rag_router)
