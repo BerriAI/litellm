@@ -22,6 +22,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
+    _dispatch_passthrough_dynamic_failure,
     _registered_pass_through_routes,
     create_pass_through_route,
     initialize_pass_through_endpoints,
@@ -5490,8 +5491,16 @@ async def test_websocket_passthrough_initializes_team_logging_before_dispatch():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_dispatches_team_failure_callback_once_for_upstream_error():
-    failure_dispatcher = AsyncMock()
+async def test_pass_through_request_dispatches_real_team_failure_callback_once_for_upstream_error():
+    class RecordingFailureCallback(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events = []
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            self.events.append(kwargs)
+
+    callback = RecordingFailureCallback()
     upstream_transport = _FakeUpstreamTransport(
         status_code=403,
         headers={"content-type": "application/json"},
@@ -5508,28 +5517,34 @@ async def test_pass_through_request_dispatches_team_failure_callback_once_for_up
         }
     )
     dependencies = _PassThroughRequestDependencies({})
+    team_key = _team_scoped_langfuse_otel_key(callback_type="failure")
 
     try:
-        response = await pass_through_request(
-            request=request,
-            target="http://upstream.test/v1/chat/completions",
-            custom_headers={},
-            user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
-            forward_headers=True,
-            proxy_config=MagicMock(),
-            dynamic_failure_dispatcher=failure_dispatcher,
-            **dependencies.kwargs(),
-        )
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", {"litellm_key_header_name": "x-custom-litellm-key"}),
+            patch(
+                "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+                return_value=callback,
+            ),
+        ):
+            response = await pass_through_request(
+                request=request,
+                target="http://upstream.test/v1/chat/completions",
+                custom_headers={},
+                user_api_key_dict=team_key,
+                forward_headers=True,
+                proxy_config=MagicMock(),
+                dynamic_failure_dispatcher=_dispatch_passthrough_dynamic_failure,
+                **dependencies.kwargs(),
+            )
 
         assert response.status_code == 403
         assert json.loads(response.body) == {"error": "upstream denied"}
-        dispatched_logging_obj, dispatched_exception, dispatched_traceback = failure_dispatcher.await_args.args
-        assert dispatched_exception.status_code == 403
-        assert isinstance(dispatched_traceback, str)
-        assert dispatched_logging_obj.model_call_details["additional_args"]["headers"] == {
+        assert len(callback.events) == 1
+        assert callback.events[0]["additional_args"]["headers"] == {
             "authorization": "***REDACTED***",
             "x-api-key": "***REDACTED***",
-            "x-custom-litellm-key": "virtual-key-secret",
+            "x-custom-litellm-key": "***REDACTED***",
             "x-request-id": "request-123",
         }
         assert upstream_transport.request is not None
