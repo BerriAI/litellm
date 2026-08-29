@@ -168,17 +168,20 @@ class LangsmithLogger(CustomBatchLogger):
         return outputs
 
     def _ensure_required_ids(self, data: dict, run_id: str | None):
+        resolved_id: Final = run_id or str(uuid.uuid4())
         if "id" not in data or data["id"] is None:
-            run_id = str(uuid.uuid4())
-            data["id"] = run_id
+            data["id"] = resolved_id
 
-        if "trace_id" not in data or data["trace_id"] is None:
-            if run_id is not None and isinstance(run_id, str):
-                data["trace_id"] = run_id
+        # LangSmith rejects the whole ingest batch unless a root run's trace_id
+        # equals the run id embedded in the first segment of dotted_order
+        posts_as_root: Final = ("parent_run_id" not in data or data["parent_run_id"] is None) and (
+            "dotted_order" not in data or data["dotted_order"] is None
+        )
+        if posts_as_root or "trace_id" not in data or data["trace_id"] is None:
+            data["trace_id"] = resolved_id
 
         if "dotted_order" not in data or data["dotted_order"] is None:
-            if run_id is not None and isinstance(run_id, str):
-                data["dotted_order"] = self.make_dot_order(run_id=run_id)
+            data["dotted_order"] = self.make_dot_order(run_id=resolved_id)
 
     def _prepare_log_data(
         self,
@@ -193,6 +196,11 @@ class LangsmithLogger(CustomBatchLogger):
             metadata = _litellm_params.get("metadata", {}) or {}
 
             fields: Final = self._extract_metadata_fields(metadata, credentials)
+            # the proxy header fan-out mirrors one value into both keys, and LangSmith
+            # rejects the whole ingest batch when run-body session_id is not an
+            # existing tracer-session uuid
+            if fields["session_id"] == fields["trace_id"]:
+                fields["session_id"] = None
             verbose_logger.debug(
                 "Langsmith Logging - project_name: %s, run_name %s", fields["project_name"], fields["run_name"]
             )

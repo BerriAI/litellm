@@ -6,6 +6,7 @@ Provider-specific Pass-Through Endpoints
 Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
+import hmac
 import json
 import os
 import re
@@ -25,9 +26,11 @@ from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
+from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _get_bearer_token,
@@ -1055,7 +1058,7 @@ async def bedrock_proxy_route(
     except ImportError:
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-    aws_region_name: Final = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
+    aws_region_name: Final = get_secret_str(secret_name="AWS_REGION_NAME")
     if not _is_bedrock_agent_runtime_route(endpoint=endpoint):
         return await bedrock_llm_proxy_route(
             endpoint=endpoint,
@@ -1070,7 +1073,7 @@ async def bedrock_proxy_route(
             detail="bedrock-agent-runtime pass-through is disabled on this proxy.",
         )
 
-    base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+    base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -1203,7 +1206,7 @@ async def comprehend_medical_proxy_route(
             "X-Amz-Target": f"{COMPREHEND_MEDICAL_TARGET_PREFIX}.{operation}",
         }
     )
-    target_url: Final = f"https://comprehendmedical.{aws_region_name}.amazonaws.com/"
+    target_url: Final = f"https://comprehendmedical.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
     _request: Final = AWSRequest(method="POST", url=target_url, data=json.dumps(data), headers=headers)
     sigv4.add_auth(_request)
     prepped: Final = _request.prepare()
@@ -1791,29 +1794,11 @@ _HEADERS_NEVER_FORWARDED_TO_VERTEX: Final = frozenset({"content-length", "host"}
 )
 
 
-_VERTEX_CALLER_KEY_HEADER_PRECEDENCE: Final = (
-    SpecialHeaders.custom_litellm_api_key.value.lower(),
-    SpecialHeaders.openai_authorization.value.lower(),
-    SpecialHeaders.azure_authorization.value.lower(),
-    SpecialHeaders.anthropic_authorization.value.lower(),
-    SpecialHeaders.google_ai_studio_authorization.value.lower(),
-    SpecialHeaders.azure_apim_authorization.value.lower(),
-)
-
 _MAPPED_ROUTE_CALLER_KEY_HEADER: Final = "litellm_user_api_key"
 
 
-def _operator_configured_caller_key_header_names() -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Operator-configured caller-key header names, as (override, pass_through).
-
-    ``user_api_key_auth`` accepts the caller's key from two runtime-configured
-    header sources beyond the built-in ones, at opposite ends of its precedence.
-    ``general_settings.litellm_key_header_name`` overrides every built-in source
-    (it replaces the resolved key after ``get_api_key`` runs), so it is highest
-    precedence. Each ``general_settings.pass_through_endpoints`` entry's
-    ``headers.litellm_user_api_key`` is checked last inside ``get_api_key``, so it
-    is lowest. Google never consumes either, so both are also dropped by name.
-    """
+def _operator_configured_caller_key_header_names() -> tuple[str, ...]:
+    """Operator-configured header names ``user_api_key_auth`` reads the caller's key from."""
     from litellm.proxy.proxy_server import general_settings
 
     custom_key_header: Final = general_settings.get("litellm_key_header_name")
@@ -1829,80 +1814,53 @@ def _operator_configured_caller_key_header_names() -> tuple[tuple[str, ...], tup
             if isinstance(headers, dict) and isinstance(headers.get("litellm_user_api_key"), str)
         )
     )
-    return override, pass_through
+    return override + pass_through
 
 
-def _authenticated_caller_key_values(request: Request) -> frozenset[str]:
-    """The value ``user_api_key_auth`` would accept as this caller's LiteLLM key.
-
-    The Vertex route authenticates through ``Depends(user_api_key_auth)``, which
-    resolves the key by precedence, matched here exactly. The ``/vertex_ai`` route
-    is a mapped pass-through route, so a header literally named
-    ``litellm_user_api_key`` overrides every other source (``user_api_key_auth``
-    applies it last), making it highest precedence. Then an operator
-    ``litellm_key_header_name``, then the built-in headers in ``get_api_key`` order,
-    then a ``pass_through_endpoints`` ``litellm_user_api_key`` header which
-    ``get_api_key`` checks last. Some of those headers (``Authorization``,
-    ``x-goog-api-key``) are also kept as genuine bring-your-own Google credentials,
-    so returning only the value that actually authenticated lets the filter strip
-    that value wherever it appears while leaving a real Google credential in place.
-    An empty set means no caller key was found, so nothing is value-stripped.
-    """
-    incoming: Final = _safe_get_request_headers(request)
-    override_headers, pass_through_headers = _operator_configured_caller_key_header_names()
-    ordered_names: Final = (
-        (_MAPPED_ROUTE_CALLER_KEY_HEADER,)
-        + override_headers
-        + _VERTEX_CALLER_KEY_HEADER_PRECEDENCE
-        + pass_through_headers
+def _is_authenticated_caller_jwt(value: str, jwt_claims: Mapping[str, object]) -> bool:
+    """Whether a header value is the JWT whose claims ``user_api_key_auth`` stored as ``jwt_claims``."""
+    presented_claims: Final = JWTHandler.get_unverified_claims(value)
+    if presented_claims is None:
+        return False
+    return all(
+        presented_claims.get(name) == claim
+        for name, claim in jwt_claims.items()
+        if name not in JWTHandler.LITELLM_INTERNAL_CLAIMS
     )
-    present_values: Final = (incoming[name] for name in ordered_names if incoming.get(name))
-    authenticated_key: Final = next(
-        (stripped for value in present_values if (stripped := _normalize_credential_value(value))),
-        "",
-    )
-    return frozenset({authenticated_key}) if authenticated_key else frozenset()
 
 
-def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -> Mapping[str, str]:
-    """
-    Header set to forward on the bring-your-own-credentials Vertex passthrough
-    branch, used when the proxy has no Vertex credential configured.
+def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``."""
+    from litellm.proxy.proxy_server import master_key
 
-    No credential the proxy accepts for caller authentication is forwarded to
-    Google. ``user_api_key_auth`` reads the caller's key from every header in
-    ``SpecialHeaders.litellm_credential_header_names()``, and Vertex only ever
-    authenticates with an OAuth token in ``Authorization`` or an API key in
-    ``x-goog-api-key``. So the proxy-only auth headers Google never consumes
-    (everything in that set except those two, e.g. ``x-litellm-api-key`` /
-    ``api-key`` / ``x-api-key`` / ``Ocp-Apim-Subscription-Key``, plus the mapped
-    pass-through ``litellm_user_api_key`` header and any operator-configured
-    ``litellm_key_header_name`` / ``pass_through_endpoints`` key header) are dropped
-    by name. ``Authorization`` and ``x-goog-api-key`` may
-    instead carry a genuine bring-your-own Google credential, so they are kept
-    unless their value is the caller's authenticated LiteLLM key, which is dropped
-    by value (normalizing any ``Bearer`` / ``Basic`` / ``AWS4`` auth-scheme prefix
-    the same way authentication does). Because the value that authenticated is
-    resolved by the same precedence ``user_api_key_auth`` uses, a virtual key sent
-    only in ``x-goog-api-key`` (or in an operator-configured key header) is dropped
-    too, while a real Google key in ``x-goog-api-key`` alongside a virtual key in a
-    higher-precedence header is preserved. When neither a surviving
-    ``Authorization`` nor ``x-goog-api-key`` remains the request is rejected so the
-    virtual key cannot leak upstream.
-    """
+    normalized: Final = _normalize_credential_value(value)
+    if master_key is not None and hmac.compare_digest(normalized.encode(), master_key.encode()):
+        return True
+    jwt_claims: Final = user_api_key_dict.jwt_claims
+    if jwt_claims and _is_authenticated_caller_jwt(normalized, jwt_claims):
+        return True
+    authenticated_key: Final = user_api_key_dict.api_key
+    if authenticated_key is None:
+        return False
+    if master_key is None and not normalized.startswith("sk-"):
+        return False
+    stored_representation: Final = UserAPIKeyAuth._safe_hash_litellm_api_key(normalized)  # pyright: ignore[reportPrivateUsage]  # the exact transform auth applied when it stored api_key
+    return hmac.compare_digest(stored_representation.encode(), authenticated_key.encode())
+
+
+def _forwarded_headers_for_credentialless_vertex_passthrough(
+    request: Request, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, str]:
+    """Caller headers to forward on the bring-your-own-credentials Vertex branch, minus LiteLLM secrets."""
     incoming: Final = _safe_get_request_headers(request)
-    caller_key_values: Final = _authenticated_caller_key_values(request)
-    override_headers, pass_through_headers = _operator_configured_caller_key_header_names()
-    never_forwarded: Final = (
-        _HEADERS_NEVER_FORWARDED_TO_VERTEX.union((_MAPPED_ROUTE_CALLER_KEY_HEADER,))
-        .union(override_headers)
-        .union(pass_through_headers)
+    never_forwarded: Final = _HEADERS_NEVER_FORWARDED_TO_VERTEX.union(
+        (_MAPPED_ROUTE_CALLER_KEY_HEADER, *_operator_configured_caller_key_header_names())
     )
     forwarded: Final = MappingProxyType(
         {
             name: value
             for name, value in incoming.items()
-            if name not in never_forwarded and _normalize_credential_value(value) not in caller_key_values
+            if name not in never_forwarded and not _is_authenticated_caller_secret(value, user_api_key_dict)
         }
     )
     if "authorization" not in forwarded and "x-goog-api-key" not in forwarded:
@@ -1918,6 +1876,7 @@ async def _prepare_vertex_auth_headers(
     vertex_location: str | None,
     base_target_url: str | None,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> tuple[Mapping[str, str], str | None, bool, str | None, str | None]:
     """
     Prepare authentication headers for Vertex AI pass-through requests.
@@ -1930,6 +1889,8 @@ async def _prepare_vertex_auth_headers(
         vertex_location: Vertex location
         base_target_url: Base URL for the Vertex AI service
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
+        user_api_key_dict: The caller's resolved authentication, so only the secret that
+            authenticated them is stripped on the credential-less branch
 
     Returns:
         Tuple containing:
@@ -1944,7 +1905,7 @@ async def _prepare_vertex_auth_headers(
 
     # Use headers from the incoming request if no vertex credentials are found
     if (vertex_credentials is None or vertex_credentials.vertex_project is None) and router_credentials is None:
-        headers = _forwarded_headers_for_credentialless_vertex_passthrough(request)
+        headers = _forwarded_headers_for_credentialless_vertex_passthrough(request, user_api_key_dict)
         headers_passed_through = True
         verbose_proxy_logger.debug(
             "default_vertex_config not set, forwarding caller-provided headers %s", tuple(headers.keys())
@@ -2104,6 +2065,7 @@ async def _base_vertex_proxy_route(
         vertex_location=vertex_location,
         base_target_url=base_target_url,
         get_vertex_pass_through_handler=get_vertex_pass_through_handler,
+        user_api_key_dict=user_api_key_dict,
     )
 
     if base_target_url is None:
