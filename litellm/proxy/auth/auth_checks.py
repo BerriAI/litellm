@@ -30,7 +30,6 @@ from litellm.constants import (
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
-    DEFAULT_MODEL_ACCESS_GROUP_CACHE_TTL,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
     MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
@@ -1951,7 +1950,7 @@ async def _fetch_uncached_model_access_group_budgets(
                 key=model_access_group_cache_key(fetched_name),
                 value=fetched_obj,
                 model_type=ModelAccessGroupBudget,
-                ttl=DEFAULT_MODEL_ACCESS_GROUP_CACHE_TTL,
+                ttl=get_management_object_ttl(user_api_key_cache),
             )
     except Exception as e:  # noqa: BLE001  # fail-safe: a budget fetch error must yield "no budget rows", never break auth
         verbose_proxy_logger.debug("Error batch fetching model access group budgets from database: %s", e)

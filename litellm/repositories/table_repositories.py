@@ -100,9 +100,7 @@ class TagRepository(PrismaTableRepository["prisma_models.LiteLLM_TagTable"]):
     table_name = "litellm_tagtable"
 
 
-class ModelAccessGroupBudgetRepository(
-    PrismaTableRepository["prisma_models.LiteLLM_ModelAccessGroupBudgetTable"]
-):
+class ModelAccessGroupBudgetRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelAccessGroupBudgetTable"]):
     table_name = "litellm_modelaccessgroupbudgettable"
 
 
