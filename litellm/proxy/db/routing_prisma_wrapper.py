@@ -62,18 +62,23 @@ class _RoutedActions:
 
 
 class WriterPinnedClient:
-    """PrismaClient-shaped view whose `.db` always resolves to the writer.
+    """PrismaClient-shaped view whose `.db` resolves to the writer while it is available.
 
     Read-after-write paths (e.g. the model reconcile a /model/new triggers to
     verify its own just-committed row) must not read through a lagging read
     replica: the row is not replayed there yet, so the reconcile concludes the
     write is missing and fails the request even though it is durable (#38556).
+
+    While the writer is degraded (`writer_unavailable`), the pin yields to the
+    routed wrapper so reconcile reads keep working from the replica: a proxy
+    that starts during a primary outage must still load DB-backed models, and
+    no read-after-write hazard exists then because writes are failing anyway.
     """
 
     __slots__ = ("db",)
 
     def __init__(self, db: "PrismaWrapper | RoutingPrismaWrapper") -> None:
-        self.db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) else db
+        self.db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) and not db.writer_unavailable else db
 
 
 class RoutingPrismaWrapper:
