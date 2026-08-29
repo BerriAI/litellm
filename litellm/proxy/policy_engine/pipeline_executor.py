@@ -6,7 +6,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
 import time
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -24,6 +24,11 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
     PipelineStep,
     PipelineStepResult,
 )
+
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.guardrail_translation.base_translation import (
+        BaseTranslation,
+    )
 
 try:
     from fastapi.exceptions import HTTPException
@@ -43,6 +48,8 @@ class PipelineExecutor:
         call_type: str,
         policy_name: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        streaming_chunks: list[Any] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
+        endpoint_translation: "BaseTranslation | None" = None,
     ) -> PipelineExecutionResult:
         """
         Execute pipeline steps sequentially with conditional actions.
@@ -59,6 +66,12 @@ class PipelineExecutor:
                 step whose guardrail opted into ``scan_raw_request`` evaluates
                 the original request instead of whatever an earlier
                 ``pass_data`` step in this same pipeline already rewrote.
+            streaming_chunks: buffered chunks of a completed stream. When set
+                (with ``endpoint_translation``), post_call steps scan the
+                assembled streamed output through the endpoint translation
+                instead of calling ``async_post_call_success_hook``.
+            endpoint_translation: the guardrail translation for the streamed
+                endpoint, resolved by the caller.
 
         Returns:
             PipelineExecutionResult with terminal action and step results
@@ -83,6 +96,8 @@ class PipelineExecutor:
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 raw_request_snapshot=raw_request_snapshot,
+                streaming_chunks=streaming_chunks,
+                endpoint_translation=endpoint_translation,
             )
 
             duration = time.perf_counter() - start_time
@@ -154,6 +169,8 @@ class PipelineExecutor:
         user_api_key_dict: Any,
         call_type: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        streaming_chunks: list[Any] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
+        endpoint_translation: "BaseTranslation | None" = None,
     ) -> tuple[
         Literal["pass", "fail", "error"],
         dict | None,
@@ -198,10 +215,8 @@ class PipelineExecutor:
 
             # Use unified_guardrail path if callback implements apply_guardrail
             target: CustomLogger = callback
-            use_unified: Final = (
-                "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
-            )
-            if use_unified:
+            use_unified: Final = PipelineExecutor.supports_unified_execution(callback)
+            if use_unified and streaming_chunks is None:
                 hook_input["guardrail_to_apply"] = callback
                 target = UnifiedLLMGuardrails()
 
@@ -216,6 +231,22 @@ class PipelineExecutor:
                     callback.mark_pre_call_hook_ran(data)
                     if isinstance(response, dict):
                         callback.mark_pre_call_hook_ran(response)
+            elif mode == "post_call" and streaming_chunks is not None:
+                if not use_unified or endpoint_translation is None:
+                    return (
+                        "error",
+                        None,
+                        f"Guardrail '{step.guardrail}' does not support streaming pipeline execution",
+                        None,
+                    )
+                await endpoint_translation.process_output_streaming_response(
+                    responses_so_far=streaming_chunks,
+                    guardrail_to_apply=callback,
+                    litellm_logging_obj=data.get("litellm_logging_obj"),
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=hook_input,
+                )
+                response = None
             elif mode == "post_call":
                 response = await target.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -245,6 +276,12 @@ class PipelineExecutor:
             else:
                 verbose_proxy_logger.error("Pipeline: unexpected error from guardrail '%s': %s", step.guardrail, e)
                 return ("error", None, str(e), e)
+
+    @staticmethod
+    def supports_unified_execution(callback: CustomGuardrail) -> bool:
+        """Whether this guardrail runs through the unified apply_guardrail path,
+        the interface streaming pipeline execution requires."""
+        return "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
 
     @staticmethod
     def find_guardrail_callback(guardrail_name: str) -> CustomGuardrail | None:
