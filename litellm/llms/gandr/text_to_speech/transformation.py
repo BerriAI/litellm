@@ -33,7 +33,7 @@ else:
     HttpxBinaryResponseContent: TypeAlias = Any
 
 
-def _resolve_voice(voice: Any) -> str | None:
+def _resolve_voice(voice: object) -> str | None:
     """Return a voice id from a plain string or a voice-object mapping."""
     if isinstance(voice, str) and voice.strip():
         return voice
@@ -45,7 +45,7 @@ def _resolve_voice(voice: Any) -> str | None:
     return None
 
 
-def _as_voice_str(value: Any) -> str | None:
+def _as_voice_str(value: object) -> str | None:
     """Return the value if it is a non-empty string, else None."""
     if isinstance(value, str) and value.strip():
         return value
