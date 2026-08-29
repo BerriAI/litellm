@@ -169,17 +169,23 @@ def _drop_reflected_assertion(rendered: str, assertion: SecretStr | None) -> str
 def _shares_a_credential_run(rendered: str, compacted_secret: str) -> bool:
     """``unquote`` covers a credential sent form-encoded, without every caller enumerating that
     shape for itself: percent-escaping is reversible and applies to any field, query string
-    included."""
+    included.
+
+    A secret shorter than the probe run is compared whole: a window longer than the secret can
+    never be found inside it, which would leave a short client secret unprotected in every shape
+    but the verbatim one.
+    """
     # unquote covers %XX; unquote_plus additionally covers the "+" a form-encoded body uses for a
     # space. Both are kept rather than only the wider one, because "+" is a base64 character and
     # decoding it away would lose a run that the undecoded candidate still matches on.
+    run: Final = min(_REFLECTION_MIN_RUN, len(compacted_secret))
     compacted_candidates: Final = tuple(
         _CREDENTIAL_CHARS.sub("", candidate) for candidate in (rendered, unquote(rendered), unquote_plus(rendered))
     )
     return any(
-        compacted[start : start + _REFLECTION_MIN_RUN] in compacted_secret
+        compacted[start : start + run] in compacted_secret
         for compacted in compacted_candidates
-        for start in range(len(compacted) - _REFLECTION_MIN_RUN + 1)
+        for start in range(len(compacted) - run + 1)
     )
 
 

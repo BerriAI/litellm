@@ -703,6 +703,19 @@ class TestRedactionAndCaps:
 
         assert "short-secret" not in result.redacted_body
 
+    def test_a_short_secret_echoed_in_its_wire_shape_is_dropped(self):
+        """Regression: the run scan only ever compared eight-character windows, so a secret
+        with fewer credential characters than that could never match once it came back
+        percent-encoded rather than verbatim, and the whole-value check needs the raw form."""
+        secret = SecretStr("p@ss w0rd!")
+        echoed = quote(secret.get_secret_value(), safe="")
+        body = {"error": "invalid_client", "error_description": f"rejected {echoed}"}
+
+        assert secret.get_secret_value() not in echoed
+        result = redact_oauth_error_body(400, json.dumps(body), secret)
+
+        assert echoed not in result.redacted_body
+
     def test_an_unrelated_body_is_not_falsely_redacted(self):
         """The scan must not fire on a body that merely shares short runs with the assertion."""
         assertion = SecretStr("eyJhbGciOiJSUzI1NiJ9." + "Z" * 60 + ".signature")
