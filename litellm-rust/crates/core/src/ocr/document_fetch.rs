@@ -1,101 +1,27 @@
 use std::net::IpAddr;
-use std::time::{Duration, Instant};
 
-use crate::CoreResult;
-use crate::error::CoreError;
-use crate::ocr::transformation::OcrProviderConfig;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use reqwest::Url;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::providers::azure_ai::ocr::transformation::{
-    AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
-};
-use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
-use crate::providers::vertex_ai::ocr::transformation as vertex_ai;
-use crate::providers::vertex_ai::ocr::transformation::{
-    VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
-};
+use crate::CoreResult;
+use crate::error::CoreError;
+use crate::http_utils::truncate_error_body;
 
-use super::client::http_client;
-
-const ERROR_BODY_MAX_CHARS: usize = 256;
-const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
 const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
 
-pub(super) fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= ERROR_BODY_MAX_CHARS {
-        return body.to_string();
-    }
-    let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
-    format!("{truncated}... (truncated)")
-}
-
-pub(super) fn ocr_provider_config(
-    provider: &str,
-    model: &str,
-) -> Option<&'static dyn OcrProviderConfig> {
-    match provider {
-        "mistral" => Some(&MISTRAL_OCR_CONFIG),
-        "azure_ai" if is_azure_document_intelligence_model(model) => {
-            Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
-        }
-        "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
-        "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
-        "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),
-        _ => None,
-    }
-}
-
-fn is_azure_document_intelligence_model(model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    model.contains("doc-intelligence") || model.contains("documentintelligence")
-}
-
-pub(super) fn string_headers(
-    extra_headers: Option<Map<String, Value>>,
-) -> CoreResult<Vec<(String, String)>> {
-    extra_headers
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(key, value)| {
-            value
-                .as_str()
-                .map(|value| (key.clone(), value.to_string()))
-                .ok_or_else(|| {
-                    CoreError::InvalidRequest(format!(
-                        "OCR extra_headers.{key} must be a string, got {}",
-                        crate::error::json_type_name(&value)
-                    ))
-                })
-        })
-        .collect()
-}
-
-pub(super) fn has_header(headers: &[(String, String)], name: &str) -> bool {
-    headers
-        .iter()
-        .any(|(key, _)| key.eq_ignore_ascii_case(name))
-}
-
-fn document_url_field(document: &Value) -> CoreResult<Option<(&str, &str)>> {
-    let Some(object) = document.as_object() else {
-        return Ok(None);
-    };
-    let Some(doc_type) = object.get("type").and_then(Value::as_str) else {
-        return Ok(None);
-    };
+fn document_url_field(document: &Value) -> Option<(&str, &str)> {
+    let object = document.as_object()?;
+    let doc_type = object.get("type").and_then(Value::as_str)?;
     let field = match doc_type {
         "document_url" => "document_url",
         "image_url" => "image_url",
-        _ => return Ok(None),
+        _ => return None,
     };
-    let Some(url) = object.get(field).and_then(Value::as_str) else {
-        return Ok(None);
-    };
-    Ok(Some((field, url)))
+    let url = object.get(field).and_then(Value::as_str)?;
+    Some((field, url))
 }
 
 fn is_url_requiring_fetch(url: &str) -> bool {
@@ -256,7 +182,7 @@ async fn read_response_with_limit(
 }
 
 pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreResult<Value> {
-    let Some((field, url)) = document_url_field(&document)? else {
+    let Some((field, url)) = document_url_field(&document) else {
         return Ok(document);
     };
     if !is_url_requiring_fetch(url) {
@@ -293,107 +219,6 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
         .ok_or_else(|| CoreError::InvalidRequest("OCR document must be an object".to_string()))?;
     transformed.insert(field.to_string(), Value::String(data_uri));
     Ok(Value::Object(transformed))
-}
-
-fn same_origin(left: &str, right: &str) -> bool {
-    let Ok(left) = reqwest::Url::parse(left) else {
-        return false;
-    };
-    let Ok(right) = reqwest::Url::parse(right) else {
-        return false;
-    };
-    left.scheme() == right.scheme()
-        && left.host_str() == right.host_str()
-        && left.port_or_known_default() == right.port_or_known_default()
-}
-
-fn retry_after_secs(response: &reqwest::Response) -> u64 {
-    response
-        .headers()
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(2)
-}
-
-fn operation_status(response_json: &Value) -> CoreResult<&str> {
-    let status = response_json
-        .get("status")
-        .and_then(Value::as_str)
-        .ok_or(CoreError::MissingField("status"))?;
-    match status {
-        "succeeded" => Ok("succeeded"),
-        "running" | "notStarted" => Ok("running"),
-        "failed" => {
-            let message = response_json
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("Unknown error");
-            Err(CoreError::InvalidResponse(format!(
-                "Azure Document Intelligence analysis failed: {message}"
-            )))
-        }
-        other => Err(CoreError::InvalidResponse(format!(
-            "Unknown operation status: {other}"
-        ))),
-    }
-}
-
-pub(super) async fn poll_document_intelligence(
-    operation_url: &str,
-    original_url: &str,
-    headers: &[(String, String)],
-    timeout: Option<Duration>,
-) -> CoreResult<Value> {
-    if !same_origin(operation_url, original_url) {
-        return Err(CoreError::InvalidResponse(
-            "Azure Document Intelligence: rejected cross-origin polling URL".to_string(),
-        ));
-    }
-
-    let start = Instant::now();
-    let timeout = timeout.unwrap_or(Duration::from_secs(
-        AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS,
-    ));
-    loop {
-        if start.elapsed() > timeout {
-            return Err(CoreError::Network(format!(
-                "Azure Document Intelligence operation polling timed out after {} seconds",
-                timeout.as_secs()
-            )));
-        }
-
-        let mut request_builder = http_client().get(operation_url);
-        for (key, value) in headers {
-            if key.eq_ignore_ascii_case("ocp-apim-subscription-key") {
-                request_builder = request_builder.header(key, value);
-            }
-        }
-        let response = request_builder
-            .send()
-            .await
-            .map_err(|err| CoreError::Network(err.to_string()))?;
-        let retry_after = retry_after_secs(&response);
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|err| CoreError::Network(err.to_string()))?;
-        if !status.is_success() {
-            return Err(CoreError::Http {
-                status: status.as_u16(),
-                body: truncate_error_body(&text),
-            });
-        }
-        let response_json: Value = serde_json::from_str(&text).map_err(|err| {
-            CoreError::InvalidResponse(format!("invalid Azure DI poll response JSON: {err}"))
-        })?;
-        if operation_status(&response_json)? == "succeeded" {
-            return Ok(response_json);
-        }
-        tokio::time::sleep(Duration::from_secs(retry_after)).await;
-    }
 }
 
 #[cfg(test)]

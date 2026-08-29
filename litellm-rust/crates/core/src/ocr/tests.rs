@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use super::common_utils::{has_header, ocr_provider_config, string_headers, truncate_error_body};
+use super::provider_config::ocr_provider_config;
 use super::{OcrRequest, ocr};
 use crate::callbacks::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
@@ -199,33 +199,6 @@ impl CustomGuardrail for RecordingOcrGuardrail {
 }
 
 #[test]
-fn truncate_error_body_passes_short_strings_through() {
-    let body = "Unauthorized";
-    assert_eq!(truncate_error_body(body), "Unauthorized");
-}
-
-#[test]
-fn truncate_error_body_caps_long_payloads() {
-    let body = "x".repeat(306);
-    let truncated = truncate_error_body(&body);
-
-    assert!(truncated.ends_with("... (truncated)"));
-    let prefix_chars = truncated
-        .strip_suffix("... (truncated)")
-        .expect("truncated marker present")
-        .chars()
-        .count();
-    assert_eq!(prefix_chars, 256);
-}
-
-#[test]
-fn truncate_error_body_does_not_split_multibyte_chars() {
-    let body = "é".repeat(266);
-    let truncated = truncate_error_body(&body);
-    assert!(truncated.is_char_boundary(truncated.len()));
-}
-
-#[test]
 fn ocr_dispatch_supports_migrated_providers() {
     assert!(ocr_provider_config("mistral", "mistral-ocr-latest").is_some());
     assert!(
@@ -246,37 +219,6 @@ fn ocr_dispatch_supports_migrated_providers() {
             .contains(&"temperature")
     );
     assert!(ocr_provider_config("openai", "gpt-4o").is_none());
-}
-
-#[test]
-fn string_headers_accepts_string_values() {
-    let headers = json!({
-        "x-trace-id": "trace-1"
-    })
-    .as_object()
-    .unwrap()
-    .clone();
-
-    assert_eq!(
-        string_headers(Some(headers)).expect("string headers accepted"),
-        vec![("x-trace-id".to_string(), "trace-1".to_string())]
-    );
-}
-
-#[test]
-fn auth_header_detection_is_case_insensitive() {
-    let headers = vec![
-        ("x-trace-id".to_string(), "trace-1".to_string()),
-        ("authorization".to_string(), "Bearer sk-test".to_string()),
-    ];
-
-    assert!(has_header(&headers, "authorization"));
-
-    let headers = vec![("Authorization".to_string(), "Bearer sk-test".to_string())];
-    assert!(has_header(&headers, "authorization"));
-
-    let headers = vec![("x-trace-id".to_string(), "trace-1".to_string())];
-    assert!(!has_header(&headers, "authorization"));
 }
 
 #[tokio::test]
@@ -592,23 +534,5 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
             .to_ascii_lowercase()
             .contains("ocp-apim-subscription-key: di-key"),
         "{poll_request}"
-    );
-}
-
-#[test]
-fn string_headers_rejects_non_string_values() {
-    let headers = json!({
-        "x-retry-count": 3
-    })
-    .as_object()
-    .unwrap()
-    .clone();
-
-    let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-    assert_eq!(
-        err,
-        CoreError::InvalidRequest(
-            "OCR extra_headers.x-retry-count must be a string, got number".to_string()
-        )
     );
 }

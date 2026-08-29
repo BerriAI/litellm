@@ -4,12 +4,12 @@ use std::pin::Pin;
 use crate::CoreResult;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use crate::error::CoreError;
+use crate::http_utils::{has_header, string_headers};
 use crate::ocr::transformation::OcrAuthStrategy;
 use serde_json::{Map, Value, json};
 
-use super::common_utils::{
-    convert_document_url_to_data_uri, has_header, ocr_provider_config, string_headers,
-};
+use super::document_fetch::convert_document_url_to_data_uri;
+use super::provider_config::ocr_provider_config;
 use super::types::{PreparedOcrRequest, ProviderOcrRequest};
 use crate::callbacks::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
@@ -76,7 +76,7 @@ impl OcrLifecycleHooks {
         let config = ocr_provider_config(&request.custom_llm_provider, &request.model)
             .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.clone()))?;
         let env_lookup = |key: &str| std::env::var(key).ok();
-        let headers = string_headers(request.extra_headers)?;
+        let headers = string_headers("OCR", request.extra_headers)?;
         let auth_strategy = config.auth_strategy();
         let api_key = (!has_header(&headers, auth_strategy.header_name()))
             .then(|| config.resolve_api_key(request.api_key.as_deref(), &env_lookup))
