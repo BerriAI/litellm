@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import argparse
 import logging
 import os
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final, cast
 from urllib.parse import quote
@@ -15,11 +13,17 @@ from hypothesis.strategies import DrawFn, SearchStrategy
 
 import litellm
 from litellm.rust_bridge.ocr import use_litellm_rust
+from tests.test_litellm._fixture_generator import (
+    FixtureTarget,
+    generate_target_fixtures,
+    parse_generator_args,
+)
+from tests.test_litellm._fixture_generator import (
+    require_targets as require_fixture_targets,
+)
 from tests.test_litellm._fixture_recorder import (
     ProviderSpec,
     fixture_directory,
-    generate_case_inputs,
-    record_cases,
 )
 from tests.test_litellm.ocr.fixture_models import (
     JsonSchemaDefinition,
@@ -38,26 +42,13 @@ from tests.test_litellm.ocr.fixture_models import (
 )
 
 FIXTURE_DIR_ENV: Final = "LITELLM_OCR_FIXTURE_DIR"
-LOGGER: Final = logging.getLogger(__name__)
 _TEXT: Final = st.just("invoice 123")
 _VALUE_TEXT: Final = st.just("case-1")
 _FONT_SIZE: Final = st.just(24)
 _MISTRAL_MODEL: Final = "mistral/mistral-ocr-latest"
 
 
-@dataclass(frozen=True, slots=True)
-class GeneratorArgs:
-    concurrency: int
-    examples: int
-    fixture_dir: Path | None
-
-
-@dataclass(frozen=True, slots=True)
-class OcrFixtureTarget:
-    name: str
-    provider_spec: ProviderSpec
-    strategy: SearchStrategy[OcrSdkInputBase]
-    invoke: Callable[[str, OcrSdkInputBase], object]
+OcrFixtureTarget = FixtureTarget[OcrSdkInputBase]
 
 
 def _image_document(text: str, font_size: int) -> MistralImageUrlDocument:
@@ -249,22 +240,7 @@ def _generate_examples(
     examples: int,
     concurrency: int,
 ) -> None:
-    case_inputs: Final = generate_case_inputs(target.strategy, examples)
-    results: Final = record_cases(
-        target.provider_spec,
-        root,
-        case_inputs,
-        target.invoke,
-        OcrParityCase,
-        concurrency,
-    )
-    for result in results:
-        LOGGER.info(
-            "%s %s %s",
-            "cached" if result.cache_hit else "recorded",
-            target.name,
-            result.case.litellm_input.model,
-        )
+    generate_target_fixtures(target, root, examples, concurrency, OcrParityCase)
 
 
 def _mistral_upstream_base(environ: Mapping[str, str]) -> str:
@@ -300,21 +276,9 @@ def discover_targets(
 
 
 def require_targets(targets: tuple[OcrFixtureTarget, ...]) -> tuple[OcrFixtureTarget, ...]:
-    if targets:
-        return targets
-    raise SystemExit("No OCR fixture providers are configured. Set MISTRAL_API_KEY")
-
-
-def parse_generator_args(argv: Sequence[str] | None = None) -> GeneratorArgs:
-    parser: Final = argparse.ArgumentParser()
-    parser.add_argument("--concurrency", type=int, default=4)
-    parser.add_argument("--examples", type=int, default=4)
-    parser.add_argument("--fixture-dir", type=Path)
-    namespace: Final = parser.parse_args(argv)
-    return GeneratorArgs(
-        concurrency=cast(int, namespace.concurrency),
-        examples=cast(int, namespace.examples),
-        fixture_dir=cast(Path | None, namespace.fixture_dir),
+    return require_fixture_targets(
+        targets,
+        "No OCR fixture providers are configured. Set MISTRAL_API_KEY",
     )
 
 

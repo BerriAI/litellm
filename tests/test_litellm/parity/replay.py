@@ -20,7 +20,7 @@ EXCLUDED_REQUEST_HEADERS: Final = frozenset(
         "connection",
         "accept-encoding",
         "user-agent",
-        "x-ocr-parity-route",
+        "x-litellm-parity-route",
     }
 )
 EXCLUDED_RESPONSE_HEADERS: Final = frozenset({"content-length", "transfer-encoding", "connection"})

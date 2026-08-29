@@ -5,28 +5,23 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
-from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
 from tests.test_litellm.parity.compare import assert_parity
 from tests.test_litellm.parity.models import CapturedRequest, Execution, SDKReport
 
-SENTINEL: Final = "python-ocr-parity-fallback"
+SENTINEL: Final = "python-parity-fallback"
 
 
 def _execution(*, body: JsonValue = None, markdown: str = "same", user_agent: str | None = None) -> Execution:
     return Execution(
         request=CapturedRequest(
             method="POST",
-            path="/v1/ocr?mode=test",
+            path="/v1/test-route?mode=test",
             headers=(("authorization", "Bearer test-key"), ("content-type", "application/json")),
-            body={"model": "mistral-ocr-latest"} if body is None else body,
+            body={"model": "test-model"} if body is None else body,
             user_agent=user_agent,
         ),
         report=SDKReport(
-            response=OCRResponse(
-                pages=[OCRPage(index=0, markdown=markdown)],
-                model="mistral-ocr-latest",
-                object="ocr",
-            )
+            response={"items": [{"text": markdown}], "model": "test-model"}
         ),
     )
 

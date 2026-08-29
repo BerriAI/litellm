@@ -4,9 +4,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
-
-
 class CapturedRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -20,7 +17,7 @@ class CapturedRequest(BaseModel):
 class SDKReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    response: OCRResponse
+    response: JsonValue
 
 
 class Execution(BaseModel):

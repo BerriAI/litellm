@@ -2,39 +2,36 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from typing_extensions import Self
 
-from tests.test_litellm._recorded_http import RecordedResponse
+from tests.test_litellm._fixture_models import (
+    FixtureModel,
+    JsonObject,
+    JsonSchemaDefinition,
+    JsonSchemaResponseFormat,
+    ParityCase,
+    SdkInputBase,
+)
 
-JsonObject = dict[str, JsonValue]
+__all__ = ("JsonSchemaDefinition", "JsonSchemaResponseFormat", "OcrParityCase", "OcrSdkInputBase")
 
-
-class _FixtureModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True, serialize_by_alias=True)
-
-
-class OcrSdkInputBase(_FixtureModel):
-    def as_sdk_kwargs(self) -> dict[str, object]:
-        return cast(dict[str, object], self.model_dump(mode="python", exclude_unset=True))
-
-    def canonical_input(self) -> dict[str, object]:
-        return cast(dict[str, object], self.model_dump(mode="json", exclude_unset=True))
+OcrSdkInputBase = SdkInputBase
 
 
-class MistralImageUrlValue(_FixtureModel):
+class MistralImageUrlValue(FixtureModel):
     url: str
     detail: Literal["low", "auto", "high"] | None = None
 
 
-class MistralImageUrlDocument(_FixtureModel):
+class MistralImageUrlDocument(FixtureModel):
     type: Literal["image_url"]
     image_url: str | MistralImageUrlValue
 
 
-class MistralDocumentUrlDocument(_FixtureModel):
+class MistralDocumentUrlDocument(FixtureModel):
     type: Literal["document_url"]
     document_url: str
     document_name: str | None = None
@@ -44,18 +41,6 @@ MistralDocument = Annotated[
     MistralImageUrlDocument | MistralDocumentUrlDocument,
     Field(discriminator="type"),
 ]
-
-
-class JsonSchemaDefinition(_FixtureModel):
-    name: str
-    description: str | None = None
-    schema_definition: JsonObject = Field(alias="schema")
-    strict: bool = False
-
-
-class JsonSchemaResponseFormat(_FixtureModel):
-    type: Literal["json_schema"]
-    json_schema: JsonSchemaDefinition
 
 
 MistralModel = Literal[
@@ -117,7 +102,7 @@ def _validate_reducto_source(source: str) -> str:
     return source
 
 
-class ReductoImageUrlDocument(_FixtureModel):
+class ReductoImageUrlDocument(FixtureModel):
     type: Literal["image_url"]
     image_url: str
 
@@ -127,7 +112,7 @@ class ReductoImageUrlDocument(_FixtureModel):
         return _validate_reducto_source(value)
 
 
-class ReductoDocumentUrlDocument(_FixtureModel):
+class ReductoDocumentUrlDocument(FixtureModel):
     type: Literal["document_url"]
     document_url: str
 
@@ -167,7 +152,7 @@ ReductoBlockType = Literal[
 ]
 
 
-class ReductoFormatting(_FixtureModel):
+class ReductoFormatting(FixtureModel):
     add_page_markers: bool = False
     table_output_format: ReductoTableOutputFormat = "dynamic"
     merge_tables: bool = False
@@ -181,7 +166,7 @@ class ReductoFormatting(_FixtureModel):
         return value
 
 
-class ReductoChunking(_FixtureModel):
+class ReductoChunking(FixtureModel):
     chunk_mode: Literal["variable", "section", "page", "disabled", "block", "page_sections"] = "disabled"
     chunk_size: int | None = None
     chunk_overlap: int = Field(default=0, ge=0)
@@ -195,7 +180,7 @@ class ReductoChunking(_FixtureModel):
         return self
 
 
-class ReductoRetrieval(_FixtureModel):
+class ReductoRetrieval(FixtureModel):
     chunking: ReductoChunking = Field(default_factory=ReductoChunking)
     filter_blocks: list[ReductoBlockType] = Field(default_factory=list)
     embedding_optimized: bool = False
@@ -208,7 +193,7 @@ class ReductoRetrieval(_FixtureModel):
         return value
 
 
-class ReductoPageRange(_FixtureModel):
+class ReductoPageRange(FixtureModel):
     start: int | None = Field(default=None, ge=1)
     end: int | None = Field(default=None, ge=1)
 
@@ -219,19 +204,19 @@ class ReductoPageRange(_FixtureModel):
         return self
 
 
-class ReductoTenantThrottling(_FixtureModel):
+class ReductoTenantThrottling(FixtureModel):
     tenant_id: str = Field(min_length=1, max_length=256)
     max_share: float = Field(default=0.5, gt=0, le=1)
 
 
-class ReductoHybridVpcSettings(_FixtureModel):
+class ReductoHybridVpcSettings(FixtureModel):
     environment: str | None = None
 
 
 ReductoPageSelection = ReductoPageRange | list[ReductoPageRange] | list[int] | list[str]
 
 
-class ReductoSettings(_FixtureModel):
+class ReductoSettings(FixtureModel):
     ocr_system: Literal["standard", "legacy"] = "standard"
     extraction_mode: Literal["ocr", "hybrid"] = "hybrid"
     force_url_result: bool = False
@@ -285,6 +270,5 @@ class ReductoParseLegacySdkInput(OcrSdkInputBase):
         return self
 
 
-class OcrParityCase(_FixtureModel):
-    litellm_input: MistralOcrSdkInput
-    provider_response: RecordedResponse
+class OcrParityCase(ParityCase[MistralOcrSdkInput]):
+    pass
