@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
 
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
@@ -323,7 +324,9 @@ class BedrockBatchesHandler:
                 api_key="",
                 additional_args={
                     "complete_input_dict": {"jobIdentifier": batch_id},
-                    "api_base": (f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{url_path_id}"),
+                    "api_base": (
+                        f"https://bedrock.{region}.{get_aws_dns_suffix(region)}/model-invocation-job/{url_path_id}"
+                    ),
                 },
             )
 
