@@ -2,6 +2,7 @@
 Support for gpt model family
 """
 
+import copy
 import json
 import os
 from collections.abc import AsyncIterator, Coroutine, Iterator
@@ -378,18 +379,25 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         from litellm.types.llms.openai import ChatCompletionToolParam
 
-        for i, message in enumerate(messages):
-            messages[i] = cast(
+        new_messages: Final = [  # mutable-ok: the declared return type is list[AllMessageValues]
+            cast(
                 AllMessageValues,
-                filter_value_from_dict(message, "cache_control"),
+                filter_value_from_dict(copy.deepcopy(message), "cache_control"),
             )
-        if tools is not None:
-            for i, tool in enumerate(tools):
-                tools[i] = cast(
+            for message in messages
+        ]
+        new_tools: Final = (
+            [  # mutable-ok: the declared return type is list[ChatCompletionToolParam]
+                cast(
                     ChatCompletionToolParam,
-                    filter_value_from_dict(tool, "cache_control"),
+                    filter_value_from_dict(copy.deepcopy(tool), "cache_control"),
                 )
-        return messages, tools
+                for tool in tools
+            ]
+            if tools is not None
+            else None
+        )
+        return new_messages, new_tools
 
     def _should_preserve_cache_control_for_endpoint(
         self,

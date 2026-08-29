@@ -1,3 +1,4 @@
+import copy
 from typing import TYPE_CHECKING, Any, Final, cast, get_type_hints
 
 import httpx
@@ -188,24 +189,40 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         the chat path. Strips Anthropic-only `cache_control` markers from
         Responses API input content blocks and tools.
 
-        `filter_value_from_dict` mutates each dict in place, so the same
-        objects are returned.
+        `filter_value_from_dict` deletes the key in place and recurses, so each
+        item is copied first: the caller keeps its own input list and may reuse
+        it on a provider that does support prompt caching.
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             filter_value_from_dict,
         )
 
-        if isinstance(input, list):
-            for item in input:
-                if isinstance(item, dict):
-                    filter_value_from_dict(cast(dict, item), "cache_control")
+        new_input: Final = (
+            cast(  # cast-ok: the comprehension rebuilds the input item for item
+                ResponseInputParam,
+                [  # mutable-ok: the declared return type is ResponseInputParam
+                    filter_value_from_dict(copy.deepcopy(cast(dict, item)), "cache_control")
+                    if isinstance(item, dict)
+                    else item
+                    for item in input
+                ],
+            )
+            if isinstance(input, list)
+            else input
+        )
 
-        if tools is not None:
-            for tool in tools:
-                if isinstance(tool, dict):
-                    filter_value_from_dict(cast(dict, tool), "cache_control")
+        new_tools: Final = (
+            [  # mutable-ok: the declared return type is List[ALL_RESPONSES_API_TOOL_PARAMS]
+                filter_value_from_dict(copy.deepcopy(cast(dict, tool)), "cache_control")
+                if isinstance(tool, dict)
+                else tool
+                for tool in tools
+            ]
+            if tools is not None
+            else None
+        )
 
-        return input, tools
+        return new_input, new_tools
 
     def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """
