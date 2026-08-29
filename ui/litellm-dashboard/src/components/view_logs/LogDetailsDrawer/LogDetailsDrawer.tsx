@@ -30,6 +30,7 @@ export interface LogDetailsDrawerProps {
 }
 
 const SIDEBAR_WIDTH_PX = 224;
+const SIDEBAR_RAIL_WIDTH_PX = 40;
 
 // Session logs are fetched page-by-page from the paginated backend and
 // accumulated so the drawer can show the whole session. page_size is the
@@ -312,98 +313,104 @@ export function LogDetailsDrawer({
         <SheetTitle className="sr-only">
           {logEntry?.request_id ? `Request ${logEntry.request_id} details` : "Request details"}
         </SheetTitle>
-        <div style={{ height: "100%" }} className="flex relative">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
-            className="absolute top-2 left-2 z-floating bg-card! border! border-border! rounded-md!"
-            aria-label={isSidebarCollapsed ? "Expand trace sidebar" : "Collapse trace sidebar"}
+        <div style={{ height: "100%" }} className="flex">
+          <div
+            className="border-r border-border bg-muted flex flex-col shrink-0"
+            style={{ width: isSidebarCollapsed ? SIDEBAR_RAIL_WIDTH_PX : SIDEBAR_WIDTH_PX }}
           >
-            {isSidebarCollapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
-          </Button>
-          {!isSidebarCollapsed && (
-            <div className="border-r border-border bg-muted flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
-              <div className="pl-12 pr-3 py-2 border-b border-border bg-card">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      {isSessionMode ? "Session" : "Trace"}
-                    </div>
-                    <div className="font-mono text-[12px] text-foreground leading-tight flex items-center gap-1">
-                      <span className="truncate">{leftPanelDisplayId}</span>
-                      <button
-                        type="button"
-                        onClick={handleCopyLeftPanelId}
-                        className="text-muted-foreground hover:text-foreground"
-                        aria-label="Copy trace id"
-                      >
-                        {copiedLeftPanelId ? <Check className="size-3" /> : <Copy className="size-3" />}
-                      </button>
-                    </div>
+            <div
+              className={`flex items-start gap-1 py-2 pl-1 border-b border-border bg-card ${isSidebarCollapsed ? "pr-1" : "pr-3"}`}
+            >
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
+                className="shrink-0 border! border-border! rounded-md!"
+                aria-label={isSidebarCollapsed ? "Expand trace sidebar" : "Collapse trace sidebar"}
+              >
+                {isSidebarCollapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+              </Button>
+              {!isSidebarCollapsed && (
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {isSessionMode ? "Session" : "Trace"}
                   </div>
-                </div>
-                <div className="mt-1 text-[11px] text-muted-foreground font-mono">
-                  {logsForList.length} req
-                  {[
-                    isSessionMode
-                      ? llmCount
-                      : logsForList.filter(
-                          (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
-                        ).length,
-                    isSessionMode
-                      ? agentCount
-                      : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
-                    isSessionMode
-                      ? mcpCount
-                      : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
-                  ].map((count, i) => {
-                    const label = [" LLM", " Agent", " MCP"][i];
-                    return count > 0 ? (
-                      <span key={label}>
+                  <div className="font-mono text-[12px] text-foreground leading-tight flex items-center gap-1">
+                    <span className="truncate">{leftPanelDisplayId}</span>
+                    <button
+                      type="button"
+                      onClick={handleCopyLeftPanelId}
+                      className="text-muted-foreground hover:text-foreground"
+                      aria-label="Copy trace id"
+                    >
+                      {copiedLeftPanelId ? <Check className="size-3" /> : <Copy className="size-3" />}
+                    </button>
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted-foreground font-mono">
+                    {logsForList.length} req
+                    {[
+                      isSessionMode
+                        ? llmCount
+                        : logsForList.filter(
+                            (row) =>
+                              !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
+                          ).length,
+                      isSessionMode
+                        ? agentCount
+                        : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
+                      isSessionMode
+                        ? mcpCount
+                        : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
+                    ].map((count, i) => {
+                      const label = [" LLM", " Agent", " MCP"][i];
+                      return count > 0 ? (
+                        <span key={label}>
+                          <span className="mx-1.5">·</span>
+                          {count}
+                          {label}
+                        </span>
+                      ) : null;
+                    })}
+                    <span className="mx-1.5">·</span>
+                    {isSessionMode ? getSpendString(totalSessionCost) : getSpendString(currentLog.spend || 0)}
+                    {isSessionMode && (
+                      <>
                         <span className="mx-1.5">·</span>
-                        {count}
-                        {label}
-                      </span>
-                    ) : null;
-                  })}
-                  <span className="mx-1.5">·</span>
-                  {isSessionMode ? getSpendString(totalSessionCost) : getSpendString(currentLog.spend || 0)}
+                        {sessionDurationSeconds}s
+                      </>
+                    )}
+                  </div>
                   {isSessionMode && (
-                    <>
-                      <span className="mx-1.5">·</span>
-                      {sessionDurationSeconds}s
-                    </>
+                    <div className="text-[11px] text-muted-foreground font-mono whitespace-nowrap">
+                      {cacheHitCount}/{logsForList.length} cached
+                    </div>
+                  )}
+                  {isSessionMode && sessionTruncated && (
+                    <div className="mt-1 text-[11px] text-warning font-mono">
+                      Showing most recent {logsForList.length} of {sessionTotalCount}
+                    </div>
+                  )}
+                  {isSessionMode && (
+                    <Tabs
+                      className="mt-1.5"
+                      value={sessionSortMode}
+                      onValueChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
+                    >
+                      <TabsList className="w-full">
+                        <TabsTrigger value="duration" className="text-[11px]">
+                          Duration
+                        </TabsTrigger>
+                        <TabsTrigger value="start_time" className="text-[11px]">
+                          Start time
+                        </TabsTrigger>
+                      </TabsList>
+                    </Tabs>
                   )}
                 </div>
-                {isSessionMode && (
-                  <div className="text-[11px] text-muted-foreground font-mono whitespace-nowrap">
-                    {cacheHitCount}/{logsForList.length} cached
-                  </div>
-                )}
-                {isSessionMode && sessionTruncated && (
-                  <div className="mt-1 text-[11px] text-warning font-mono">
-                    Showing most recent {logsForList.length} of {sessionTotalCount}
-                  </div>
-                )}
-                {isSessionMode && (
-                  <Tabs
-                    className="mt-1.5"
-                    value={sessionSortMode}
-                    onValueChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
-                  >
-                    <TabsList className="w-full">
-                      <TabsTrigger value="duration" className="text-[11px]">
-                        Duration
-                      </TabsTrigger>
-                      <TabsTrigger value="start_time" className="text-[11px]">
-                        Start time
-                      </TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                )}
-              </div>
+              )}
+            </div>
 
+            {!isSidebarCollapsed && (
               <div className="flex-1 overflow-y-auto">
                 {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
                   <div className="px-3 pt-2">
@@ -447,8 +454,8 @@ export function LogDetailsDrawer({
                   </div>
                 )}
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           <div className="flex-1 flex flex-col overflow-hidden">
             <DrawerHeader
