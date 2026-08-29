@@ -1975,7 +1975,8 @@ async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_comple
     result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type)
 
     if not expect_conversion:
-        assert result is None
+        assert result is kwargs
+        assert HEADROOM_CONVERTED_STREAM_KEY not in kwargs
         assert kwargs["stream"] is stream
         return
 
@@ -1983,6 +1984,34 @@ async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_comple
     assert result["stream"] is False
     assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
     assert kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_still_compresses_for_deployment_level_configs(
+    guardrail: HeadroomGuardrail,
+):
+    """Regression for the stream-conversion override swallowing the parent hook:
+    when the guardrail is attached at the deployment level and proxy pre_call never
+    ran, the deployment hook is the only place compression executes, so the
+    override must delegate to CustomGuardrail.async_pre_call_deployment_hook."""
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [dict(m) for m in ORIGINAL_MESSAGES],
+        "stream": False,
+        "guardrails": ["headroom"],
+        "metadata": {},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ):
+        result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
+
+    assert result is not None
+    assert result["messages"] == EXPECTED_MESSAGES
 
 
 @pytest.mark.asyncio
