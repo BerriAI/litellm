@@ -101,12 +101,26 @@ class PassThroughStreamingHandler:
                 )
             )
         )
+        is_anthropic_route: Final[bool] = bool(
+            model_name
+            and (
+                endpoint_type == EndpointType.ANTHROPIC
+                or "/v1/messages" in url_route
+            )
+        )
+        saw_message_start = False
         try:
             if not cost_injection_active:
                 # Hot path: just buffer for end-of-stream logging and forward.
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
+                    if is_anthropic_route and not saw_message_start and b"message_start" in chunk:
+                        assert model_name is not None
+                        chunk = PassThroughStreamingHandler._rewrite_anthropic_message_start_chunk(
+                            chunk, model_name
+                        )
+                        saw_message_start = True
                     yield chunk
             else:
                 # ``cost_injection_active`` already requires ``model_name`` to
@@ -118,6 +132,11 @@ class PassThroughStreamingHandler:
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
+                    if is_anthropic_route and not saw_message_start and b"message_start" in chunk:
+                        chunk = PassThroughStreamingHandler._rewrite_anthropic_message_start_chunk(
+                            chunk, resolved_model_name
+                        )
+                        saw_message_start = True
                     complete_frames, pending = split_complete_sse_frames(
                         pending + chunk
                     )  # rebind-ok: SSE frame reassembly buffer across transport chunks
@@ -355,3 +374,44 @@ class PassThroughStreamingHandler:
         lines: Final = [line.strip() for line in combined_str.split("\n") if line.strip()]
 
         return lines
+
+    @staticmethod
+    def _rewrite_anthropic_message_start_chunk(chunk: bytes, model_name: str) -> bytes:
+        """
+        Rewrite backend model ID in message_start SSE frame to the requested model name.
+        """
+        if b"message_start" not in chunk:
+            return chunk
+        try:
+            import json
+
+            decoded: Final = chunk.decode("utf-8")
+            lines: Final = decoded.splitlines()
+            modified = False
+            new_lines = []
+            for line in lines:
+                if line.startswith("data:"):
+                    data_str = line[len("data:") :].strip()
+                    data_obj = json.loads(data_str)
+                    if (
+                        isinstance(data_obj, dict)
+                        and data_obj.get("type") == "message_start"
+                        and isinstance(data_obj.get("message"), dict)
+                    ):
+                        data_obj["message"]["model"] = model_name
+                        new_lines.append(f"data: {json.dumps(data_obj)}")
+                        modified = True
+                    else:
+                        new_lines.append(line)
+                else:
+                    new_lines.append(line)
+            if modified:
+                trailing = (
+                    b"\n\n"
+                    if chunk.endswith(b"\n\n")
+                    else (b"\n" if chunk.endswith(b"\n") else b"")
+                )
+                return "\n".join(new_lines).encode("utf-8") + trailing
+        except Exception:
+            pass
+        return chunk

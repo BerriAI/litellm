@@ -397,6 +397,24 @@ class BaseAnthropicMessagesStreamingIterator:
             url_route="/v1/messages",
         )
 
+    def _get_requested_model(self) -> str | None:
+        """Helper to extract requested model name from request_body or logging_obj."""
+        if self.request_body and isinstance(self.request_body, dict):
+            model = self.request_body.get("model")
+            if isinstance(model, str) and model:
+                return model
+        if hasattr(self.litellm_logging_obj, "model_call_details") and isinstance(
+            self.litellm_logging_obj.model_call_details, dict
+        ):
+            model = self.litellm_logging_obj.model_call_details.get("model")
+            if isinstance(model, str) and model:
+                return model
+        if hasattr(self.litellm_logging_obj, "model"):
+            model = getattr(self.litellm_logging_obj, "model", None)
+            if isinstance(model, str) and model:
+                return model
+        return None
+
     def _convert_chunk_to_sse_format(self, chunk: dict | Any) -> bytes:
         """
         Convert a chunk to Server-Sent Events format.
@@ -404,10 +422,52 @@ class BaseAnthropicMessagesStreamingIterator:
         This method should be overridden by subclasses if they need custom
         chunk formatting logic.
         """
+        requested_model: Final = self._get_requested_model()
         if isinstance(chunk, dict):
+            if requested_model and chunk.get("type") == "message_start" and isinstance(chunk.get("message"), dict):
+                chunk = {
+                    **chunk,
+                    "message": {
+                        **chunk["message"],
+                        "model": requested_model,
+                    },
+                }
             event_type: Final[str] = str(chunk.get("type", "message"))
             payload: Final = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
             return payload.encode()
+        elif isinstance(chunk, (bytes, bytearray)):
+            if requested_model and b"message_start" in chunk:
+                try:
+                    decoded: Final = chunk.decode("utf-8")
+                    lines = decoded.splitlines()
+                    modified = False
+                    new_lines = []
+                    for line in lines:
+                        if line.startswith("data:"):
+                            data_str = line[len("data:") :].strip()
+                            data_obj = json.loads(data_str)
+                            if (
+                                isinstance(data_obj, dict)
+                                and data_obj.get("type") == "message_start"
+                                and isinstance(data_obj.get("message"), dict)
+                            ):
+                                data_obj["message"]["model"] = requested_model
+                                new_lines.append(f"data: {json.dumps(data_obj)}")
+                                modified = True
+                            else:
+                                new_lines.append(line)
+                        else:
+                            new_lines.append(line)
+                    if modified:
+                        trailing = (
+                            b"\n\n"
+                            if chunk.endswith(b"\n\n")
+                            else (b"\n" if chunk.endswith(b"\n") else b"")
+                        )
+                        return "\n".join(new_lines).encode("utf-8") + trailing
+                except Exception:
+                    pass
+            return chunk
         else:
             # For non-dict chunks, return as is
             return chunk

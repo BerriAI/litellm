@@ -629,3 +629,94 @@ async def test_normal_end_without_deferred_dispatch_enqueues_immediately(monkeyp
     assert len(worker.enqueued) == 1
     assert getattr(iterator.litellm_logging_obj, "_deferred_stream_complete_args", None) is None
     worker.close_enqueued()
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_rewrites_backend_model_in_message_start_dict():
+    """
+    Regression test for #38761: streaming response message_start event must rewrite
+    the backend model ID to the client-requested alias/model name.
+    """
+    stream_events = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                "usage": {"input_tokens": 10, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    )
+
+    iterator = BaseAnthropicMessagesStreamingIterator(
+        litellm_logging_obj=_make_logging_obj("test_streaming_model_rewrite_dict"),
+        request_body={"model": "my-claude-alias"},
+    )
+
+    chunks = await _collect(iterator, _stream_of(stream_events))
+    assert len(chunks) == len(stream_events)
+
+    first_chunk = chunks[0].decode()
+    assert first_chunk.startswith("event: message_start\n")
+    first_payload = json.loads(first_chunk.split("data: ", 1)[1])
+    assert first_payload["message"]["model"] == "my-claude-alias"
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_rewrites_backend_model_in_message_start_bytes():
+    """
+    Regression test for #38761: streaming response message_start bytes chunk must rewrite
+    the backend model ID to the client-requested alias/model name.
+    """
+    start_chunk = (
+        b"event: message_start\n"
+        b'data: {"type": "message_start", "message": {"id": "msg_1", "type": "message", '
+        b'"role": "assistant", "content": [], "model": "anthropic.claude-3-sonnet-backend-raw", '
+        b'"usage": {"input_tokens": 10, "output_tokens": 0}}}\n\n'
+    )
+    stop_chunk = b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+
+    async def _byte_stream():
+        yield start_chunk
+        yield stop_chunk
+
+    iterator = BaseAnthropicMessagesStreamingIterator(
+        litellm_logging_obj=_make_logging_obj("test_streaming_model_rewrite_bytes"),
+        request_body={"model": "custom-requested-model"},
+    )
+
+    chunks = await _collect(iterator, _byte_stream())
+    assert len(chunks) == 2
+
+    first_chunk = chunks[0].decode()
+    assert first_chunk.startswith("event: message_start\n")
+    first_payload = json.loads(first_chunk.split("data: ", 1)[1])
+    assert first_payload["message"]["model"] == "custom-requested-model"
+
+
+def test_passthrough_streaming_handler_rewrites_message_start_chunk():
+    """
+    Test PassThroughStreamingHandler._rewrite_anthropic_message_start_chunk rewrites model.
+    """
+    from litellm.proxy.pass_through_endpoints.streaming_handler import (
+        PassThroughStreamingHandler,
+    )
+
+    raw_chunk = (
+        b"event: message_start\n"
+        b'data: {"type": "message_start", "message": {"id": "msg_1", "model": "claude-backend-id"}}\n\n'
+    )
+    rewritten = PassThroughStreamingHandler._rewrite_anthropic_message_start_chunk(
+        raw_chunk, "my-requested-model"
+    )
+    assert b'"model": "my-requested-model"' in rewritten
+    assert b"claude-backend-id" not in rewritten
+
