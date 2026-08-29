@@ -3,11 +3,7 @@ import { fetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 import { modelAccessGroupKeys } from "./useModelAccessGroups";
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
 type DeleteModelAccessGroupBudgetResponse = components["schemas"]["DeleteAccessGroupBudgetResponse"];
-
-// ── Fetch function ───────────────────────────────────────────────────────────
 
 const deleteModelAccessGroupBudget = async (
   accessGroup: string,
@@ -17,8 +13,6 @@ const deleteModelAccessGroupBudget = async (
   });
   return data;
 };
-
-// ── Hook ─────────────────────────────────────────────────────────────────────
 
 /**
  * Clear a model access group's shared budget. The group and its deployments are untouched,
