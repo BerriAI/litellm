@@ -9122,6 +9122,10 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
+
+            return get_hosted_vllm_video_config(model)
         return None
 
     @staticmethod
