@@ -9,7 +9,7 @@ Audio Speech request shape and returns raw audio bytes, so the same
 OpenAI SDK works here unchanged.
 """
 
-from typing import TYPE_CHECKING, Any, ClassVar, Final  # noqa: TID251  # Any matches the base interface
+from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeAlias  # noqa: TID251  # Any matches the base interface
 
 import httpx
 from httpx import Headers
@@ -29,8 +29,27 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
-    LiteLLMLoggingObj = Any
-    HttpxBinaryResponseContent = Any
+    LiteLLMLoggingObj: TypeAlias = Any
+    HttpxBinaryResponseContent: TypeAlias = Any
+
+
+def _resolve_voice(voice: Any) -> str | None:
+    """Return a voice id from a plain string or a voice-object mapping."""
+    if isinstance(voice, str) and voice.strip():
+        return voice
+    if isinstance(voice, dict):
+        for key in ("voice_id", "id", "name"):
+            candidate = voice.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+    return None
+
+
+def _as_voice_str(value: Any) -> str | None:
+    """Return the value if it is a non-empty string, else None."""
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
 
 
 class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
@@ -78,20 +97,8 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         params: Final = dict(optional_params) if optional_params else {}
         passthrough_kwargs: Final = dict(kwargs) if kwargs is not None else {}
 
-        mapped_voice: str | None = None
-        if isinstance(voice, str) and voice.strip():
-            mapped_voice = voice
-        elif isinstance(voice, dict):
-            for key in ("voice_id", "id", "name"):
-                candidate = voice.get(key)
-                if isinstance(candidate, str) and candidate.strip():
-                    mapped_voice = candidate
-                    break
-
-        if mapped_voice is None:
-            voice_override: Final = params.pop("voice_id", None)
-            if isinstance(voice_override, str) and voice_override.strip():
-                mapped_voice = voice_override
+        voice_override: Final = params.pop("voice_id", None)
+        mapped_voice: Final = _resolve_voice(voice) or _as_voice_str(voice_override)
 
         if mapped_voice is None:
             raise ValueError("Gandr voice is required. Pass `voice` when calling `litellm.speech()`.")
@@ -242,7 +249,6 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Construct the Gandr endpoint URL.
         """
-        base_url = api_base or get_secret_str("GANDR_API_BASE") or self.TTS_BASE_URL
-        base_url = base_url.rstrip("/")
+        base_url: Final = (api_base or get_secret_str("GANDR_API_BASE") or self.TTS_BASE_URL).rstrip("/")
 
         return f"{base_url}{self.TTS_ENDPOINT_PATH}"
