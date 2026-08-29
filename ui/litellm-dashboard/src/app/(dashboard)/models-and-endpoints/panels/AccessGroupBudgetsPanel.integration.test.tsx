@@ -66,6 +66,15 @@ describe("AccessGroupBudgetsPanel", () => {
     expect(GET).toHaveBeenCalledWith("/access_group/list");
   });
 
+  it("keeps a sub-cent budget readable instead of rounding it away to $0.00", async () => {
+    GET.mockResolvedValue({
+      data: { access_groups: [{ ...BUDGETED_GROUP, budget: { ...BUDGETED_GROUP.budget, max_budget: 0.00002 } }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText("of $0.00002")).toBeInTheDocument();
+  });
+
   it("shows a group with no budget as unlimited and offers nothing to clear", async () => {
     renderPanel();
 
