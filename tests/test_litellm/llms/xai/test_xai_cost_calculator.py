@@ -127,11 +127,12 @@ class TestXAICostCalculator:
 
         prompt_cost, completion_cost = cost_per_token(model="grok-4", usage=usage)
 
-        # Expected costs for grok-4:
-        # Input: 10 tokens * $3e-6 = $0.00003
-        # Completion: (200 + 150) tokens * $1.5e-5 = $0.00525
-        expected_prompt_cost = 10 * 3e-6
-        expected_completion_cost = (200 + 150) * 1.5e-5
+        # grok-4 was retired on 2026-05-15 and now redirects to grok-4.3, so it bills
+        # at grok-4.3's rates:
+        # Input: 10 tokens * $1.25e-6
+        # Completion: (200 + 150) tokens * $2.5e-6
+        expected_prompt_cost = 10 * 1.25e-6
+        expected_completion_cost = (200 + 150) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -193,7 +194,7 @@ class TestXAICostCalculator:
 
     def test_tiered_pricing_above_128k_tokens(self):
         """Test tiered pricing for tokens above 128k."""
-        # Test with grok-4-fast-reasoning which has tiered pricing
+        # Test with grok-4-1-fast, which still carries a 128k tier
         usage = Usage(
             prompt_tokens=150000,  # Above 128k threshold
             completion_tokens=100000,  # Above 128k threshold
@@ -208,10 +209,10 @@ class TestXAICostCalculator:
         )
 
         prompt_cost, completion_cost = cost_per_token(
-            model="xai/grok-4-fast-reasoning", usage=usage
+            model="xai/grok-4-1-fast", usage=usage
         )
 
-        # Expected costs for grok-4-fast-reasoning with tiered pricing:
+        # Expected costs for grok-4-1-fast with tiered pricing:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
         # Completion: (100000 + 50000) tokens * $1e-6 (tiered rate since input > 128k) = $0.15
         expected_prompt_cost = 150000 * 0.4e-6
@@ -222,7 +223,7 @@ class TestXAICostCalculator:
 
     def test_tiered_pricing_below_128k_tokens(self):
         """Test that regular pricing is used for tokens below 128k threshold."""
-        # Test with grok-4-fast-reasoning which has tiered pricing
+        # Test with grok-4-1-fast, which still carries a 128k tier
         usage = Usage(
             prompt_tokens=100000,  # Below 128k threshold
             completion_tokens=50000,
@@ -237,10 +238,10 @@ class TestXAICostCalculator:
         )
 
         prompt_cost, completion_cost = cost_per_token(
-            model="xai/grok-4-fast-reasoning", usage=usage
+            model="xai/grok-4-1-fast", usage=usage
         )
 
-        # Expected costs for grok-4-fast-reasoning with regular pricing:
+        # Expected costs for grok-4-1-fast with regular pricing:
         # Input: 100000 tokens * $0.2e-6 (regular rate) = $0.02
         # Completion: (50000 + 10000) tokens * $0.5e-6 (regular rate) = $0.03
         expected_prompt_cost = 100000 * 0.2e-6
@@ -252,9 +253,9 @@ class TestXAICostCalculator:
     def test_tiered_pricing_grok_4_latest(self):
         """Test tiered pricing for grok-4-latest model."""
         usage = Usage(
-            prompt_tokens=200000,  # Above 128k threshold
+            prompt_tokens=250000,  # Above the 200k threshold
             completion_tokens=100000,
-            total_tokens=350000,
+            total_tokens=400000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -268,11 +269,11 @@ class TestXAICostCalculator:
             model="xai/grok-4-latest", usage=usage
         )
 
-        # Expected costs for grok-4-latest with tiered pricing:
-        # Input: 200000 tokens * $6e-6 (ALL tokens at tiered rate since input > 128k) = $1.2
-        # Completion: (100000 + 50000) tokens * $30e-6 (tiered rate since input > 128k) = $4.5
-        expected_prompt_cost = 200000 * 6e-6
-        expected_completion_cost = (100000 + 50000) * 30e-6
+        # grok-4-latest redirects to grok-4.3, which tiers at 200k rather than 128k:
+        # Input: 250000 tokens * $2.5e-6 (ALL tokens at tiered rate since input > 200k)
+        # Completion: (100000 + 50000) tokens * $5e-6 (tiered rate since input > 200k)
+        expected_prompt_cost = 250000 * 2.5e-6
+        expected_completion_cost = (100000 + 50000) * 5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -293,10 +294,10 @@ class TestXAICostCalculator:
         )
 
         prompt_cost, completion_cost = cost_per_token(
-            model="xai/grok-4-fast-reasoning", usage=usage
+            model="xai/grok-4-1-fast", usage=usage
         )
 
-        # Expected costs for grok-4-fast-reasoning:
+        # Expected costs for grok-4-1-fast:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
         # Completion: (50000 + 10000) tokens * $1e-6 (tiered rate since input > 128k) = $0.06
         expected_prompt_cost = 150000 * 0.4e-6
