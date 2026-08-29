@@ -34016,6 +34016,12 @@ export interface components {
              */
             code_keywords?: string[] | null;
             /**
+             * Context Window Escalation Buffer
+             * @description Fraction of a model's declared context window the estimated prompt must fit within. The token count is an estimate, so fitting against the full window would dispatch prompts that the provider's own tokenizer then rejects; 0.95 leaves room for that drift plus the response tokens.
+             * @default 0.95
+             */
+            context_window_escalation_buffer: number;
+            /**
              * Custom Technical Keywords
              * @description Domain-specific technical keywords appended to the effective base list (technical_keywords if set, otherwise DEFAULT_TECHNICAL_KEYWORDS). Order is preserved; duplicates are removed case-insensitively against the base list and within this list.
              */
@@ -34043,6 +34049,12 @@ export interface components {
              * @description Embedding model (LiteLLM model name) used when semantic_keyword_matching is enabled
              */
             embedding_model?: string | null;
+            /**
+             * Enable Context Window Escalation
+             * @description Escalate a request off a tier whose models provably cannot hold its prompt, before dispatch. The classifier scores complexity and never prompt size, so a long agentic session whose newest ask is trivial lands on a small-window tier and the provider rejects it with a context-window 400 that nothing retries. When every model of the decided tier has a declared window smaller than the estimated prompt, the request moves to the lowest configured tier with a model whose declared window fits; when only some of the tier's models fit, the pick is restricted to those and the tier keeps the request. Models with no resolvable window are never escalated away from and never escalated onto. Set false to dispatch on complexity alone, as before.
+             * @default true
+             */
+            enable_context_window_escalation: boolean;
             /**
              * Escalation Keywords
              * @description Case-sensitive phrases a user can include to force a bump to the next-higher complexity tier when they aren't satisfied with results (they can force a stronger model, but not choose which one). Defaults to ['LITELLM ESCALATE'] when unset; set to an empty list to disable.
@@ -35232,6 +35244,10 @@ export interface components {
             classifier_cost?: number;
             /** Classifier Model */
             classifier_model?: string;
+            /** Context Escalated */
+            context_escalated?: boolean;
+            /** Context Escalation Original Tier */
+            context_escalation_original_tier?: string;
             /** Conversation Continuing */
             conversation_continuing?: boolean;
             /** Escalated */

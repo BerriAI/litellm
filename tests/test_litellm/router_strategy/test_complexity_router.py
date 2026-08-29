@@ -9762,3 +9762,229 @@ class TestHeuristicFirst:
         )
         outcome = await router.aclassify(NO_SIGNAL_PROMPT)
         assert outcome.cause == "default_model_fallback"
+
+
+def _window_declaring_router(windows: "Dict[str, int | None]") -> MagicMock:
+    """A router whose groups declare context windows the way the real Router resolves them:
+    per deployment through model_info, never through the admin-facing group name."""
+    router = MagicMock()
+    router.get_model_list.side_effect = lambda model_name: (
+        [{"model_name": model_name, "model_info": {"max_input_tokens": windows[model_name]}}]
+        if model_name in windows
+        else None
+    )
+    router.get_router_model_info.side_effect = lambda deployment, received_model_name: deployment["model_info"]
+    return router
+
+
+# A long agentic session whose newest ask is trivial: low-density filler the heuristic scores
+# SIMPLE, sized well past a 16,385-token window so the fit check must move it.
+_CONTEXT_FILLER = "The meeting notes were saved to the shared folder for later review this week. " * 2000
+_OVERSIZED_TURNS = [
+    {"role": "user", "content": "Here is everything discussed so far. " + _CONTEXT_FILLER},
+    {"role": "assistant", "content": "Noted, I have read all of it."},
+    {"role": "user", "content": "ok continue"},
+]
+
+
+class TestContextWindowEscalation:
+    """A tier decided on complexity alone must still hold the prompt, or the provider 400s.
+
+    The classifier never weighs prompt size (token count is a 0.10-weight scoring dimension,
+    below every tier boundary), so a long session ending in a trivial ask lands on the
+    smallest tier and dies upstream with no retry. The gate checks fit pre-dispatch.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_oversized_simple_prompt_escalates_to_the_lowest_tier_that_fits(self):
+        """The LIT-6503 regression: SIMPLE verdict, 17k-token prompt, 16,385-token tier model.
+
+        Unfixed, this dispatched to the small model and the provider rejected it with a
+        context-window 400 that neither the retry layer nor tier-keyed fallbacks catch.
+        """
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=_window_declaring_router({"small-model": 16385, "big-model": 200000}),
+            complexity_router_config={"tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"}},
+        )
+
+        result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
+
+        assert result is not None
+        assert result.model == "big-model"
+        assert result.routing_decision["context_escalated"] is True
+        assert result.routing_decision["context_escalation_original_tier"] == "SIMPLE"
+        assert result.routing_decision["tier"] == "COMPLEX"
+        assert "context_escalation" in result.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_a_prompt_that_fits_routes_exactly_as_before(self):
+        """The gate must be invisible for normal traffic: same model, no escalation facts."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=_window_declaring_router({"small-model": 16385, "big-model": 200000}),
+            complexity_router_config={"tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"}},
+        )
+
+        result = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=[{"role": "user", "content": "ok continue"}]
+        )
+
+        assert result is not None
+        assert result.model == "small-model"
+        assert "context_escalated" not in result.routing_decision
+        assert "context_escalation_original_tier" not in result.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_the_pick_prefers_a_fitting_group_inside_the_decided_tier(self):
+        """A tier holding both a small and a large model keeps the request and picks the one
+        that fits, which is cheaper than escalating and preserves the classifier's decision."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=_window_declaring_router(
+                {"small-model": 16385, "mid-model": 200000, "big-model": 200000}
+            ),
+            complexity_router_config={"tiers": {"SIMPLE": ["small-model", "mid-model"], "COMPLEX": "big-model"}},
+        )
+
+        result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
+
+        assert result is not None
+        assert result.model == "mid-model"
+        assert result.routing_decision["tier"] == "SIMPLE"
+        assert "context_escalated" not in result.routing_decision
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "windows,expected_model",
+        [
+            ({"small-model": None, "big-model": 200000}, "small-model"),
+            ({"small-model": 16385, "mid-model": None, "big-model": 200000}, "big-model"),
+            ({"small-model": 16385}, "small-model"),
+        ],
+        ids=["unknown-window-stays", "unproven-target-skipped", "nothing-fits-stays"],
+    )
+    async def test_unknown_windows_are_never_acted_on(self, windows, expected_model):
+        """No faith in either direction: a model declaring no window is never escalated away
+        from (its misfit is unprovable) and never escalated onto (its fit is unprovable);
+        when nothing provably fits, the classified tier stands and the client owns overflow."""
+        tiers = {"SIMPLE": "small-model"}
+        if "mid-model" in windows:
+            tiers["MEDIUM"] = "mid-model"
+        if "big-model" in windows:
+            tiers["COMPLEX"] = "big-model"
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=_window_declaring_router(windows),
+            complexity_router_config={"tiers": tiers},
+        )
+
+        result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
+
+        assert result is not None
+        assert result.model == expected_model
+
+    @pytest.mark.asyncio
+    async def test_the_disabled_gate_dispatches_on_complexity_alone(self):
+        """The escape hatch: enable_context_window_escalation false restores today's behavior."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=_window_declaring_router({"small-model": 16385, "big-model": 200000}),
+            complexity_router_config={
+                "tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"},
+                "enable_context_window_escalation": False,
+            },
+        )
+
+        result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
+
+        assert result is not None
+        assert result.model == "small-model"
+        assert "context_escalated" not in result.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_an_escalated_first_turn_never_becomes_the_session_pin(self):
+        """Escalation describes the prompt's size, not the session: once the client compacts,
+        the next turn fits again, so pinning the big-window tier would hold the whole session
+        on it for the TTL. The escalated turn routes big and writes no pin."""
+        mock_router = _window_declaring_router({"small-model": 16385, "big-model": 200000})
+        mock_router.cache.async_get_cache = AsyncMock(return_value=None)
+        mock_router.cache.async_set_cache = AsyncMock()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"},
+                "session_affinity": True,
+            },
+        )
+
+        result = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}},
+            messages=_OVERSIZED_TURNS,
+        )
+
+        assert result is not None
+        assert result.model == "big-model"
+        mock_router.cache.async_set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_pinned_session_escalates_per_request_and_keeps_its_pin(self):
+        """The pin fast path skips classification, not physics: an oversized turn on a session
+        pinned to the small tier is served by the fitting tier, while the stored pin keeps the
+        session's own model so the first turn that fits again routes exactly as pinned."""
+        mock_router = _window_declaring_router({"small-model": 16385, "big-model": 200000})
+        mock_router.cache.async_get_cache = AsyncMock(return_value={"model": "small-model", "tier": "SIMPLE"})
+        mock_router.cache.async_set_cache = AsyncMock()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"},
+                "session_affinity": True,
+            },
+        )
+
+        result = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}},
+            messages=_OVERSIZED_TURNS,
+        )
+
+        assert result is not None
+        assert result.model == "big-model"
+        assert result.routing_decision["cause"] == "session_affinity_pin"
+        assert result.routing_decision["context_escalated"] is True
+        assert result.routing_decision["context_escalation_original_tier"] == "SIMPLE"
+        refreshed_pin = mock_router.cache.async_set_cache.call_args.kwargs["value"]
+        assert refreshed_pin["model"] == "small-model"
+
+    @pytest.mark.asyncio
+    async def test_out_of_band_system_and_tools_count_against_the_window(self):
+        """The Claude Code shape that live-testing caught: a tiny ask riding a top-level
+        `system` block and tool definitions that together dwarf the message list. None of
+        that reaches resolved messages on /v1/messages, so a gate reading only messages
+        dispatches a provably oversized request and the provider 400s anyway."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=_window_declaring_router({"small-model": 16385, "big-model": 200000}),
+            complexity_router_config={"tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"}},
+        )
+
+        result = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={
+                "proxy_server_request": {
+                    "body": {
+                        "system": _CONTEXT_FILLER,
+                        "tools": [{"name": f"tool_{i}", "description": _CONTEXT_FILLER[:500]} for i in range(20)],
+                    }
+                }
+            },
+            messages=[{"role": "user", "content": "reply with exactly: rig check ok"}],
+        )
+
+        assert result is not None
+        assert result.model == "big-model"
+        assert result.routing_decision["context_escalated"] is True

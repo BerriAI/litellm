@@ -2881,6 +2881,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     classifier_cost: float
     escalated: bool
+    context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    context_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
@@ -2907,6 +2909,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_model",
         "classifier_cost",
         "escalated",
+        "context_escalated",
+        "context_escalation_original_tier",
         "tier_boundaries",
         "reasoning_override_min_score",
         "conversation_continuing",

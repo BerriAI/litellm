@@ -706,11 +706,20 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
     of the three: an agent names the conversation on its first turn, so the cheapest tier would be
     the pin every session starts with, and the real work that follows would run there for the whole
     TTL. It describes what that one call is, never what the session's traffic looks like.
+
+    A context-window escalation describes the prompt's size, not the session's complexity, and
+    size shrinks again the moment the client compacts: pinning the escalated tier would hold the
+    session on the big-window model long after the oversized context that forced it is gone. The
+    gate re-fires per request, so leaving these unpinned costs nothing but the classifier call.
     """
-    return decision is None or decision.get("cause") not in (
-        "default_model_fallback",
-        "plan_mode",
-        "housekeeping",
+    return decision is None or (
+        decision.get("cause")
+        not in (
+            "default_model_fallback",
+            "plan_mode",
+            "housekeeping",
+        )
+        and not decision.get("context_escalated")
     )
 
 
@@ -757,6 +766,18 @@ class ClassificationOutcome(NamedTuple):
         "default_model_fallback",
     ]
     classifier_cost: float | None = None
+
+
+class _ContextWindowPlacement(NamedTuple):
+    """Where the context-window gate moved a decided placement, and to which model groups.
+
+    `tier` is the classified tier when only the in-tier pick needed restricting, or the
+    lowest higher tier with a provably fitting group when the whole tier could not hold
+    the prompt. `allowed_models` is the subset of that tier's pool the pick may use.
+    """
+
+    tier: ComplexityTier | str
+    allowed_models: tuple[str, ...]
 
 
 class _SessionAffinityPin(NamedTuple):
@@ -1195,6 +1216,7 @@ class ComplexityRouter(CustomLogger):
         classifier_cost: float | None = None,
         conversation_continuing: bool = True,
         tier_litellm_params: Mapping[str, object] | None = None,
+        context_escalation_original_tier: ComplexityTier | str | None = None,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -1244,6 +1266,12 @@ class ComplexityRouter(CustomLogger):
             decision["classifier_model"] = classifier_model
         if classifier_cost is not None:
             decision["classifier_cost"] = classifier_cost
+        if context_escalation_original_tier is not None:
+            # The pair travels together: the flag says the gate moved the request off its
+            # decided tier on prompt size, and the original tier names where the decision
+            # (classifier, keyword rule, or session pin) had placed it before physics did.
+            decision["context_escalated"] = True
+            decision["context_escalation_original_tier"] = _tier_name(context_escalation_original_tier)
         if tier_litellm_params:
             masked_tier_litellm_params: Final = mask_credentials_in_payload(tier_litellm_params)
             if isinstance(masked_tier_litellm_params, Mapping):
@@ -1644,7 +1672,7 @@ class ComplexityRouter(CustomLogger):
         return entry.litellm_params if entry is not None else MappingProxyType({})
 
     @staticmethod
-    def _pick_from_tier_value(model: str | list[str], tier_key: str) -> str:
+    def _pick_from_tier_value(model: str | Sequence[str], tier_key: str) -> str:
         if isinstance(model, str):
             return model
         if not model:
@@ -1660,15 +1688,21 @@ class ComplexityRouter(CustomLogger):
         raw_messages: list[dict[str, Any]] | None,
         resolved_messages: list[dict[str, Any]] | None,
         request_kwargs: dict,
+        allowed_models: tuple[str, ...] | None = None,
     ) -> str:
         if not self.config.plugins:
+            if allowed_models is not None:
+                return self._pick_from_tier_value(allowed_models, _tier_name(tier))
             return self.get_model_for_tier(tier)
 
         from litellm.types.router import RoutingContext
 
         tier_key: Final = _tier_name(tier)
         metadata_key: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
-        pool: Final = tuple(self._tier_pools().get(tier_key, ()))
+        full_pool: Final = tuple(self._tier_pools().get(tier_key, ()))
+        pool: Final = (
+            tuple(model for model in full_pool if model in allowed_models) if allowed_models is not None else full_pool
+        )
         if not pool:
             # Nothing for the plugins to filter. Falling through would raise the
             # plugin-filtering error below and send the operator hunting for a policy
@@ -1955,6 +1989,150 @@ class ComplexityRouter(CustomLogger):
         if name is None:
             return None
         return name if self.config.has_custom_tiers else ComplexityTier(name)
+
+    def _deployment_window(self, group: str, deployment: Mapping[str, object]) -> int | None:
+        try:
+            model_info: Final = self.litellm_router_instance.get_router_model_info(
+                deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
+                received_model_name=group,
+            )
+            window: Final = model_info.get("max_input_tokens")
+        except Exception:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
+            return None
+        return window if isinstance(window, int) else None
+
+    def _group_window_facts(self, group: str) -> tuple[int | None, bool]:
+        """(largest declared context window across the group's deployments, whether any deployment
+        declares none). Windows resolve through the router's own model-info chain
+        (litellm_params.model / base_model), never the admin-facing group name."""
+        deployments: Final = self.litellm_router_instance.get_model_list(model_name=group)
+        if not isinstance(deployments, list) or not deployments:
+            return (None, True)
+        windows: Final = tuple(
+            window for deployment in deployments if (window := self._deployment_window(group, deployment)) is not None
+        )
+        return (max(windows) if windows else None, len(windows) < len(deployments))
+
+    @staticmethod
+    def _out_of_band_request_chars(request_kwargs: Mapping[str, object]) -> int:
+        """Prompt content the resolved message list never carries, in characters.
+
+        A coding agent's context is dominated by exactly these: the Responses API's
+        `instructions` kwarg, the /v1/messages top-level `system` block (which never
+        becomes a chat message before this hook), and tool definitions on every surface.
+        All of it counts against the provider's window, so a gate reading only the
+        message list dispatches a provably oversized request and reads as broken for
+        precisely the client this feature exists for.
+        """
+        import json
+
+        instructions: Final = request_kwargs.get("instructions")
+        proxy_request: Final = request_kwargs.get("proxy_server_request")
+        body: Final = proxy_request.get("body") if isinstance(proxy_request, Mapping) else None
+        system: Final = body.get("system") if isinstance(body, Mapping) else None
+        tools: Final = (
+            body.get("tools") if isinstance(body, Mapping) and body.get("tools") else request_kwargs.get("tools")
+        )
+        tools_chars = 0
+        if tools:
+            try:
+                tools_chars = len(json.dumps(tools, default=str))
+            except (TypeError, ValueError):
+                tools_chars = len(str(tools))
+        return (
+            (len(instructions) if isinstance(instructions, str) else 0)
+            + (len(str(system)) if system is not None else 0)
+            + tools_chars
+        )
+
+    def _estimated_request_chars(
+        self, resolved_messages: Sequence[Mapping[str, object]] | None, request_kwargs: Mapping[str, object]
+    ) -> int:
+        content_chars: Final = sum(len(str(m.get("content") or "")) for m in resolved_messages or ())
+        return content_chars + self._out_of_band_request_chars(request_kwargs)
+
+    async def _counted_request_tokens(
+        self, resolved_messages: Sequence[Mapping[str, object]], request_kwargs: Mapping[str, object]
+    ) -> int | None:
+        """Authoritative token count off the event loop, None when counting fails.
+
+        Counts the resolved (chat-shape) messages with the real tokenizer so all three
+        request surfaces share one path, and adds the out-of-band carriers (instructions,
+        top-level system, tools) at the chars-per-token estimate: they are not chat
+        messages, exact tool accounting is the core pre-call check's own open problem,
+        and the buffer absorbs the residual either way.
+        """
+        import litellm
+        from litellm.litellm_core_utils.asyncify import asyncify
+
+        try:
+            counted: Final = await asyncify(litellm.token_counter)(
+                messages=cast(list, resolved_messages)  # cast-ok: token_counter only iterates the sequence
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
+            verbose_router_logger.debug("ComplexityRouter: context-window token count failed. Got - %s", e)
+            return None
+        return counted + self._out_of_band_request_chars(request_kwargs) // 4
+
+    async def _context_window_placement(
+        self,
+        tier: ComplexityTier | str,
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: Mapping[str, object],
+        pool_override: tuple[str, ...] | None = None,
+    ) -> _ContextWindowPlacement | None:
+        """Correct a decided placement whose models provably cannot hold the prompt, or None.
+
+        None means the placement stands: the gate is off, every group fits (or none declares
+        a window, which is not proof of misfit), the prompt is nowhere near a boundary, or
+        nothing configured provably fits and dispatching as decided is all that is left.
+        Escalation walks the configured tier order upward and lands only on a group whose
+        declared window fits, so an escalated request can never trade a provable misfit for
+        an unprovable one.
+        """
+        if not self.config.enable_context_window_escalation:
+            return None
+        if not resolved_messages:
+            return None
+        pools: Final = self._tier_pools()
+        pool: Final = pool_override if pool_override is not None else tuple(pools.get(_tier_name(tier), ()))
+        if not pool:
+            return None
+        facts: Final = MappingProxyType({group: self._group_window_facts(group) for group in pool})
+        known_windows: Final = tuple(window for window, _ in facts.values() if window is not None)
+        if not known_windows:
+            return None
+        buffer: Final = self.config.context_window_escalation_buffer
+
+        def usable_tokens(window: int) -> int:
+            return int(window * buffer)
+
+        estimated: Final = self._estimated_request_chars(resolved_messages, request_kwargs) // 4
+        if estimated <= usable_tokens(min(known_windows)) // 2:
+            return None
+        counted: Final = await self._counted_request_tokens(resolved_messages, request_kwargs)
+        needed: Final = counted if counted is not None else estimated
+
+        def group_can_hold(group: str) -> bool:
+            window, _ = facts[group]
+            return window is None or needed <= usable_tokens(window)
+
+        in_tier: Final = tuple(group for group in pool if group_can_hold(group))
+        if in_tier:
+            if len(in_tier) == len(pool):
+                return None
+            return _ContextWindowPlacement(tier=tier, allowed_models=in_tier)
+        for name in self.config.tier_names()[self._active_tier_severity(tier) + 1 :]:
+            proven = tuple(
+                group
+                for group in pools.get(name, ())
+                if (window := self._group_window_facts(group)[0]) is not None and needed <= usable_tokens(window)
+            )
+            if proven:
+                return _ContextWindowPlacement(
+                    tier=name if self.config.has_custom_tiers else ComplexityTier(name), allowed_models=proven
+                )
+        return None
 
     def _apply_plan_mode_floor(self, tier: ComplexityTier | str) -> ComplexityTier | str:
         """The higher of the decided tier and the plan-mode floor; identity when the floor is unset."""
@@ -2339,6 +2517,28 @@ class ComplexityRouter(CustomLogger):
                     session_model: Final = routed_model
                     if plan_floored and pinned_tier is not None:
                         routed_model = self.get_model_for_tier(self._apply_plan_mode_floor(pinned_tier))
+                    pin_source_tier: Final = self._tier_for_model(routed_model)
+                    pin_placement: Final = (
+                        await self._context_window_placement(
+                            pin_source_tier, resolved_messages, request_kwargs, pool_override=(routed_model,)
+                        )
+                        if pin_source_tier is not None
+                        else None
+                    )
+                    pin_context_original_tier: Final = (
+                        pin_source_tier
+                        if pin_placement is not None
+                        and pin_source_tier is not None
+                        and _tier_name(pin_placement.tier) != _tier_name(pin_source_tier)
+                        else None
+                    )
+                    if pin_placement is not None and pin_context_original_tier is not None:
+                        # Per-request physics, never a re-pin: the stored pin keeps the session's
+                        # own model below, so the first turn whose prompt fits again routes
+                        # exactly as the session pinned it.
+                        routed_model = self._pick_from_tier_value(
+                            pin_placement.allowed_models, _tier_name(pin_placement.tier)
+                        )
                     # Refresh the TTL on every hit so an active session doesn't lose its
                     # pin mid-conversation just because it outlives the original write.
                     await self.litellm_router_instance.cache.async_set_cache(
@@ -2362,7 +2562,11 @@ class ComplexityRouter(CustomLogger):
                     verbose_router_logger.info(
                         "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model
                     )
-                    routed_pin_tier: Final = self._tier_for_model(routed_model) if plan_floored else resolved_pin_tier
+                    routed_pin_tier: Final = (
+                        pin_placement.tier
+                        if pin_placement is not None and pin_context_original_tier is not None
+                        else (self._tier_for_model(routed_model) if plan_floored else resolved_pin_tier)
+                    )
                     session_tier_litellm_params: Final = self._litellm_params_for_model(routed_pin_tier, routed_model)
                     has_original_messages: Final = messages is not None and len(messages) > 0
                     return self._with_session_deployment_affinity(
@@ -2379,6 +2583,7 @@ class ComplexityRouter(CustomLogger):
                                 escalated=escalated,
                                 conversation_continuing=conversation_continuing,
                                 tier_litellm_params=session_tier_litellm_params,
+                                context_escalation_original_tier=pin_context_original_tier,
                             ),
                         )
                     )
@@ -2573,6 +2778,14 @@ class ComplexityRouter(CustomLogger):
         plan_floored: Final = tier != pre_floor_tier
         if plan_floored:
             signals = (*signals, "plan_mode_floor")
+        context_placement: Final = await self._context_window_placement(tier, resolved_messages, request_kwargs)
+        context_original_tier: Final = (
+            tier if context_placement is not None and _tier_name(context_placement.tier) != _tier_name(tier) else None
+        )
+        if context_placement is not None:
+            tier = context_placement.tier
+        if context_original_tier is not None:
+            signals = (*signals, "context_escalation")
         score_repr: Final = f"{score:.3f}" if score is not None else "n/a"
         fallback_model: Final = self.config.default_model if not self.config.plugins else None
         # A sentinel-carrying request skips the failure exit below, whether or not the floor
@@ -2619,8 +2832,15 @@ class ComplexityRouter(CustomLogger):
             # the cheapest tier would then contradict the floor and bound the pick below the tier
             # the decision reports.
             housekeeping_ceiling: Final = tier if outcome.cause == "housekeeping" else None
+            # The gate's placement outranks the plan floor by construction (it only ever
+            # raises the already-floored tier), and a floor the bandit can slide under is
+            # not a floor, so an escalated tier becomes the hard floor of the pick.
             routed_model = self._soft_floor_pick(
-                tier, user_message, request_kwargs, hard_floor=plan_floor, hard_ceiling=housekeeping_ceiling
+                tier,
+                user_message,
+                request_kwargs,
+                hard_floor=tier if context_original_tier is not None else plan_floor,
+                hard_ceiling=housekeeping_ceiling,
             )
             adaptive: Final = self._ensure_adaptive_router()
             if adaptive is not None:
@@ -2637,7 +2857,13 @@ class ComplexityRouter(CustomLogger):
                 routed_model,
             )
         else:
-            routed_model = await self._pick_model_for_tier(tier, messages, resolved_messages, request_kwargs)
+            routed_model = await self._pick_model_for_tier(
+                tier,
+                messages,
+                resolved_messages,
+                request_kwargs,
+                allowed_models=context_placement.allowed_models if context_placement is not None else None,
+            )
             verbose_router_logger.info(
                 "ComplexityRouter: routing decision cause=%s, tier=%s, score=%s, signals=%s, routed_model=%s",
                 outcome.cause,
@@ -2690,5 +2916,6 @@ class ComplexityRouter(CustomLogger):
                 classifier_model=classifier_model,
                 classifier_cost=outcome.classifier_cost,
                 tier_litellm_params=tier_litellm_params,
+                context_escalation_original_tier=context_original_tier,
             ),
         )
