@@ -952,6 +952,32 @@ async def test_post_call_pipeline_pass_runs_once_and_leaves_request_data_untouch
 
 
 @pytest.mark.asyncio
+async def test_post_call_pipeline_managed_default_on_guardrail_runs_exactly_once(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {"count": 0}
+
+    class CountingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            seen["count"] += 1
+            return None
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CountingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=True)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data()
+
+    await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert seen["count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_post_call_pipeline_replacement_response_reaches_caller(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
