@@ -28,12 +28,14 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.budget_reservation import (
+    reservation_cost_cap,
     TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
     _approximate_input_size,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
     release_budget_reservation,
+    reconcile_budget_reservation,
     release_budget_reservation_on_cancel,
     reserve_budget_for_request,
 )
@@ -2962,3 +2964,182 @@ async def test_small_prompt_is_tokenized_inline(spend_counter_state):
 
     assert reservation is not None
     assert threads == [threading.main_thread()]
+
+
+@pytest.mark.asyncio
+async def test_reservation_cost_cap_disabled_by_default(spend_counter_state, monkeypatch):
+    """Without the env override the reservation keeps its strict worst-case size."""
+    monkeypatch.delenv("LITELLM_BUDGET_RESERVATION_MAX_COST_USD", raising=False)
+    reservation_cost_cap.cache_clear()
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-cap-disabled", spend=0.0, max_budget=10.0)
+
+    with patch(  # test-quality-ok: isolate estimator output to exercise reservation-state transitions
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=3.0,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(3.0)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-cap-disabled") == pytest.approx(3.0)
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_cost_cap_limits_reservation_and_cancel_reconciles_true_input_cost(
+    spend_counter_state,
+    monkeypatch,
+):
+    """With a cap, the in-flight pre-occupation shrinks but a cancelled request
+    still reconciles the counter to its TRUE input cost, not to the capped
+    reservation — the provider already billed those input tokens."""
+    monkeypatch.setenv("LITELLM_BUDGET_RESERVATION_MAX_COST_USD", "0.1")
+    reservation_cost_cap.cache_clear()
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-cap-cancel", spend=0.0, max_budget=10.0)
+
+    with (
+        patch(  # test-quality-ok: isolate estimator output to exercise reservation-state transitions
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=3.0,
+        ),
+        patch(  # test-quality-ok: isolate estimator output to exercise reservation-state transitions
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_input_cost",
+            return_value=0.5,
+        ),
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.1)
+    assert reservation["input_cost"] == pytest.approx(0.5)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-cap-cancel") == pytest.approx(0.1)
+
+    await release_budget_reservation_on_cancel(reservation)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-cap-cancel") == pytest.approx(0.5)
+    assert reservation["finalized"] is True
+
+    # idempotent: a second cancel reconcile must not change the counter again
+    await release_budget_reservation_on_cancel(reservation)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-cap-cancel") == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_cost_cap_zero_disables_cap(spend_counter_state, monkeypatch):
+    monkeypatch.setenv("LITELLM_BUDGET_RESERVATION_MAX_COST_USD", "0")
+    reservation_cost_cap.cache_clear()
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-cap-zero", spend=0.0, max_budget=10.0)
+
+    with patch(  # test-quality-ok: isolate estimator output to exercise reservation-state transitions
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=3.0,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(3.0)
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.parametrize("raw_value", ["abc", "nan", "inf", "-inf"])
+@pytest.mark.asyncio
+async def test_cost_cap_non_finite_or_invalid_values_disable_cap(
+    spend_counter_state,
+    monkeypatch,
+    raw_value,
+):
+    """Non-numeric and non-finite env values must not poison the counters;
+    they disable the cap (strict reservations) instead."""
+    monkeypatch.setenv("LITELLM_BUDGET_RESERVATION_MAX_COST_USD", raw_value)
+    reservation_cost_cap.cache_clear()
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-cap-invalid", spend=0.0, max_budget=10.0)
+
+    with patch(  # test-quality-ok: isolate estimator output to exercise reservation-state transitions
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=3.0,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(3.0)
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_cost_cap_success_reconcile_records_true_cost(spend_counter_state, monkeypatch):
+    """Under a cap, the success reconcile must land the request's TRUE cost on
+    the counter, even though the in-flight reservation only pre-occupied the
+    capped amount."""
+    monkeypatch.setenv("LITELLM_BUDGET_RESERVATION_MAX_COST_USD", "0.1")
+    reservation_cost_cap.cache_clear()
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-cap-success", spend=0.0, max_budget=10.0)
+
+    with patch(  # test-quality-ok: isolate estimator output to exercise reservation-state transitions
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=3.0,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    assert reservation is not None
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-cap-success") == pytest.approx(0.1)
+
+    await reconcile_budget_reservation(budget_reservation=reservation, actual_cost=0.6)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-cap-success") == pytest.approx(0.6)
