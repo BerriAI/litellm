@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -878,10 +878,12 @@ async def test_process_prompt_template_aresponses_swaps_model_and_merges_input(p
 # ---------------------------------------------------------------------------
 
 
-def _post_call_pipeline_data(guardrail: str = "gr-post", **extra: Any) -> Dict[str, Any]:
+def _post_call_pipeline_data(
+    guardrail: str = "gr-post", step: PipelineStep | None = None, **extra: Any
+) -> Dict[str, Any]:
     pipeline = GuardrailPipeline(
         mode="post_call",
-        steps=[PipelineStep(guardrail=guardrail, on_pass="allow", on_fail="block")],
+        steps=[step or PipelineStep(guardrail=guardrail, on_pass="allow", on_fail="block")],
     )
     return {
         "model": "m",
@@ -1585,6 +1587,101 @@ async def test_streaming_iterator_hook_pipeline_block_withholds_all_chunks(
     assert delivered == []
     assert info.value.status_code == 400
     assert "output blocked" in str(info.value.detail)
+
+
+def _rewriting_stream_guardrail(transform: Callable[[Dict[str, Any]], Dict[str, Any]]) -> CustomGuardrail:
+    class RewritingStreamGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return {**inputs, **transform(inputs)}
+
+    return RewritingStreamGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)
+
+
+def _tool_call_stream_chunks() -> List[Any]:
+    tool_call = {
+        "index": 0,
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "lookup", "arguments": '{"ssn": "123"}'},
+    }
+    return [
+        litellm.ModelResponseStream(
+            choices=[{"index": 0, "delta": {"tool_calls": [tool_call]}, "finish_reason": None}]
+        ),
+        litellm.ModelResponseStream(choices=[{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]),
+    ]
+
+
+def _echoed_tool_call_dicts(arguments: str) -> List[Dict[str, Any]]:
+    return [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": arguments}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("on_fail, on_error", [("block", None), ("next", "next")])
+@pytest.mark.parametrize(
+    "make_chunks, transform",
+    [
+        (_stream_chunks, lambda inputs: {"texts": ["hello [MASKED]"]}),
+        (_tool_call_stream_chunks, lambda inputs: {"tool_calls": _echoed_tool_call_dicts('{"ssn": "[MASKED]"}')}),
+    ],
+    ids=["texts", "tool_calls"],
+)
+async def test_streaming_iterator_hook_pipeline_withholds_runtime_rewrite(
+    proxy_logging, make_user_api_key_auth, monkeypatch, make_chunks, transform, on_fail, on_error
+):
+    monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(transform)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    step = PipelineStep(guardrail="gr-post", on_pass="allow", on_fail=on_fail, on_error=on_error)
+    data = _post_call_pipeline_data(step=step, stream=True)
+    delivered: List[Any] = []
+
+    async def _drain() -> None:
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+            response=_async_chunk_iter(make_chunks()),
+            request_data=data,
+        ):
+            delivered.append(item)
+
+    with pytest.raises(HTTPException) as info:
+        await _drain()
+
+    error = info.value.detail["error"]
+    assert delivered == []
+    assert info.value.status_code == 400
+    assert error["type"] == "guardrail_pipeline_error"
+    assert error["policies"] == ("response-governance",)
+    assert error["guardrails"] == ("gr-post",)
+    assert "stream=false" in error["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_chunks, transform",
+    [
+        (_stream_chunks, lambda inputs: {"texts": tuple(inputs["texts"])}),
+        (_tool_call_stream_chunks, lambda inputs: {"tool_calls": _echoed_tool_call_dicts('{"ssn": "123"}')}),
+    ],
+    ids=["texts_as_tuple", "tool_calls_as_dicts"],
+)
+async def test_streaming_iterator_hook_pipeline_releases_stream_echoed_in_another_shape(
+    proxy_logging, make_user_api_key_auth, monkeypatch, make_chunks, transform
+):
+    monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(transform)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+    chunks = make_chunks()
+
+    delivered = [
+        item
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+            response=_async_chunk_iter(chunks),
+            request_data=data,
+        )
+    ]
+
+    assert [id(item) for item in delivered] == [id(chunk) for chunk in chunks]
 
 
 @pytest.mark.asyncio

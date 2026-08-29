@@ -155,7 +155,7 @@ from litellm.proxy.hooks.sensitive_data_routing import (
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
-from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor, UndeliverableStreamRewrite
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
@@ -509,6 +509,23 @@ class _PipelineErrorBody(TypedDict):
 
 class _PipelineErrorDetail(TypedDict):
     error: ReadOnly[_PipelineErrorBody]
+
+
+def _undeliverable_stream_rewrite_error(policy_name: str, guardrail_name: str) -> HTTPException:
+    detail: Final[_PipelineErrorDetail] = {
+        "error": {
+            "message": (
+                f"Streaming response withheld by policy pipeline '{policy_name}' because guardrail "
+                f"'{guardrail_name}' rewrote the streamed output, and streaming pipelines cannot deliver "
+                "rewrites. Retry with stream=false, or drop it from the pipeline steps so guardrails.add "
+                "applies it to streamed output."
+            ),
+            "type": "guardrail_pipeline_error",
+            "policies": (policy_name,),
+            "guardrails": (guardrail_name,),
+        }
+    }
+    return HTTPException(status_code=400, detail=detail)
 
 
 def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -3468,11 +3485,12 @@ class ProxyLogging:
         pipeline allows it), then runs each pipeline's steps against the
         assembled output through the endpoint guardrail translation, the same
         machinery flat post_call guardrails use at end of stream. An allow
-        releases the buffered chunks as that machinery left them (the
-        Responses and A2A translations write guardrail output back into the
-        final chunk, exactly as they do for flat guardrails); a block or
-        modify_response terminates with the translation's block chunks or the
-        raised error.
+        releases the buffered chunks verbatim; a step whose guardrail rewrote
+        the output withholds the stream with a 400 instead, since no
+        translation rewrites every buffered chunk consistently and some
+        rewrites (Bedrock's ANONYMIZED action, for one) are only decided at
+        runtime; a block or modify_response terminates with the translation's
+        block chunks or the raised error.
         """
         buffered: Final[list[object]] = []  # mutable-ok: accumulates the stream before the pipeline verdict
         async for item in response:
@@ -3495,16 +3513,26 @@ class ProxyLogging:
         call_type, endpoint_translation = resolved
 
         for policy_name, pipeline in pipelines:
-            result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
-                steps=pipeline.steps,
-                mode="post_call",
-                data=request_data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-                policy_name=policy_name,
-                streaming_chunks=buffered,
-                endpoint_translation=endpoint_translation,
-            )
+            try:
+                result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
+                    steps=pipeline.steps,
+                    mode="post_call",
+                    data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                    policy_name=policy_name,
+                    streaming_chunks=buffered,
+                    endpoint_translation=endpoint_translation,
+                )
+            except UndeliverableStreamRewrite as rewrite:
+                async for error_chunk in unified_guardrail.emit_streaming_http_error(
+                    _undeliverable_stream_rewrite_error(policy_name, rewrite.guardrail_name),
+                    call_type,
+                    buffered,
+                    request_data,
+                ):
+                    yield error_chunk
+                return
             try:
                 ProxyLogging._handle_pipeline_result(
                     result, data=request_data, policy_name=policy_name, original_response=buffered
