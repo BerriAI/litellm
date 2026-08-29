@@ -3,9 +3,11 @@ healthy one.
 
 Each test registers a primary deployment that fails (an unreachable base URL, or
 a 1ms deadline) and calls it with a `router_settings_override` mapping it to the
-real `gpt-5.5`. The proof the fallback fired is twofold: the response is a real
-completion from `gpt-5.5` (a non-empty content string), and the proxy reports at
-least one attempted fallback in the x-litellm-attempted-fallbacks header.
+real `gpt-5.5`. The proof the fallback fired is twofold: the response is a
+completion from `gpt-5.5`, and the proxy reports at least one attempted fallback
+in the x-litellm-attempted-fallbacks header. Empty content is accepted only for
+`finish_reason == "length"`, since gpt-5.5 counts reasoning against max_tokens
+and can consume the whole budget before emitting any text.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from reliability_support import (
     content_of,
     create_bad_base_deployment,
     create_timeout_deployment,
+    finish_reason_of,
 )
 
 pytestmark = pytest.mark.e2e
@@ -30,9 +33,15 @@ pytestmark = pytest.mark.e2e
 def _assert_served_by_fallback(resp: StreamingResponse) -> None:
     assert resp.status_code == 200, f"expected 200 after fallback, got {resp.status_code}: {resp.body[:300]}"
     content = content_of(resp)
-    assert isinstance(content, str) and content, (
-        f"the gpt-5.5 fallback should have returned a real completion, got content {content!r} "
+    finish_reason = finish_reason_of(resp)
+    assert isinstance(content, str), (
+        f"the gpt-5.5 fallback should have returned a completion body, got content {content!r} "
         f"(body={resp.body[:300]})"
+    )
+    assert content or finish_reason == "length", (
+        f"the gpt-5.5 fallback returned empty content with finish_reason={finish_reason!r}; only "
+        f"finish_reason='length' may be empty, since gpt-5.5 can spend the whole max_tokens "
+        f"budget on reasoning (body={resp.body[:300]})"
     )
     attempted = resp.headers.get("x-litellm-attempted-fallbacks")
     assert attempted is not None, "response is missing the x-litellm-attempted-fallbacks header"
