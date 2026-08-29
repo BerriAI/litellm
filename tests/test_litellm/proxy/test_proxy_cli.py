@@ -1,5 +1,6 @@
 import inspect
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +18,28 @@ import uvicorn
 import yaml
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
+
+
+@pytest.mark.parametrize(
+    ("environment", "arguments", "expected_debug", "expected_detailed_debug"),
+    (
+        ({"DEBUG": "release"}, (), False, False),
+        ({"LITELLM_DEBUG": "1"}, (), True, False),
+        ({"DETAILED_DEBUG": "release"}, (), False, False),
+        ({"LITELLM_DETAILED_DEBUG": "1"}, (), False, True),
+        ({}, ("--debug", "--detailed_debug"), True, True),
+    ),
+)
+def test_debug_options_use_namespaced_environment_variables(
+    environment: Mapping[str, str],
+    arguments: tuple[str, ...],
+    expected_debug: bool,
+    expected_detailed_debug: bool,
+) -> None:
+    with patch.dict(os.environ, environment, clear=True):
+        with run_server.make_context("litellm", list(arguments)) as context:
+            assert context.params["debug"] is expected_debug
+            assert context.params["detailed_debug"] is expected_detailed_debug
 
 
 @pytest.mark.xdist_group("proxy_cli")
