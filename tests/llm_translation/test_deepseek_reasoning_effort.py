@@ -39,3 +39,11 @@ def test_explicit_thinking_disabled_wins_and_drops_effort():
 def test_no_reasoning_effort_leaves_no_key():
     out = _map({})
     assert out.get("reasoning_effort") is None
+
+
+def test_explicit_enabled_thinking_with_none_effort_not_contradictory():
+    # "none" is a thinking-OFF sentinel, not a real effort value: it must not be
+    # passed alongside explicit thinking:enabled (would contradict the provider).
+    out = _map({"thinking": {"type": "enabled"}, "reasoning_effort": "none"})
+    assert out["thinking"] == {"type": "enabled"}
+    assert "reasoning_effort" not in out

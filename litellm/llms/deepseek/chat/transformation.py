@@ -70,8 +70,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         # can run away, exhausting max_tokens during reasoning and returning empty content
         # (finish_reason="length", content:null). Preserve the value into the request body
         # when thinking is on so callers can bound effort (e.g. reasoning_effort="low").
-        # See https://api-docs.deepseek.com/guides/thinking_mode
-        if thinking_enabled and reasoning_effort is not None:
+        # Exclude the "none" sentinel: it is an OpenAI-style thinking-OFF switch, not a real
+        # effort value, so passing it alongside explicit thinking:enabled would be
+        # contradictory. See https://api-docs.deepseek.com/guides/thinking_mode
+        if thinking_enabled and reasoning_effort not in (None, "none"):
             optional_params["reasoning_effort"] = reasoning_effort
 
         return optional_params
