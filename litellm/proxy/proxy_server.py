@@ -16,7 +16,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, MutableMapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Collection, Mapping, MutableMapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -12801,6 +12801,7 @@ async def _fetch_db_models_for_search(
     size: int,
     sort_by: str | None,
     is_byok_outside_caller_teams: Callable[[dict[str, JsonValue]], bool],
+    model_name: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
@@ -12817,7 +12818,9 @@ async def _fetch_db_models_for_search(
     filter for `team_public_model_name` instead and keep the DB cost
     bounded by `search`.
     """
-    db_where_condition: Final[dict[str, Any]] = {"model_name": {"contains": search_lower, "mode": "insensitive"}}
+    db_where_condition: Final[dict[str, Any]] = {
+        "model_name": {"contains": search_lower, "mode": "insensitive"} if model_name is None else model_name
+    }
     if db_model_ids_in_router:
         db_where_condition["model_id"] = {"not": {"in": list(db_model_ids_in_router)}}
 
@@ -12864,6 +12867,7 @@ async def _apply_search_filter_to_models(
     page: int = 1,
     size: int = 50,
     sort_by: str | None = None,
+    model_name: str | None = None,
 ) -> tuple[list[dict[str, Any]], int | None]:
     """
     Apply search filter to models, querying database for additional matching models.
@@ -12884,6 +12888,11 @@ async def _apply_search_filter_to_models(
         sort_by: Sort field. When set, results must be sorted across the
             full match set, so the DB fetch is capped at
             ``_SORTED_SEARCH_DB_FETCH_CAP`` instead of one page.
+        model_name: Exact ``model_name`` the caller already narrowed
+            ``all_models`` to (``?model=``). The DB query matches it
+            exactly instead of the substring, and is skipped when the
+            substring cannot occur in it, otherwise rows from other model
+            groups leak into the result and the count.
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
@@ -12941,7 +12950,8 @@ async def _apply_search_filter_to_models(
 
     # Query database for additional models with search term
     db_models: list[dict[str, Any]] = []
-    if prisma_client is not None:
+    exact_name_can_match: Final = model_name is None or search_lower in model_name.lower()
+    if prisma_client is not None and exact_name_can_match:
         try:
             db_models, db_models_total_count = await _fetch_db_models_for_search(
                 prisma_client=prisma_client,
@@ -12953,6 +12963,7 @@ async def _apply_search_filter_to_models(
                 size=size,
                 sort_by=sort_by,
                 is_byok_outside_caller_teams=_is_byok_outside_caller_teams,
+                model_name=model_name,
             )
             search_total_count = router_models_count + db_models_total_count
         except Exception as e:
@@ -13506,7 +13517,7 @@ async def model_info_v2(
             all_models += [user_model]
 
         if model is not None:
-            all_models = [m for m in all_models if m["model_name"] == model]
+            all_models = [m for m in all_models if _deployment_matches_allowed_model_names(m, frozenset((model,)))]
 
         # Apply search filter if provided
         all_models, search_total_count = await _apply_search_filter_to_models(
@@ -13518,6 +13529,7 @@ async def model_info_v2(
             page=page,
             size=size,
             sort_by=sortBy,
+            model_name=model,
         )
 
     if user_models_only:
@@ -14032,7 +14044,7 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
-def _deployment_matches_allowed_model_names(model: dict[str, JsonValue], allowed_model_names: set[str]) -> bool:
+def _deployment_matches_allowed_model_names(model: dict[str, JsonValue], allowed_model_names: Collection[str]) -> bool:
     """Match a router deployment against allowed public model names.
 
     Team-scoped rows store an internal routing key in ``model_name``; callers
