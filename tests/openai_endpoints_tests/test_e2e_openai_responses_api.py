@@ -115,9 +115,9 @@ def test_bad_request_error():
 def test_bad_request_bad_param_error():
     client = get_test_client()
     with pytest.raises(BadRequestError):
-        # Trigger error with invalid model name
+        # Out-of-range temperature on a non-reasoning model, so drop_params forwards it
         client.responses.create(
-            model="gpt-5.5", input="This should fail", temperature=2000
+            model="gpt-4.1", input="This should fail", temperature=2000
         )
 
 
