@@ -76,6 +76,7 @@ from litellm.constants import (
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
+    PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.litellm_core_utils.fallback_generalizations import (
@@ -2302,7 +2303,7 @@ def token_counter(
     model="",
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: list | None = None,
+    messages: Sequence | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
@@ -2555,10 +2556,19 @@ def _supports_factory(model: str, custom_llm_provider: str | None, key: str) -> 
     Raises:
     Exception: If the given model is not found or there's an error in retrieval.
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
     try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
+        declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+        if declared is not None:
+            model = model.removeprefix(
+                f"{declared}/"
+            )  # rebind-ok: mirrors get_llm_provider's split without its OAuth flow
+            custom_llm_provider = declared  # rebind-ok: same
+        else:
+            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
 
         model_info: Final = _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
@@ -2594,6 +2604,46 @@ def _supports_factory(model: str, custom_llm_provider: str | None, key: str) -> 
             return supported_by_provider
 
         return False
+
+
+def declared_value_factory(model: str, custom_llm_provider: str | None, key: str) -> str | None:
+    """Return a string value the model map declares for *key*, or ``None`` when it says nothing.
+
+    The string-valued sibling of :func:`_supports_factory` and
+    :func:`_is_explicitly_disabled_factory`, public where those two are not because it is read
+    from the provider configs rather than from this module, sharing their
+    ``get_llm_provider`` -> ``_get_model_info_helper`` chain and their unprefixed-twin
+    fallback (#20885), so a provider-prefixed entry that omits the key still answers
+    from the bare entry that carries it.
+
+    ``None`` means "the map does not say", never "the map says no" - callers decide what
+    an unknown declaration implies, and for a capability gate that decision must be the
+    conservative one.
+    """
+    try:
+        resolved: Final = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        resolved_model: Final = resolved[0]
+        resolved_provider: Final = resolved[1]
+        model_info: Final = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider)
+        declared: Final = model_info.get(key)
+        if isinstance(declared, str):
+            return declared
+        bare_model_key: Final = _get_model_cost_key(resolved_model)
+        bare_entry: Final = litellm.model_cost.get(bare_model_key) if bare_model_key is not None else None
+        if isinstance(bare_entry, dict):
+            bare_declared: Final = bare_entry.get(key)
+            if isinstance(bare_declared, str):
+                return bare_declared
+        return None
+    except Exception as e:  # noqa: BLE001  # an unreadable map entry means "not declared", never a failed call
+        verbose_logger.debug(
+            "Model not found or error in reading %s. You passed model=%s, custom_llm_provider=%s. Error: %s",
+            key,
+            model,
+            custom_llm_provider,
+            e,
+        )
+        return None
 
 
 def _is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
@@ -2948,7 +2998,12 @@ def reapply_runtime_model_cost_registrations() -> None:
         register_model(model_cost=dict(_runtime_registered_model_cost))  # mutable-ok: snapshot, replay rewrites it
 
 
-def register_model(model_cost: str | dict, *, persist_across_reloads: bool = True):
+def register_model(
+    model_cost: str | dict,
+    *,
+    persist_across_reloads: bool = True,
+    warning_display_name: str | None = None,
+):
     """
     Register new / Override existing models (and their pricing) to specific providers.
     Provide EITHER a model cost dictionary or a url to a hosted json blob
@@ -2968,6 +3023,10 @@ def register_model(model_cost: str | dict, *, persist_across_reloads: bool = Tru
     registering a model is declaring durable intent. Pass False for a
     registration that only describes one request, so it is dropped rather than
     re-asserted over every future catalog.
+
+    ``warning_display_name`` names the model in the missing-cache-pricing
+    warning instead of the registered key, for callers that register under an
+    opaque key (e.g. the router's hashed deployment ids).
     """
 
     loaded_model_cost = {}
@@ -2982,12 +3041,7 @@ def register_model(model_cost: str | dict, *, persist_across_reloads: bool = Tru
         for _registered_key, _registered_value in _registrations.items():
             _runtime_registered_model_cost[_registered_key] = dict(_registered_value)  # mutable-ok: caller-owned
 
-    # Providers that trigger side effects (e.g., OAuth flows) when get_model_info is called
-    # Skip get_model_info for these providers during model registration
-    _skip_get_model_info_providers: Final = {
-        LlmProviders.GITHUB_COPILOT.value,
-        LlmProviders.CHATGPT.value,
-    }
+    _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 
     for key, value in loaded_model_cost.items():
         ## get model info ##
@@ -3014,10 +3068,14 @@ def register_model(model_cost: str | dict, *, persist_across_reloads: bool = Tru
                 elif (
                     value.get("cache_creation_input_token_cost") is None
                     and value.get("cache_read_input_token_cost") is None
+                    and value.get("tiered_pricing") is None
+                    and (
+                        value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None
+                    )
                 ):
                     verbose_logger.warning(
-                        "register_model: model=%s not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info",
-                        key,
+                        "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
+                        warning_display_name or key,
                     )
         # ``get_model_info`` returns ``litellm_provider: None`` when the
         # provider is unknown (e.g. custom deployments registered via
@@ -3523,7 +3581,7 @@ def get_optional_params_embeddings(
             object = litellm.AmazonTitanMultimodalEmbeddingG1Config()
         elif "amazon.titan-embed-text-v2:0" in model:
             object = litellm.AmazonTitanV2Config()
-        elif "cohere.embed-multilingual-v3" in model or "cohere.embed-v4" in model:
+        elif "cohere.embed" in model:
             object = litellm.BedrockCohereEmbeddingConfig()
         elif "twelvelabs" in model or "marengo" in model:
             object = litellm.TwelveLabsMarengoEmbeddingConfig()
@@ -4137,17 +4195,11 @@ def get_optional_params(
         unsupported_params: Final = {}
         for k in non_default_params:
             if k not in supported_params:
-                if k == "user" or k == "stream_options" or k == "stream":
+                if k in PROVIDER_UNVALIDATED_PARAMS:
                     continue
                 if k == "n" and n == 1:  # langchain sends n=1 as a default value
                     continue  # skip this param
-                if (
-                    k == "max_retries"
-                ):  # TODO: This is a patch. We support max retries for OpenAI, Azure. For non OpenAI LLMs we need to add support for max retries
-                    continue  # skip this param
-                # Always keeps this in elif code blocks
-                else:
-                    unsupported_params[k] = non_default_params[k]
+                unsupported_params[k] = non_default_params[k]
 
         if unsupported_params:
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
@@ -4714,6 +4766,22 @@ def _apply_openai_param_overrides(optional_params: dict, non_default_params: dic
                 continue
             optional_params[param] = non_default_params.pop(param)
     return optional_params
+
+
+PROVIDER_UNVALIDATED_PARAMS: Final = frozenset({"user", "stream_options", "stream", "max_retries"})
+
+
+def provider_rejectable_params(passed_params: Mapping[str, object]) -> frozenset[str]:
+    """The params a provider can actually be rejected for, i.e. the ones _check_valid_arg compares
+    against its supported list.
+
+    Anything outside this set never reaches that comparison. Endpoint and transport controls such as
+    base_url, timeout, default_headers, organization and deployment_id are not chat completion
+    params at all, so a caller filtering on "is this an OpenAI param" would discard configuration the
+    request needs while never touching what the provider would have rejected.
+    """
+    params: Final = dict(passed_params)  # mutable-ok: get_non_default_params takes a dict
+    return frozenset(get_non_default_params(params)) - PROVIDER_UNVALIDATED_PARAMS
 
 
 def get_non_default_params(passed_params: dict) -> dict:
@@ -5531,6 +5599,8 @@ def _get_model_info_helper(
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
     try:
         azure_llms: Final = {**litellm.azure_llms, **litellm.azure_embedding_models}
         if model in azure_llms:
@@ -5545,7 +5615,9 @@ def _get_model_info_helper(
             ):
                 model = model + "@latest"
         ##########################
-        potential_model_names: Final = _get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider)
+        potential_model_names: Final = _get_potential_model_names(
+            model=model, custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model)
+        )
 
         verbose_logger.debug("checking potential_model_names in litellm.model_cost: %s", potential_model_names)
 
@@ -5853,6 +5925,7 @@ def _get_model_info_helper(
                 supports_response_schema=_model_info.get("supports_response_schema", None),
                 supports_vision=_model_info.get("supports_vision", None),
                 supports_function_calling=_model_info.get("supports_function_calling", None),
+                supports_parallel_function_calling=_model_info.get("supports_parallel_function_calling", None),
                 supports_tool_choice=_model_info.get("supports_tool_choice", None),
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
@@ -5876,6 +5949,8 @@ def _get_model_info_helper(
                 supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
+                reasoning_effort_levels=_model_info.get("reasoning_effort_levels", None),
+                default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
@@ -7727,7 +7802,7 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
         raise TypeError(f"Invalid message type: {type(message)}. Expected dict or Pydantic model.")
 
 
-def convert_list_message_to_dict(messages: list):
+def convert_list_message_to_dict(messages: Sequence):
     new_messages: Final = []
     for message in messages:
         convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
@@ -8503,6 +8578,12 @@ class ProviderConfigManager:
             )
 
             return VertexAIAudioTranscriptionConfig()
+        elif litellm.LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.audio_transcription.transformation import (
+                GeminiAudioTranscriptionConfig,
+            )
+
+            return GeminiAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -9041,6 +9122,10 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
+
+            return get_hosted_vllm_video_config(model)
         return None
 
     @staticmethod
