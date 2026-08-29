@@ -21,6 +21,10 @@ from litellm.proxy.auth.auth_checks import (
     log_db_metrics,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.db.db_spend_update_writer import (
+    debitable_model_access_groups,
+    get_llm_router,
+)
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_log_error_logger import (
     should_suppress_spend_log_tracebacks,
@@ -260,7 +264,11 @@ class _ProxyDBLogger(CustomLogger):
                 sl_object=sl_object,
                 metadata=metadata,
             )
-            model_access_groups: Final = get_request_model_access_groups(kwargs)
+            model_access_groups: Final = debitable_model_access_groups(
+                attributed=get_request_model_access_groups(kwargs),
+                served_model_id=sl_object.get("model_id") if sl_object is not None else None,
+                router=get_llm_router(),
+            )
 
             if response_cost is not None:
                 user_api_key: Final = metadata.get("user_api_key", None)
