@@ -1217,7 +1217,6 @@ name = "litellm-ai-gateway"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64",
  "futures-channel",
  "futures-util",
  "litellm-core",
@@ -1242,6 +1241,7 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-runtime-api",
  "aws-types",
+ "base64",
  "rand 0.8.7",
  "reqwest",
  "serde",

@@ -10,13 +10,13 @@ use serde_json::{Map, Value, json};
 use super::common_utils::{audio_transcription_provider_config, has_header, string_headers};
 use super::handler::sign_request;
 use super::types::{PreparedAudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
-use crate::integrations::custom_guardrail::{
+use litellm_core::callbacks::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{
+use litellm_core::callbacks::custom_logger::{
     CallType, CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{
+use litellm_core::callbacks::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
 };
 

@@ -1,12 +1,12 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
+use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::hooks::OcrLifecycleHooks;
 use super::types::{OcrRequest, PreparedOcrRequest};
-use crate::integrations::custom_guardrail::CustomGuardrailRunner;
-use crate::integrations::custom_logger::CustomLoggerRunner;
+use crate::callbacks::custom_guardrail::CustomGuardrailRunner;
+use crate::callbacks::custom_logger::CustomLoggerRunner;
 
 pub(crate) struct PreparedOcrCall {
     pub(crate) request: PreparedOcrRequest,

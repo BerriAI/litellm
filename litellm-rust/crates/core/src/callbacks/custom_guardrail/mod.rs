@@ -6,7 +6,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::integrations::custom_logger::{
+use crate::callbacks::custom_logger::{
     CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
 
@@ -174,8 +174,8 @@ impl CustomGuardrailRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::custom_logger::{CallType, CallbackValue, CustomLogger, LogFuture};
-    use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
+    use crate::callbacks::custom_logger::{CallType, CallbackValue, CustomLogger, LogFuture};
+    use crate::callbacks::types::{StandardLoggingMetadata, StandardLoggingPayload};
     use serde_json::json;
     use std::sync::Mutex;
 

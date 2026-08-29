@@ -16,9 +16,9 @@ use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
 use crate::state::AppState;
+use litellm_core::callbacks::custom_logger::CustomLogger;
+use litellm_core::callbacks::types::RequestMetadata;
 
 static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
 

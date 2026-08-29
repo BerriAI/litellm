@@ -4,7 +4,6 @@ use std::time::Duration;
 use litellm_ai_gateway::io::audio_transcription::{
     AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
 };
-use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
 use litellm_core::chat_completions::{
@@ -13,6 +12,7 @@ use litellm_core::chat_completions::{
 use litellm_core::error::CoreError;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
+use litellm_core::ocr::{OcrRequest, ocr as run_ocr};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};

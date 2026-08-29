@@ -16,7 +16,6 @@
 pub mod audio_transcription;
 mod client;
 pub mod io;
-pub mod ocr;
 
 /// GIL-activity tracking. Pure (atomics only); shared by the `server` routes and
 /// the `python-config` reader, so it is available without either feature.

@@ -1,25 +1,23 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use litellm_core::CoreResult;
-use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::CoreError;
-use litellm_core::ocr::transformation::OcrAuthStrategy;
+use crate::CoreResult;
+use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
+use crate::error::CoreError;
+use crate::ocr::transformation::OcrAuthStrategy;
 use serde_json::{Map, Value, json};
 
 use super::common_utils::{
     convert_document_url_to_data_uri, has_header, ocr_provider_config, string_headers,
 };
 use super::types::{PreparedOcrRequest, ProviderOcrRequest};
-use crate::integrations::custom_guardrail::{
+use crate::callbacks::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{
+use crate::callbacks::custom_logger::{
     CallType, CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{
-    RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
-};
+use crate::callbacks::types::{RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload};
 
 pub(crate) struct OcrLifecycleHooks {
     logger_runner: CustomLoggerRunner,

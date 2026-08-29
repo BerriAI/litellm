@@ -5,9 +5,9 @@ use litellm_core::audio_transcription::transformation::AudioTranscriptionProvide
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use serde_json::{Map, Value};
 
-use crate::integrations::custom_guardrail::CustomGuardrail;
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
+use litellm_core::callbacks::custom_guardrail::CustomGuardrail;
+use litellm_core::callbacks::custom_logger::CustomLogger;
+use litellm_core::callbacks::types::RequestMetadata;
 
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,

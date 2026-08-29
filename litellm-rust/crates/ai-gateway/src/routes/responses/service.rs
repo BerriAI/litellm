@@ -10,10 +10,10 @@ use litellm_core::responses::instrumentation::{
 use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::{CoreError, CoreResult};
 
-use crate::integrations::custom_logger::{
+use litellm_core::callbacks::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::RequestMetadata;
+use litellm_core::callbacks::types::RequestMetadata;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run<In, Out>(
@@ -126,7 +126,7 @@ fn logging_values(
     let end_time = payload.end_time;
     let callback = CallbackValue::new(callback.object, callback.value);
     let details = ModelCallDetails::from_standard_logging_payload(
-        crate::integrations::types::StandardLoggingPayload {
+        litellm_core::callbacks::types::StandardLoggingPayload {
             id: payload.id,
             litellm_call_id: payload.litellm_call_id,
             call_type: payload.call_type,
@@ -139,7 +139,7 @@ fn logging_values(
             start_time: payload.start_time,
             end_time: payload.end_time,
             stream: payload.stream,
-            metadata: crate::integrations::types::StandardLoggingMetadata {
+            metadata: litellm_core::callbacks::types::StandardLoggingMetadata {
                 user_api_key_hash: payload.metadata.user_api_key_hash,
                 user_api_key_user_id: payload.metadata.user_api_key_user_id,
                 user_api_key_team_id: payload.metadata.user_api_key_team_id,

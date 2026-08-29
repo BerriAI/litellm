@@ -4,7 +4,7 @@ use std::pin::Pin;
 
 use serde_json::Value;
 
-use crate::integrations::custom_logger::CallType;
+use crate::callbacks::custom_logger::CallType;
 
 pub type GuardrailFuture<'a> =
     Pin<Box<dyn Future<Output = Result<GuardrailDecision, GuardrailError>> + Send + 'a>>;

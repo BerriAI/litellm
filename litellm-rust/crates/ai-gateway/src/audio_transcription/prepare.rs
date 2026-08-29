@@ -5,8 +5,8 @@ use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_pr
 
 use super::hooks::AudioTranscriptionLifecycleHooks;
 use super::types::{AudioTranscriptionRequest, PreparedAudioTranscriptionRequest};
-use crate::integrations::custom_guardrail::CustomGuardrailRunner;
-use crate::integrations::custom_logger::CustomLoggerRunner;
+use litellm_core::callbacks::custom_guardrail::CustomGuardrailRunner;
+use litellm_core::callbacks::custom_logger::CustomLoggerRunner;
 
 pub(crate) struct PreparedAudioTranscriptionCall {
     pub(crate) request: PreparedAudioTranscriptionRequest,

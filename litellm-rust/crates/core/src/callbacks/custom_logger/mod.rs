@@ -65,7 +65,7 @@ impl CustomLoggerRunner {
                 .await
             {
                 report.dropped += 1;
-                eprintln!("litellm-ai-gateway: async_log_success_event dropped: {err}");
+                eprintln!("litellm-core: async_log_success_event dropped: {err}");
             }
         }
         report
@@ -89,7 +89,7 @@ impl CustomLoggerRunner {
                 .await
             {
                 report.dropped += 1;
-                eprintln!("litellm-ai-gateway: async_log_failure_event dropped: {err}");
+                eprintln!("litellm-core: async_log_failure_event dropped: {err}");
             }
         }
         report
@@ -99,7 +99,7 @@ impl CustomLoggerRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
+    use crate::callbacks::types::{StandardLoggingMetadata, StandardLoggingPayload};
     use serde_json::json;
     use std::sync::Mutex;
 

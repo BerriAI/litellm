@@ -17,7 +17,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::interval;
 
 use crate::constants::{DEFAULT_PROXY_BASE_URL, RUST_CONTROL_PLANE_LOGS_PATH};
-use crate::integrations::custom_logger::{
+use litellm_core::callbacks::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogError, LogFuture, LoggingError,
     ModelCallDetails,
 };

@@ -4,7 +4,7 @@ use std::pin::Pin;
 
 use serde_json::Value;
 
-use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
+use crate::callbacks::types::{StandardLoggingMetadata, StandardLoggingPayload};
 
 pub type LogFuture<'a> = Pin<Box<dyn Future<Output = Result<(), LogError>> + Send + 'a>>;
 

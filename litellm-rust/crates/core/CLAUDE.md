@@ -18,6 +18,7 @@ Allowed:
 - Typed errors with stable, non-sensitive messages.
 - Deterministic validation helpers.
 - Serialization helpers that intentionally mirror Python output shape.
+- Callback and guardrail contracts, runners, and lifecycle orchestration.
 - Route templates that match Python base config responsibilities, such as
   `messages::transformation::AnthropicMessagesProviderConfig`.
 
@@ -26,7 +27,7 @@ Not allowed:
 - Filesystem, database, or cache access.
 - Config file reading or rollout state; the host resolves those and passes them
   in. Env reads are limited to credential fallback in a route's `prepare.rs`.
-- Logging callbacks, tracing spans, spend writes, or customer callbacks.
+- Callback transport, tracing spans, spend writes, or customer callback I/O.
 - Provider-specific branching that belongs in `providers`.
 - Panics for user/provider-controlled input.
 

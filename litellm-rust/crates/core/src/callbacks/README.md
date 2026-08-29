@@ -1,6 +1,6 @@
 # LiteLLM Rust integrations
 
-This directory contains Rust-native equivalents of LiteLLM integration hooks.
+This directory contains Rust-native equivalents of LiteLLM callback hooks.
 The first supported surfaces are terminal custom loggers and pre/during-call
 custom guardrails.
 
@@ -13,8 +13,7 @@ Every integration is a folder:
   types
 
 Do not add new flat integration files such as `custom_logger.rs`. Shared wire
-contracts that are used by multiple integrations can stay in
-`integrations/types.rs`.
+contracts that are used by multiple callbacks can stay in `callbacks/types.rs`.
 
 Call ordering and lifecycle timing live in `litellm-core/src/call_lifecycle`.
 Call-type modules, such as OCR, adapt their request and response shapes into
@@ -26,7 +25,7 @@ Implement `CustomLogger` when Rust code needs to observe terminal success or
 failure events. Method names intentionally match Python `CustomLogger` names.
 
 ```rust
-use litellm_ai_gateway::integrations::custom_logger::{
+use litellm_core::callbacks::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
 
@@ -80,7 +79,7 @@ during-call checks. Method names intentionally match Python `CustomGuardrail`
 entrypoints inherited from Python `CustomLogger`.
 
 ```rust
-use litellm_ai_gateway::integrations::custom_guardrail::{
+use litellm_core::callbacks::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
 };
@@ -104,7 +103,7 @@ impl CustomGuardrail for BlocklistedPromptGuardrail {
         Box::pin(async move {
             if request.data.to_string().contains("blocked phrase") {
                 return Ok(GuardrailDecision::Block(
-                    litellm_ai_gateway::integrations::custom_guardrail::GuardrailError::blocked(
+                    litellm_core::callbacks::custom_guardrail::GuardrailError::blocked(
                         "blocked phrase detected",
                     ),
                 ));

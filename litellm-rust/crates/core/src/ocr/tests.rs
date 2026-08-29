@@ -1,22 +1,22 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use litellm_core::error::CoreError;
-use litellm_core::ocr::transformation::OcrResponseHandling;
+use crate::error::CoreError;
+use crate::ocr::transformation::OcrResponseHandling;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::common_utils::{has_header, ocr_provider_config, string_headers, truncate_error_body};
 use super::{OcrRequest, ocr};
-use crate::integrations::custom_guardrail::{
+use crate::callbacks::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{
+use crate::callbacks::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
-use crate::integrations::types::RequestMetadata;
+use crate::callbacks::types::RequestMetadata;
 
 async fn read_http_headers(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
