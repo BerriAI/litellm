@@ -46,10 +46,15 @@ class WingbackGuardrail(GenericGuardrailAPI):
 
         existing_params: Final = additional_provider_specific_params
         additional_params: Final = (
-            {**existing_params, "wingback_app_id": wingback_app_id}  # mutable-ok: one-shot merge for guardrail API payload
+            {  # mutable-ok: one-shot merge for guardrail API payload
+                **existing_params,
+                "wingback_app_id": wingback_app_id,
+            }
             if wingback_app_id and existing_params is not None and "wingback_app_id" not in existing_params
             else (
-                {"wingback_app_id": wingback_app_id}  # mutable-ok: default provider params when only app id is configured
+                {  # mutable-ok: default provider params when only app id is configured
+                    "wingback_app_id": wingback_app_id
+                }
                 if wingback_app_id and existing_params is None
                 else existing_params
             )
