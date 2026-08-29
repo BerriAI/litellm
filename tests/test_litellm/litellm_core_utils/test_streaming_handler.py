@@ -2190,6 +2190,86 @@ def test_raise_on_model_repetition_tolerates_empty_choices(
         wrapper.raise_on_model_repetition()
 
 
+@pytest.mark.asyncio
+async def test_stream_stays_failed_after_raising_and_logs_failure_once():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/13786
+
+    A model stuck repeating one chunk makes the wrapper raise, but the provider
+    iterator keeps yielding, so a consumer that iterates past the error used to
+    get a freshly detected, freshly logged failure on every __anext__ call -
+    thousands of failure callbacks for a single request.
+    """
+
+    async def looping_stream():
+        while True:
+            yield _make_chunk("the model is stuck on this")
+
+    logging_obj = MagicMock()
+    logging_obj.completion_start_time = None
+    dispatched = []
+
+    async def _record_failure(exception, traceback_exception, **kwargs):
+        dispatched.append(exception)
+
+    logging_obj.dispatch_failure_handlers = _record_failure
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=looping_stream(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    raised = []
+    for _ in range(litellm.REPEATED_STREAMING_CHUNK_LIMIT + 5):
+        try:
+            await wrapper.__anext__()
+        except Exception as e:
+            raised.append(e)
+
+    await asyncio.sleep(0)
+
+    assert len(raised) == 5
+    assert all(error is raised[0] for error in raised[1:])
+    assert len(dispatched) == 1
+
+
+def test_sync_stream_stays_failed_after_raising_and_logs_failure_once():
+    """Sync counterpart of the async test above (see issue #13786)."""
+
+    def looping_stream():
+        while True:
+            yield _make_chunk("the model is stuck on this")
+
+    logging_obj = MagicMock()
+    logging_obj.completion_start_time = None
+    failures = []
+    logging_obj.failure_handler = lambda exception, traceback_exception: failures.append(
+        exception
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=looping_stream(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    raised = []
+    for _ in range(litellm.REPEATED_STREAMING_CHUNK_LIMIT + 5):
+        try:
+            next(wrapper)
+        except Exception as e:
+            raised.append(e)
+
+    time.sleep(0.1)
+
+    assert len(raised) == 5
+    assert all(error is raised[0] for error in raised[1:])
+    assert len(failures) == 1
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk

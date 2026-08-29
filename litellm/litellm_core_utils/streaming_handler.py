@@ -241,6 +241,7 @@ class CustomStreamWrapper:
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
+        self._terminal_failure: Exception | None = None
         self.sent_first_chunk = False
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
@@ -1915,6 +1916,7 @@ class CustomStreamWrapper:
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
+        self._raise_if_stream_already_failed()
         self._check_max_streaming_duration()
         try:
             if self.completion_stream is None:
@@ -2123,6 +2125,7 @@ class CustomStreamWrapper:
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
+        self._raise_if_stream_already_failed()
         try:
             # Inside the try (not before it) so a raised litellm.Timeout flows
             # through the same except Exception -> _handle_stream_fallback_error
@@ -2389,6 +2392,24 @@ class CustomStreamWrapper:
                 recover_error,
             )
 
+    def _raise_if_stream_already_failed(self) -> None:
+        """
+        A stream that already raised is finished, but its underlying iterator can
+        still hand out chunks - a consumer that keeps iterating (or a wrapper that
+        swallows the error and asks for the next chunk) re-runs detection, then
+        re-raises and re-logs the same failure on every call, flooding the failure
+        callbacks with thousands of copies of one request
+        (https://github.com/BerriAI/litellm/issues/13786).
+
+        Re-raise the failure the stream died of, without logging it a second time.
+        """
+        if self._terminal_failure is not None:
+            raise self._terminal_failure
+
+    def _raise_terminal_failure(self, exc: Exception) -> "NoReturn":
+        self._terminal_failure = exc
+        raise exc
+
     def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
         """
         Common error handling for both __next__ and __anext__.
@@ -2449,17 +2470,19 @@ class CustomStreamWrapper:
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
         if mapped_status_code is not None and 400 <= mapped_status_code < 500 and mapped_status_code != 429:
-            raise mapped_exception
+            self._raise_terminal_failure(mapped_exception)
         if original_status_code is not None and 400 <= original_status_code < 500 and original_status_code != 429:
-            raise mapped_exception
+            self._raise_terminal_failure(mapped_exception)
 
-        raise MidStreamFallbackError(
-            message=str(mapped_exception),
-            model=self.model,
-            llm_provider=self.custom_llm_provider or "anthropic",
-            original_exception=mapped_exception,
-            generated_content=self.response_uptil_now,
-            is_pre_first_chunk=not self.sent_first_chunk,
+        self._raise_terminal_failure(
+            MidStreamFallbackError(
+                message=str(mapped_exception),
+                model=self.model,
+                llm_provider=self.custom_llm_provider or "anthropic",
+                original_exception=mapped_exception,
+                generated_content=self.response_uptil_now,
+                is_pre_first_chunk=not self.sent_first_chunk,
+            )
         )
 
     @staticmethod
