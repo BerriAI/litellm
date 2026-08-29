@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::error::{CoreError, CoreResult, json_type_name};
+use crate::error::{CoreError, CoreResult, UpstreamError, json_type_name};
 use crate::ocr::transformation::{OcrAuthStrategy, OcrProviderConfig, OcrResponseHandling};
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
@@ -36,7 +36,7 @@ fn resolve_value(
     non_empty(explicit)
         .map(str::to_string)
         .or_else(|| env_lookup(env_name).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| CoreError::Auth(missing_message.to_string()))
+        .ok_or_else(|| CoreError::auth(missing_message.to_string()))
 }
 
 pub fn resolve_azure_ai_api_key(
@@ -138,7 +138,7 @@ fn normalize_pages_param(pages: &Value) -> CoreResult<Option<String>> {
             if normalized.split(',').all(pages_token_is_valid) {
                 Ok(Some(normalized))
             } else {
-                Err(CoreError::InvalidRequest(format!(
+                Err(CoreError::invalid_request(format!(
                     "Invalid `pages` string for Azure Document Intelligence: {value:?}. Expected format like '1-3,5,7-9'."
                 )))
             }
@@ -152,7 +152,7 @@ fn normalize_pages_param(pages: &Value) -> CoreResult<Option<String>> {
                 for value in values {
                     let page = value.as_i64().expect("checked is_i64");
                     if page < 0 {
-                        return Err(CoreError::InvalidRequest(
+                        return Err(CoreError::invalid_request(
                             "`pages` integers must be >= 0 (Mistral 0-based indices)".to_string(),
                         ));
                     }
@@ -176,16 +176,16 @@ fn normalize_pages_param(pages: &Value) -> CoreResult<Option<String>> {
                 if normalized.split(',').all(pages_token_is_valid) {
                     return Ok(Some(normalized));
                 }
-                return Err(CoreError::InvalidRequest(format!(
+                return Err(CoreError::invalid_request(format!(
                     "Invalid `pages` list for Azure Document Intelligence: {values:?}. Expected tokens like '1' or '3-5'."
                 )));
             }
-            Err(CoreError::InvalidRequest(
+            Err(CoreError::invalid_request(
                 "`pages` must be a list[int] (0-based, Mistral-style) or a string like '1-3,5,7-9'."
                     .to_string(),
             ))
         }
-        _ => Err(CoreError::InvalidRequest(
+        _ => Err(CoreError::invalid_request(
             "`pages` must be a list[int] (0-based, Mistral-style) or a string like '1-3,5,7-9'."
                 .to_string(),
         )),
@@ -217,19 +217,18 @@ pub fn complete_document_intelligence_url(
 }
 
 fn document_url_from_mistral_document(document: &Value) -> CoreResult<&str> {
-    let object = document.as_object().ok_or_else(|| CoreError::InvalidType {
-        expected: "object",
-        actual: json_type_name(document),
-    })?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| CoreError::invalid_type("object", json_type_name(document)))?;
     let doc_type = object
         .get("type")
         .and_then(Value::as_str)
-        .ok_or(CoreError::MissingField("document.type"))?;
+        .ok_or(CoreError::missing_field("document.type"))?;
     let field_name = match doc_type {
         "document_url" => "document_url",
         "image_url" => "image_url",
         other => {
-            return Err(CoreError::InvalidRequest(format!(
+            return Err(CoreError::invalid_request(format!(
                 "Invalid document type: {other}. Must be 'document_url' or 'image_url'"
             )));
         }
@@ -238,7 +237,7 @@ fn document_url_from_mistral_document(document: &Value) -> CoreResult<&str> {
         .get(field_name)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(CoreError::MissingField(field_name))
+        .ok_or(CoreError::missing_field(field_name))
 }
 
 fn extract_base64_from_data_uri(data_uri: &str) -> &str {
@@ -298,7 +297,7 @@ impl OcrProviderConfig for AzureAiOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData> {
+    ) -> Result<OcrResponseData, UpstreamError> {
         MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
     }
 
@@ -359,19 +358,16 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData> {
+    ) -> Result<OcrResponseData, UpstreamError> {
         let response = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
+            .ok_or_else(|| UpstreamError::invalid_type("object", json_type_name(&response_json)))?;
         let status = response
             .get("status")
             .and_then(Value::as_str)
-            .ok_or(CoreError::MissingField("status"))?;
+            .ok_or_else(|| UpstreamError::missing_field("status"))?;
         if status != "succeeded" {
-            return Err(CoreError::InvalidResponse(format!(
+            return Err(UpstreamError::InvalidResponse(format!(
                 "Azure Document Intelligence analysis failed with status: {status}"
             )));
         }

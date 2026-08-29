@@ -73,13 +73,19 @@ fn chat_completions_response_to_py(
 }
 
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
-    match err {
-        CoreError::Auth(message) => PyValueError::new_err(message),
-        CoreError::InvalidProvider(_)
-        | CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
-        other => PyRuntimeError::new_err(other.to_string()),
+    use litellm_core::RequestError;
+    match &err {
+        CoreError::Request(request) => match request {
+            RequestError::Auth(message) => PyValueError::new_err(message.clone()),
+            RequestError::InvalidProvider(_)
+            | RequestError::InvalidRequest(_)
+            | RequestError::InvalidType { .. }
+            | RequestError::MissingField(_) => PyValueError::new_err(err.to_string()),
+            RequestError::Connect(_) | RequestError::Routing(_) | RequestError::Unsupported(_) => {
+                PyRuntimeError::new_err(err.to_string())
+            }
+        },
+        CoreError::Upstream(_) => PyRuntimeError::new_err(err.to_string()),
     }
 }
 
@@ -88,23 +94,17 @@ fn core_error_to_pyerr(err: CoreError) -> PyErr {
 /// The distinction the host needs is whether the provider was already called.
 /// Everything raised before the request goes out is safe for the host to retry
 /// on its own path; anything after it is not, because the provider has already
-/// done the work and billed for it.
+/// done the work and billed for it. The type system now carries that split:
+/// [`CoreError::Request`] always declines, [`CoreError::Upstream`] never does.
 fn chat_completions_error_to_pyerr(err: CoreError) -> PyErr {
+    use litellm_core::UpstreamError;
     match err {
-        CoreError::Unsupported(_)
-        | CoreError::Auth(_)
-        | CoreError::InvalidProvider(_)
-        | CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_)
-        | CoreError::Routing(_)
-        // Nothing reached the provider, so serving it on Python cannot double
-        // bill and is the only way the caller gets an answer at all.
-        | CoreError::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
-        CoreError::Http { status, body } => {
+        CoreError::Request(_) => RustBridgeDeclined::new_err(err.to_string()),
+        CoreError::Upstream(UpstreamError::Http { status, body }) => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
-        CoreError::Network(message) | CoreError::InvalidResponse(message) => {
+        CoreError::Upstream(UpstreamError::Network(message))
+        | CoreError::Upstream(UpstreamError::InvalidResponse(message)) => {
             RustUpstreamError::new_err((0u16, message))
         }
     }
@@ -256,9 +256,6 @@ fn ocr(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
             litellm_call_id: None,
         }))
     });
@@ -301,9 +298,6 @@ fn aocr(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
             litellm_call_id: None,
         })
         .await
@@ -345,9 +339,6 @@ fn transcription(
                 extra_headers,
                 optional_params,
                 timeout,
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
-                request_metadata: Default::default(),
                 litellm_call_id: None,
             },
         ))
@@ -389,9 +380,6 @@ fn atranscription(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
             litellm_call_id: None,
         })
         .await

@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::error::{CoreError, CoreResult};
-use crate::http_utils::truncate_error_body;
+use crate::http_utils::{map_send_error, upstream_http};
 
 use super::client::http_client;
 use super::transformation::ChatCompletionsAuth;
@@ -13,7 +13,7 @@ pub(super) async fn execute_chat_completions_provider_call(
     request: ProviderChatCompletionsRequest,
 ) -> CoreResult<ChatCompletionsResponse> {
     let body = serde_json::to_vec(&request.body).map_err(|err| {
-        CoreError::InvalidRequest(format!(
+        CoreError::invalid_request(format!(
             "failed to serialize chat completions request: {err}"
         ))
     })?;
@@ -27,53 +27,26 @@ pub(super) async fn execute_chat_completions_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder.send().await.map_err(|err| {
-        // Failing to establish the connection means the request never went out,
-        // so the host can still serve it. Everything else here, a timeout
-        // above all, may have reached the provider and been answered.
-        if err.is_connect() || err.is_builder() {
-            CoreError::Connect(err.to_string())
-        } else {
-            CoreError::Network(err.to_string())
-        }
-    })?;
+    let response = request_builder.send().await.map_err(map_send_error)?;
 
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| CoreError::network(err.to_string()))?;
 
     if !status.is_success() {
-        return Err(CoreError::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        });
+        return Err(upstream_http(status, &text));
     }
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
-        CoreError::InvalidResponse(format!("invalid chat completions response JSON: {err}"))
+        CoreError::invalid_response(format!("invalid chat completions response JSON: {err}"))
     })?;
-    request
+    // `transform_response` can only fail with an upstream error: the provider
+    // already answered, so the request must not be retried blindly.
+    Ok(request
         .config
-        .transform_response(&request.model, ProviderChatResponseData { body })
-        .map_err(as_response_error)
-}
-
-/// Re-tag an error raised while normalizing a response the provider already
-/// returned.
-///
-/// A config reports the same variants on either side of the call: a missing
-/// field or an unsupported block can mean "this request cannot be translated"
-/// during prepare and "this response cannot be normalized" here. Only the
-/// second kind has already been billed, and a host that keeps a reference
-/// implementation must not retry those, so collapse them to one variant that
-/// can only mean the provider was already called.
-pub(super) fn as_response_error(err: CoreError) -> CoreError {
-    match err {
-        already @ (CoreError::InvalidResponse(_) | CoreError::Http { .. }) => already,
-        other => CoreError::InvalidResponse(other.to_string()),
-    }
+        .transform_response(&request.model, ProviderChatResponseData { body })?)
 }
 
 #[cfg(feature = "bedrock-auth")]
@@ -101,7 +74,7 @@ pub(super) async fn signed_headers(
         .iter()
         .any(|(name, _)| is_sigv4_computed_header(name))
     {
-        return Err(CoreError::Unsupported(
+        return Err(CoreError::unsupported(
             "request forwards a header AWS SigV4 computes",
         ));
     }
@@ -139,7 +112,7 @@ pub(super) async fn signed_headers(
     _body: &[u8],
 ) -> CoreResult<Vec<(String, String)>> {
     match &request.auth {
-        ChatCompletionsAuth::AwsSigV4 { .. } => Err(CoreError::Unsupported(
+        ChatCompletionsAuth::AwsSigV4 { .. } => Err(CoreError::unsupported(
             "AWS SigV4 requires the bedrock-auth feature",
         )),
         _ => Ok(request.upstream_headers.clone()),

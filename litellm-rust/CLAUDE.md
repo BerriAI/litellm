@@ -52,10 +52,10 @@ Streaming keeps the same shape: the route entrypoint has a `<route>_stream`
 variant in `core` that returns the upstream response so a host can splice it to
 its own caller; the host still owns no provider logic.
 
-Call-hook and lifecycle instrumentation, including phase timing, usage
-accumulation, and callback payload construction, always lives in `core`.
-Hosts feed observed events into core and dispatch the completed payloads through
-their I/O logger; hosts must not own callback orchestration.
+Typed call lifecycle ordering, phase timing, and SDK callback contracts live in
+`core`. Route requests contain only route inputs; callback and guardrail state is
+injected through `CallInterceptor` implementations. Hosts may own concrete
+logger transports, but not provider preparation or route lifecycle ordering.
 
 Allowed in `core`:
 - The public entrypoint for a top-level LiteLLM call
@@ -71,7 +71,7 @@ Not allowed in `core`:
 - Filesystem access
 - Database access
 - Config file reading and rollout state
-- Logging callbacks, spend writes, or custom callbacks
+- Callback transport, spend writes, or customer callback I/O
 - Global mutable runtime state
 
 Env reads in `core` are limited to credential fallback inside a route's

@@ -40,28 +40,27 @@ impl ResponsesWebSocketConnection {
     ) -> CoreResult<Self> {
         let mut request = url
             .into_client_request()
-            .map_err(|error| CoreError::Network(error.to_string()))?;
+            .map_err(|error| CoreError::network(error.to_string()))?;
         for (name, value) in headers {
             let header_name = name
                 .parse::<HeaderName>()
-                .map_err(|error| CoreError::InvalidRequest(error.to_string()))?;
+                .map_err(|error| CoreError::invalid_request(error.to_string()))?;
             let header_value = HeaderValue::from_str(value)
-                .map_err(|error| CoreError::InvalidRequest(error.to_string()))?;
+                .map_err(|error| CoreError::invalid_request(error.to_string()))?;
             request.headers_mut().insert(header_name, header_value);
         }
         let connect = connect_async(request);
         let result = match timeout {
             Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
-                CoreError::Network("Responses WebSocket connection timed out".to_string())
+                CoreError::network("Responses WebSocket connection timed out".to_string())
             })?,
             None => connect.await,
         };
         let (socket, _) = result.map_err(|error| match error {
-            tokio_tungstenite::tungstenite::Error::Http(response) => CoreError::Http {
-                status: response.status().as_u16(),
-                body: String::new(),
-            },
-            other => CoreError::Network(other.to_string()),
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                CoreError::http(response.status().as_u16(), String::new())
+            }
+            other => CoreError::network(other.to_string()),
         })?;
         Ok(Self {
             socket: Arc::new(Mutex::new(Some(socket))),
@@ -71,14 +70,14 @@ impl ResponsesWebSocketConnection {
     pub async fn send_text(&self, text: String) -> CoreResult<()> {
         let mut socket = self.socket.lock().await;
         let Some(socket) = socket.as_mut() else {
-            return Err(CoreError::Network(
+            return Err(CoreError::network(
                 "Responses WebSocket is closed".to_string(),
             ));
         };
         socket
             .send(Message::Text(text))
             .await
-            .map_err(|error| CoreError::Network(error.to_string()))
+            .map_err(|error| CoreError::network(error.to_string()))
     }
 
     pub async fn recv_text(&self) -> CoreResult<Option<String>> {
@@ -90,10 +89,10 @@ impl ResponsesWebSocketConnection {
             Some(Ok(Message::Text(text))) => Ok(Some(text)),
             Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
                 .map(Some)
-                .map_err(|error| CoreError::InvalidResponse(error.to_string())),
+                .map_err(|error| CoreError::invalid_response(error.to_string())),
             Some(Ok(Message::Close(_))) | None => Ok(None),
             Some(Ok(_)) => Ok(None),
-            Some(Err(error)) => Err(CoreError::Network(error.to_string())),
+            Some(Err(error)) => Err(CoreError::network(error.to_string())),
         }
     }
 
@@ -103,7 +102,7 @@ impl ResponsesWebSocketConnection {
             socket
                 .close(None)
                 .await
-                .map_err(|error| CoreError::Network(error.to_string()))?;
+                .map_err(|error| CoreError::network(error.to_string()))?;
         }
         *socket = None;
         Ok(())
@@ -120,7 +119,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
-        .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| CoreError::auth(MISSING_KEY_MESSAGE.to_string()))
 }
 
 async fn dial_upstream(
@@ -132,26 +131,25 @@ async fn dial_upstream(
     let mut request = url
         .as_str()
         .into_client_request()
-        .map_err(|error| CoreError::Network(error.to_string()))?;
+        .map_err(|error| CoreError::network(error.to_string()))?;
     request.headers_mut().insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|error| CoreError::Auth(error.to_string()))?,
+            .map_err(|error| CoreError::auth(error.to_string()))?,
     );
     let result = tokio::time::timeout(
         Duration::from_secs(DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS),
         connect_async(request),
     )
     .await
-    .map_err(|_| CoreError::Network("Responses WebSocket connection timed out".to_string()))?;
+    .map_err(|_| CoreError::network("Responses WebSocket connection timed out".to_string()))?;
     result
         .map(|(socket, _)| socket)
         .map_err(|error| match error {
-            tokio_tungstenite::tungstenite::Error::Http(response) => CoreError::Http {
-                status: response.status().as_u16(),
-                body: String::new(),
-            },
-            other => CoreError::Network(other.to_string()),
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                CoreError::http(response.status().as_u16(), String::new())
+            }
+            other => CoreError::network(other.to_string()),
         })
 }
 
@@ -210,18 +208,18 @@ where
                     .events
                 {
                     let payload = serde_json::to_string(&outbound)
-                        .map_err(|error| CoreError::InvalidResponse(error.to_string()))?;
+                        .map_err(|error| CoreError::invalid_response(error.to_string()))?;
                     upstream_tx.send(Message::Text(payload))
                         .await
-                        .map_err(|error| CoreError::Network(error.to_string()))?;
+                        .map_err(|error| CoreError::network(error.to_string()))?;
                 }
             }
             message = upstream_rx.next() => {
                 let Some(message) = message else { break };
-                match message.map_err(|error| CoreError::Network(error.to_string()))? {
+                match message.map_err(|error| CoreError::network(error.to_string()))? {
                     Message::Text(text) => {
                         let event = serde_json::from_str::<ResponsesWsEvent>(&text)
-                            .map_err(|error| CoreError::InvalidResponse(error.to_string()))?;
+                            .map_err(|error| CoreError::invalid_response(error.to_string()))?;
                         observe(&event);
                         for outbound in OPENAI_RESPONSES_WS_CONFIG
                             .transform_ws_response(&event, model)?
@@ -229,7 +227,7 @@ where
                         {
                             client_out.send(outbound)
                                 .await
-                                .map_err(|error| CoreError::Network(error.to_string()))?;
+                                .map_err(|error| CoreError::network(error.to_string()))?;
                         }
                     }
                     Message::Close(_) => break,
@@ -267,11 +265,11 @@ where
             .events
         {
             let payload = serde_json::to_string(&outbound)
-                .map_err(|error| CoreError::InvalidResponse(error.to_string()))?;
+                .map_err(|error| CoreError::invalid_response(error.to_string()))?;
             upstream_tx
                 .send(Message::Text(payload))
                 .await
-                .map_err(|error| CoreError::Network(error.to_string()))?;
+                .map_err(|error| CoreError::network(error.to_string()))?;
         }
     }
     ResponsesWebSocketStreaming::bidirectional_forward(
@@ -320,6 +318,7 @@ mod tests {
     use super::*;
     use futures_channel::mpsc;
     use futures_util::{SinkExt, StreamExt};
+    use litellm_core::UpstreamError;
     use litellm_core::responses::types::ResponsesWsEventType;
     use serde_json::json;
     use tokio::io::AsyncWriteExt;
@@ -514,7 +513,10 @@ mod tests {
         )
         .await
         .expect_err("status error");
-        assert!(matches!(error, CoreError::Http { status: 401, .. }));
+        assert!(matches!(
+            error,
+            CoreError::Upstream(UpstreamError::Http { status: 401, .. })
+        ));
         server.await.expect("server task");
     }
 
@@ -543,7 +545,10 @@ mod tests {
         )
         .await
         .expect_err("status error");
-        assert!(matches!(error, CoreError::Http { status: 500, .. }));
+        assert!(matches!(
+            error,
+            CoreError::Upstream(UpstreamError::Http { status: 500, .. })
+        ));
         server.await.expect("server task");
     }
 }

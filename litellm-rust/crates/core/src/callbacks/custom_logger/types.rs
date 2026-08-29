@@ -157,38 +157,44 @@ impl ModelCallDetails {
     }
 }
 
+/// A failure record attached to a logging event. Kinds are open-ended (hosts
+/// log provider, callback, and session failures alike), so this stays a
+/// record rather than a closed enum.
 #[derive(Clone, Debug)]
 pub struct LoggingError {
     pub message: String,
     pub kind: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct LogError {
-    pub message: String,
-    pub kind: String,
-}
-
-impl LogError {
-    pub fn channel_full() -> Self {
-        Self {
-            message: "logging channel is full; dropping record".to_string(),
-            kind: "ChannelFull".to_string(),
-        }
-    }
-
-    pub fn channel_closed() -> Self {
-        Self {
-            message: "logging channel is closed; worker has shut down".to_string(),
-            kind: "ChannelClosed".to_string(),
-        }
-    }
-}
-
-impl std::fmt::Display for LogError {
+impl std::fmt::Display for LoggingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.kind, self.message)
     }
 }
 
-impl std::error::Error for LogError {}
+impl std::error::Error for LoggingError {}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum LogError {
+    #[error("ChannelFull: logging channel is full; dropping record")]
+    ChannelFull,
+    #[error("ChannelClosed: logging channel is closed; worker has shut down")]
+    ChannelClosed,
+}
+
+impl LogError {
+    pub fn channel_full() -> Self {
+        Self::ChannelFull
+    }
+
+    pub fn channel_closed() -> Self {
+        Self::ChannelClosed
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::ChannelFull => "ChannelFull",
+            Self::ChannelClosed => "ChannelClosed",
+        }
+    }
+}

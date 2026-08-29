@@ -1,13 +1,9 @@
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType};
-use crate::{CoreError, CoreResult};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResponsesWsUsage {
@@ -66,7 +62,6 @@ struct InstrumentationState {
     start_time: f64,
     end_time: f64,
     metadata: ResponsesWsMetadata,
-    outcome: Option<ResponsesWsLogOutcome>,
 }
 
 pub struct ResponsesWsInstrumentation {
@@ -90,7 +85,6 @@ impl ResponsesWsInstrumentation {
                 start_time: now,
                 end_time: now,
                 metadata,
-                outcome: None,
             }),
         }
     }
@@ -186,75 +180,12 @@ impl ResponsesWsInstrumentation {
         }
     }
 
-    pub fn take_outcome(&self) -> Option<ResponsesWsLogOutcome> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .outcome
-            .take()
-    }
-
-    pub fn take_or_build_outcome(&self, success: bool) -> ResponsesWsLogOutcome {
-        self.take_outcome().unwrap_or_else(|| {
-            if success {
-                self.success_outcome()
-            } else {
-                self.failure_outcome()
-            }
-        })
-    }
-}
-
-type LifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
-
-impl CallLifecycleHooks<(), (), ()> for ResponsesWsInstrumentation {
-    type PreCallFuture<'a> = LifecycleFuture<'a, ()>;
-    type DuringCallFuture<'a> = LifecycleFuture<'a, ()>;
-    type SuccessFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
-    type FailureFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
-
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: (),
-    ) -> Self::PreCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
-    }
-
-    fn async_during_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: (),
-    ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
-    }
-
-    fn async_log_success_event<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        _response: &'a (),
-        _timing: &'a CallLifecycleTiming,
-    ) -> Self::SuccessFuture<'a> {
-        Box::pin(async move {
-            let outcome = self.success_outcome();
-            if let Ok(mut state) = self.state.lock() {
-                state.outcome = Some(outcome);
-            }
-        })
-    }
-
-    fn async_log_failure_event<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        _error: &'a CoreError,
-        _timing: &'a CallLifecycleTiming,
-    ) -> Self::FailureFuture<'a> {
-        Box::pin(async move {
-            let outcome = self.failure_outcome();
-            if let Ok(mut state) = self.state.lock() {
-                state.outcome = Some(outcome);
-            }
-        })
+    pub fn outcome(&self, success: bool) -> ResponsesWsLogOutcome {
+        if success {
+            self.success_outcome()
+        } else {
+            self.failure_outcome()
+        }
     }
 }
 
@@ -328,37 +259,12 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn lifecycle_records_success_outcome_for_provider_completion() {
-        let instrumentation =
-            ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
-        let result = crate::call_lifecycle::CallLifecycle::default()
-            .run(
-                crate::call_lifecycle::CallLifecycleContext::new(
-                    "responses_websocket",
-                    "gpt-5",
-                    "openai",
-                    "call-1",
-                ),
-                (),
-                &instrumentation,
-                |_| async { Ok::<(), CoreError>(()) },
-            )
-            .await;
-
-        assert!(result.is_ok());
-        assert!(matches!(
-            instrumentation.take_outcome(),
-            Some(ResponsesWsLogOutcome::Success { .. })
-        ));
-    }
-
     #[test]
-    fn builds_outcome_when_lifecycle_did_not_record_one() {
+    fn builds_outcome_from_session_status() {
         let instrumentation =
             ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
         assert!(matches!(
-            instrumentation.take_or_build_outcome(true),
+            instrumentation.outcome(true),
             ResponsesWsLogOutcome::Success { .. }
         ));
     }

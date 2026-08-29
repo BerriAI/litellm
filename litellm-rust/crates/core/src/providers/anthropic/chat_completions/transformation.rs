@@ -10,7 +10,7 @@ use crate::chat_completions::types::{
     ProviderChatRequestData, ProviderChatResponseData,
 };
 use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
-use crate::error::{CoreError, CoreResult};
+use crate::error::{CoreResult, UpstreamError};
 use crate::providers::anthropic::messages::transformation::{
     complete_anthropic_url, resolve_anthropic_api_key,
 };
@@ -147,23 +147,25 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         _model: &str,
         response: ProviderChatResponseData,
-    ) -> CoreResult<ChatCompletionsResponse> {
+    ) -> Result<ChatCompletionsResponse, UpstreamError> {
         let body = response.body.as_object().ok_or_else(|| {
-            CoreError::InvalidResponse("messages response is not an object".into())
+            UpstreamError::InvalidResponse("messages response is not an object".into())
         })?;
 
         let content = body
             .get("content")
             .and_then(Value::as_array)
-            .ok_or(CoreError::MissingField("content"))?;
+            .ok_or_else(|| UpstreamError::missing_field("content"))?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.
-        // Decline rather than silently dropping it; the host falls back.
+        // Refuse rather than silently dropping it; the host falls back.
         if content
             .iter()
             .any(|block| block.get("type").and_then(Value::as_str) != Some("text"))
         {
-            return Err(CoreError::Unsupported("non-text response content block"));
+            return Err(UpstreamError::unsupported(
+                "non-text response content block",
+            ));
         }
         let text: String = content
             .iter()
@@ -173,7 +175,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         let usage = body
             .get("usage")
             .and_then(Value::as_object)
-            .ok_or(CoreError::MissingField("usage"))?;
+            .ok_or_else(|| UpstreamError::missing_field("usage"))?;
         let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
 
         Ok(ChatCompletionsResponse {
@@ -181,7 +183,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             model: body
                 .get("model")
                 .and_then(Value::as_str)
-                .ok_or(CoreError::MissingField("model"))?
+                .ok_or_else(|| UpstreamError::missing_field("model"))?
                 .to_string(),
             choices: vec![ChatCompletionsChoice {
                 index: 0,

@@ -3,8 +3,10 @@ use std::future::Future;
 use std::pin::Pin;
 
 use serde_json::Value;
+use thiserror::Error;
 
 use crate::callbacks::custom_logger::CallType;
+use crate::error::{CoreError, RequestError};
 
 pub type GuardrailFuture<'a> =
     Pin<Box<dyn Future<Output = Result<GuardrailDecision, GuardrailError>> + Send + 'a>>;
@@ -24,28 +26,38 @@ impl GuardrailEventHook {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GuardrailError {
-    pub message: String,
-    pub kind: String,
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum GuardrailError {
+    /// A guardrail policy rejected the request or response content.
+    #[error("GuardrailBlocked: {0}")]
+    Blocked(String),
 }
 
 impl GuardrailError {
     pub fn blocked(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            kind: "GuardrailBlocked".to_string(),
+        Self::Blocked(message.into())
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Blocked(_) => "GuardrailBlocked",
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Blocked(message) => message,
         }
     }
 }
 
-impl std::fmt::Display for GuardrailError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.kind, self.message)
+/// A guardrail can only run before the provider call is issued, so its
+/// failures are always request-side: the host may retry on its own path.
+impl From<GuardrailError> for CoreError {
+    fn from(error: GuardrailError) -> Self {
+        Self::Request(RequestError::InvalidRequest(error.to_string()))
     }
 }
-
-impl std::error::Error for GuardrailError {}
 
 #[derive(Clone, Debug)]
 pub struct GuardrailContext {

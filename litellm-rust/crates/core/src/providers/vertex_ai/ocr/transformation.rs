@@ -1,4 +1,4 @@
-use crate::error::{CoreError, CoreResult, json_type_name};
+use crate::error::{CoreError, CoreResult, UpstreamError, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
@@ -51,7 +51,7 @@ pub fn resolve_vertex_api_key(
         .or_else(|| env_lookup(VERTEX_AI_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
         .or_else(|| env_lookup(VERTEXAI_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::Auth(
+            CoreError::auth(
                 "Missing Vertex AI access token - pass api_key or provide Authorization via extra_headers"
                     .to_string(),
             )
@@ -66,7 +66,7 @@ fn vertex_project(
         .map(str::to_string)
         .or_else(|| env_lookup(VERTEXAI_PROJECT_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::InvalidRequest(
+            CoreError::invalid_request(
                 "Missing vertex_project - Set VERTEXAI_PROJECT environment variable or pass vertex_project parameter"
                     .to_string(),
             )
@@ -126,19 +126,18 @@ pub fn complete_vertex_deepseek_url(
 }
 
 fn document_content_item(document: &Value) -> CoreResult<Value> {
-    let object = document.as_object().ok_or_else(|| CoreError::InvalidType {
-        expected: "object",
-        actual: json_type_name(document),
-    })?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| CoreError::invalid_type("object", json_type_name(document)))?;
     let doc_type = object
         .get("type")
         .and_then(Value::as_str)
-        .ok_or(CoreError::MissingField("document.type"))?;
+        .ok_or(CoreError::missing_field("document.type"))?;
     let url_field = match doc_type {
         "image_url" => "image_url",
         "document_url" => "document_url",
         other => {
-            return Err(CoreError::InvalidRequest(format!(
+            return Err(CoreError::invalid_request(format!(
                 "Unsupported document type: {other}. Expected 'image_url' or 'document_url'"
             )));
         }
@@ -147,7 +146,7 @@ fn document_content_item(document: &Value) -> CoreResult<Value> {
         .get(url_field)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(CoreError::MissingField(url_field))?;
+        .ok_or(CoreError::missing_field(url_field))?;
 
     Ok(json!({
         "type": "image_url",
@@ -163,7 +162,7 @@ fn deepseek_model_name(model: &str) -> String {
     }
 }
 
-fn first_choice_content(response: &Value) -> CoreResult<Value> {
+fn first_choice_content(response: &Value) -> Result<Value, UpstreamError> {
     response
         .get("choices")
         .and_then(Value::as_array)
@@ -176,9 +175,7 @@ fn first_choice_content(response: &Value) -> CoreResult<Value> {
             Value::Object(_) => true,
             _ => false,
         })
-        .ok_or_else(|| {
-            CoreError::InvalidResponse("No content in DeepSeek OCR response".to_string())
-        })
+        .ok_or_else(|| UpstreamError::InvalidResponse("No content in DeepSeek OCR response".into()))
 }
 
 fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> Value {
@@ -227,7 +224,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData> {
+    ) -> Result<OcrResponseData, UpstreamError> {
         MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
     }
 
@@ -289,13 +286,10 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData> {
+    ) -> Result<OcrResponseData, UpstreamError> {
         let response = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
+            .ok_or_else(|| UpstreamError::invalid_type("object", json_type_name(&response_json)))?;
         let usage = response.get("usage").cloned();
         let content = first_choice_content(&response_json)?;
         let mut ocr_data = ocr_data_from_content(content.clone(), usage.clone(), model);
@@ -314,10 +308,9 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
             });
         }
 
-        let object = ocr_data.as_object().ok_or_else(|| CoreError::InvalidType {
-            expected: "object",
-            actual: json_type_name(&ocr_data),
-        })?;
+        let object = ocr_data
+            .as_object()
+            .ok_or_else(|| UpstreamError::invalid_type("object", json_type_name(&ocr_data)))?;
         let pages = object
             .get("pages")
             .and_then(Value::as_array)

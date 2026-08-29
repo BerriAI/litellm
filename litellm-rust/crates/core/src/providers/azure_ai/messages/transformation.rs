@@ -1,4 +1,4 @@
-use crate::error::{CoreError, CoreResult};
+use crate::error::{CoreError, CoreResult, UpstreamError};
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 use crate::messages::types::{
     AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, ContentBlock,
@@ -33,7 +33,7 @@ pub fn resolve_azure_api_key(
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::Auth(
+            CoreError::auth(
                 "Missing Azure API Key - Set `api_key` or the AZURE_API_KEY environment variable"
                     .to_string(),
             )
@@ -48,7 +48,7 @@ pub fn complete_azure_anthropic_url(
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_BASE_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::Auth(
+            CoreError::auth(
                 "Missing Azure API Base - Set `api_base` or the AZURE_API_BASE environment variable. \
                  Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
                     .to_string(),
@@ -190,7 +190,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         &self,
         model: &str,
         response: AnthropicMessagesResponse,
-    ) -> CoreResult<AnthropicMessagesResponse> {
+    ) -> Result<AnthropicMessagesResponse, UpstreamError> {
         self.anthropic.transform_response(model, response)
     }
 }
@@ -268,7 +268,10 @@ mod tests {
             "https://env.services.ai.azure.com/anthropic/v1/messages"
         );
         let err = complete_azure_anthropic_url(Some("  "), &|_| None).expect_err("missing base");
-        assert!(matches!(err, CoreError::Auth(_)));
+        assert!(matches!(
+            err,
+            CoreError::Request(crate::RequestError::Auth(_))
+        ));
     }
 
     #[test]
@@ -284,7 +287,7 @@ mod tests {
         );
         assert!(matches!(
             resolve_azure_api_key(None, &|_| None).expect_err("missing key"),
-            CoreError::Auth(_)
+            CoreError::Request(crate::RequestError::Auth(_))
         ));
     }
 

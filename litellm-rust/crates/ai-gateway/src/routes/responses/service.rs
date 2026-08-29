@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{Sink, Stream};
-use litellm_core::call_lifecycle::{CallLifecycle, CallLifecycleContext};
+use litellm_core::call_lifecycle::{
+    CallContext, CallInterceptor, CallOutcome, CallRuntime, CallSpec, CallTiming,
+};
 use litellm_core::responses::instrumentation::{
     ResponsesWsCallbackPayload, ResponsesWsInstrumentation, ResponsesWsLogOutcome,
     ResponsesWsMetadata,
@@ -33,7 +35,7 @@ where
     Out::Error: std::fmt::Display,
 {
     let deployment = router.get_available_deployment(model).ok_or_else(|| {
-        CoreError::Routing(format!("no deployment available for model '{model}'"))
+        CoreError::routing(format!("no deployment available for model '{model}'"))
     })?;
     let params = &deployment.litellm_params;
     let provider_model = params
@@ -41,7 +43,7 @@ where
         .strip_prefix("openai/")
         .unwrap_or(&params.model);
     if params.model.contains('/') && !params.model.starts_with("openai/") {
-        return Err(CoreError::InvalidProvider(
+        return Err(CoreError::invalid_provider(
             "Responses WebSocket route supports OpenAI deployments only".to_string(),
         ));
     }
@@ -55,27 +57,69 @@ where
         },
     ));
     let observer_instrumentation = Arc::clone(&instrumentation);
-    let context = CallLifecycleContext::new("responses_websocket", model, "openai", call_id);
-    let result = CallLifecycle::default()
-        .run(context, (), instrumentation.as_ref(), |_| async move {
-            crate::io::responses_ws::async_responses_websocket(
-                provider_model,
-                params.api_key.as_deref(),
-                params.api_base.as_deref(),
-                first_frame,
-                idle_timeout,
-                move |event| {
-                    observer_instrumentation.observe(event);
-                },
-                client_in,
-                client_out,
-            )
-            .await
-        })
-        .await;
-    let outcome = instrumentation.take_or_build_outcome(result.is_ok());
-    dispatch_outcome(loggers, outcome).await;
-    result
+    let context = CallContext::new(model, "openai", call_id);
+    let interceptor = ResponsesCallbackInterceptor {
+        instrumentation: Arc::clone(&instrumentation),
+        loggers,
+    };
+    CallRuntime::new(&interceptor)
+        .run::<ResponsesWsCall, _, _, _, _>(
+            context,
+            (),
+            |_| async { Ok(()) },
+            |_| async move {
+                crate::io::responses_ws::async_responses_websocket(
+                    provider_model,
+                    params.api_key.as_deref(),
+                    params.api_base.as_deref(),
+                    first_frame,
+                    idle_timeout,
+                    move |event| {
+                        observer_instrumentation.observe(event);
+                    },
+                    client_in,
+                    client_out,
+                )
+                .await
+            },
+        )
+        .await
+}
+
+enum ResponsesWsCall {}
+
+impl CallSpec for ResponsesWsCall {
+    const NAME: &'static str = "responses_websocket";
+    type BeforeCall = ();
+    type BeforeSend = ();
+    type Response = ();
+}
+
+struct ResponsesCallbackInterceptor {
+    instrumentation: Arc<ResponsesWsInstrumentation>,
+    loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
+}
+
+impl CallInterceptor<ResponsesWsCall> for ResponsesCallbackInterceptor {
+    async fn before_call<'a>(&'a self, _context: &'a CallContext, input: ()) -> CoreResult<()> {
+        Ok(input)
+    }
+
+    async fn before_send<'a>(&'a self, _context: &'a CallContext, input: ()) -> CoreResult<()> {
+        Ok(input)
+    }
+
+    async fn complete<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        outcome: CallOutcome<'a, ()>,
+        _timing: &'a CallTiming,
+    ) {
+        let outcome = self
+            .instrumentation
+            .outcome(matches!(outcome, CallOutcome::Success(_)));
+        dispatch_outcome(Arc::clone(&self.loggers), outcome).await;
+    }
 }
 
 async fn dispatch_outcome(

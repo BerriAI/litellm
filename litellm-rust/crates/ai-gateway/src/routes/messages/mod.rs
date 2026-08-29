@@ -46,7 +46,7 @@ fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRout
     let mut response = Response::builder()
         .status(
             StatusCode::from_u16(upstream.status().as_u16()).map_err(|error| {
-                MessagesRouteError(CoreError::InvalidResponse(format!(
+                MessagesRouteError(CoreError::invalid_response(format!(
                     "invalid upstream response status: {error}"
                 )))
             })?,
@@ -58,7 +58,7 @@ fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRout
     response
         .body(Body::from_stream(upstream.bytes_stream()))
         .map_err(|error| {
-            MessagesRouteError(CoreError::InvalidResponse(format!(
+            MessagesRouteError(CoreError::invalid_response(format!(
                 "failed to build streaming response: {error}"
             )))
         })
@@ -74,7 +74,7 @@ fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, 
         })
         .map(|(name, value)| {
             let value = value.to_str().map_err(|_| {
-                CoreError::InvalidRequest(format!("invalid value for header {}", name.as_str()))
+                CoreError::invalid_request(format!("invalid value for header {}", name.as_str()))
             })?;
             Ok((name.to_string(), Value::String(value.to_string())))
         })
@@ -93,29 +93,31 @@ impl From<CoreError> for MessagesRouteError {
 
 impl IntoResponse for MessagesRouteError {
     fn into_response(self) -> Response {
+        use litellm_core::RequestError;
         let (status, message) = match self.0 {
-            CoreError::InvalidRequest(message) => (StatusCode::BAD_REQUEST, message),
-            CoreError::InvalidProvider(_) | CoreError::Routing(_) => (
+            CoreError::Request(RequestError::InvalidRequest(message)) => {
+                (StatusCode::BAD_REQUEST, message)
+            }
+            CoreError::Request(RequestError::InvalidProvider(_))
+            | CoreError::Request(RequestError::Routing(_)) => (
                 StatusCode::NOT_FOUND,
                 "no messages deployment is configured for this model".to_string(),
             ),
-            CoreError::Auth(_) => (
+            CoreError::Request(RequestError::Auth(_)) => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider authentication failed".to_string(),
             ),
-            CoreError::Http { .. }
-            | CoreError::Network(_)
-            | CoreError::Connect(_)
-            | CoreError::InvalidResponse(_)
-            | CoreError::InvalidType { .. }
-            | CoreError::MissingField(_) => (
+            CoreError::Upstream(_)
+            | CoreError::Request(RequestError::Connect(_))
+            | CoreError::Request(RequestError::InvalidType { .. })
+            | CoreError::Request(RequestError::MissingField(_)) => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider request failed".to_string(),
             ),
             // The gateway has no Python implementation to decline to, so a
             // request the core cannot serve is reported to the caller. The
             // reason is a fixed internal string, never provider content.
-            CoreError::Unsupported(reason) => (
+            CoreError::Request(RequestError::Unsupported(reason)) => (
                 StatusCode::BAD_REQUEST,
                 format!("messages request is not supported: {reason}"),
             ),

@@ -18,6 +18,10 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
+use litellm_core::CoreResult;
+use litellm_core::call_lifecycle::{
+    CallContext, CallInterceptor, CallOutcome, CallRuntime, CallSpec, CallTiming,
+};
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
@@ -120,12 +124,8 @@ async fn bridge(
     // path — just a monomorphized FnMut mutating stack-local fields. This is
     // what lets observe scale: 10K concurrent sessions = 10K independent
     // collectors, zero cross-task synchronization.
-    let mut collector = RealTimeStreaming::new(
-        loggers.as_ref().clone(),
-        new_call_id(),
-        model.clone(),
-        metadata,
-    );
+    let call_id = new_call_id();
+    let collector = RealTimeStreaming::new(call_id.clone(), model.clone());
 
     let client_in = ws_stream.filter_map(|message| async move {
         match message {
@@ -142,25 +142,77 @@ async fn bridge(
 
     futures_util::pin_mut!(client_in, client_out);
 
-    // The observe closure borrows `&mut collector` for the duration of the
-    // splice; the borrow ends when `run` returns, freeing the collector for the
-    // single post-session `log_messages` flush. `run` picks a pooled (warm) or
-    // fresh upstream — observe fires on the upstream arm either way.
-    let result = service::run(
-        &router,
-        &pool,
-        &model,
-        None,
-        |event: &RealtimeEvent| collector.observe(event),
-        client_in,
-        client_out,
-    )
-    .await;
+    let interceptor = RealtimeCallbackInterceptor { loggers, metadata };
+    let context = CallContext::new(&model, "openai", call_id);
+    let session = CallRuntime::new(&interceptor)
+        .run::<RealtimeSessionCall, _, _, _, _>(
+            context,
+            (),
+            |_| async { Ok(()) },
+            |_| async move {
+                let mut collector = collector;
+                let result = service::run(
+                    &router,
+                    &pool,
+                    &model,
+                    None,
+                    |event: &RealtimeEvent| collector.observe(event),
+                    client_in,
+                    client_out,
+                )
+                .await;
+                Ok(RealtimeSession { collector, result })
+            },
+        )
+        .await;
+    let _ = session.and_then(|session| session.result);
+}
 
-    let status = if result.is_ok() {
-        SessionStatus::Success
-    } else {
-        SessionStatus::Failure
-    };
-    collector.log_messages(status).await;
+enum RealtimeSessionCall {}
+
+impl CallSpec for RealtimeSessionCall {
+    const NAME: &'static str = "realtime";
+    type BeforeCall = ();
+    type BeforeSend = ();
+    type Response = RealtimeSession;
+}
+
+struct RealtimeSession {
+    collector: RealTimeStreaming,
+    result: CoreResult<()>,
+}
+
+struct RealtimeCallbackInterceptor {
+    loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
+    metadata: RequestMetadata,
+}
+
+impl CallInterceptor<RealtimeSessionCall> for RealtimeCallbackInterceptor {
+    async fn before_call<'a>(&'a self, _context: &'a CallContext, input: ()) -> CoreResult<()> {
+        Ok(input)
+    }
+
+    async fn before_send<'a>(&'a self, _context: &'a CallContext, input: ()) -> CoreResult<()> {
+        Ok(input)
+    }
+
+    async fn complete<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        outcome: CallOutcome<'a, RealtimeSession>,
+        _timing: &'a CallTiming,
+    ) {
+        let CallOutcome::Success(session) = outcome else {
+            return;
+        };
+        let status = if session.result.is_ok() {
+            SessionStatus::Success
+        } else {
+            SessionStatus::Failure
+        };
+        session
+            .collector
+            .log_messages(self.loggers.as_ref().clone(), &self.metadata, status)
+            .await;
+    }
 }

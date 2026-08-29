@@ -20,18 +20,20 @@ pub(super) fn resolve_provider_config<'a>(
             })
         })
         .ok_or_else(|| {
-            CoreError::InvalidProvider(
+            CoreError::invalid_provider(
                 "unable to resolve custom_llm_provider for chat completions request".to_string(),
             )
         })?;
-    let config = chat_completions_provider_config(provider_info.custom_llm_provider)
-        .ok_or_else(|| CoreError::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
+    let config =
+        chat_completions_provider_config(provider_info.custom_llm_provider).ok_or_else(|| {
+            CoreError::invalid_provider(provider_info.custom_llm_provider.to_string())
+        })?;
     Ok((provider_info.model.to_string(), config))
 }
 
 pub(super) fn parse_messages(messages: Value) -> CoreResult<Vec<ChatMessage>> {
     serde_json::from_value(messages).map_err(|err| {
-        CoreError::InvalidRequest(format!("invalid chat completions messages: {err}"))
+        CoreError::invalid_request(format!("invalid chat completions messages: {err}"))
     })
 }
 
@@ -43,12 +45,12 @@ pub(super) fn prepare_chat_completions_call(
 
     let messages = parse_messages(request.messages)?;
     if messages.is_empty() {
-        return Err(CoreError::InvalidRequest(
+        return Err(CoreError::invalid_request(
             "chat completions requires at least one message".to_string(),
         ));
     }
     if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
-        return Err(CoreError::Unsupported(reason.0));
+        return Err(CoreError::unsupported(reason.0));
     }
 
     let mut headers = string_headers(request.extra_headers)?;

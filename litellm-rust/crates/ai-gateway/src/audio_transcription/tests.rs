@@ -41,9 +41,6 @@ async fn bedrock_request_is_signed_and_contains_audio() {
         extra_headers: None,
         optional_params,
         timeout: None,
-        callbacks: Vec::new(),
-        guardrails: Vec::new(),
-        request_metadata: Default::default(),
         litellm_call_id: None,
     })
     .await

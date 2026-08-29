@@ -33,7 +33,7 @@ fn operation_status(response_json: &Value) -> CoreResult<&str> {
     let status = response_json
         .get("status")
         .and_then(Value::as_str)
-        .ok_or(CoreError::MissingField("status"))?;
+        .ok_or(CoreError::missing_field("status"))?;
     match status {
         "succeeded" => Ok("succeeded"),
         "running" | "notStarted" => Ok("running"),
@@ -43,11 +43,11 @@ fn operation_status(response_json: &Value) -> CoreResult<&str> {
                 .and_then(|error| error.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("Unknown error");
-            Err(CoreError::InvalidResponse(format!(
+            Err(CoreError::invalid_response(format!(
                 "Azure Document Intelligence analysis failed: {message}"
             )))
         }
-        other => Err(CoreError::InvalidResponse(format!(
+        other => Err(CoreError::invalid_response(format!(
             "Unknown operation status: {other}"
         ))),
     }
@@ -61,7 +61,7 @@ pub(crate) async fn poll_document_intelligence(
     timeout: Option<Duration>,
 ) -> CoreResult<Value> {
     if !same_origin(operation_url, original_url) {
-        return Err(CoreError::InvalidResponse(
+        return Err(CoreError::invalid_response(
             "Azure Document Intelligence: rejected cross-origin polling URL".to_string(),
         ));
     }
@@ -70,7 +70,7 @@ pub(crate) async fn poll_document_intelligence(
     let timeout = timeout.unwrap_or(Duration::from_secs(POLL_TIMEOUT_SECS));
     loop {
         if start.elapsed() > timeout {
-            return Err(CoreError::Network(format!(
+            return Err(CoreError::network(format!(
                 "Azure Document Intelligence operation polling timed out after {} seconds",
                 timeout.as_secs()
             )));
@@ -85,21 +85,18 @@ pub(crate) async fn poll_document_intelligence(
         let response = request_builder
             .send()
             .await
-            .map_err(|err| CoreError::Network(err.to_string()))?;
+            .map_err(|err| CoreError::network(err.to_string()))?;
         let retry_after = retry_after_secs(&response);
         let status = response.status();
         let text = response
             .text()
             .await
-            .map_err(|err| CoreError::Network(err.to_string()))?;
+            .map_err(|err| CoreError::network(err.to_string()))?;
         if !status.is_success() {
-            return Err(CoreError::Http {
-                status: status.as_u16(),
-                body: truncate_error_body(&text),
-            });
+            return Err(CoreError::http(status.as_u16(), truncate_error_body(&text)));
         }
         let response_json: Value = serde_json::from_str(&text).map_err(|err| {
-            CoreError::InvalidResponse(format!("invalid Azure DI poll response JSON: {err}"))
+            CoreError::invalid_response(format!("invalid Azure DI poll response JSON: {err}"))
         })?;
         if operation_status(&response_json)? == "succeeded" {
             return Ok(response_json);

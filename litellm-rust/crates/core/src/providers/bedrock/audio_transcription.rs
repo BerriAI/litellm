@@ -19,21 +19,20 @@ pub static BEDROCK_AUDIO_TRANSCRIPTION_CONFIG: BedrockAudioTranscriptionConfig =
 pub struct BedrockAudioTranscriptionConfig;
 
 fn audio_fields(audio: Value) -> CoreResult<(String, String)> {
-    let object = audio.as_object().ok_or_else(|| CoreError::InvalidType {
-        expected: "object",
-        actual: json_type_name(&audio),
-    })?;
+    let object = audio
+        .as_object()
+        .ok_or_else(|| CoreError::invalid_type("object", json_type_name(&audio)))?;
     let data = object
         .get("data")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(CoreError::MissingField("audio.data"))?;
+        .ok_or(CoreError::missing_field("audio.data"))?;
     let format = object
         .get("format")
         .and_then(Value::as_str)
         .filter(|value| matches!(*value, "wav" | "mp3" | "flac" | "ogg"))
         .ok_or_else(|| {
-            CoreError::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".to_string())
+            CoreError::invalid_request("audio.format must be wav, mp3, flac, or ogg".to_string())
         })?;
     Ok((data.to_string(), format.to_string()))
 }
@@ -94,7 +93,7 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
             .and_then(|value| value.get("content"))
             .and_then(Value::as_array)
             .ok_or_else(|| {
-                CoreError::InvalidResponse("Bedrock response has no output content".to_string())
+                CoreError::invalid_response("Bedrock response has no output content".to_string())
             })?;
         let mut text = String::new();
         for block in content {

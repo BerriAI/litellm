@@ -119,7 +119,7 @@ impl CustomLogger for LiteLLMPythonProxyAPILogger {
                 self.enqueue(LogRecord {
                     status: "failure".to_string(),
                     payload: payload.clone(),
-                    error: Some(format!("{}: {}", error.kind, error.message)),
+                    error: Some(error.to_string()),
                 })?;
             }
             Ok(())

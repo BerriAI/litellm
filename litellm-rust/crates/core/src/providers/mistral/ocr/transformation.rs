@@ -1,4 +1,4 @@
-use crate::error::{CoreError, CoreResult, json_type_name};
+use crate::error::{CoreError, CoreResult, UpstreamError, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value};
@@ -62,7 +62,7 @@ pub fn resolve_api_key(
         .filter(|key| !key.is_empty())
         .map(str::to_string)
         .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| CoreError::auth(MISSING_KEY_MESSAGE.to_string()))
 }
 
 pub struct MistralOcrConfig;
@@ -81,10 +81,7 @@ impl OcrProviderConfig for MistralOcrConfig {
         optional_params: Map<String, Value>,
     ) -> CoreResult<OcrRequestData> {
         if !document.is_object() {
-            return Err(CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&document),
-            });
+            return Err(CoreError::invalid_type("object", json_type_name(&document)));
         }
 
         let mut data = Map::new();
@@ -104,13 +101,10 @@ impl OcrProviderConfig for MistralOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData> {
+    ) -> Result<OcrResponseData, UpstreamError> {
         let response_object = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
+            .ok_or_else(|| UpstreamError::invalid_type("object", json_type_name(&response_json)))?;
 
         let pages = response_object
             .get("pages")
@@ -169,7 +163,10 @@ pub fn transform_ocr_request(
     MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
 }
 
-pub fn transform_ocr_response(model: &str, response_json: Value) -> CoreResult<OcrResponseData> {
+pub fn transform_ocr_response(
+    model: &str,
+    response_json: Value,
+) -> Result<OcrResponseData, UpstreamError> {
     MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
 }
 
@@ -248,13 +245,7 @@ mod tests {
         let err = transform_ocr_request("mistral-ocr-latest", json!("bad"), Map::new())
             .expect_err("string document should be rejected");
 
-        assert_eq!(
-            err,
-            CoreError::InvalidType {
-                expected: "object",
-                actual: "string",
-            }
-        );
+        assert_eq!(err, CoreError::invalid_type("object", "string"));
     }
 
     #[test]
@@ -307,6 +298,6 @@ mod tests {
     #[test]
     fn resolve_api_key_errors_when_absent() {
         let err = resolve_api_key(None, &|_| None).expect_err("missing key should error");
-        assert_eq!(err, CoreError::Auth(MISSING_KEY_MESSAGE.to_string()));
+        assert_eq!(err, CoreError::auth(MISSING_KEY_MESSAGE.to_string()));
     }
 }

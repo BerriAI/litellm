@@ -22,7 +22,7 @@ pub fn resolve_anthropic_api_key(
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::Auth(
+            CoreError::auth(
                 "Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY \
                  environment variable"
                     .to_string(),
@@ -121,7 +121,7 @@ mod tests {
         );
         assert!(matches!(
             resolve_anthropic_api_key(None, &|_| None).expect_err("missing key"),
-            CoreError::Auth(_)
+            CoreError::Request(crate::RequestError::Auth(_))
         ));
     }
 

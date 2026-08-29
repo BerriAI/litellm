@@ -1,4 +1,4 @@
-use crate::error::CoreResult;
+use crate::error::{CoreResult, UpstreamError};
 
 use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 
@@ -53,11 +53,14 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         Ok(request)
     }
 
+    /// Normalize a body the provider already returned. The only failures
+    /// possible here are upstream ones: the call went out, so the host must
+    /// not blindly retry.
     fn transform_response(
         &self,
         _model: &str,
         response: AnthropicMessagesResponse,
-    ) -> CoreResult<AnthropicMessagesResponse> {
+    ) -> Result<AnthropicMessagesResponse, UpstreamError> {
         Ok(response)
     }
 }

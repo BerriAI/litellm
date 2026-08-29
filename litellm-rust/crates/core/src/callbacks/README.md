@@ -17,7 +17,8 @@ contracts that are used by multiple callbacks can stay in `callbacks/types.rs`.
 
 Call ordering and lifecycle timing live in `litellm-core/src/call_lifecycle`.
 Call-type modules, such as OCR, adapt their request and response shapes into
-that generic lifecycle runner.
+that generic lifecycle runner. `CallbackOptions` carries configured SDK
+callbacks, guardrails, and request metadata separately from route request data.
 
 ## CustomLogger
 

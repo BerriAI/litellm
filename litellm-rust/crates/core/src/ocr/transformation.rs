@@ -1,6 +1,7 @@
 use serde_json::{Map, Value};
 
 use crate::CoreResult;
+use crate::error::UpstreamError;
 
 use super::types::{OcrRequestData, OcrResponseData};
 
@@ -45,11 +46,14 @@ pub trait OcrProviderConfig: Sync {
         optional_params: Map<String, Value>,
     ) -> CoreResult<OcrRequestData>;
 
+    /// Normalize a body the provider already returned. The only failures
+    /// possible here are upstream ones: the call went out, so the host must
+    /// not blindly retry.
     fn transform_ocr_response(
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData>;
+    ) -> Result<OcrResponseData, UpstreamError>;
 
     fn complete_url(
         &self,

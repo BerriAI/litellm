@@ -7,7 +7,7 @@ use crate::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAG
 
 use super::transformation::AnthropicMessagesProviderConfig;
 
-pub(super) use crate::http_utils::{has_bearer_auth, has_header, truncate_error_body};
+pub(super) use crate::http_utils::{has_bearer_auth, has_header};
 
 const HEADER_CONTEXT: &str = "messages";
 

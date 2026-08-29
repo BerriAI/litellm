@@ -36,7 +36,7 @@ where
     <Out as Sink<RealtimeEvent>>::Error: std::fmt::Display,
 {
     let deployment = router.get_available_deployment(model).ok_or_else(|| {
-        CoreError::Routing(format!("no deployment available for model '{model}'"))
+        CoreError::routing(format!("no deployment available for model '{model}'"))
     })?;
     let params = &deployment.litellm_params;
     // Strip a leading `openai/` so the OpenAI-only realtime fn gets the bare model.
@@ -51,18 +51,17 @@ where
         provider_model,
         params.api_key.as_deref(),
         params.api_base.as_deref(),
-    ) {
-        if let Some(handoff) = pool.take(&key) {
-            return crate::io::realtime::realtime_warm(
-                provider_model,
-                handoff,
-                idle_timeout,
-                observe,
-                client_in,
-                client_out,
-            )
-            .await;
-        }
+    ) && let Some(handoff) = pool.take(&key)
+    {
+        return crate::io::realtime::realtime_warm(
+            provider_model,
+            handoff,
+            idle_timeout,
+            observe,
+            client_in,
+            client_out,
+        )
+        .await;
     }
 
     // Cold path: fresh dial (the original behavior).

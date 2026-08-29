@@ -1,185 +1,193 @@
 use std::future::Future;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::{CoreError, CoreResult};
+use crate::CoreResult;
 
 pub mod types;
 
-pub use types::{
-    CallLifecycleContext, CallLifecyclePhase, CallLifecyclePhaseTiming, CallLifecycleRequest,
-    CallLifecycleTiming,
-};
+pub use types::{CallContext, CallOutcome, CallPhase, CallPhaseTiming, CallTiming};
 
-pub trait CallLifecycleHooks<InitialReq, ProviderReq, Resp>: Send + Sync {
-    type PreCallFuture<'a>: Future<Output = CoreResult<InitialReq>> + Send + 'a
-    where
-        Self: 'a,
-        InitialReq: 'a,
-        ProviderReq: 'a,
-        Resp: 'a;
+pub trait CallSpec: 'static {
+    const NAME: &'static str;
 
-    type DuringCallFuture<'a>: Future<Output = CoreResult<ProviderReq>> + Send + 'a
-    where
-        Self: 'a,
-        InitialReq: 'a,
-        ProviderReq: 'a,
-        Resp: 'a;
-
-    type SuccessFuture<'a>: Future<Output = ()> + Send + 'a
-    where
-        Self: 'a,
-        Resp: 'a;
-
-    type FailureFuture<'a>: Future<Output = ()> + Send + 'a
-    where
-        Self: 'a;
-
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        request: InitialReq,
-    ) -> Self::PreCallFuture<'a>;
-
-    fn async_during_call_hook<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        request: InitialReq,
-    ) -> Self::DuringCallFuture<'a>;
-
-    fn async_log_success_event<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        response: &'a Resp,
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::SuccessFuture<'a>;
-
-    fn async_log_failure_event<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        error: &'a CoreError,
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::FailureFuture<'a>;
+    type BeforeCall: Send + 'static;
+    type BeforeSend: Send + 'static;
+    type Response: Sync + 'static;
 }
 
-pub trait CallLifecycleObserver: Send + Sync {
-    fn on_phase_start(&self, _context: &CallLifecycleContext, _phase: CallLifecyclePhase) {}
+pub trait CallInterceptor<Call: CallSpec>: Send + Sync {
+    fn before_call<'a>(
+        &'a self,
+        context: &'a CallContext,
+        input: Call::BeforeCall,
+    ) -> impl Future<Output = CoreResult<Call::BeforeCall>> + Send + 'a;
 
-    fn on_phase_end(&self, _context: &CallLifecycleContext, _timing: &CallLifecyclePhaseTiming) {}
+    fn before_send<'a>(
+        &'a self,
+        context: &'a CallContext,
+        input: Call::BeforeSend,
+    ) -> impl Future<Output = CoreResult<Call::BeforeSend>> + Send + 'a;
+
+    fn complete<'a>(
+        &'a self,
+        context: &'a CallContext,
+        outcome: CallOutcome<'a, Call::Response>,
+        timing: &'a CallTiming,
+    ) -> impl Future<Output = ()> + Send + 'a;
 }
 
 #[derive(Default)]
-pub struct NoopCallLifecycleObserver;
+pub struct NoopCallInterceptor;
 
-impl CallLifecycleObserver for NoopCallLifecycleObserver {}
+impl<Call: CallSpec> CallInterceptor<Call> for NoopCallInterceptor {
+    async fn before_call<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        input: Call::BeforeCall,
+    ) -> CoreResult<Call::BeforeCall> {
+        Ok(input)
+    }
 
-pub struct CallLifecycle<'a> {
-    observer: &'a dyn CallLifecycleObserver,
+    async fn before_send<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        input: Call::BeforeSend,
+    ) -> CoreResult<Call::BeforeSend> {
+        Ok(input)
+    }
+
+    async fn complete<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        _outcome: CallOutcome<'a, Call::Response>,
+        _timing: &'a CallTiming,
+    ) {
+    }
 }
 
-impl<'a> CallLifecycle<'a> {
-    pub fn new(observer: &'a dyn CallLifecycleObserver) -> Self {
-        Self { observer }
+pub trait CallObserver: Send + Sync {
+    fn on_phase_start(&self, _call: &'static str, _context: &CallContext, _phase: CallPhase) {}
+
+    fn on_phase_end(&self, _call: &'static str, _context: &CallContext, _timing: &CallPhaseTiming) {
+    }
+}
+
+#[derive(Default)]
+pub struct NoopCallObserver;
+
+impl CallObserver for NoopCallObserver {}
+
+pub struct CallRuntime<'a, Interceptor> {
+    interceptor: &'a Interceptor,
+    observer: &'a dyn CallObserver,
+}
+
+impl<'a, Interceptor> CallRuntime<'a, Interceptor> {
+    pub fn new(interceptor: &'a Interceptor) -> Self {
+        static OBSERVER: NoopCallObserver = NoopCallObserver;
+        Self {
+            interceptor,
+            observer: &OBSERVER,
+        }
     }
 
-    pub async fn run_request<InitialReq, ProviderReq, Resp, Hooks, ProviderCall, ProviderFuture>(
-        &self,
-        request: InitialReq,
-        hooks: &Hooks,
-        provider_call: ProviderCall,
-    ) -> CoreResult<Resp>
-    where
-        InitialReq: CallLifecycleRequest,
-        Hooks: CallLifecycleHooks<InitialReq, ProviderReq, Resp>,
-        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
-        ProviderFuture: Future<Output = CoreResult<Resp>>,
-    {
-        let context = request.lifecycle_context();
-        self.run(context, request, hooks, provider_call).await
+    pub fn with_observer(interceptor: &'a Interceptor, observer: &'a dyn CallObserver) -> Self {
+        Self {
+            interceptor,
+            observer,
+        }
     }
 
-    pub async fn run<InitialReq, ProviderReq, Resp, Hooks, ProviderCall, ProviderFuture>(
+    pub async fn run<Call, Prepare, PrepareFuture, Provider, ProviderFuture>(
         &self,
-        context: CallLifecycleContext,
-        request: InitialReq,
-        hooks: &Hooks,
-        provider_call: ProviderCall,
-    ) -> CoreResult<Resp>
+        context: CallContext,
+        input: Call::BeforeCall,
+        prepare: Prepare,
+        provider: Provider,
+    ) -> CoreResult<Call::Response>
     where
-        Hooks: CallLifecycleHooks<InitialReq, ProviderReq, Resp>,
-        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
-        ProviderFuture: Future<Output = CoreResult<Resp>>,
+        Call: CallSpec,
+        Interceptor: CallInterceptor<Call>,
+        Prepare: FnOnce(Call::BeforeCall) -> PrepareFuture,
+        PrepareFuture: Future<Output = CoreResult<Call::BeforeSend>>,
+        Provider: FnOnce(Call::BeforeSend) -> ProviderFuture,
+        ProviderFuture: Future<Output = CoreResult<Call::Response>>,
     {
         let call_start = epoch_seconds();
         let mut phases = Vec::new();
 
-        let pre_call = self.start_phase(&context, CallLifecyclePhase::PreCall);
-        let request = match hooks.async_pre_call_hook(&context, request).await {
-            Ok(request) => {
-                phases.push(self.finish_phase(&context, pre_call));
-                request
+        let before_call = self.start_phase::<Call>(&context, CallPhase::BeforeCall);
+        let input = match self.interceptor.before_call(&context, input).await {
+            Ok(input) => {
+                phases.push(self.finish_phase::<Call>(&context, before_call));
+                input
             }
             Err(error) => {
-                phases.push(self.finish_phase(&context, pre_call));
-                self.log_failure(&context, hooks, &error, call_start, &mut phases)
+                phases.push(self.finish_phase::<Call>(&context, before_call));
+                let result = Err(error);
+                self.complete::<Call>(&context, &result, call_start, &mut phases)
                     .await;
-                return Err(error);
+                return result;
             }
         };
 
-        let during_call = self.start_phase(&context, CallLifecyclePhase::DuringCall);
-        let provider_request = match hooks.async_during_call_hook(&context, request).await {
-            Ok(request) => {
-                phases.push(self.finish_phase(&context, during_call));
-                request
+        let prepare_phase = self.start_phase::<Call>(&context, CallPhase::Prepare);
+        let provider_input = match prepare(input).await {
+            Ok(input) => {
+                phases.push(self.finish_phase::<Call>(&context, prepare_phase));
+                input
             }
             Err(error) => {
-                phases.push(self.finish_phase(&context, during_call));
-                self.log_failure(&context, hooks, &error, call_start, &mut phases)
+                phases.push(self.finish_phase::<Call>(&context, prepare_phase));
+                let result = Err(error);
+                self.complete::<Call>(&context, &result, call_start, &mut phases)
                     .await;
-                return Err(error);
+                return result;
             }
         };
 
-        let provider_phase = self.start_phase(&context, CallLifecyclePhase::ProviderCall);
-        let result = provider_call(provider_request).await;
-        phases.push(self.finish_phase(&context, provider_phase));
-
-        match &result {
-            Ok(response) => {
-                let success_phase = self.start_phase(&context, CallLifecyclePhase::SuccessCallback);
-                let timing = CallLifecycleTiming::new(call_start, epoch_seconds(), phases.clone());
-                hooks
-                    .async_log_success_event(&context, response, &timing)
-                    .await;
-                phases.push(self.finish_phase(&context, success_phase));
+        let before_send = self.start_phase::<Call>(&context, CallPhase::BeforeSend);
+        let provider_input = match self.interceptor.before_send(&context, provider_input).await {
+            Ok(input) => {
+                phases.push(self.finish_phase::<Call>(&context, before_send));
+                input
             }
             Err(error) => {
-                self.log_failure(&context, hooks, error, call_start, &mut phases)
+                phases.push(self.finish_phase::<Call>(&context, before_send));
+                let result = Err(error);
+                self.complete::<Call>(&context, &result, call_start, &mut phases)
                     .await;
+                return result;
             }
-        }
+        };
 
+        let provider_phase = self.start_phase::<Call>(&context, CallPhase::Provider);
+        let result = provider(provider_input).await;
+        phases.push(self.finish_phase::<Call>(&context, provider_phase));
+        self.complete::<Call>(&context, &result, call_start, &mut phases)
+            .await;
         result
     }
 
-    async fn log_failure<InitialReq, ProviderReq, Resp, Hooks>(
+    async fn complete<Call: CallSpec>(
         &self,
-        context: &CallLifecycleContext,
-        hooks: &Hooks,
-        error: &CoreError,
+        context: &CallContext,
+        result: &CoreResult<Call::Response>,
         call_start: f64,
-        phases: &mut Vec<CallLifecyclePhaseTiming>,
+        phases: &mut Vec<CallPhaseTiming>,
     ) where
-        Hooks: CallLifecycleHooks<InitialReq, ProviderReq, Resp>,
+        Interceptor: CallInterceptor<Call>,
     {
-        let failure_phase = self.start_phase(context, CallLifecyclePhase::FailureCallback);
-        let timing = CallLifecycleTiming::new(call_start, epoch_seconds(), phases.clone());
-        hooks.async_log_failure_event(context, error, &timing).await;
-        phases.push(self.finish_phase(context, failure_phase));
+        let complete = self.start_phase::<Call>(context, CallPhase::Complete);
+        let timing = CallTiming::new(call_start, epoch_seconds(), phases.clone());
+        self.interceptor
+            .complete(context, CallOutcome::from_result(result), &timing)
+            .await;
+        phases.push(self.finish_phase::<Call>(context, complete));
     }
 
-    fn start_phase(&self, context: &CallLifecycleContext, phase: CallLifecyclePhase) -> PhaseStart {
-        self.observer.on_phase_start(context, phase);
+    fn start_phase<Call: CallSpec>(&self, context: &CallContext, phase: CallPhase) -> PhaseStart {
+        self.observer.on_phase_start(Call::NAME, context, phase);
         PhaseStart {
             phase,
             start_time: epoch_seconds(),
@@ -187,31 +195,31 @@ impl<'a> CallLifecycle<'a> {
         }
     }
 
-    fn finish_phase(
+    fn finish_phase<Call: CallSpec>(
         &self,
-        context: &CallLifecycleContext,
+        context: &CallContext,
         phase_start: PhaseStart,
-    ) -> CallLifecyclePhaseTiming {
-        let timing = CallLifecyclePhaseTiming {
+    ) -> CallPhaseTiming {
+        let timing = CallPhaseTiming {
             phase: phase_start.phase,
             start_time: phase_start.start_time,
             end_time: epoch_seconds(),
             duration: phase_start.started_at.elapsed(),
         };
-        self.observer.on_phase_end(context, &timing);
+        self.observer.on_phase_end(Call::NAME, context, &timing);
         timing
     }
 }
 
-impl Default for CallLifecycle<'static> {
+impl Default for CallRuntime<'static, NoopCallInterceptor> {
     fn default() -> Self {
-        static OBSERVER: NoopCallLifecycleObserver = NoopCallLifecycleObserver;
-        Self::new(&OBSERVER)
+        static INTERCEPTOR: NoopCallInterceptor = NoopCallInterceptor;
+        Self::new(&INTERCEPTOR)
     }
 }
 
 struct PhaseStart {
-    phase: CallLifecyclePhase,
+    phase: CallPhase,
     start_time: f64,
     started_at: Instant,
 }
@@ -225,190 +233,101 @@ fn epoch_seconds() -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::pin::Pin;
     use std::sync::Mutex;
 
-    type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+    use crate::{CoreError, RequestError};
+
+    use super::*;
+
+    enum TestCall {}
+
+    impl CallSpec for TestCall {
+        const NAME: &'static str = "test";
+        type BeforeCall = String;
+        type BeforeSend = String;
+        type Response = String;
+    }
 
     #[derive(Default)]
-    struct RecordingHooks {
+    struct RecordingInterceptor {
         events: Mutex<Vec<&'static str>>,
     }
 
-    struct RecordingRequest(String);
-
-    impl CallLifecycleRequest for RecordingRequest {
-        fn lifecycle_context(&self) -> CallLifecycleContext {
-            CallLifecycleContext::new("ocr", "mistral-ocr-latest", "mistral", "call_1")
-        }
-    }
-
-    impl RecordingHooks {
-        fn events(&self) -> Vec<&'static str> {
-            self.events.lock().unwrap().clone()
-        }
-    }
-
-    impl CallLifecycleHooks<String, String, String> for RecordingHooks {
-        type PreCallFuture<'a> = BoxFuture<'a, CoreResult<String>>;
-        type DuringCallFuture<'a> = BoxFuture<'a, CoreResult<String>>;
-        type SuccessFuture<'a> = BoxFuture<'a, ()>;
-        type FailureFuture<'a> = BoxFuture<'a, ()>;
-
-        fn async_pre_call_hook<'a>(
+    impl CallInterceptor<TestCall> for RecordingInterceptor {
+        async fn before_call<'a>(
             &'a self,
-            _context: &'a CallLifecycleContext,
-            request: String,
-        ) -> Self::PreCallFuture<'a> {
-            Box::pin(async move {
-                self.events.lock().unwrap().push("pre_call");
-                Ok(format!("{request}:pre"))
-            })
+            _context: &'a CallContext,
+            input: String,
+        ) -> CoreResult<String> {
+            self.events.lock().unwrap().push("before_call");
+            Ok(format!("{input}:before_call"))
         }
 
-        fn async_during_call_hook<'a>(
+        async fn before_send<'a>(
             &'a self,
-            _context: &'a CallLifecycleContext,
-            request: String,
-        ) -> Self::DuringCallFuture<'a> {
-            Box::pin(async move {
-                self.events.lock().unwrap().push("during_call");
-                Ok(format!("{request}:during"))
-            })
+            _context: &'a CallContext,
+            input: String,
+        ) -> CoreResult<String> {
+            self.events.lock().unwrap().push("before_send");
+            Ok(format!("{input}:before_send"))
         }
 
-        fn async_log_success_event<'a>(
+        async fn complete<'a>(
             &'a self,
-            _context: &'a CallLifecycleContext,
-            _response: &'a String,
-            timing: &'a CallLifecycleTiming,
-        ) -> Self::SuccessFuture<'a> {
-            Box::pin(async move {
-                assert!(timing.end_time >= timing.start_time);
-                assert_eq!(timing.phases.len(), 3);
-                self.events.lock().unwrap().push("success");
-            })
-        }
-
-        fn async_log_failure_event<'a>(
-            &'a self,
-            _context: &'a CallLifecycleContext,
-            _error: &'a CoreError,
-            _timing: &'a CallLifecycleTiming,
-        ) -> Self::FailureFuture<'a> {
-            Box::pin(async move {
-                self.events.lock().unwrap().push("failure");
-            })
-        }
-    }
-
-    impl CallLifecycleHooks<RecordingRequest, String, String> for RecordingHooks {
-        type PreCallFuture<'a> = BoxFuture<'a, CoreResult<RecordingRequest>>;
-        type DuringCallFuture<'a> = BoxFuture<'a, CoreResult<String>>;
-        type SuccessFuture<'a> = BoxFuture<'a, ()>;
-        type FailureFuture<'a> = BoxFuture<'a, ()>;
-
-        fn async_pre_call_hook<'a>(
-            &'a self,
-            _context: &'a CallLifecycleContext,
-            request: RecordingRequest,
-        ) -> Self::PreCallFuture<'a> {
-            Box::pin(async move {
-                self.events.lock().unwrap().push("pre_call");
-                Ok(RecordingRequest(format!("{}:pre", request.0)))
-            })
-        }
-
-        fn async_during_call_hook<'a>(
-            &'a self,
-            _context: &'a CallLifecycleContext,
-            request: RecordingRequest,
-        ) -> Self::DuringCallFuture<'a> {
-            Box::pin(async move {
-                self.events.lock().unwrap().push("during_call");
-                Ok(format!("{}:during", request.0))
-            })
-        }
-
-        fn async_log_success_event<'a>(
-            &'a self,
-            _context: &'a CallLifecycleContext,
-            _response: &'a String,
-            _timing: &'a CallLifecycleTiming,
-        ) -> Self::SuccessFuture<'a> {
-            Box::pin(async move {
-                self.events.lock().unwrap().push("success");
-            })
-        }
-
-        fn async_log_failure_event<'a>(
-            &'a self,
-            _context: &'a CallLifecycleContext,
-            _error: &'a CoreError,
-            _timing: &'a CallLifecycleTiming,
-        ) -> Self::FailureFuture<'a> {
-            Box::pin(async move {
-                self.events.lock().unwrap().push("failure");
-            })
+            _context: &'a CallContext,
+            outcome: CallOutcome<'a, String>,
+            timing: &'a CallTiming,
+        ) {
+            assert!(!timing.phases.is_empty());
+            self.events.lock().unwrap().push(match outcome {
+                CallOutcome::Success(_) => "success",
+                CallOutcome::Failure(_) => "failure",
+            });
         }
     }
 
     #[tokio::test]
-    async fn lifecycle_runs_hooks_around_provider_call() {
-        let hooks = RecordingHooks::default();
-        let response = CallLifecycle::default()
-            .run(
-                CallLifecycleContext::new("ocr", "mistral-ocr-latest", "mistral", "call_1"),
+    async fn runtime_runs_typed_phases_in_order() {
+        let interceptor = RecordingInterceptor::default();
+        let result = CallRuntime::new(&interceptor)
+            .run::<TestCall, _, _, _, _>(
+                CallContext::new("model", "provider", "call-1"),
                 "request".to_string(),
-                &hooks,
-                |request| async move {
-                    assert_eq!(request, "request:pre:during");
+                |input| async move { Ok(format!("{input}:prepare")) },
+                |input| async move {
+                    assert_eq!(input, "request:before_call:prepare:before_send");
                     Ok("response".to_string())
                 },
             )
             .await
-            .expect("call succeeds");
+            .unwrap();
 
-        assert_eq!(response, "response");
-        assert_eq!(hooks.events(), vec!["pre_call", "during_call", "success"]);
+        assert_eq!(result, "response");
+        assert_eq!(
+            interceptor.events.lock().unwrap().as_slice(),
+            ["before_call", "before_send", "success"]
+        );
     }
 
     #[tokio::test]
-    async fn lifecycle_logs_failure_when_provider_fails() {
-        let hooks = RecordingHooks::default();
-        let error = CallLifecycle::default()
-            .run(
-                CallLifecycleContext::new("ocr", "mistral-ocr-latest", "mistral", "call_1"),
+    async fn runtime_completes_once_when_preparation_fails() {
+        let interceptor = RecordingInterceptor::default();
+        let result = CallRuntime::new(&interceptor)
+            .run::<TestCall, _, _, _, _>(
+                CallContext::new("model", "provider", "call-1"),
                 "request".to_string(),
-                &hooks,
-                |_request| async move {
-                    Err::<String, CoreError>(CoreError::Network("provider down".to_string()))
-                },
+                |_input| async { Err(CoreError::invalid_request("invalid".to_string())) },
+                |_input| async { Ok("unreachable".to_string()) },
             )
-            .await
-            .expect_err("call fails");
+            .await;
 
-        assert_eq!(error, CoreError::Network("provider down".to_string()));
-        assert_eq!(hooks.events(), vec!["pre_call", "during_call", "failure"]);
-    }
-
-    #[tokio::test]
-    async fn lifecycle_can_run_any_request_with_embedded_context() {
-        let hooks = RecordingHooks::default();
-        let response = CallLifecycle::default()
-            .run_request(
-                RecordingRequest("request".to_string()),
-                &hooks,
-                |request| async move {
-                    assert_eq!(request, "request:pre:during");
-                    Ok("response".to_string())
-                },
-            )
-            .await
-            .expect("call succeeds");
-
-        assert_eq!(response, "response");
-        assert_eq!(hooks.events(), vec!["pre_call", "during_call", "success"]);
+        assert!(matches!(
+            result,
+            Err(CoreError::Request(RequestError::InvalidRequest(_)))
+        ));
+        assert_eq!(
+            interceptor.events.lock().unwrap().as_slice(),
+            ["before_call", "failure"]
+        );
     }
 }

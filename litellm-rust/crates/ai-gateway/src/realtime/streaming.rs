@@ -1,10 +1,10 @@
-//! `RealTimeStreaming` — the realtime logging collector.
+//! Realtime session summary collection and callback payload adaptation.
 //!
 //! Mirrors Python `litellm.realtime_api.main.RealTimeStreaming`: it observes the
 //! event stream in O(1) (never buffering frames), accumulating just the fields
 //! the spend log needs (model, id, cumulative usage), then on session close
-//! builds a `StandardLoggingPayload` and fans it out to every registered
-//! `CustomLogger`.
+//! builds a `StandardLoggingPayload`. The route's typed completion interceptor
+//! owns terminal callback dispatch.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,7 +14,8 @@ use serde_json::Value;
 
 use crate::constants::DEFAULT_PROVIDER;
 use litellm_core::callbacks::custom_logger::{
-    CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, LoggingError, ModelCallDetails,
+    CallbackDispatchReport, CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner,
+    LoggingError, ModelCallDetails,
 };
 use litellm_core::callbacks::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload, Usage,
@@ -38,7 +39,6 @@ pub enum SessionStatus {
 
 /// Accumulates realtime session state and emits a logging payload on close.
 pub struct RealTimeStreaming {
-    callbacks: Vec<Arc<dyn CustomLogger>>,
     /// REQUEST-ID RULE: the SpendLogs `request_id` == the OpenAI realtime session
     /// id (`sess_…`), captured from `session.created`. Both `id` and
     /// `litellm_call_id` are set to that value so the Python writer logs the same
@@ -53,25 +53,15 @@ pub struct RealTimeStreaming {
     usage: Usage,
     response_cost: f64,
     start_time: f64,
-    end_time: f64,
-    metadata: RequestMetadata,
-    /// Count of logging callbacks that failed to enqueue (non-fatal).
-    dropped: u64,
 }
 
 impl RealTimeStreaming {
     /// Create a collector for one session. `litellm_call_id` is the gateway's
     /// per-connection id; `model` is the requested model (a sane default until
     /// `session.created` reports the upstream model).
-    pub fn new(
-        callbacks: Vec<Arc<dyn CustomLogger>>,
-        litellm_call_id: String,
-        model: String,
-        metadata: RequestMetadata,
-    ) -> Self {
+    pub fn new(litellm_call_id: String, model: String) -> Self {
         let now = epoch_seconds();
         Self {
-            callbacks,
             id: litellm_call_id.clone(),
             litellm_call_id,
             model,
@@ -79,16 +69,7 @@ impl RealTimeStreaming {
             usage: Usage::default(),
             response_cost: 0.0,
             start_time: now,
-            end_time: now,
-            metadata,
-            dropped: 0,
         }
-    }
-
-    /// Number of logging callbacks that failed to enqueue so far (test/observ.).
-    #[allow(dead_code)]
-    pub fn dropped(&self) -> u64 {
-        self.dropped
     }
 
     /// Observe one realtime event. O(1): updates accumulated state only; never
@@ -106,16 +87,16 @@ impl RealTimeStreaming {
     /// `litellm_call_id`, replacing the gateway-generated fallback.
     fn on_session(&mut self, event: &RealtimeEvent) {
         let session = event.data.get("session").and_then(Value::as_object);
-        if let Some(id) = session.and_then(|s| s.get("id")).and_then(Value::as_str) {
-            if !id.is_empty() {
-                self.id = id.to_string();
-                self.litellm_call_id = id.to_string();
-            }
+        if let Some(id) = session.and_then(|s| s.get("id")).and_then(Value::as_str)
+            && !id.is_empty()
+        {
+            self.id = id.to_string();
+            self.litellm_call_id = id.to_string();
         }
-        if let Some(model) = session.and_then(|s| s.get("model")).and_then(Value::as_str) {
-            if !model.is_empty() {
-                self.model = model.to_string();
-            }
+        if let Some(model) = session.and_then(|s| s.get("model")).and_then(Value::as_str)
+            && !model.is_empty()
+        {
+            self.model = model.to_string();
         }
     }
 
@@ -158,7 +139,7 @@ impl RealTimeStreaming {
     }
 
     /// Build the `StandardLoggingPayload` from accumulated state.
-    pub fn build_payload(&self) -> StandardLoggingPayload {
+    pub fn build_payload(&self, metadata: &RequestMetadata) -> StandardLoggingPayload {
         StandardLoggingPayload {
             id: self.id.clone(),
             litellm_call_id: self.litellm_call_id.clone(),
@@ -170,12 +151,12 @@ impl RealTimeStreaming {
             completion_tokens: self.usage.completion_tokens,
             total_tokens: self.usage.total_tokens,
             start_time: self.start_time,
-            end_time: self.end_time,
+            end_time: epoch_seconds(),
             stream: true,
             metadata: StandardLoggingMetadata {
-                user_api_key_hash: self.metadata.user_api_key_hash.clone(),
-                user_api_key_user_id: self.metadata.user_api_key_user_id.clone(),
-                user_api_key_team_id: self.metadata.user_api_key_team_id.clone(),
+                user_api_key_hash: metadata.user_api_key_hash.clone(),
+                user_api_key_user_id: metadata.user_api_key_user_id.clone(),
+                user_api_key_team_id: metadata.user_api_key_team_id.clone(),
                 ..Default::default()
             },
             messages: None,
@@ -185,23 +166,27 @@ impl RealTimeStreaming {
     /// Finish the session: stamp the end time and fan the payload out to every
     /// callback. On a logger enqueue error we bump a non-fatal counter (the
     /// realtime session has already ended; a dropped log must never propagate).
-    pub async fn log_messages(&mut self, status: SessionStatus) {
-        self.end_time = epoch_seconds();
-        let payload = self.build_payload();
+    pub async fn log_messages(
+        &self,
+        callbacks: Vec<Arc<dyn CustomLogger>>,
+        metadata: &RequestMetadata,
+        status: SessionStatus,
+    ) -> CallbackDispatchReport {
+        let mut payload = self.build_payload(metadata);
+        payload.end_time = epoch_seconds();
         let timing = CallbackTiming::new(payload.start_time, payload.end_time);
-        let runner = CustomLoggerRunner::new(self.callbacks.clone());
+        let runner = CustomLoggerRunner::new(callbacks);
 
         match status {
             SessionStatus::Success => {
                 let response = CallbackValue::new("realtime", serde_json::Value::Null);
-                let report = runner
+                runner
                     .async_log_success_event(
                         &ModelCallDetails::from_standard_logging_payload(payload),
                         &response,
                         timing,
                     )
-                    .await;
-                self.dropped += report.dropped as u64;
+                    .await
             }
             SessionStatus::Failure => {
                 let error = LoggingError {
@@ -215,15 +200,14 @@ impl RealTimeStreaming {
                         "kind": error.kind,
                     }),
                 );
-                let report = runner
+                runner
                     .async_log_failure_event(
                         &ModelCallDetails::from_standard_logging_payload(payload)
                             .with_failure_error(error),
                         Some(&response),
                         timing,
                     )
-                    .await;
-                self.dropped += report.dropped as u64;
+                    .await
             }
         }
     }
@@ -273,16 +257,13 @@ mod tests {
     async fn observe_accumulates_model_and_tokens_then_logs() {
         let logger = Arc::new(CapturingLogger::default());
         let callbacks: Vec<Arc<dyn CustomLogger>> = vec![logger.clone()];
-        let mut streaming = RealTimeStreaming::new(
-            callbacks,
-            "call_abc".to_string(),
-            "gpt-realtime".to_string(),
-            RequestMetadata {
-                user_api_key_hash: Some("hash123".to_string()),
-                user_api_key_user_id: Some("user-1".to_string()),
-                user_api_key_team_id: Some("team-1".to_string()),
-            },
-        );
+        let metadata = RequestMetadata {
+            user_api_key_hash: Some("hash123".to_string()),
+            user_api_key_user_id: Some("user-1".to_string()),
+            user_api_key_team_id: Some("team-1".to_string()),
+        };
+        let mut streaming =
+            RealTimeStreaming::new("call_abc".to_string(), "gpt-realtime".to_string());
 
         streaming.observe(&event(
             r#"{"type":"session.created","session":{"id":"sess_001","model":"gpt-realtime-2025"}}"#,
@@ -295,7 +276,7 @@ mod tests {
             r#"{"type":"response.done","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}"#,
         ));
 
-        let payload = streaming.build_payload();
+        let payload = streaming.build_payload(&metadata);
         assert_eq!(payload.model, "gpt-realtime-2025");
         // Request-id rule: session.created's id becomes BOTH id and
         // litellm_call_id (replacing the "call_abc" gateway fallback), so the
@@ -313,29 +294,27 @@ mod tests {
             Some("hash123")
         );
 
-        streaming.log_messages(SessionStatus::Success).await;
+        let report = streaming
+            .log_messages(callbacks, &metadata, SessionStatus::Success)
+            .await;
         assert_eq!(logger.calls.load(Ordering::SeqCst), 1);
         assert_eq!(
             logger.last_model.lock().unwrap().as_deref(),
             Some("gpt-realtime-2025")
         );
         assert_eq!(logger.last_total_tokens.load(Ordering::SeqCst), 20);
-        assert_eq!(streaming.dropped(), 0);
+        assert_eq!(report.dropped, 0);
     }
 
     #[test]
     fn payload_serializes_with_camelcase_times_and_realtime_call_type() {
-        let mut streaming = RealTimeStreaming::new(
-            Vec::new(),
-            "call_xyz".to_string(),
-            "gpt-realtime".to_string(),
-            RequestMetadata::default(),
-        );
+        let mut streaming =
+            RealTimeStreaming::new("call_xyz".to_string(), "gpt-realtime".to_string());
         streaming.observe(&event(
             r#"{"type":"response.done","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}"#,
         ));
         streaming.set_response_cost(0.0042);
-        let payload = streaming.build_payload();
+        let payload = streaming.build_payload(&RequestMetadata::default());
         let json = serde_json::to_string(&payload).expect("serialize payload");
 
         assert!(json.contains("\"startTime\""), "missing startTime: {json}");
@@ -376,13 +355,14 @@ mod tests {
             }
         }
         let callbacks: Vec<Arc<dyn CustomLogger>> = vec![Arc::new(FailingLogger)];
-        let mut streaming = RealTimeStreaming::new(
-            callbacks,
-            "call_1".to_string(),
-            "gpt-realtime".to_string(),
-            RequestMetadata::default(),
-        );
-        streaming.log_messages(SessionStatus::Success).await;
-        assert_eq!(streaming.dropped(), 1);
+        let streaming = RealTimeStreaming::new("call_1".to_string(), "gpt-realtime".to_string());
+        let report = streaming
+            .log_messages(
+                callbacks,
+                &RequestMetadata::default(),
+                SessionStatus::Success,
+            )
+            .await;
+        assert_eq!(report.dropped, 1);
     }
 }

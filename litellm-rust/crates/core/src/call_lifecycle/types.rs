@@ -1,22 +1,21 @@
 use std::time::Duration;
 
+use crate::{CoreError, CoreResult};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CallLifecycleContext {
-    pub call_type: String,
+pub struct CallContext {
     pub model: String,
     pub custom_llm_provider: String,
     pub litellm_call_id: String,
 }
 
-impl CallLifecycleContext {
+impl CallContext {
     pub fn new(
-        call_type: impl Into<String>,
         model: impl Into<String>,
         custom_llm_provider: impl Into<String>,
         litellm_call_id: impl Into<String>,
     ) -> Self {
         Self {
-            call_type: call_type.into(),
             model: model.into(),
             custom_llm_provider: custom_llm_provider.into(),
             litellm_call_id: litellm_call_id.into(),
@@ -24,52 +23,63 @@ impl CallLifecycleContext {
     }
 }
 
-pub trait CallLifecycleRequest {
-    fn lifecycle_context(&self) -> CallLifecycleContext;
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CallLifecyclePhase {
-    PreCall,
-    DuringCall,
-    ProviderCall,
-    SuccessCallback,
-    FailureCallback,
+pub enum CallPhase {
+    BeforeCall,
+    Prepare,
+    BeforeSend,
+    Provider,
+    Complete,
 }
 
-impl CallLifecyclePhase {
+impl CallPhase {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::PreCall => "pre_call",
-            Self::DuringCall => "during_call",
-            Self::ProviderCall => "provider_call",
-            Self::SuccessCallback => "success_callback",
-            Self::FailureCallback => "failure_callback",
+            Self::BeforeCall => "before_call",
+            Self::Prepare => "prepare",
+            Self::BeforeSend => "before_send",
+            Self::Provider => "provider",
+            Self::Complete => "complete",
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CallLifecyclePhaseTiming {
-    pub phase: CallLifecyclePhase,
+pub struct CallPhaseTiming {
+    pub phase: CallPhase,
     pub start_time: f64,
     pub end_time: f64,
     pub duration: Duration,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct CallLifecycleTiming {
+pub struct CallTiming {
     pub start_time: f64,
     pub end_time: f64,
-    pub phases: Vec<CallLifecyclePhaseTiming>,
+    pub phases: Vec<CallPhaseTiming>,
 }
 
-impl CallLifecycleTiming {
-    pub fn new(start_time: f64, end_time: f64, phases: Vec<CallLifecyclePhaseTiming>) -> Self {
+impl CallTiming {
+    pub fn new(start_time: f64, end_time: f64, phases: Vec<CallPhaseTiming>) -> Self {
         Self {
             start_time,
             end_time,
             phases,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum CallOutcome<'a, Response> {
+    Success(&'a Response),
+    Failure(&'a CoreError),
+}
+
+impl<'a, Response> CallOutcome<'a, Response> {
+    pub fn from_result(result: &'a CoreResult<Response>) -> Self {
+        match result {
+            Ok(response) => Self::Success(response),
+            Err(error) => Self::Failure(error),
         }
     }
 }

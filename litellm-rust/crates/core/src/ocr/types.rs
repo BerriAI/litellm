@@ -1,13 +1,9 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
-use crate::callbacks::custom_guardrail::CustomGuardrail;
-use crate::callbacks::custom_logger::CustomLogger;
-use crate::callbacks::types::RequestMetadata;
+use crate::call_lifecycle::CallSpec;
 use crate::ocr::transformation::OcrProviderConfig;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -85,42 +81,44 @@ pub struct OcrRequest<'a> {
     pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,
-    pub callbacks: Vec<Arc<dyn CustomLogger>>,
-    pub guardrails: Vec<Arc<dyn CustomGuardrail>>,
-    pub request_metadata: RequestMetadata,
     pub litellm_call_id: Option<&'a str>,
 }
 
-pub(crate) struct PreparedOcrRequest {
+pub enum OcrCall {}
+
+impl CallSpec for OcrCall {
+    const NAME: &'static str = "ocr";
+    type BeforeCall = PreparedOcrRequest;
+    type BeforeSend = ProviderOcrRequest;
+    type Response = Value;
+}
+
+pub struct PreparedOcrRequest {
     pub(crate) model: String,
     pub(crate) custom_llm_provider: String,
-    pub(crate) litellm_call_id: String,
-    pub(crate) document: OcrDocument,
+    pub document: OcrDocument,
     pub(crate) api_key: Option<String>,
     pub(crate) api_base: Option<String>,
     pub(crate) extra_headers: Option<Map<String, Value>>,
-    pub(crate) optional_params: Map<String, Value>,
+    pub optional_params: Map<String, Value>,
+    pub(crate) private_params: Map<String, Value>,
     pub(crate) timeout: Option<Duration>,
 }
 
-impl CallLifecycleRequest for PreparedOcrRequest {
-    fn lifecycle_context(&self) -> CallLifecycleContext {
-        CallLifecycleContext::new(
-            "ocr",
-            self.model.clone(),
-            self.custom_llm_provider.clone(),
-            self.litellm_call_id.clone(),
-        )
-    }
-}
-
-pub(crate) struct ProviderOcrRequest {
+pub struct ProviderOcrRequest {
     pub(crate) model: String,
+    pub(crate) custom_llm_provider: String,
     pub(crate) config: &'static dyn OcrProviderConfig,
     pub(crate) url: String,
-    pub(crate) body: Value,
+    pub body: Value,
     pub(crate) upstream_headers: Vec<(String, String)>,
     pub(crate) timeout: Option<Duration>,
+}
+
+impl ProviderOcrRequest {
+    pub fn endpoint(&self) -> &str {
+        &self.url
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

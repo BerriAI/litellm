@@ -18,7 +18,7 @@ pub(super) fn prepare_messages_call(
                 })
         })
         .ok_or_else(|| {
-            CoreError::InvalidProvider(
+            CoreError::invalid_provider(
                 "unable to resolve custom_llm_provider for messages request".to_string(),
             )
         })?;
@@ -26,7 +26,7 @@ pub(super) fn prepare_messages_call(
     let provider = provider_info.custom_llm_provider;
 
     let config = messages_provider_config(provider)
-        .ok_or_else(|| CoreError::InvalidProvider(provider.to_string()))?;
+        .ok_or_else(|| CoreError::invalid_provider(provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let mut headers = string_headers(request.extra_headers)?;
@@ -53,11 +53,11 @@ pub(super) fn prepare_messages_call(
 
     let url = config.complete_url(request.api_base, &model, &env_lookup)?;
     let typed_request = serde_json::from_value(request.body).map_err(|err| {
-        CoreError::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+        CoreError::invalid_request(format!("invalid Anthropic messages request: {err}"))
     })?;
     let transformed = config.transform_request(typed_request)?;
     let body = serde_json::to_value(transformed).map_err(|err| {
-        CoreError::InvalidRequest(format!(
+        CoreError::invalid_request(format!(
             "failed to serialize Anthropic messages request: {err}"
         ))
     })?;

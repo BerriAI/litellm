@@ -23,7 +23,7 @@ fn transform(msgs: Value, opts: Value) -> Value {
         .body
 }
 
-fn transform_response(body: Value) -> CoreResult<ChatCompletionsResponse> {
+fn transform_response(body: Value) -> Result<ChatCompletionsResponse, UpstreamError> {
     BEDROCK_CHAT_COMPLETIONS_CONFIG.transform_response(
         "anthropic.claude-sonnet-4-5-v1:0",
         ProviderChatResponseData { body },
@@ -480,7 +480,7 @@ fn declines_a_response_carrying_a_tool_use_block() {
     .expect_err("tool use block");
     assert_eq!(
         err,
-        CoreError::Unsupported("non-text response content block")
+        UpstreamError::unsupported("non-text response content block")
     );
 }
 
@@ -488,15 +488,15 @@ fn declines_a_response_carrying_a_tool_use_block() {
 fn errors_on_a_response_missing_required_fields() {
     assert_eq!(
         transform_response(json!("nope")).expect_err("not an object"),
-        CoreError::InvalidResponse("converse response is not an object".to_string())
+        UpstreamError::InvalidResponse("converse response is not an object".to_string())
     );
     assert_eq!(
         transform_response(json!({"usage": {}})).expect_err("no output"),
-        CoreError::MissingField("output.message.content")
+        UpstreamError::missing_field("output.message.content")
     );
     assert_eq!(
         transform_response(json!({"output": {"message": {"content": []}}})).expect_err("no usage"),
-        CoreError::MissingField("usage")
+        UpstreamError::missing_field("usage")
     );
 }
 

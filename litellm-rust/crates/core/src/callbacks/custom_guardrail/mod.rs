@@ -99,14 +99,14 @@ impl CustomGuardrailRunner {
             Ok(result) => Ok(result),
             Err(error) => {
                 let failure_details = model_call_details.clone().with_failure_error(LoggingError {
-                    message: error.message.clone(),
-                    kind: error.kind.clone(),
+                    message: error.message().to_string(),
+                    kind: error.kind().to_string(),
                 });
                 let response_obj = CallbackValue::new(
                     "guardrail_error",
                     serde_json::json!({
-                        "message": error.message,
-                        "kind": error.kind,
+                        "message": error.message(),
+                        "kind": error.kind(),
                     }),
                 );
                 logger_runner
@@ -381,7 +381,7 @@ mod tests {
             .await
             .expect_err("guardrail blocks request");
 
-        assert_eq!(err.kind, "GuardrailBlocked");
+        assert_eq!(err.kind(), "GuardrailBlocked");
         assert_eq!(
             logger.errors.lock().unwrap().as_slice(),
             ["GuardrailBlocked"]
@@ -446,8 +446,8 @@ mod tests {
             .await;
 
         let err = result.expect_err("provider error is returned directly");
-        assert_eq!(err.kind, "GuardrailBlocked");
-        assert_eq!(err.message, "provider-side guardrail error");
+        assert_eq!(err.kind(), "GuardrailBlocked");
+        assert_eq!(err.message(), "provider-side guardrail error");
     }
 
     #[tokio::test]

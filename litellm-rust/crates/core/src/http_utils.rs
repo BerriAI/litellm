@@ -15,6 +15,24 @@ pub fn truncate_error_body(body: &str) -> String {
     format!("{truncated}... (truncated)")
 }
 
+/// Classify a failed `reqwest` send so the retry contract stays accurate.
+///
+/// Failing to establish the connection means the request never went out, so
+/// the host can still serve it. Everything else here, a timeout above all,
+/// may have reached the provider and been answered.
+pub fn map_send_error(err: reqwest::Error) -> CoreError {
+    if err.is_connect() || err.is_builder() {
+        CoreError::connect(err.to_string())
+    } else {
+        CoreError::network(err.to_string())
+    }
+}
+
+/// Build the canonical upstream-status error, truncating the provider body.
+pub fn upstream_http(status: reqwest::StatusCode, body: &str) -> CoreError {
+    CoreError::http(status.as_u16(), truncate_error_body(body))
+}
+
 pub fn string_headers(
     context: &'static str,
     extra_headers: Option<Map<String, Value>>,
@@ -27,7 +45,7 @@ pub fn string_headers(
                 .as_str()
                 .map(|value| (key.clone(), value.to_string()))
                 .ok_or_else(|| {
-                    CoreError::InvalidRequest(format!(
+                    CoreError::invalid_request(format!(
                         "{context} extra_headers.{key} must be a string, got {}",
                         json_type_name(&value)
                     ))
@@ -81,7 +99,7 @@ mod tests {
         let err = string_headers("chat completions", Some(headers)).expect_err("non-string value");
         assert_eq!(
             err,
-            CoreError::InvalidRequest(
+            CoreError::invalid_request(
                 "chat completions extra_headers.x-trace must be a string, got number".to_string()
             )
         );
@@ -108,5 +126,22 @@ mod tests {
             "Authorization".to_string(),
             "Basic abc".to_string()
         )]));
+    }
+
+    #[test]
+    fn upstream_http_truncates_the_provider_body() {
+        let body = "x".repeat(UPSTREAM_ERROR_BODY_MAX_CHARS + 1);
+        let err = upstream_http(reqwest::StatusCode::BAD_GATEWAY, &body);
+        assert!(matches!(
+            err,
+            CoreError::Upstream(crate::UpstreamError::Http { status: 502, .. })
+        ));
+        match err {
+            CoreError::Upstream(crate::UpstreamError::Http { body, .. }) => {
+                assert_eq!(body, truncate_error_body(&body));
+                assert!(body.ends_with("... (truncated)"));
+            }
+            other => panic!("expected an upstream http error, got {other:?}"),
+        }
     }
 }

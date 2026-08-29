@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use crate::error::CoreResult;
+use crate::error::{CoreResult, UpstreamError};
 
 use super::types::{
     ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
@@ -93,11 +93,14 @@ pub trait ChatCompletionsProviderConfig: Sync {
         optional_params: Map<String, Value>,
     ) -> CoreResult<ProviderChatRequestData>;
 
+    /// Normalize a body the provider already returned. The only failures
+    /// possible here are upstream ones: the call went out, so the host must
+    /// not blindly retry.
     fn transform_response(
         &self,
         model: &str,
         response: ProviderChatResponseData,
-    ) -> CoreResult<ChatCompletionsResponse>;
+    ) -> Result<ChatCompletionsResponse, UpstreamError>;
 }
 
 pub fn unsupported_param(

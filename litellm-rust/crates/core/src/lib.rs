@@ -14,4 +14,4 @@ pub mod responses;
 pub mod router;
 pub mod routing_utils;
 
-pub use error::{CoreError, CoreResult};
+pub use error::{CoreError, CoreResult, RequestError, UpstreamError};

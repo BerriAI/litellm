@@ -26,7 +26,7 @@ pub(super) fn string_headers(
                 .as_str()
                 .map(|value| (key.clone(), value.to_string()))
                 .ok_or_else(|| {
-                    CoreError::InvalidRequest(format!(
+                    CoreError::invalid_request(format!(
                         "audio transcription extra_headers.{key} must be a string"
                     ))
                 })
@@ -36,13 +36,4 @@ pub(super) fn string_headers(
 
 pub(super) fn has_header(headers: &BTreeMap<String, String>, name: &str) -> bool {
     headers.keys().any(|key| key.eq_ignore_ascii_case(name))
-}
-
-pub(super) fn truncate_error_body(body: &str) -> String {
-    let truncated: String = body.chars().take(256).collect();
-    if truncated.chars().count() == body.chars().count() {
-        truncated
-    } else {
-        format!("{truncated}... (truncated)")
-    }
 }

@@ -1,6 +1,6 @@
 use crate::CoreResult;
 use crate::error::CoreError;
-use crate::http_utils::truncate_error_body;
+use crate::http_utils::{map_send_error, upstream_http};
 use crate::ocr::transformation::OcrResponseHandling;
 use crate::providers::azure_ai::ocr::poll_document_intelligence;
 use serde_json::Value;
@@ -17,10 +17,7 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Co
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
-        .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+    let response = request_builder.send().await.map_err(map_send_error)?;
 
     let status = response.status();
     if request.config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
@@ -32,7 +29,7 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Co
             .and_then(|value| value.to_str().ok())
             .map(str::to_string)
             .ok_or_else(|| {
-                CoreError::InvalidResponse(
+                CoreError::invalid_response(
                     "Azure Document Intelligence returned 202 but no Operation-Location header found"
                         .to_string(),
                 )
@@ -54,17 +51,14 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Co
     let text = response
         .text()
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| CoreError::network(err.to_string()))?;
 
     if !status.is_success() {
-        return Err(CoreError::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        });
+        return Err(upstream_http(status, &text));
     }
 
     let response_json: Value = serde_json::from_str(&text)
-        .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
+        .map_err(|err| CoreError::invalid_response(format!("invalid OCR response JSON: {err}")))?;
 
     Ok(request
         .config

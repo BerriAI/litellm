@@ -1,14 +1,15 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::error::CoreError;
+use crate::error::{CoreError, RequestError, UpstreamError};
 use crate::ocr::transformation::OcrResponseHandling;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::provider_config::ocr_provider_config;
-use super::{OcrDocument, OcrRequest, ocr};
+use super::{OcrDocument, OcrRequest, ocr, ocr_with_callbacks};
+use crate::callbacks::CallbackOptions;
 use crate::callbacks::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
@@ -256,23 +257,27 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
         GuardrailEventHook::PreCall,
         GuardrailEventHook::DuringCall,
     ]));
-    let response = ocr(OcrRequest {
-        model: "mistral-ocr-latest",
-        document: document_url(),
-        api_key: Some("sk-test"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("mistral"),
-        extra_headers: None,
-        optional_params: Map::new(),
-        timeout: Some(Duration::from_secs(5)),
-        callbacks: vec![logger.clone()],
-        guardrails: vec![guardrail.clone()],
-        request_metadata: RequestMetadata {
-            user_api_key_user_id: Some("user-1".to_string()),
-            ..Default::default()
+    let response = ocr_with_callbacks(
+        OcrRequest {
+            model: "mistral-ocr-latest",
+            document: document_url(),
+            api_key: Some("sk-test"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: Some("mistral"),
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_secs(5)),
+            litellm_call_id: Some("ocr-call-1"),
         },
-        litellm_call_id: Some("ocr-call-1"),
-    })
+        CallbackOptions {
+            callbacks: vec![logger.clone()],
+            guardrails: vec![guardrail.clone()],
+            request_metadata: RequestMetadata {
+                user_api_key_user_id: Some("user-1".to_string()),
+                ..Default::default()
+            },
+        },
+    )
     .await
     .expect("ocr request succeeds");
 
@@ -321,24 +326,30 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     });
 
     let logger = Arc::new(RecordingOcrLogger::default());
-    let err = ocr(OcrRequest {
-        model: "mistral-ocr-latest",
-        document: document_url(),
-        api_key: Some("sk-test"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("mistral"),
-        extra_headers: None,
-        optional_params: Map::new(),
-        timeout: Some(Duration::from_secs(5)),
-        callbacks: vec![logger.clone()],
-        guardrails: Vec::new(),
-        request_metadata: RequestMetadata::default(),
-        litellm_call_id: Some("ocr-call-2"),
-    })
+    let err = ocr_with_callbacks(
+        OcrRequest {
+            model: "mistral-ocr-latest",
+            document: document_url(),
+            api_key: Some("sk-test"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: Some("mistral"),
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_secs(5)),
+            litellm_call_id: Some("ocr-call-2"),
+        },
+        CallbackOptions {
+            callbacks: vec![logger.clone()],
+            ..Default::default()
+        },
+    )
     .await
     .expect_err("provider error propagates");
 
-    assert!(matches!(err, CoreError::Http { status: 500, .. }));
+    assert!(matches!(
+        err,
+        CoreError::Upstream(UpstreamError::Http { status: 500, .. })
+    ));
     server.await.expect("server task completes");
     assert_eq!(
         logger.events(),
@@ -362,24 +373,31 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
     let logger = Arc::new(RecordingOcrLogger::default());
     let guardrail = Arc::new(RecordingOcrGuardrail::blocking_pre_call());
 
-    let err = ocr(OcrRequest {
-        model: "mistral-ocr-latest",
-        document: document_url(),
-        api_key: Some("sk-test"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("mistral"),
-        extra_headers: None,
-        optional_params: Map::new(),
-        timeout: Some(Duration::from_millis(100)),
-        callbacks: vec![logger.clone()],
-        guardrails: vec![guardrail.clone()],
-        request_metadata: RequestMetadata::default(),
-        litellm_call_id: Some("ocr-call-3"),
-    })
+    let err = ocr_with_callbacks(
+        OcrRequest {
+            model: "mistral-ocr-latest",
+            document: document_url(),
+            api_key: Some("sk-test"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: Some("mistral"),
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_millis(100)),
+            litellm_call_id: Some("ocr-call-3"),
+        },
+        CallbackOptions {
+            callbacks: vec![logger.clone()],
+            guardrails: vec![guardrail.clone()],
+            ..Default::default()
+        },
+    )
     .await
     .expect_err("guardrail blocks request");
 
-    assert!(matches!(err, CoreError::InvalidRequest(_)));
+    assert!(matches!(
+        err,
+        CoreError::Request(RequestError::InvalidRequest(_))
+    ));
     assert_eq!(guardrail.events(), vec!["async_pre_call_hook"]);
     assert_eq!(
         logger.events(),
@@ -438,9 +456,6 @@ async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
         extra_headers: Some(headers),
         optional_params: Map::new(),
         timeout: Some(Duration::from_secs(5)),
-        callbacks: Vec::new(),
-        guardrails: Vec::new(),
-        request_metadata: RequestMetadata::default(),
         litellm_call_id: None,
     })
     .await
@@ -504,9 +519,6 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
         extra_headers: None,
         optional_params: Map::new(),
         timeout: Some(Duration::from_secs(5)),
-        callbacks: Vec::new(),
-        guardrails: Vec::new(),
-        request_metadata: RequestMetadata::default(),
         litellm_call_id: None,
     })
     .await

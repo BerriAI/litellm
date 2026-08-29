@@ -1,167 +1,87 @@
 # Call lifecycle
 
-`litellm_core::call_lifecycle` is the shared execution wrapper for LiteLLM call
-types migrated to Rust. It owns lifecycle ordering, phase timing, and trace
-observer calls. It must not know about OCR, chat, messages, responses,
-completions, provider auth, request transforms, or response normalization.
-
-Call-type modules own their domain behavior. For example, OCR owns document
-payloads, OCR provider transforms, safe document fetch, guardrail payload shape,
-callback payload shape, and provider HTTP execution.
+`litellm_core::call_lifecycle` executes typed SDK calls. It owns lifecycle
+ordering, phase timing, exactly-once completion, and observer notification. It
+does not know about providers, route payloads, callbacks, guardrails, or
+transport.
 
 ## Runtime order
 
-Every wrapped call runs in this order:
+Every call runs in this order:
 
-1. `async_pre_call_hook`
-2. `async_during_call_hook`
-3. provider call
-4. `async_log_success_event` or `async_log_failure_event`
+1. `CallInterceptor::before_call`
+2. Route-owned provider preparation
+3. `CallInterceptor::before_send`
+4. Provider execution
+5. `CallInterceptor::complete`
 
-`async_pre_call_hook` receives the initial LiteLLM request shape. It is where
-pre-call custom guardrails run.
+`complete` runs once for failures from any preceding phase and for successful
+provider responses. It returns `()`, so instrumentation failures cannot replace
+the original call result.
 
-`async_during_call_hook` converts the initial request into the provider-ready
-request. It is where provider config selection, parameter mapping, auth/header
-resolution, request transforms, and during-call guardrails belong.
+## Typed extension point
 
-The provider call receives only the provider-ready request. It should execute
-I/O and call the provider response transform.
-
-Success and failure callbacks receive `CallLifecycleTiming`. Callback failures
-must not replace the original provider or guardrail result.
-
-## Trace contract
-
-The lifecycle runner records:
-
-- full call start and end time
-- `pre_call` phase timing
-- `during_call` phase timing
-- `provider_call` phase timing
-- `success_callback` phase timing
-- `failure_callback` phase timing
-
-`CallLifecycleObserver` receives phase start and end events. The default
-observer is a no-op. Future OTEL support should implement this observer instead
-of editing OCR, chat, messages, responses, completions, or provider modules.
-
-## Required shape
-
-Each migrated call type should use this folder shape:
-
-```text
-litellm-rust/crates/ai-gateway/src/<call_type>/
-  mod.rs          # thin public entrypoint
-  types.rs        # public request, prepared request, provider request, response types
-  prepare.rs      # model/provider/callback/guardrail setup
-  hooks.rs        # CallLifecycleHooks implementation
-  handler.rs      # provider I/O and response normalization
-  tests.rs        # call-type lifecycle and handler tests
-```
-
-Provider transforms can live in `litellm-rust/crates/core/src/providers/...`.
-Shared call-type helpers can live beside the call type, but generic lifecycle
-code stays in this folder.
-
-## Core API
-
-The prepared request implements `CallLifecycleRequest`:
+Each route defines a zero-sized `CallSpec` marker with three associated types:
 
 ```rust
-impl CallLifecycleRequest for PreparedMessagesRequest {
-    fn lifecycle_context(&self) -> CallLifecycleContext {
-        CallLifecycleContext::new(
-            "messages",
-            self.model.clone(),
-            self.custom_llm_provider.clone(),
-            self.litellm_call_id.clone(),
-        )
-    }
+pub enum OcrCall {}
+
+impl CallSpec for OcrCall {
+    const NAME: &'static str = "ocr";
+    type BeforeCall = PreparedOcrRequest;
+    type BeforeSend = ProviderOcrRequest;
+    type Response = serde_json::Value;
 }
 ```
 
-The call-type hooks implement `CallLifecycleHooks`:
+Phase types are capability boundaries. Fields that an interceptor may change
+are public. Credentials, headers, provider configuration, and endpoint identity
+stay private. Read-only facts can be exposed through getters.
+
+Native Rust extensions implement `CallInterceptor<C>`. The lifecycle boundary
+uses static dispatch and native `impl Future + Send`; it does not require
+`async_trait` or Tower. Dynamic dispatch remains inside callback registries,
+where runtime-selected integrations require it.
+
+## Route entrypoints
+
+The normal route entrypoint uses `NoopCallInterceptor`:
 
 ```rust
-impl CallLifecycleHooks<
-    PreparedMessagesRequest,
-    ProviderMessagesRequest,
-    MessagesResponse,
-> for MessagesLifecycleHooks {
-    fn async_pre_call_hook(...) {
-        // run pre-call custom guardrails against the LiteLLM request shape
-    }
-
-    fn async_during_call_hook(...) {
-        // map params, validate env, transform request, run during-call guardrails
-    }
-
-    fn async_log_success_event(...) {
-        // call async_log_success_event on configured custom loggers
-    }
-
-    fn async_log_failure_event(...) {
-        // call async_log_failure_event without swallowing the original error
-    }
+pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
+    ocr_with_interceptor(request, &NoopCallInterceptor).await
 }
 ```
 
-The public entrypoint stays thin:
+Routes expose a generic variant for native interceptors and may expose a
+callback convenience variant backed by `CallbackOptions`. Callback, guardrail,
+authentication metadata, and tracing configuration must not be fields on the
+route request.
 
-```rust
-pub async fn messages(request: MessagesRequest<'_>) -> CoreResult<MessagesResponse> {
-    let PreparedMessagesCall { request, hooks } = prepare_messages_call(request)?;
+## SDK callbacks
 
-    CallLifecycle::default()
-        .run_request(request, &hooks, execute_messages_provider_call)
-        .await
-}
-```
+`litellm_core::callbacks` owns SDK callback and guardrail contracts. Route-local
+callback interceptors adapt typed lifecycle phases to those dynamic contracts.
+Host crates may provide concrete logger implementations and callback transport,
+but the generic SDK contracts remain in core.
 
-Use `run_request` for new call types. Keep `run` available only for specialized
-tests or existing code that already has a `CallLifecycleContext`.
+The Python bridge uses the normal no-op entrypoint because Python already owns
+its callback lifecycle. Forwarding the same callbacks into Rust would dispatch
+them twice.
 
-## Adding a new call type
+## Streaming sessions
 
-1. Add `<call_type>/types.rs`
-
-Define the public request accepted by the bridge, the prepared request used by
-the lifecycle runner, and the provider request consumed by the handler.
-
-2. Implement `CallLifecycleRequest`
-
-Return `call_type`, `model`, `custom_llm_provider`, and `litellm_call_id`.
-Do not put provider-specific logic here.
-
-3. Add `<call_type>/prepare.rs`
-
-Resolve model/provider once, generate or preserve `litellm_call_id`, construct
-callback and guardrail runners, and return `Prepared<CallType>Call`.
-
-4. Add `<call_type>/hooks.rs`
-
-Implement `CallLifecycleHooks`. Put pre-call guardrail payload construction,
-provider config selection, param mapping, request transform, during-call
-guardrail payload construction, and callback payload construction here.
-
-5. Add `<call_type>/handler.rs`
-
-Execute the provider request and normalize the provider response. Do not repeat
-provider-specific transforms here; call the provider config.
-
-6. Add tests
-
-Cover hook order, success callback payload, failure callback payload, pre-call
-guardrail blocking before provider I/O, during-call body mutation, and provider
-error mapping.
+A provider future may represent an entire streaming or WebSocket session. Its
+response should contain the neutral session summary needed by completion
+interceptors. Event collectors accumulate state only; they do not own callback
+registries or decide when terminal callbacks run.
 
 ## Review checklist
 
-- Core lifecycle has no call-type or provider-specific branches
-- Public call-type entrypoint only prepares and calls `run_request`
-- Provider behavior lives behind provider config/transformation code
-- Hook method names map to the Python custom logger and guardrail concepts
-- Phase timing is recorded once in lifecycle, not separately per call type
-- Callback failures never hide the original provider or guardrail error
-- Tests prove the provider socket is not touched when pre-call guardrails block
+- Route request types contain only route inputs
+- `CallSpec` phase types expose only intentional mutation capabilities
+- Provider preparation is separate from interception
+- Request signing happens after `before_send`
+- `complete` runs exactly once and cannot replace the call result
+- Python bridge calls remain callback-free
+- Callback transport and customer I/O stay outside core
