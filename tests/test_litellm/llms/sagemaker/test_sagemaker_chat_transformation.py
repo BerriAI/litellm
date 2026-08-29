@@ -344,7 +344,7 @@ def test_body_model_stays_the_endpoint_name_when_hf_model_name_is_unset(monkeypa
         ),
     ],
 )
-def test_get_complete_url_uses_partition_dns_suffix(region, stream, expected_url):
+def test_get_complete_url_uses_partition_dns_suffix(region: str, stream: bool, expected_url: str) -> None:
     url = SagemakerChatConfig().get_complete_url(
         api_base=None,
         api_key=None,
@@ -356,7 +356,7 @@ def test_get_complete_url_uses_partition_dns_suffix(region, stream, expected_url
     assert url == expected_url
 
 
-def test_get_complete_url_sagemaker_base_url_override_wins():
+def test_get_complete_url_sagemaker_base_url_override_wins() -> None:
     url = SagemakerChatConfig().get_complete_url(
         api_base=None,
         api_key=None,

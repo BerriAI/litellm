@@ -85,7 +85,9 @@ async def test_write_and_read_json_secret():
                 assert delete_resp is not None
 
 
-def _prepare_request_endpoint(monkeypatch, region_name, extra_optional_params=None):
+def _prepare_request_endpoint(
+    monkeypatch: pytest.MonkeyPatch, region_name: str, extra_optional_params: dict[str, str] | None = None
+) -> str:
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
     secret_manager = AWSSecretsManagerV2(aws_region_name=region_name)
     endpoint_url, _headers, _body = secret_manager._prepare_request(
@@ -109,11 +111,13 @@ def _prepare_request_endpoint(monkeypatch, region_name, extra_optional_params=No
         ("us-east-1", "https://secretsmanager.us-east-1.amazonaws.com"),
     ],
 )
-def test_prepare_request_builds_partition_endpoint(monkeypatch, region_name, expected_endpoint):
+def test_prepare_request_builds_partition_endpoint(
+    monkeypatch: pytest.MonkeyPatch, region_name: str, expected_endpoint: str
+) -> None:
     assert _prepare_request_endpoint(monkeypatch, region_name) == expected_endpoint
 
 
-def test_prepare_request_explicit_bedrock_runtime_endpoint_param_still_wins(monkeypatch):
+def test_prepare_request_explicit_bedrock_runtime_endpoint_param_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     endpoint_url = _prepare_request_endpoint(
         monkeypatch,
         "cn-north-1",
@@ -122,7 +126,7 @@ def test_prepare_request_explicit_bedrock_runtime_endpoint_param_still_wins(monk
     assert endpoint_url == "https://secretsmanager.my-vpce.example.com"
 
 
-def test_prepare_request_env_bedrock_runtime_endpoint_still_wins(monkeypatch):
+def test_prepare_request_env_bedrock_runtime_endpoint_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "AWS_BEDROCK_RUNTIME_ENDPOINT", "https://bedrock-runtime.eu-west-1.amazonaws.com"
     )
