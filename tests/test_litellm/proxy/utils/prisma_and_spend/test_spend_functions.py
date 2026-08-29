@@ -351,8 +351,9 @@ async def test_drain_spend_logs_queue_flushes_rows_queued_while_draining(
 
     written: list[str] = []
 
-    async def _write(*args: Any, **kwargs: Any) -> None:
-        written.extend(row["request_id"] for row in kwargs["data"])
+    async def _write(*, data: list[dict[str, object]], skip_duplicates: bool) -> None:
+        del skip_duplicates
+        written.extend(row["request_id"] for row in data)
         if len(written) == 1:
             mock_prisma_client.spend_log_transactions.append(
                 make_spend_log_row(request_id="r2")
@@ -392,12 +393,13 @@ async def test_drain_spend_logs_queue_stops_monitor_and_keeps_its_popped_rows(
     written: list[str] = []
     write_calls = {"n": 0}
 
-    async def _write(*args: Any, **kwargs: Any) -> None:
+    async def _write(*, data: list[dict[str, object]], skip_duplicates: bool) -> None:
+        del skip_duplicates
         write_calls["n"] += 1
         if write_calls["n"] == 1:
             write_started.set()
             await asyncio.Event().wait()
-        written.extend(row["request_id"] for row in kwargs["data"])
+        written.extend(row["request_id"] for row in data)
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_write)
 
@@ -440,7 +442,10 @@ async def test_drain_spend_logs_queue_gives_up_after_max_passes(
     proxy_logging.failure_handler = AsyncMock()
     mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
 
-    async def _write_and_refill(*args: Any, **kwargs: Any) -> None:
+    async def _write_and_refill(
+        *, data: list[dict[str, object]], skip_duplicates: bool
+    ) -> None:
+        del data, skip_duplicates
         mock_prisma_client.spend_log_transactions.append(make_spend_log_row())
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(

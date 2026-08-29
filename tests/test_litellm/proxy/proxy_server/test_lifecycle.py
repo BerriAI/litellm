@@ -177,18 +177,19 @@ async def test_proxy_shutdown_drains_spend_logs_before_disconnecting(monkeypatch
     directly — is otherwise discarded on worker recycle with no log line.
     Ordering is the behavior, so assert drain then disconnect.
     """
-    calls: list = []  # mutable-ok: records call order, which is the assertion
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
 
     fake_prisma = MagicMock()
     fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
 
-    async def _record_drain():
+    async def _record_drain() -> None:
         calls.append("drain_spend")
 
     monkeypatch.setattr(ps, "_flush_spend_logs_queue_on_shutdown", _record_drain, raising=False)
 
-    async def _record_flush(client, accumulator):
+    async def _record_flush(client: object, accumulator: object) -> None:
+        del accumulator
         calls.append("flush_gateway")
         assert client is fake_prisma
 
