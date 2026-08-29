@@ -5,6 +5,9 @@
 //! OpenAI-shaped message list, the provider-mapped optional params, and
 //! credentials, and it resolves the provider, translates the conversation,
 //! calls the provider, and returns a typed OpenAI-shaped response.
+//!
+//! [`chat_completions_stream`] is the streaming variant: it returns a stream
+//! of SSE chunks for token-by-token streaming to the client.
 
 mod client;
 mod common_utils;
@@ -15,11 +18,14 @@ pub mod response_utils;
 pub mod transformation;
 pub mod types;
 
+use futures::Stream;
 use serde_json::{Map, Value};
+use std::pin::Pin;
 
 use crate::error::CoreResult;
 
-use handler::execute_chat_completions_provider_call;
+use handler::{execute_chat_completions_provider_call, execute_chat_completions_streaming_call};
+pub use handler::StreamingChunk;
 use prepare::{parse_messages, prepare_chat_completions_call, resolve_provider_config};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
@@ -27,6 +33,14 @@ pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
 ) -> CoreResult<ChatCompletionsResponse> {
     execute_chat_completions_provider_call(prepare_chat_completions_call(request)?).await
+}
+
+/// Streaming variant: returns a stream of SSE chunks
+pub fn chat_completions_stream(
+    request: ChatCompletionsRequest<'_>,
+) -> CoreResult<Pin<Box<dyn Stream<Item = StreamingChunk> + Send>>> {
+    let prepared = prepare_chat_completions_call(request)?;
+    Ok(execute_chat_completions_streaming_call(prepared))
 }
 
 /// Whether the core would accept this request, without resolving credentials or

@@ -1227,6 +1227,38 @@ def completion_cost(
     try:
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 
+        if call_type == "completion" and custom_cost_per_token is None and custom_cost_per_second is None:
+            from litellm.rust_bridge.cost_calculator import try_rust_completion_cost
+
+            _rust_model = model
+            if _rust_model is None and completion_response is not None:
+                _rust_model = getattr(completion_response, "model", None)
+            if _rust_model is None:
+                _rust_model = litellm_model_name
+
+            if _rust_model is not None:
+                _usage = _get_usage_object(completion_response=completion_response)
+                if _usage is not None:
+                    _prompt_tokens = getattr(_usage, "prompt_tokens", 0) or 0
+                    _completion_tokens = getattr(_usage, "completion_tokens", 0) or 0
+                    _details = getattr(_usage, "prompt_tokens_details", None)
+                    _comp_details = getattr(_usage, "completion_tokens_details", None)
+
+                    _rust_result = try_rust_completion_cost(
+                        model=_rust_model,
+                        prompt_tokens=_prompt_tokens,
+                        completion_tokens=_completion_tokens,
+                        custom_llm_provider=custom_llm_provider,
+                        service_tier=service_tier,
+                        cache_hit_tokens=getattr(_details, "cache_hit_tokens", None) if _details else None,
+                        cache_creation_tokens=getattr(_details, "cache_creation_tokens", None) if _details else None,
+                        audio_input_tokens=getattr(_details, "audio_tokens", None) if _details else None,
+                        audio_output_tokens=getattr(_comp_details, "audio_tokens", None) if _comp_details else None,
+                        reasoning_tokens=getattr(_comp_details, "reasoning_tokens", None) if _comp_details else None,
+                    )
+                    if _rust_result is not None:
+                        return _rust_result
+
         if (
             (call_type == "aimage_generation" or call_type == "image_generation")
             and model is not None
