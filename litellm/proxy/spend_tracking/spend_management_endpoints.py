@@ -2755,13 +2755,18 @@ async def _fetch_session_representatives(
         ) AS session_representatives
     """
     rep_rows: Final[Sequence[Mapping[str, object]]] = await _query_raw(
-        prisma_client, rep_query, *sql_params, list(session_keys)  # mutable-ok: prisma serializes array params from a list
+        prisma_client,
+        rep_query,
+        *sql_params,
+        list(session_keys),  # mutable-ok: prisma serializes array params from a list
     )
     rep_by_key: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
         {str(row["session_key"]): row for row in rep_rows}
     )
     return [  # mutable-ok: downstream enrichment mutates rows in place
-        {key: value for key, value in rep_by_key[session_key].items() if key != "session_key"}  # mutable-ok: downstream enrichment mutates rows in place
+        {
+            key: value for key, value in rep_by_key[session_key].items() if key != "session_key"
+        }  # mutable-ok: downstream enrichment mutates rows in place
         for session_key in session_keys
         if session_key in rep_by_key
     ]
