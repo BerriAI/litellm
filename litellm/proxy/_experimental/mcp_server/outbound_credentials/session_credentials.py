@@ -20,13 +20,16 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+    AsymmetricSessionKeys,
     OpenedSessionToken,
     SessionExpired,
     SessionKeys,
     SessionPrincipal,
+    SessionRotatedPublicKey,
+    SessionSigningKeys,
     is_session_refresh_token,
     is_session_token,
     open_session_refresh_token,
@@ -66,6 +69,95 @@ def session_keys_from_master_key(master_key: str) -> SessionKeys:
         dklen=_DERIVED_KEY_BYTES,
     ).hex()
     return SessionKeys(signing_key=SecretStr(signing))
+
+
+class SessionSigningPreviousKey(BaseModel):
+    """One retired key in ``mcp_session_token_signing.previous_public_keys``: its ``kid``
+    and the PEM public half (inline or an ``os.environ/`` reference)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kid: str = Field(min_length=1)
+    public_key: str = Field(min_length=1)
+
+
+class MCPSessionTokenSigningSettings(BaseModel):
+    """The ``general_settings.mcp_session_token_signing`` block: opt-in asymmetric signing
+    for the gateway session tokens. Absent, the gateway keeps the backward-compatible
+    HS256 key derived from ``master_key``. ``private_key`` and each ``public_key`` accept
+    a PEM string inline or an ``os.environ/<NAME>`` (or secret manager) reference."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    algorithm: Literal["RS256"]
+    kid: str = Field(min_length=1)
+    private_key: str = Field(min_length=1)
+    previous_public_keys: tuple[SessionSigningPreviousKey, ...] = ()
+
+
+class SessionSigningConfigError(BaseModel):
+    """``mcp_session_token_signing`` is present but unusable (bad shape, unresolvable
+    secret reference, or a key that is not a loadable RSA PEM); the caller fails closed
+    with a server error instead of silently falling back to HS256."""
+
+    model_config = ConfigDict(frozen=True)
+    tag: Literal["session_signing_config_error"] = "session_signing_config_error"
+    detail: str
+
+
+def _resolve_key_material(value: str) -> str | None:
+    if not value.startswith("os.environ/"):
+        return value
+    from litellm.secret_managers.main import get_secret_str  # noqa: PLC0415  # heavy import kept off the pure path
+
+    return get_secret_str(value)
+
+
+def resolve_session_signing_keys(
+    master_key: str,
+    raw_settings: object | None,
+) -> SessionSigningKeys | SessionSigningConfigError:
+    """Turn the operator's ``mcp_session_token_signing`` setting into signing key material.
+
+    ``None`` (the setting absent) keeps the backward-compatible HS256 key derived from
+    ``master_key``. A present setting must fully validate into RS256 material; any defect
+    is a ``SessionSigningConfigError`` value so token issuance and admission fail closed
+    rather than minting under a key the operator did not intend.
+    """
+    if raw_settings is None:
+        return session_keys_from_master_key(master_key)
+    try:
+        settings: Final = MCPSessionTokenSigningSettings.model_validate(raw_settings)
+    except ValidationError as exc:
+        return SessionSigningConfigError(detail=f"mcp_session_token_signing is malformed: {exc}")
+    private_pem: Final = _resolve_key_material(settings.private_key)
+    if private_pem is None:
+        return SessionSigningConfigError(detail="mcp_session_token_signing.private_key reference did not resolve")
+    resolved_previous: Final = tuple(
+        (previous.kid, _resolve_key_material(previous.public_key)) for previous in settings.previous_public_keys
+    )
+    unresolved: Final = tuple(kid for kid, pem in resolved_previous if pem is None)
+    if unresolved:
+        return SessionSigningConfigError(
+            detail=f"mcp_session_token_signing.previous_public_keys reference did not resolve for kid(s): {', '.join(unresolved)}"
+        )
+    try:
+        return AsymmetricSessionKeys(
+            private_key_pem=SecretStr(private_pem),
+            kid=settings.kid,
+            previous_public_keys=tuple(
+                SessionRotatedPublicKey(kid=kid, public_key_pem=pem) for kid, pem in resolved_previous if pem is not None
+            ),
+        )
+    except ValidationError as exc:
+        return SessionSigningConfigError(detail=f"mcp_session_token_signing keys are not usable RSA PEM material: {exc}")
+
+
+def active_session_signing_keys(master_key: str) -> SessionSigningKeys | SessionSigningConfigError:
+    """Wiring helper for the token endpoint and the admission edge: resolve the signing
+    keys from the live ``general_settings.mcp_session_token_signing`` block, or derive the
+    default HS256 key from ``master_key`` when the block is absent."""
+    from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415  # circular import at module load
+
+    return resolve_session_signing_keys(master_key, general_settings.get("mcp_session_token_signing"))
 
 
 class NotSessionBearer(BaseModel):
@@ -116,7 +208,7 @@ def is_session_bearer_shaped(authorization_value: str) -> bool:
 
 def resolve_session_bearer(
     authorization_value: str,
-    keys: SessionKeys,
+    keys: SessionSigningKeys,
     now: datetime,
 ) -> SessionBearerResult:
     """Classify an ``Authorization`` value presented at the aggregate MCP edge.
@@ -166,7 +258,7 @@ SessionRefreshResult: TypeAlias = SessionRefreshOpened | SessionRefreshInvalid
 
 def open_session_refresh_bearer(
     refresh_value: str,
-    keys: SessionKeys,
+    keys: SessionSigningKeys,
     now: datetime,
     expected_client_id: str,
 ) -> SessionRefreshResult:
