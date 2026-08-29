@@ -54637,5 +54637,29 @@
         "supports_function_calling": false,
         "supports_system_messages": true,
         "supports_tool_choice": false
+    },
+    "aipg/z-image-turbo": {
+        "input_cost_per_image": 0.003,
+        "litellm_provider": "aipg",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "aipg/Krea 2 Turbo": {
+        "input_cost_per_image": 0.005,
+        "litellm_provider": "aipg",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "aipg/FLUX.2 Klein 4B FP8": {
+        "input_cost_per_image": 0.01,
+        "litellm_provider": "aipg",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
     }
 }

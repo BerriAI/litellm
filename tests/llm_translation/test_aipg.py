@@ -19,7 +19,11 @@ def test_aipg_json_registry():
     assert config.api_key_env == "AIPG_API_KEY"
     assert config.api_base_env == "AIPG_API_BASE"
     assert config.require_explicit_key_for_custom_base is True
-    assert config.supported_endpoints == ["/v1/chat/completions", "/v1/responses"]
+    assert config.supported_endpoints == [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/images/generations",
+    ]
     assert JSONProviderRegistry.supports_responses_api("aipg") is True
 
 
@@ -119,6 +123,49 @@ def test_aipg_responses_rejects_env_key_with_custom_api_base():
         assert headers["Authorization"] == "Bearer explicit-key"
 
 
+def test_aipg_image_generation_uses_native_endpoint():
+    mock_response = mock.MagicMock()
+    mock_response.model_dump.return_value = {
+        "created": 1,
+        "data": [{"url": "https://images.example/aipg.webp"}],
+    }
+    mock_client = mock.MagicMock()
+    mock_client.images.generate.return_value = mock_response
+
+    with (
+        mock.patch.dict(os.environ, {"AIPG_API_KEY": "grid-test"}, clear=True),
+        mock.patch("litellm.llms.openai.openai.OpenAI", return_value=mock_client) as constructor,
+    ):
+        response = litellm.image_generation(
+            model="aipg/z-image-turbo",
+            prompt="An amber square on black.",
+            n=1,
+            size="512x512",
+        )
+
+    constructor.assert_called_once()
+    assert constructor.call_args.kwargs["api_key"] == "grid-test"
+    assert str(constructor.call_args.kwargs["base_url"]).rstrip("/") == AIPG_API_BASE
+    request = mock_client.images.generate.call_args.kwargs
+    assert request["model"] == "z-image-turbo"
+    assert request["prompt"] == "An amber square on black."
+    assert request["n"] == 1
+    assert request["size"] == "512x512"
+    assert response.data[0]["url"] == "https://images.example/aipg.webp"
+
+
+def test_aipg_image_generation_rejects_env_key_with_custom_api_base():
+    with (
+        mock.patch.dict(os.environ, {"AIPG_API_KEY": "env-key"}, clear=True),
+        pytest.raises(litellm.BadRequestError, match="api_key is required for custom api_base"),
+    ):
+        litellm.image_generation(
+            model="aipg/z-image-turbo",
+            prompt="An amber square on black.",
+            api_base="https://attacker.example/v1",
+        )
+
+
 def test_aipg_model_metadata():
     model_cost = litellm.get_model_cost_map(url="")
     expected = {
@@ -135,3 +182,15 @@ def test_aipg_model_metadata():
         assert info["max_tokens"] == output_limit
         assert info["input_cost_per_token"] == input_cost
         assert info["output_cost_per_token"] == output_cost
+
+    image_prices = {
+        "aipg/z-image-turbo": 0.003,
+        "aipg/Krea 2 Turbo": 0.005,
+        "aipg/FLUX.2 Klein 4B FP8": 0.01,
+    }
+    for model, input_cost_per_image in image_prices.items():
+        info = model_cost[model]
+        assert info["litellm_provider"] == "aipg"
+        assert info["mode"] == "image_generation"
+        assert info["input_cost_per_image"] == input_cost_per_image
+        assert info["supported_endpoints"] == ["/v1/images/generations"]
