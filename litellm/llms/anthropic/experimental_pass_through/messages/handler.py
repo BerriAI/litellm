@@ -71,13 +71,14 @@ def _should_route_to_responses_api(
     custom_llm_provider: str | None,
     requested_model: str | None = None,
     resolved_model: str | None = None,
+    use_chat_completions_api: bool | None = None,
 ) -> bool:
     """Return True when the request should use the Responses API path.
 
     Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
     opt out and route OpenAI/Azure requests through chat/completions instead.
     """
-    if litellm.use_chat_completions_url_for_anthropic_messages:
+    if litellm.use_chat_completions_url_for_anthropic_messages or use_chat_completions_api is True:
         return False
     if custom_llm_provider in _RESPONSES_API_PROVIDERS:
         return True
@@ -592,7 +593,12 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
+        if _should_route_to_responses_api(
+            custom_llm_provider=custom_llm_provider,
+            requested_model=original_model,
+            resolved_model=model,
+            use_chat_completions_api=kwargs.get("use_chat_completions_api"),
+        ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
 
         # The in-gateway context_management polyfill runs inside
