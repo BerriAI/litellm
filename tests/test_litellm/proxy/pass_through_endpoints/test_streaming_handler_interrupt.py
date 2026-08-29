@@ -9,55 +9,59 @@ import httpx
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
     PassThroughStreamingHandler,
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 
-def _make_streaming_response(chunks):
+def _make_streaming_response(chunks, error: Exception | None = None):
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
 
     async def _aiter_bytes():
         for c in chunks:
             yield c
+        if error is not None:
+            raise error
 
     mock.aiter_bytes = _aiter_bytes
     return mock
+
+
+class _RecordingLoggingWorker:
+    def __init__(self):
+        self.coroutines = []
+
+    def ensure_initialized_and_enqueue(self, async_coroutine):
+        self.coroutines.append(async_coroutine)
+        async_coroutine.close()
 
 
 @pytest.mark.asyncio
 async def test_chunk_processor_logs_on_normal_completion():
     chunks = [b"chunk-1", b"chunk-2", b"chunk-3"]
     response = _make_streaming_response(chunks)
+    route_logging = AsyncMock()
+    logging_worker = _RecordingLoggingWorker()
 
-    mock_logging_obj = MagicMock()
-    mock_passthrough_handler = MagicMock()
-
-    with patch.object(
-        PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
-        new=AsyncMock(),
-    ) as mock_route:
-        received = []
-        async for chunk in PassThroughStreamingHandler.chunk_processor(
-            response=response,
-            request_body={"model": "claude-3-haiku"},
-            litellm_logging_obj=mock_logging_obj,
-            endpoint_type=EndpointType.GENERIC,
-            start_time=datetime.now(),
-            passthrough_success_handler_obj=mock_passthrough_handler,
-            url_route="/bedrock/model/claude/invoke-with-response-stream",
-        ):
-            received.append(chunk)
-
-        await asyncio.sleep(0)
+    received = []
+    async for chunk in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=route_logging,
+        logging_worker=logging_worker,
+    ):
+        received.append(chunk)
 
     assert received == chunks
-    mock_route.assert_called_once()
-    call_kwargs = mock_route.call_args.kwargs
+    assert len(logging_worker.coroutines) == 1
+    call_kwargs = route_logging.call_args.kwargs
     assert call_kwargs["raw_bytes"] == chunks
 
 
@@ -65,34 +69,82 @@ async def test_chunk_processor_logs_on_normal_completion():
 async def test_chunk_processor_logs_on_client_disconnect():
     chunks = [b"event-1", b"event-2", b"event-3"]
     response = _make_streaming_response(chunks)
+    route_logging = AsyncMock()
+    logging_worker = _RecordingLoggingWorker()
 
-    mock_logging_obj = MagicMock()
-    mock_passthrough_handler = MagicMock()
+    gen = PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=route_logging,
+        logging_worker=logging_worker,
+    )
 
-    with patch.object(
-        PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
-        new=AsyncMock(),
-    ) as mock_route:
-        gen = PassThroughStreamingHandler.chunk_processor(
-            response=response,
-            request_body={"model": "claude-3-haiku"},
-            litellm_logging_obj=mock_logging_obj,
-            endpoint_type=EndpointType.GENERIC,
-            start_time=datetime.now(),
-            passthrough_success_handler_obj=mock_passthrough_handler,
-            url_route="/bedrock/model/claude/invoke-with-response-stream",
-        )
-
-        first = await gen.__anext__()
-        await gen.aclose()
-
-        await asyncio.sleep(0)
+    first = await gen.__anext__()
+    await gen.aclose()
 
     assert first == chunks[0]
-    mock_route.assert_called_once()
-    call_kwargs = mock_route.call_args.kwargs
+    assert len(logging_worker.coroutines) == 1
+    call_kwargs = route_logging.call_args.kwargs
     assert call_kwargs["raw_bytes"] == [chunks[0]]
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_dispatches_stream_read_error_without_success_logging():
+    error = RuntimeError("upstream stream failed")
+    response = _make_streaming_response([b"partial"], error=error)
+    dispatcher = AsyncMock()
+
+    route_logging = AsyncMock()
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    generator = PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=route_logging,
+        dynamic_failure_dispatcher=dispatcher,
+        logging_worker=_RecordingLoggingWorker(),
+    )
+
+    assert await generator.__anext__() == b"partial"
+    with pytest.raises(RuntimeError, match="upstream stream failed"):
+        await generator.__anext__()
+
+    dispatcher.assert_awaited_once_with(logging_obj, error)
+    route_logging.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_does_not_schedule_success_logging_for_upstream_error_without_dispatcher():
+    response = _make_streaming_response([b"partial"], error=RuntimeError("upstream stream failed"))
+
+    route_logging = AsyncMock()
+    generator = PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=route_logging,
+        logging_worker=_RecordingLoggingWorker(),
+    )
+
+    assert await generator.__anext__() == b"partial"
+    with pytest.raises(RuntimeError, match="upstream stream failed"):
+        await generator.__anext__()
+
+    route_logging.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -104,58 +156,48 @@ async def test_chunk_processor_does_not_schedule_success_logging_for_upstream_er
     response = _make_streaming_response(chunks)
     response.status_code = 403
 
-    mock_logging_obj = MagicMock()
-    mock_passthrough_handler = MagicMock()
-
-    with patch.object(
-        PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
-        new=AsyncMock(),
-    ) as mock_route:
-        received = []
-        async for chunk in PassThroughStreamingHandler.chunk_processor(
-            response=response,
-            request_body={"model": "claude-3-haiku"},
-            litellm_logging_obj=mock_logging_obj,
-            endpoint_type=EndpointType.GENERIC,
-            start_time=datetime.now(),
-            passthrough_success_handler_obj=mock_passthrough_handler,
-            url_route="/bedrock/model/claude/invoke-with-response-stream",
-        ):
-            received.append(chunk)
-
-        await asyncio.sleep(0)
+    route_logging = AsyncMock()
+    logging_worker = _RecordingLoggingWorker()
+    received = []
+    async for chunk in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=route_logging,
+        logging_worker=logging_worker,
+    ):
+        received.append(chunk)
 
     assert received == chunks
-    mock_route.assert_not_called()
+    route_logging.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_chunk_processor_does_not_schedule_logging_when_no_chunks():
     response = _make_streaming_response([])
 
-    mock_logging_obj = MagicMock()
-    mock_passthrough_handler = MagicMock()
-
-    with patch.object(
-        PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
-        new=AsyncMock(),
-    ) as mock_route:
-        received = []
-        async for chunk in PassThroughStreamingHandler.chunk_processor(
-            response=response,
-            request_body={"model": "claude-3-haiku"},
-            litellm_logging_obj=mock_logging_obj,
-            endpoint_type=EndpointType.GENERIC,
-            start_time=datetime.now(),
-            passthrough_success_handler_obj=mock_passthrough_handler,
-            url_route="/bedrock/model/claude/invoke-with-response-stream",
-        ):
-            received.append(chunk)
+    route_logging = AsyncMock()
+    logging_worker = _RecordingLoggingWorker()
+    received = []
+    async for chunk in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=route_logging,
+        logging_worker=logging_worker,
+    ):
+        received.append(chunk)
 
     assert received == []
-    mock_route.assert_not_called()
+    route_logging.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -167,39 +209,24 @@ async def test_chunk_processor_routes_logging_through_logging_worker():
     chunks = [b"chunk-1", b"chunk-2"]
     response = _make_streaming_response(chunks)
 
-    enqueued = []
-
-    def _capture(async_coroutine):
-        enqueued.append(async_coroutine)
-        async_coroutine.close()
-
-    with (
-        patch.object(
-            PassThroughStreamingHandler,
-            "_route_streaming_logging_to_handler",
-            new=AsyncMock(),
-        ),
-        patch.object(
-            GLOBAL_LOGGING_WORKER,
-            "ensure_initialized_and_enqueue",
-            side_effect=_capture,
-        ) as mock_enqueue,
+    logging_worker = _RecordingLoggingWorker()
+    received = []
+    async for chunk in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=AsyncMock(),
+        logging_worker=logging_worker,
     ):
-        received = []
-        async for chunk in PassThroughStreamingHandler.chunk_processor(
-            response=response,
-            request_body={"model": "claude-3-haiku"},
-            litellm_logging_obj=MagicMock(),
-            endpoint_type=EndpointType.GENERIC,
-            start_time=datetime.now(),
-            passthrough_success_handler_obj=MagicMock(),
-            url_route="/bedrock/model/claude/invoke-with-response-stream",
-        ):
-            received.append(chunk)
+        received.append(chunk)
 
     assert received == chunks
-    mock_enqueue.assert_called_once()
-    assert asyncio.iscoroutine(enqueued[0])
+    assert len(logging_worker.coroutines) == 1
+    assert asyncio.iscoroutine(logging_worker.coroutines[0])
 
 
 @pytest.mark.asyncio
@@ -209,38 +236,23 @@ async def test_chunk_processor_routes_logging_through_logging_worker_on_disconne
     chunks = [b"event-1", b"event-2", b"event-3"]
     response = _make_streaming_response(chunks)
 
-    enqueued = []
+    logging_worker = _RecordingLoggingWorker()
+    gen = PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=AsyncMock(),
+        logging_worker=logging_worker,
+    )
+    await gen.__anext__()
+    await gen.aclose()
 
-    def _capture(async_coroutine):
-        enqueued.append(async_coroutine)
-        async_coroutine.close()
-
-    with (
-        patch.object(
-            PassThroughStreamingHandler,
-            "_route_streaming_logging_to_handler",
-            new=AsyncMock(),
-        ),
-        patch.object(
-            GLOBAL_LOGGING_WORKER,
-            "ensure_initialized_and_enqueue",
-            side_effect=_capture,
-        ) as mock_enqueue,
-    ):
-        gen = PassThroughStreamingHandler.chunk_processor(
-            response=response,
-            request_body={"model": "claude-3-haiku"},
-            litellm_logging_obj=MagicMock(),
-            endpoint_type=EndpointType.GENERIC,
-            start_time=datetime.now(),
-            passthrough_success_handler_obj=MagicMock(),
-            url_route="/bedrock/model/claude/invoke-with-response-stream",
-        )
-        await gen.__anext__()
-        await gen.aclose()
-
-    mock_enqueue.assert_called_once()
-    assert asyncio.iscoroutine(enqueued[0])
+    assert len(logging_worker.coroutines) == 1
+    assert asyncio.iscoroutine(logging_worker.coroutines[0])
 
 
 def _logging_obj_with_write_once_cst():
@@ -266,26 +278,19 @@ async def test_chunk_processor_stamps_completion_start_time_on_first_chunk():
     response = _make_streaming_response(chunks)
 
     mock_logging_obj = _logging_obj_with_write_once_cst()
-    mock_passthrough_handler = MagicMock()
-
-    with patch.object(
-        PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
-        new=AsyncMock(),
+    received = []
+    async for chunk in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-haiku-4-5"},
+        litellm_logging_obj=mock_logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        route_streaming_logging=AsyncMock(),
+        logging_worker=_RecordingLoggingWorker(),
     ):
-        received = []
-        async for chunk in PassThroughStreamingHandler.chunk_processor(
-            response=response,
-            request_body={"model": "claude-haiku-4-5"},
-            litellm_logging_obj=mock_logging_obj,
-            endpoint_type=EndpointType.ANTHROPIC,
-            start_time=datetime.now(),
-            passthrough_success_handler_obj=mock_passthrough_handler,
-            url_route="/v1/messages",
-        ):
-            received.append(chunk)
-
-        await asyncio.sleep(0)
+        received.append(chunk)
 
     assert received == chunks
     mock_logging_obj._update_completion_start_time.assert_called_once()
@@ -305,23 +310,19 @@ async def test_chunk_processor_does_not_reset_completion_start_time_on_later_chu
     # Simulate first-chunk stamp having already landed (e.g. under contention or a
     # prior wrapper that already set it): later chunks must be no-ops.
     mock_logging_obj.completion_start_time = real_first
-    mock_passthrough_handler = MagicMock()
 
-    with patch.object(
-        PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
-        new=AsyncMock(),
+    async for _ in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-haiku-4-5"},
+        litellm_logging_obj=mock_logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        route_streaming_logging=AsyncMock(),
+        logging_worker=_RecordingLoggingWorker(),
     ):
-        async for _ in PassThroughStreamingHandler.chunk_processor(
-            response=response,
-            request_body={"model": "claude-haiku-4-5"},
-            litellm_logging_obj=mock_logging_obj,
-            endpoint_type=EndpointType.ANTHROPIC,
-            start_time=datetime.now(),
-            passthrough_success_handler_obj=mock_passthrough_handler,
-            url_route="/v1/messages",
-        ):
-            pass
+        pass
 
     mock_logging_obj._update_completion_start_time.assert_not_called()
     assert mock_logging_obj.completion_start_time == real_first
@@ -337,30 +338,30 @@ async def test_chunk_processor_stamps_completion_start_time_on_cost_injection_pa
 
     mock_logging_obj = _logging_obj_with_write_once_cst()
     mock_logging_obj.model_call_details = {"model": "claude-haiku-4-5"}
-    mock_passthrough_handler = MagicMock()
+    route_logging = AsyncMock()
+    logging_worker = _RecordingLoggingWorker()
 
     original = getattr(litellm_mod, "include_cost_in_streaming_usage", False)
     litellm_mod.include_cost_in_streaming_usage = True
     try:
-        with patch.object(
-            PassThroughStreamingHandler,
-            "_route_streaming_logging_to_handler",
-            new=AsyncMock(),
+        async for _ in PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={"model": "claude-haiku-4-5"},
+            litellm_logging_obj=mock_logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/v1/messages",
+            route_streaming_logging=route_logging,
+            logging_worker=logging_worker,
         ):
-            async for _ in PassThroughStreamingHandler.chunk_processor(
-                response=response,
-                request_body={"model": "claude-haiku-4-5"},
-                litellm_logging_obj=mock_logging_obj,
-                endpoint_type=EndpointType.ANTHROPIC,
-                start_time=datetime.now(),
-                passthrough_success_handler_obj=mock_passthrough_handler,
-                url_route="/v1/messages",
-            ):
-                pass
+            pass
     finally:
         litellm_mod.include_cost_in_streaming_usage = original
 
     mock_logging_obj._update_completion_start_time.assert_called_once()
+    route_logging.assert_called_once()
+    assert len(logging_worker.coroutines) == 1
 
 
 def _openai_passthrough_stream_chunks():
@@ -393,6 +394,7 @@ async def _collect_openai_passthrough_chunks(chunks, endpoint_type):
         passthrough_success_handler_obj=MagicMock(),
         url_route="/openai/v1/chat/completions",
         route_streaming_logging=AsyncMock(),
+        logging_worker=_RecordingLoggingWorker(),
     ):
         received.append(chunk)
     await asyncio.sleep(0)

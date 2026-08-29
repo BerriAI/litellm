@@ -4102,6 +4102,14 @@ class _RecordingUpstreamByteStream(httpx.AsyncByteStream):
         self.closed = True
 
 
+class _FailingUpstreamByteStream(_RecordingUpstreamByteStream):
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            self.chunks_served += 1
+            yield chunk
+        raise RuntimeError("upstream stream failed")
+
+
 class _FakeUpstreamTransport(httpx.AsyncBaseTransport):
     def __init__(self, status_code, headers, stream):
         self._status_code = status_code
@@ -4153,21 +4161,24 @@ def _inject_fake_passthrough_client(transport, timeout):
     return fake_client, _cleanup
 
 
-def _enter_relay_logging_mocks(stack, parsed_body):
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+class _PassThroughRequestDependencies:
+    def __init__(self, parsed_body):
+        self.proxy_logging = MagicMock()
+        self.proxy_logging.pre_call_hook = AsyncMock(return_value=parsed_body)
+        self.proxy_logging.post_call_failure_hook = AsyncMock()
+        self.proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+        self.proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+        self.success_handler = MagicMock(spec=PassThroughEndpointLogging)
+        self.success_handler.pass_through_async_success_handler = AsyncMock()
+        self.logging_worker = MagicMock()
+        self.logging_worker.ensure_initialized_and_enqueue.side_effect = lambda async_coroutine: async_coroutine.close()
 
-    mock_proxy_logging = stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj"))
-    mock_proxy_logging.pre_call_hook = AsyncMock(return_value=parsed_body)
-    mock_proxy_logging.post_call_failure_hook = AsyncMock()
-    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
-    mock_success_handler = stack.enter_context(
-        patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
-        )
-    )
-    mock_success_handler.return_value = None
-    stack.enter_context(patch.object(GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue", new=MagicMock()))
-    return mock_proxy_logging, mock_success_handler
+    def kwargs(self):
+        return {
+            "proxy_logging": self.proxy_logging,
+            "passthrough_success_handler": self.success_handler,
+            "logging_worker": self.logging_worker,
+        }
 
 
 def _relay_client_request(method="GET"):
@@ -4220,8 +4231,9 @@ async def test_pass_through_request_relays_non_json_body_without_buffering():
         timeout=311.0,
     )
     try:
-        with ExitStack() as stack:
-            _, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+        with ExitStack():
+            dependencies = _PassThroughRequestDependencies({})
+            mock_success_handler = dependencies.success_handler.pass_through_async_success_handler
 
             response = await pass_through_request(
                 request=_relay_client_request(),
@@ -4229,6 +4241,7 @@ async def test_pass_through_request_relays_non_json_body_without_buffering():
                 custom_headers={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
                 timeout=311.0,
+                **dependencies.kwargs(),
             )
 
             assert isinstance(response, StreamingResponse)
@@ -4281,8 +4294,9 @@ async def test_pass_through_request_json_response_stays_buffered_for_logging():
         timeout=312.0,
     )
     try:
-        with ExitStack() as stack:
-            _, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+        with ExitStack():
+            dependencies = _PassThroughRequestDependencies({})
+            mock_success_handler = dependencies.success_handler.pass_through_async_success_handler
 
             response = await pass_through_request(
                 request=_relay_client_request(),
@@ -4290,6 +4304,7 @@ async def test_pass_through_request_json_response_stays_buffered_for_logging():
                 custom_headers={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
                 timeout=312.0,
+                **dependencies.kwargs(),
             )
 
             assert not isinstance(response, StreamingResponse)
@@ -4329,22 +4344,24 @@ async def test_pass_through_request_upstream_error_body_stays_buffered():
         timeout=313.0,
     )
     try:
-        with ExitStack() as stack:
-            mock_proxy_logging, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+        dependencies = _PassThroughRequestDependencies({})
+        mock_proxy_logging = dependencies.proxy_logging
+        mock_success_handler = dependencies.success_handler.pass_through_async_success_handler
 
-            response = await pass_through_request(
-                request=_relay_client_request(),
-                target="http://upstream.test/v1/messages/batches/b1/results",
-                custom_headers={},
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
-                timeout=313.0,
-            )
+        response = await pass_through_request(
+            request=_relay_client_request(),
+            target="http://upstream.test/v1/messages/batches/b1/results",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+            timeout=313.0,
+            **dependencies.kwargs(),
+        )
 
-            assert not isinstance(response, StreamingResponse)
-            assert response.status_code == 502
-            assert response.body == b"upstream exploded"
-            mock_proxy_logging.post_call_failure_hook.assert_called_once()
-            mock_success_handler.assert_not_called()
+        assert not isinstance(response, StreamingResponse)
+        assert response.status_code == 502
+        assert response.body == b"upstream exploded"
+        mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+        mock_success_handler.assert_not_called()
     finally:
         cleanup()
         await fake_client.aclose()
@@ -4378,8 +4395,9 @@ async def test_pass_through_relay_client_disconnect_logs_partial_relay_warning(c
         timeout=314.0,
     )
     try:
-        with ExitStack() as stack:
-            _, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+        with ExitStack():
+            dependencies = _PassThroughRequestDependencies({})
+            mock_success_handler = dependencies.success_handler.pass_through_async_success_handler
 
             response = await pass_through_request(
                 request=_relay_client_request(),
@@ -4387,6 +4405,7 @@ async def test_pass_through_relay_client_disconnect_logs_partial_relay_warning(c
                 custom_headers={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
                 timeout=314.0,
+                **dependencies.kwargs(),
             )
 
             assert isinstance(response, StreamingResponse)
@@ -4435,8 +4454,9 @@ async def test_pass_through_relay_full_consumption_logs_no_partial_relay_warning
         timeout=315.0,
     )
     try:
-        with ExitStack() as stack:
-            _, mock_success_handler = _enter_relay_logging_mocks(stack, {})
+        with ExitStack():
+            dependencies = _PassThroughRequestDependencies({})
+            mock_success_handler = dependencies.success_handler.pass_through_async_success_handler
 
             response = await pass_through_request(
                 request=_relay_client_request(),
@@ -4444,6 +4464,7 @@ async def test_pass_through_relay_full_consumption_logs_no_partial_relay_warning
                 custom_headers={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
                 timeout=315.0,
+                **dependencies.kwargs(),
             )
 
             assert isinstance(response, StreamingResponse)
@@ -4484,9 +4505,7 @@ def _recording_success_callback():
 
 
 def _enter_upstream_usage_mocks(stack, parsed_body):
-    """Same seams as _enter_relay_logging_mocks, but leaves the real
-    pass-through success handler in place and captures the coroutines the
-    logging worker would have run so the test can await them."""
+    """Captures pass-through success coroutines so the test can await them."""
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
     mock_proxy_logging = stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj"))
@@ -4746,29 +4765,17 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
     websocket.headers = {}
     websocket.client_state = WebSocketState.CONNECTED
 
-    with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
-        patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
-            return_value=FakeUpstreamConnect(upstream_ws),
-        ),
-        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as mock_worker,
-    ):
-        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-        mock_proxy_logging.post_call_success_hook = AsyncMock()
-        mock_proxy_logging.post_call_failure_hook = AsyncMock()
-        mock_worker.ensure_initialized_and_enqueue = MagicMock(
-            side_effect=lambda async_coroutine: async_coroutine.close()
-        )
-        await websocket_passthrough_request(
-            websocket=websocket,
-            target="wss://api.openai.com/v1/realtime?model=gpt-realtime",
-            custom_headers={"Authorization": "Bearer sk-test"},
-            user_api_key_dict=UserAPIKeyAuth(),
-            forward_headers=False,
-            endpoint="/openai/v1/realtime",
-            accept_websocket=True,
-        )
+    dependencies = _WebSocketPassthroughDependencies(upstream_ws)
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://api.openai.com/v1/realtime?model=gpt-realtime",
+        custom_headers={"Authorization": "Bearer sk-test"},
+        user_api_key_dict=UserAPIKeyAuth(),
+        forward_headers=False,
+        endpoint="/openai/v1/realtime",
+        accept_websocket=True,
+        **dependencies.kwargs(),
+    )
 
     websocket.send_text.assert_awaited_once()
     forwarded = json.loads(websocket.send_text.await_args.args[0])
@@ -4826,23 +4833,25 @@ def _client_websocket(receive):
     return websocket
 
 
-@contextmanager
-def _patched_websocket_passthrough_environment(upstream_ws):
-    with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
-        patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
-            return_value=FakeUpstreamConnect(upstream_ws),
-        ),
-        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as mock_worker,
-    ):
-        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-        mock_proxy_logging.post_call_success_hook = AsyncMock()
-        mock_proxy_logging.post_call_failure_hook = AsyncMock()
-        mock_worker.ensure_initialized_and_enqueue = MagicMock(
-            side_effect=lambda async_coroutine: async_coroutine.close()
-        )
-        yield
+class _WebSocketPassthroughDependencies:
+    def __init__(self, upstream_ws):
+        self.connect_factory = MagicMock(return_value=FakeUpstreamConnect(upstream_ws))
+        self.proxy_logging = MagicMock()
+        self.proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        self.proxy_logging.post_call_success_hook = AsyncMock()
+        self.proxy_logging.post_call_failure_hook = AsyncMock()
+        self.success_handler = MagicMock(spec=PassThroughEndpointLogging)
+        self.success_handler.pass_through_async_success_handler = AsyncMock()
+        self.logging_worker = MagicMock()
+        self.logging_worker.ensure_initialized_and_enqueue.side_effect = lambda async_coroutine: async_coroutine.close()
+
+    def kwargs(self):
+        return {
+            "connect_factory": self.connect_factory,
+            "proxy_logging": self.proxy_logging,
+            "passthrough_success_handler": self.success_handler,
+            "logging_worker": self.logging_worker,
+        }
 
 
 async def _pending_receive():
@@ -4864,16 +4873,17 @@ async def test_websocket_passthrough_relays_upstream_policy_close_to_client():
     )
     websocket = _client_websocket(_pending_receive)
 
-    with _patched_websocket_passthrough_environment(upstream_ws):
-        await websocket_passthrough_request(
-            websocket=websocket,
-            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
-            custom_headers={"Authorization": "Bearer token"},
-            user_api_key_dict=UserAPIKeyAuth(),
-            forward_headers=False,
-            endpoint="/vertex_ai/live",
-            accept_websocket=False,
-        )
+    dependencies = _WebSocketPassthroughDependencies(upstream_ws)
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+        custom_headers={"Authorization": "Bearer token"},
+        user_api_key_dict=UserAPIKeyAuth(),
+        forward_headers=False,
+        endpoint="/vertex_ai/live",
+        accept_websocket=False,
+        **dependencies.kwargs(),
+    )
 
     websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
 
@@ -4888,16 +4898,17 @@ async def test_websocket_passthrough_keeps_normal_upstream_close_normal():
     )
     websocket = _client_websocket(_pending_receive)
 
-    with _patched_websocket_passthrough_environment(upstream_ws):
-        await websocket_passthrough_request(
-            websocket=websocket,
-            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
-            custom_headers={"Authorization": "Bearer token"},
-            user_api_key_dict=UserAPIKeyAuth(),
-            forward_headers=False,
-            endpoint="/vertex_ai/live",
-            accept_websocket=False,
-        )
+    dependencies = _WebSocketPassthroughDependencies(upstream_ws)
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+        custom_headers={"Authorization": "Bearer token"},
+        user_api_key_dict=UserAPIKeyAuth(),
+        forward_headers=False,
+        endpoint="/vertex_ai/live",
+        accept_websocket=False,
+        **dependencies.kwargs(),
+    )
 
     websocket.close.assert_awaited_once_with()
 
@@ -4918,21 +4929,22 @@ async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
         )
     )
 
-    with _patched_websocket_passthrough_environment(upstream_ws):
-        await websocket_passthrough_request(
-            websocket=websocket,
-            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
-            custom_headers={"Authorization": "Bearer token"},
-            user_api_key_dict=UserAPIKeyAuth(),
-            forward_headers=False,
-            endpoint="/vertex_ai/live",
-            accept_websocket=False,
-            setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
-                vertex_project="proj-db",
-                vertex_location="global",
-                llm_router=llm_router,
-            ),
-        )
+    dependencies = _WebSocketPassthroughDependencies(upstream_ws)
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+        custom_headers={"Authorization": "Bearer token"},
+        user_api_key_dict=UserAPIKeyAuth(),
+        forward_headers=False,
+        endpoint="/vertex_ai/live",
+        accept_websocket=False,
+        setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+            vertex_project="proj-db",
+            vertex_location="global",
+            llm_router=llm_router,
+        ),
+        **dependencies.kwargs(),
+    )
 
     upstream_ws.send.assert_awaited_once()
     return upstream_ws.send.await_args.args[0]
@@ -4982,16 +4994,17 @@ async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rc
     upstream_ws = ClosingUpstreamWebSocket(ConnectionClosedError(rcvd=rcvd, sent=None, rcvd_then_sent=None))
     websocket = _client_websocket(_pending_receive)
 
-    with _patched_websocket_passthrough_environment(upstream_ws):
-        await websocket_passthrough_request(
-            websocket=websocket,
-            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
-            custom_headers={"Authorization": "Bearer token"},
-            user_api_key_dict=UserAPIKeyAuth(),
-            forward_headers=False,
-            endpoint="/vertex_ai/live",
-            accept_websocket=False,
-        )
+    dependencies = _WebSocketPassthroughDependencies(upstream_ws)
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+        custom_headers={"Authorization": "Bearer token"},
+        user_api_key_dict=UserAPIKeyAuth(),
+        forward_headers=False,
+        endpoint="/vertex_ai/live",
+        accept_websocket=False,
+        **dependencies.kwargs(),
+    )
 
     websocket.close.assert_awaited_once_with()
 
@@ -5032,23 +5045,18 @@ async def test_websocket_passthrough_does_not_close_twice_when_success_logging_f
     )
     websocket = _client_websocket(_pending_receive)
 
-    with (
-        _patched_websocket_passthrough_environment(upstream_ws),
-        patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
-            "GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
-            side_effect=RuntimeError("logging worker down"),
-        ),
-    ):
-        await websocket_passthrough_request(
-            websocket=websocket,
-            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
-            custom_headers={"Authorization": "Bearer token"},
-            user_api_key_dict=UserAPIKeyAuth(),
-            forward_headers=False,
-            endpoint="/vertex_ai/live",
-            accept_websocket=False,
-        )
+    dependencies = _WebSocketPassthroughDependencies(upstream_ws)
+    dependencies.logging_worker.ensure_initialized_and_enqueue.side_effect = RuntimeError("logging worker down")
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+        custom_headers={"Authorization": "Bearer token"},
+        user_api_key_dict=UserAPIKeyAuth(),
+        forward_headers=False,
+        endpoint="/vertex_ai/live",
+        accept_websocket=False,
+        **dependencies.kwargs(),
+    )
 
     websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
 
@@ -5403,8 +5411,6 @@ def _team_scoped_langfuse_otel_key(callback_type: str = "success") -> UserAPIKey
 
 @pytest.mark.asyncio
 async def test_pass_through_request_initializes_team_logging_before_dispatch():
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
     fake_client, cleanup = _inject_fake_passthrough_client(
         _FakeUpstreamTransport(
             status_code=200,
@@ -5414,31 +5420,20 @@ async def test_pass_through_request_initializes_team_logging_before_dispatch():
         timeout=None,
     )
 
+    dependencies = _PassThroughRequestDependencies({})
     try:
-        with ExitStack() as stack:
-            mock_proxy_logging, mock_success_handler = _enter_relay_logging_mocks(stack, {})
-            mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
-            mock_proxy_logging.get_proxy_hook = MagicMock(return_value=None)
-            enqueued = []
-            stack.enter_context(
-                patch.object(
-                    GLOBAL_LOGGING_WORKER,
-                    "ensure_initialized_and_enqueue",
-                    new=MagicMock(side_effect=lambda async_coroutine: enqueued.append(async_coroutine)),
-                )
-            )
-            stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
-
-            response = await pass_through_request(
-                request=_relay_client_request(method="POST"),
-                target="http://upstream.test/v1/chat/completions",
-                custom_headers={},
-                user_api_key_dict=_team_scoped_langfuse_otel_key(),
-            )
+        response = await pass_through_request(
+            request=_relay_client_request(method="POST"),
+            target="http://upstream.test/v1/chat/completions",
+            custom_headers={},
+            user_api_key_dict=_team_scoped_langfuse_otel_key(),
+            proxy_config=MagicMock(),
+            **dependencies.kwargs(),
+        )
 
         assert response.status_code == 200
-        pre_call_logging_obj = mock_proxy_logging.pre_call_hook.await_args.kwargs["data"]["litellm_logging_obj"]
-        success_logging_obj = mock_success_handler.call_args.kwargs["logging_obj"]
+        pre_call_logging_obj = dependencies.proxy_logging.pre_call_hook.await_args.kwargs["data"]["litellm_logging_obj"]
+        success_logging_obj = dependencies.success_handler.pass_through_async_success_handler.call_args.kwargs["logging_obj"]
         assert pre_call_logging_obj is success_logging_obj
         assert success_logging_obj.standard_callback_dynamic_params == {
             "langfuse_public_key": "team-public-key",
@@ -5456,8 +5451,6 @@ async def test_pass_through_request_initializes_team_logging_before_dispatch():
         assert [callback.callback_name for callback in success_logging_obj.dynamic_async_success_callbacks] == [
             "langfuse_otel"
         ]
-        for async_coroutine in enqueued:
-            async_coroutine.close()
     finally:
         cleanup()
         await fake_client.aclose()
@@ -5467,26 +5460,19 @@ async def test_pass_through_request_initializes_team_logging_before_dispatch():
 async def test_websocket_passthrough_initializes_team_logging_before_dispatch():
     upstream_ws = FakeUpstreamWebSocket(b'{"type": "session.created"}')
     websocket = _client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"}))
+    dependencies = _WebSocketPassthroughDependencies(upstream_ws)
 
-    with ExitStack() as stack:
-        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
-        mock_success_handler = stack.enter_context(
-            patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
-                "pass_through_endpoint_logging.pass_through_async_success_handler",
-                new=AsyncMock(),
-            )
-        )
-        with _patched_websocket_passthrough_environment(upstream_ws):
-            await websocket_passthrough_request(
-                websocket=websocket,
-                target="wss://upstream.test/v1/realtime",
-                custom_headers={},
-                user_api_key_dict=_team_scoped_langfuse_otel_key(),
-                endpoint="/openai/v1/realtime",
-            )
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://upstream.test/v1/realtime",
+        custom_headers={},
+        user_api_key_dict=_team_scoped_langfuse_otel_key(),
+        endpoint="/openai/v1/realtime",
+        proxy_config=MagicMock(),
+        **dependencies.kwargs(),
+    )
 
-    success_logging_obj = mock_success_handler.call_args.kwargs["logging_obj"]
+    success_logging_obj = dependencies.success_handler.pass_through_async_success_handler.call_args.kwargs["logging_obj"]
     assert success_logging_obj.standard_callback_dynamic_params == {
         "langfuse_public_key": "team-public-key",
         "langfuse_secret_key": "team-secret-key",
@@ -5503,18 +5489,9 @@ async def test_websocket_passthrough_initializes_team_logging_before_dispatch():
     ]
 
 
-class _FailureCallbackRecorder(CustomLogger):
-    def __init__(self):
-        super().__init__()
-        self.failure_event_kwargs: list[dict] = []
-
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self.failure_event_kwargs.append(kwargs)
-
-
 @pytest.mark.asyncio
 async def test_pass_through_request_dispatches_team_failure_callback_once_for_upstream_error():
-    failure_callback_recorder = _FailureCallbackRecorder()
+    failure_dispatcher = AsyncMock()
     upstream_transport = _FakeUpstreamTransport(
         status_code=403,
         headers={"content-type": "application/json"},
@@ -5530,61 +5507,133 @@ async def test_pass_through_request_dispatches_team_failure_callback_once_for_up
             "x-request-id": "request-123",
         }
     )
+    dependencies = _PassThroughRequestDependencies({})
 
     try:
-        with ExitStack() as stack:
-            mock_proxy_logging, mock_success_handler = _enter_relay_logging_mocks(stack, {})
-            mock_proxy_logging.get_proxy_hook = MagicMock(return_value=None)
-            stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
-            stack.enter_context(
-                patch("litellm.proxy.proxy_server.general_settings", {"litellm_key_header_name": "x-custom-litellm-key"})
-            )
-            stack.enter_context(
-                patch.object(
-                    litellm,
-                    "_known_custom_logger_compatible_callbacks",
-                    ["langfuse_otel"],
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "litellm.litellm_core_utils.litellm_logging."
-                    "_init_custom_logger_compatible_class",
-                    return_value=failure_callback_recorder,
-                )
-            )
-
-            response = await pass_through_request(
-                request=request,
-                target="http://upstream.test/v1/chat/completions",
-                custom_headers={},
-                user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
-                forward_headers=True,
-            )
+        response = await pass_through_request(
+            request=request,
+            target="http://upstream.test/v1/chat/completions",
+            custom_headers={},
+            user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+            forward_headers=True,
+            proxy_config=MagicMock(),
+            dynamic_failure_dispatcher=failure_dispatcher,
+            **dependencies.kwargs(),
+        )
 
         assert response.status_code == 403
         assert json.loads(response.body) == {"error": "upstream denied"}
-        assert len(failure_callback_recorder.failure_event_kwargs) == 1
-        callback_kwargs = failure_callback_recorder.failure_event_kwargs[0]
-        assert callback_kwargs["has_logged_async_failure"] is True
-        callback_headers = callback_kwargs["additional_args"]["headers"]
-        assert callback_headers == {
+        dispatched_logging_obj, dispatched_exception, dispatched_traceback = failure_dispatcher.await_args.args
+        assert dispatched_exception.status_code == 403
+        assert isinstance(dispatched_traceback, str)
+        assert dispatched_logging_obj.model_call_details["additional_args"]["headers"] == {
             "authorization": "***REDACTED***",
             "x-api-key": "***REDACTED***",
-            "x-custom-litellm-key": "***REDACTED***",
+            "x-custom-litellm-key": "virtual-key-secret",
             "x-request-id": "request-123",
         }
-        serialized_callback_kwargs = json.dumps(callback_kwargs, default=str)
-        assert "provider-secret" not in serialized_callback_kwargs
-        assert "provider-api-key" not in serialized_callback_kwargs
-        assert "virtual-key-secret" not in serialized_callback_kwargs
         assert upstream_transport.request is not None
         assert upstream_transport.request.headers["authorization"] == "Bearer provider-secret"
         assert upstream_transport.request.headers["x-api-key"] == "provider-api-key"
         assert upstream_transport.request.headers["X-Custom-LiteLLM-Key"] == "virtual-key-secret"
         assert request.headers["Authorization"] == "Bearer provider-secret"
-        mock_success_handler.assert_not_called()
-        mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+        dependencies.success_handler.pass_through_async_success_handler.assert_not_called()
+        dependencies.proxy_logging.post_call_failure_hook.assert_awaited_once()
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_dispatches_team_failure_callback_for_guardrail_modified_response():
+    from litellm.exceptions import ModifyResponseException
+
+    failure_dispatcher = AsyncMock()
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            stream=_RecordingUpstreamByteStream((b'{"answer": "blocked"}',)),
+        ),
+        timeout=None,
+    )
+    guardrail_exception = ModifyResponseException(
+        message="Response blocked by guardrail",
+        model="test-model",
+        request_data={"model": "test-model"},
+        guardrail_name="test-guardrail",
+    )
+    dependencies = _PassThroughRequestDependencies({})
+    dependencies.proxy_logging.post_call_success_hook = AsyncMock(side_effect=guardrail_exception)
+
+    try:
+        response = await pass_through_request(
+            request=_relay_client_request(method="POST"),
+            target="http://upstream.test/v1/chat/completions",
+            custom_headers={},
+            user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+            guardrails_config=["test-guardrail"],
+            proxy_config=MagicMock(),
+            dynamic_failure_dispatcher=failure_dispatcher,
+            **dependencies.kwargs(),
+        )
+
+        assert response.status_code == 200
+        assert json.loads(response.body)["error"]["type"] == "content_filter"
+        dispatched_logging_obj, dispatched_exception, dispatched_traceback = failure_dispatcher.await_args.args
+        assert dispatched_exception is guardrail_exception
+        assert isinstance(dispatched_traceback, str)
+        assert dispatched_logging_obj is dependencies.proxy_logging.pre_call_hook.await_args.kwargs["data"][
+            "litellm_logging_obj"
+        ]
+        dependencies.success_handler.pass_through_async_success_handler.assert_not_called()
+        dependencies.proxy_logging.post_call_failure_hook.assert_awaited_once()
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stream",
+    [
+        pytest.param(None, id="detected-from-response"),
+        pytest.param(True, id="requested"),
+    ],
+)
+async def test_pass_through_request_dispatches_team_failure_callback_for_mid_stream_sse_error(stream):
+    failure_dispatcher = AsyncMock()
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            stream=_FailingUpstreamByteStream((b'data: {"delta": "partial"}\n\n',)),
+        ),
+        timeout=None,
+    )
+
+    dependencies = _PassThroughRequestDependencies({})
+    try:
+        response = await pass_through_request(
+            request=_relay_client_request(method="POST"),
+            target="http://upstream.test/v1/chat/completions",
+            custom_headers={},
+            user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+            stream=stream,
+            proxy_config=MagicMock(),
+            dynamic_failure_dispatcher=failure_dispatcher,
+            **dependencies.kwargs(),
+        )
+
+        assert await response.body_iterator.__anext__() == b'data: {"delta": "partial"}\n\n'
+        with pytest.raises(RuntimeError, match="upstream stream failed"):
+            await response.body_iterator.__anext__()
+
+        dispatched_logging_obj, dispatched_exception = failure_dispatcher.await_args.args
+        assert isinstance(dispatched_exception, RuntimeError)
+        assert dispatched_logging_obj is dependencies.proxy_logging.pre_call_hook.await_args.kwargs["data"]["litellm_logging_obj"]
+        dependencies.success_handler.pass_through_async_success_handler.assert_not_called()
+        dependencies.proxy_logging.post_call_failure_hook.assert_not_awaited()
     finally:
         cleanup()
         await fake_client.aclose()
@@ -5592,35 +5641,104 @@ async def test_pass_through_request_dispatches_team_failure_callback_once_for_up
 
 @pytest.mark.asyncio
 async def test_websocket_passthrough_dispatches_team_failure_callback_once():
-    failure_callback_recorder = _FailureCallbackRecorder()
+    failure_dispatcher = AsyncMock()
+    upstream_ws = RecordingUpstreamWebSocket()
+    upstream_ws.send.side_effect = RuntimeError("upstream send failed")
+    client_frame = '{"type": "input"}'
+    websocket = _client_websocket(
+        AsyncMock(return_value={"type": "websocket.receive", "text": client_frame})
+    )
+    dependencies = _WebSocketPassthroughDependencies(upstream_ws)
+
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://upstream.test/v1/realtime",
+        custom_headers={},
+        user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+        endpoint="/openai/v1/realtime",
+        proxy_config=MagicMock(),
+        dynamic_failure_dispatcher=failure_dispatcher,
+        **dependencies.kwargs(),
+    )
+
+    upstream_ws.send.assert_awaited_once_with(client_frame)
+    upstream_ws.close.assert_awaited_once()
+    websocket.close.assert_awaited_once_with(code=1011, reason="WebSocket passthrough error")
+    dispatched_logging_obj, dispatched_exception, dispatched_traceback = failure_dispatcher.await_args.args
+    assert isinstance(dispatched_exception, RuntimeError)
+    assert isinstance(dispatched_traceback, str)
+    assert dispatched_logging_obj.model_call_details["additional_args"]["headers"] == {}
+    dependencies.success_handler.pass_through_async_success_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_dispatches_team_failure_callback_for_mid_stream_binary_error():
+    failure_dispatcher = AsyncMock()
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "application/x-jsonl"},
+            stream=_FailingUpstreamByteStream((b'{"item": "partial"}\n',)),
+        ),
+        timeout=None,
+    )
+
+    dependencies = _PassThroughRequestDependencies({})
+    try:
+        response = await pass_through_request(
+            request=_relay_client_request(method="GET"),
+            target="http://upstream.test/v1/files/file-123/content",
+            custom_headers={},
+            user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+            proxy_config=MagicMock(),
+            dynamic_failure_dispatcher=failure_dispatcher,
+            **dependencies.kwargs(),
+        )
+
+        assert await response.body_iterator.__anext__() == b'{"item": "partial"}\n'
+        with pytest.raises(RuntimeError, match="upstream stream failed"):
+            await response.body_iterator.__anext__()
+
+        dispatched_logging_obj, dispatched_exception, dispatched_traceback = failure_dispatcher.await_args.args
+        assert isinstance(dispatched_exception, RuntimeError)
+        assert isinstance(dispatched_traceback, str)
+        assert dispatched_logging_obj is dependencies.proxy_logging.pre_call_hook.await_args.kwargs["data"]["litellm_logging_obj"]
+        dependencies.success_handler.pass_through_async_success_handler.assert_not_called()
+        dependencies.proxy_logging.post_call_failure_hook.assert_not_awaited()
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_dispatches_team_failure_callback_for_pre_call_error():
+    failure_dispatcher = AsyncMock()
     websocket = _client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"}))
+    dependencies = _WebSocketPassthroughDependencies(RecordingUpstreamWebSocket())
+    dependencies.proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("pre-call blocked"))
 
-    with ExitStack() as stack:
-        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
-        stack.enter_context(
-            patch.object(
-                litellm,
-                "_known_custom_logger_compatible_callbacks",
-                ["langfuse_otel"],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
-                return_value=failure_callback_recorder,
-            )
-        )
-        with _patched_websocket_passthrough_environment(ClosingUpstreamWebSocket(RuntimeError("upstream failed"))):
-            await websocket_passthrough_request(
-                websocket=websocket,
-                target="wss://upstream.test/v1/realtime",
-                custom_headers={},
-                user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
-                endpoint="/openai/v1/realtime",
-            )
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://upstream.test/v1/realtime",
+        custom_headers={},
+        user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+        endpoint="/openai/v1/realtime",
+        proxy_config=MagicMock(),
+        dynamic_failure_dispatcher=failure_dispatcher,
+        **dependencies.kwargs(),
+    )
 
-    assert len(failure_callback_recorder.failure_event_kwargs) == 1
-    assert failure_callback_recorder.failure_event_kwargs[0]["additional_args"]["headers"] == {}
+    dispatched_logging_obj, dispatched_exception, dispatched_traceback = failure_dispatcher.await_args.args
+    assert isinstance(dispatched_exception, RuntimeError)
+    assert isinstance(dispatched_traceback, str)
+    assert dispatched_logging_obj.model_call_details["additional_args"]["headers"] == {}
+    dependencies.proxy_logging.pre_call_hook.assert_awaited_once_with(
+        user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+        data={},
+        call_type="pass_through_endpoint",
+    )
+    dependencies.proxy_logging.post_call_failure_hook.assert_awaited_once()
+    websocket.close.assert_awaited_once_with(code=1011, reason="WebSocket passthrough error")
 
 
 @pytest.mark.asyncio
@@ -5629,62 +5747,39 @@ async def test_websocket_passthrough_dispatches_team_failure_callback_when_upstr
     from websockets.exceptions import InvalidStatus
     from websockets.http11 import Response as WebSocketResponse
 
-    failure_callback_recorder = _FailureCallbackRecorder()
+    failure_dispatcher = AsyncMock()
     websocket = _client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"}))
     upstream_response = WebSocketResponse(
         status_code=403,
         reason_phrase="Forbidden",
         headers=WebSocketHeaders(),
     )
+    dependencies = _WebSocketPassthroughDependencies(RecordingUpstreamWebSocket())
+    dependencies.connect_factory.side_effect = InvalidStatus(upstream_response)
 
-    with ExitStack() as stack:
-        mock_proxy_logging = stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj"))
-        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-        mock_proxy_logging.post_call_failure_hook = AsyncMock()
-        stack.enter_context(
-            patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
-                side_effect=InvalidStatus(upstream_response),
-            )
-        )
-        mock_worker = stack.enter_context(
-            patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER")
-        )
-        mock_worker.ensure_initialized_and_enqueue = MagicMock(
-            side_effect=lambda async_coroutine: async_coroutine.close()
-        )
-        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
-        stack.enter_context(
-            patch.object(
-                litellm,
-                "_known_custom_logger_compatible_callbacks",
-                ["langfuse_otel"],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
-                return_value=failure_callback_recorder,
-            )
-        )
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://upstream.test/v1/realtime",
+        custom_headers={},
+        user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+        endpoint="/openai/v1/realtime",
+        proxy_config=MagicMock(),
+        dynamic_failure_dispatcher=failure_dispatcher,
+        **dependencies.kwargs(),
+    )
 
-        await websocket_passthrough_request(
-            websocket=websocket,
-            target="wss://upstream.test/v1/realtime",
-            custom_headers={},
-            user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
-            endpoint="/openai/v1/realtime",
-        )
-
-    assert len(failure_callback_recorder.failure_event_kwargs) == 1
-    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    dispatched_logging_obj, dispatched_exception, dispatched_traceback = failure_dispatcher.await_args.args
+    assert isinstance(dispatched_exception, InvalidStatus)
+    assert isinstance(dispatched_traceback, str)
+    assert dispatched_logging_obj.model_call_details["additional_args"]["headers"] == {}
+    dependencies.proxy_logging.post_call_failure_hook.assert_awaited_once()
     websocket.close.assert_awaited_once_with(code=1011, reason="Upstream connection rejected")
 
 
 @pytest.mark.asyncio
 async def test_websocket_passthrough_forwards_credentials_without_exposing_them_to_failure_callback():
-    failure_callback_recorder = _FailureCallbackRecorder()
-    websocket = _client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"}))
+    failure_dispatcher = AsyncMock()
+    websocket = _client_websocket(_pending_receive)
     websocket.headers = Headers(
         {
             "Authorization": "Bearer provider-secret",
@@ -5693,64 +5788,31 @@ async def test_websocket_passthrough_forwards_credentials_without_exposing_them_
         }
     )
     upstream_ws = ClosingUpstreamWebSocket(RuntimeError("upstream failed"))
+    dependencies = _WebSocketPassthroughDependencies(upstream_ws)
 
-    with ExitStack() as stack:
-        mock_proxy_logging = stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj"))
-        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-        mock_proxy_logging.post_call_failure_hook = AsyncMock()
-        mock_connect = stack.enter_context(
-            patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
-                return_value=FakeUpstreamConnect(upstream_ws),
-            )
-        )
-        mock_worker = stack.enter_context(
-            patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER")
-        )
-        mock_worker.ensure_initialized_and_enqueue = MagicMock(
-            side_effect=lambda async_coroutine: async_coroutine.close()
-        )
-        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", MagicMock()))
-        stack.enter_context(
-            patch("litellm.proxy.proxy_server.general_settings", {"litellm_key_header_name": "x-custom-litellm-key"})
-        )
-        stack.enter_context(
-            patch.object(
-                litellm,
-                "_known_custom_logger_compatible_callbacks",
-                ["langfuse_otel"],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
-                return_value=failure_callback_recorder,
-            )
-        )
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://upstream.test/v1/realtime",
+        custom_headers={},
+        user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
+        endpoint="/openai/v1/realtime",
+        forward_headers=True,
+        proxy_config=MagicMock(),
+        dynamic_failure_dispatcher=failure_dispatcher,
+        **dependencies.kwargs(),
+    )
 
-        await websocket_passthrough_request(
-            websocket=websocket,
-            target="wss://upstream.test/v1/realtime",
-            custom_headers={"X-Custom-LiteLLM-Key": "virtual-key-secret"},
-            user_api_key_dict=_team_scoped_langfuse_otel_key(callback_type="failure"),
-            endpoint="/openai/v1/realtime",
-            forward_headers=True,
-        )
-
-    assert len(failure_callback_recorder.failure_event_kwargs) == 1
-    callback_kwargs = failure_callback_recorder.failure_event_kwargs[0]
-    callback_headers = callback_kwargs["additional_args"]["headers"]
-    assert callback_headers == {
-        "X-Custom-LiteLLM-Key": "***REDACTED***",
+    dispatched_logging_obj, dispatched_exception, dispatched_traceback = failure_dispatcher.await_args.args
+    assert isinstance(dispatched_exception, RuntimeError)
+    assert isinstance(dispatched_traceback, str)
+    assert dispatched_logging_obj.model_call_details["additional_args"]["headers"] == {
         "authorization": "***REDACTED***",
         "x-api-key": "***REDACTED***",
     }
-    serialized_callback_kwargs = json.dumps(callback_kwargs, default=str)
-    assert "provider-secret" not in serialized_callback_kwargs
-    assert "provider-api-key" not in serialized_callback_kwargs
-    assert "virtual-key-secret" not in serialized_callback_kwargs
-    assert mock_connect.call_args.kwargs["additional_headers"] == {
-        "X-Custom-LiteLLM-Key": "virtual-key-secret",
+    serialized_logging_details = json.dumps(dispatched_logging_obj.model_call_details, default=str)
+    assert "provider-secret" not in serialized_logging_details
+    assert "provider-api-key" not in serialized_logging_details
+    assert dependencies.connect_factory.call_args.kwargs["additional_headers"] == {
         "authorization": "Bearer provider-secret",
         "x-api-key": "provider-api-key",
     }

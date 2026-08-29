@@ -44,6 +44,19 @@ class RouteStreamingLogging(Protocol):
     ) -> Coroutine[None, None, None]: ...
 
 
+class DynamicFailureDispatcher(Protocol):
+    async def __call__(
+        self,
+        logging_obj: LiteLLMLoggingObj,
+        exception: Exception,
+        traceback_str: str | None = None,
+    ) -> None: ...
+
+
+class _LoggingWorker(Protocol):
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, None, object]) -> None: ...
+
+
 class PassThroughStreamingHandler:
     @staticmethod
     def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
@@ -60,12 +73,15 @@ class PassThroughStreamingHandler:
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
         route_streaming_logging: RouteStreamingLogging | None = None,
+        dynamic_failure_dispatcher: DynamicFailureDispatcher | None = None,
+        logging_worker: _LoggingWorker | None = None,
     ):
         resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
             route_streaming_logging or PassThroughStreamingHandler._route_streaming_logging_to_handler
         )
+        resolved_logging_worker: Final = logging_worker if logging_worker is not None else GLOBAL_LOGGING_WORKER
         raw_bytes: Final[list[bytes]] = []
-        logging_scheduled = False
+        stream_failed = False
         model_name: Final = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
             url_route=url_route,
@@ -115,32 +131,27 @@ class PassThroughStreamingHandler:
                 if pending:
                     yield pending
         except Exception as e:
+            stream_failed = True  # rebind-ok: failure state spans generator cleanup
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
+            if dynamic_failure_dispatcher is not None:
+                await dynamic_failure_dispatcher(litellm_logging_obj, e)
             raise
         finally:
-            # GeneratorExit (raised on client disconnect) is not caught by
-            # `except Exception`; the finally block ensures partial usage
-            # still gets logged for spend tracking. See LIT-2642.
-            # Upstream 4xx/5xx responses are already logged as a failure by
-            # the caller before this generator starts (see
-            # _log_passthrough_upstream_failure); logging them again here as
-            # a success would double-log the same request.
-            if not logging_scheduled and raw_bytes and response.status_code < 400:
-                logging_scheduled = True
+            if not stream_failed and raw_bytes and response.status_code < 400:
+                coroutine: Final = resolved_route_streaming_logging(
+                    litellm_logging_obj=litellm_logging_obj,
+                    passthrough_success_handler_obj=passthrough_success_handler_obj,
+                    url_route=url_route,
+                    request_body=request_body or {},  # mutable-ok: handler accepts a mutable request payload
+                    endpoint_type=endpoint_type,
+                    start_time=start_time,
+                    raw_bytes=raw_bytes,
+                    end_time=datetime.now(),
+                )
                 try:
-                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                        async_coroutine=resolved_route_streaming_logging(
-                            litellm_logging_obj=litellm_logging_obj,
-                            passthrough_success_handler_obj=passthrough_success_handler_obj,
-                            url_route=url_route,
-                            request_body=request_body or {},
-                            endpoint_type=endpoint_type,
-                            start_time=start_time,
-                            raw_bytes=raw_bytes,
-                            end_time=datetime.now(),
-                        )
-                    )
+                    resolved_logging_worker.ensure_initialized_and_enqueue(async_coroutine=coroutine)
                 except Exception as e:
+                    coroutine.close()
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
 
     @staticmethod

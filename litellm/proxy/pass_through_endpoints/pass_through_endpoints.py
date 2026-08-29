@@ -5,10 +5,11 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from itertools import groupby
-from typing import Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -62,6 +63,7 @@ from litellm.proxy._types import (
     PassThroughEndpointResponse,
     PassThroughGenericEndpoint,
     ProxyException,
+    TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import request_dispatched_to_pass_through_endpoint
@@ -82,7 +84,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_dynamic_logging_metadata,
     redact_credential_headers,
 )
-from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.proxy.utils import ProxyLogging, normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -102,7 +104,33 @@ from .upstream_usage_headers import (
     apply_upstream_reported_usage,
 )
 
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig
+else:
+    ProxyConfig = Any
+
 router: Final = APIRouter()
+
+
+class WebSocketConnection(Protocol):
+    async def recv(self, decode: bool = True) -> str | bytes: ...
+
+    async def send(self, message: str | bytes) -> None: ...
+
+    async def close(self) -> None: ...
+
+    def __aiter__(self) -> AsyncIterator[str | bytes]: ...
+
+
+class WebSocketConnector(Protocol):
+    def __call__(
+        self, target: str, *, additional_headers: Mapping[str, str]
+    ) -> AbstractAsyncContextManager[WebSocketConnection]: ...
+
+
+class _LoggingWorker(Protocol):
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, None, object]) -> None: ...
+
 
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
@@ -757,20 +785,29 @@ def _build_passthrough_failure_request_payload(
     return request_payload
 
 
+class DynamicFailureDispatcher(Protocol):
+    async def __call__(
+        self,
+        logging_obj: LiteLLMLoggingObj,
+        exception: Exception,
+        traceback_str: str | None = None,
+    ) -> None: ...
+
+
 async def _dispatch_passthrough_dynamic_failure(
     logging_obj: LiteLLMLoggingObj,
     exception: Exception,
-    traceback_str: str,
+    traceback_str: str | None = None,
 ) -> None:
     if logging_obj.model_call_details.get("has_logged_async_failure", False):
         return
     try:
         await logging_obj.dispatch_failure_handlers(
             exception=exception,
-            traceback_exception=traceback_str,
+            traceback_exception=traceback_str or traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
             prefer_async_handlers=True,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - a failing logging callback must never break the passthrough response
         verbose_proxy_logger.warning(
             "pass_through_endpoint: dynamic failure callback raised",
             exc_info=True,
@@ -784,6 +821,8 @@ async def _log_passthrough_upstream_failure(
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,
     logging_obj: LiteLLMLoggingObj,
+    dynamic_failure_dispatcher: DynamicFailureDispatcher = _dispatch_passthrough_dynamic_failure,
+    proxy_logging: ProxyLogging | None = None,
 ) -> None:
     """Fire LiteLLM-side failure hooks (spend tracking, alerting callbacks) for
     an upstream 4xx/5xx passthrough response.
@@ -795,7 +834,10 @@ async def _log_passthrough_upstream_failure(
     """
     if response.status_code < 400:
         return
-    from litellm.proxy.proxy_server import proxy_logging_obj
+    if proxy_logging is None:
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        proxy_logging = proxy_logging_obj
 
     try:
         response.raise_for_status()
@@ -812,13 +854,9 @@ async def _log_passthrough_upstream_failure(
             detail=f"Upstream passthrough request failed with status {response.status_code}",
         )
         traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
-        await _dispatch_passthrough_dynamic_failure(
-            logging_obj=logging_obj,
-            exception=synthetic_exception,
-            traceback_str=traceback_str,
-        )
+        await dynamic_failure_dispatcher(logging_obj, synthetic_exception, traceback_str)
         try:
-            await proxy_logging_obj.post_call_failure_hook(
+            await proxy_logging.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=synthetic_exception,
                 request_data=request_payload,
@@ -840,39 +878,51 @@ def _get_custom_litellm_key_header_name() -> str | None:
 
 def _get_passthrough_logging_init_params(
     user_api_key_dict: UserAPIKeyAuth,
+    proxy_config: ProxyConfig | None = None,
 ) -> tuple[
-    list[str | Callable | CustomLogger] | None,
-    list[str | Callable | CustomLogger] | None,
+    list[str | Callable[..., object] | CustomLogger] | None,
+    list[str | Callable[..., object] | CustomLogger] | None,
     dict[str, object] | None,
 ]:
-    from litellm.proxy.proxy_server import proxy_config
+    if proxy_config is None:
+        from litellm.proxy.proxy_server import proxy_config as server_proxy_config
 
-    callback_settings: Final = get_dynamic_logging_metadata(
+        return _get_passthrough_logging_init_params(
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=server_proxy_config,
+        )
+    callback_settings: Final[TeamCallbackMetadata | None] = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict,
         proxy_config=proxy_config,
     )
     if callback_settings is None:
         return None, None, None
 
-    success_callback_names: Final = callback_settings.success_callback
-    dynamic_success_callbacks: Final[list[str | Callable | CustomLogger] | None] = (
-        [*success_callback_names] if success_callback_names is not None else None
+    dynamic_success_callbacks: Final[list[str | Callable[..., object] | CustomLogger] | None] = (
+        list[str | Callable[..., object] | CustomLogger](  # mutable-ok: Logging requires a mutable callback list
+            callback_settings.success_callback
+        )
+        if callback_settings.success_callback is not None
+        else None
     )
-    failure_callback_names: Final = callback_settings.failure_callback
-    dynamic_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = (
-        [*failure_callback_names] if failure_callback_names is not None else None
+    dynamic_failure_callbacks: Final[list[str | Callable[..., object] | CustomLogger] | None] = (
+        list[str | Callable[..., object] | CustomLogger](  # mutable-ok: Logging requires a mutable callback list
+            callback_settings.failure_callback
+        )
+        if callback_settings.failure_callback is not None
+        else None
     )
-    callback_vars: Final = callback_settings.callback_vars
+    callback_vars: Final[dict[str, str]] = dict(  # mutable-ok: Logging requires mutable kwargs
+        callback_settings.callback_vars or {}
+    )
     if not callback_vars:
         return dynamic_success_callbacks, dynamic_failure_callbacks, None
 
-    return (
-        dynamic_success_callbacks,
-        dynamic_failure_callbacks,
-        dict(
-            (*callback_vars.items(), (TRUSTED_CALLBACK_VARS_FIELD, callback_vars)),
-        ),
-    )
+    callback_kwargs: Final[dict[str, object]] = {  # mutable-ok: Logging requires mutable kwargs
+        **callback_vars,
+        TRUSTED_CALLBACK_VARS_FIELD: callback_vars.copy(),
+    }
+    return dynamic_success_callbacks, dynamic_failure_callbacks, callback_kwargs
 
 
 from litellm.passthrough.timeout_utils import (
@@ -897,6 +947,11 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
+    proxy_config: ProxyConfig | None = None,
+    dynamic_failure_dispatcher: DynamicFailureDispatcher = _dispatch_passthrough_dynamic_failure,
+    proxy_logging: ProxyLogging | None = None,
+    passthrough_success_handler: PassThroughEndpointLogging | None = None,
+    logging_worker: _LoggingWorker | None = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -924,6 +979,12 @@ async def pass_through_request(
         PassthroughGuardrailHandler,
     )
     from litellm.proxy.proxy_server import proxy_logging_obj
+
+    resolved_proxy_logging: Final = proxy_logging if proxy_logging is not None else proxy_logging_obj
+    resolved_success_handler: Final = (
+        passthrough_success_handler if passthrough_success_handler is not None else pass_through_endpoint_logging
+    )
+    resolved_logging_worker: Final = logging_worker if logging_worker is not None else GLOBAL_LOGGING_WORKER
 
     #########################################################
     # Initialize variables
@@ -1012,7 +1073,8 @@ async def pass_through_request(
         passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
         start_time: Final = datetime.now()
         dynamic_success_callbacks, dynamic_failure_callbacks, callback_kwargs = _get_passthrough_logging_init_params(
-            user_api_key_dict=user_api_key_dict
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=proxy_config,
         )
         logging_obj = Logging(
             model=passthrough_model,
@@ -1036,7 +1098,7 @@ async def pass_through_request(
         _parsed_body["litellm_logging_obj"] = logging_obj
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-        _parsed_body = await proxy_logging_obj.pre_call_hook(
+        _parsed_body = await resolved_proxy_logging.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=_parsed_body,
             call_type="pass_through_endpoint",
@@ -1094,7 +1156,7 @@ async def pass_through_request(
                 request.url.path,
                 request.method,
             )
-            _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook("managed_files")
+            _passthrough_managed_hook = resolved_proxy_logging.get_proxy_hook("managed_files")
             if _passthrough_managed_hook is not None:
                 from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
                     rewrite_body_ids,
@@ -1172,7 +1234,7 @@ async def pass_through_request(
             proxy_general_settings.get("passthrough_managed_object_ids", False)
             and _managed_id_provider is not None
             and request.method == "GET"
-            and proxy_logging_obj.get_proxy_hook("managed_files") is not None
+            and resolved_proxy_logging.get_proxy_hook("managed_files") is not None
         ):
             from litellm.proxy.auth.auth_utils import get_request_route
             from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
@@ -1284,6 +1346,8 @@ async def pass_through_request(
                     upstream_usage=upstream_usage,
                 ),
                 logging_obj=logging_obj,
+                dynamic_failure_dispatcher=dynamic_failure_dispatcher,
+                proxy_logging=resolved_proxy_logging,
             )
 
             # Call response headers hook for streaming pass-through
@@ -1291,7 +1355,7 @@ async def pass_through_request(
                 headers=response.headers,
                 litellm_call_id=litellm_call_id,
             )
-            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            callback_headers = await resolved_proxy_logging.post_call_response_headers_hook(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=response,
@@ -1309,8 +1373,10 @@ async def pass_through_request(
                             litellm_logging_obj=logging_obj,
                             endpoint_type=endpoint_type,
                             start_time=start_time,
-                            passthrough_success_handler_obj=pass_through_endpoint_logging,
+                            passthrough_success_handler_obj=resolved_success_handler,
                             url_route=str(url),
+                            dynamic_failure_dispatcher=dynamic_failure_dispatcher,
+                            logging_worker=resolved_logging_worker,
                         ),
                         managed_id_provider=_managed_id_provider,
                         request=request,
@@ -1366,6 +1432,8 @@ async def pass_through_request(
                     upstream_usage=upstream_usage,
                 ),
                 logging_obj=logging_obj,
+                dynamic_failure_dispatcher=dynamic_failure_dispatcher,
+                proxy_logging=resolved_proxy_logging,
             )
 
             # Call response headers hook for detected streaming pass-through
@@ -1373,7 +1441,7 @@ async def pass_through_request(
                 headers=response.headers,
                 litellm_call_id=litellm_call_id,
             )
-            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            callback_headers = await resolved_proxy_logging.post_call_response_headers_hook(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=response,
@@ -1391,8 +1459,10 @@ async def pass_through_request(
                             litellm_logging_obj=logging_obj,
                             endpoint_type=endpoint_type,
                             start_time=start_time,
-                            passthrough_success_handler_obj=pass_through_endpoint_logging,
+                            passthrough_success_handler_obj=resolved_success_handler,
                             url_route=str(url),
+                            dynamic_failure_dispatcher=dynamic_failure_dispatcher,
+                            logging_worker=resolved_logging_worker,
                         ),
                         managed_id_provider=_managed_id_provider,
                         request=request,
@@ -1413,7 +1483,7 @@ async def pass_through_request(
                 cache_key=None,
                 api_base=str(url._uri_reference),
             )
-            relay_callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
+            relay_callback_headers: Final = await resolved_proxy_logging.post_call_response_headers_hook(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
                 response=response,
@@ -1431,6 +1501,9 @@ async def pass_through_request(
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     success_handler_kwargs=kwargs,
+                    dynamic_failure_dispatcher=dynamic_failure_dispatcher,
+                    passthrough_success_handler=resolved_success_handler,
+                    logging_worker=resolved_logging_worker,
                 ),
                 status_code=response.status_code,
                 headers=HttpPassThroughEndpointHelpers.get_response_headers(
@@ -1461,6 +1534,8 @@ async def pass_through_request(
             user_api_key_dict=user_api_key_dict,
             request_payload=failure_request_payload,
             logging_obj=logging_obj,
+            dynamic_failure_dispatcher=dynamic_failure_dispatcher,
+            proxy_logging=resolved_proxy_logging,
         )
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:
@@ -1477,7 +1552,7 @@ async def pass_through_request(
                 "guardrails": guardrails_to_run,
             }
             post_call_guardrail_data = hook_data
-            response_body = await proxy_logging_obj.post_call_success_hook(
+            response_body = await resolved_proxy_logging.post_call_success_hook(
                 data=hook_data,
                 user_api_key_dict=user_api_key_dict,
                 response=response_body,
@@ -1512,7 +1587,7 @@ async def pass_through_request(
                 request.method,
                 response.status_code,
             )
-            _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook("managed_files")
+            _passthrough_managed_hook = resolved_proxy_logging.get_proxy_hook("managed_files")
             if _passthrough_managed_hook is not None:
                 from litellm.proxy.auth.auth_utils import get_request_route
                 from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
@@ -1561,8 +1636,8 @@ async def pass_through_request(
         passthrough_logging_payload["response_body"] = response_body
         end_time: Final = datetime.now()
         if response.status_code < 400:
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
+            resolved_logging_worker.ensure_initialized_and_enqueue(
+                async_coroutine=resolved_success_handler.pass_through_async_success_handler(
                     httpx_response=response,
                     response_body=response_body,
                     url_route=str(url),
@@ -1587,7 +1662,7 @@ async def pass_through_request(
         )
 
         # Call response headers hook
-        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+        callback_headers = await resolved_proxy_logging.post_call_response_headers_hook(
             data=_parsed_body or {},
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -1614,11 +1689,15 @@ async def pass_through_request(
             e.guardrail_name,
             str(e.message or "")[:200],
         )
+        modified_response_traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        if logging_obj is not None:
+            await dynamic_failure_dispatcher(logging_obj, e, modified_response_traceback_str)
         try:
-            await proxy_logging_obj.post_call_failure_hook(
+            await resolved_proxy_logging.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=e.request_data,
+                traceback_str=modified_response_traceback_str,
             )
         except Exception:
             verbose_proxy_logger.warning(
@@ -1677,12 +1756,8 @@ async def pass_through_request(
 
         traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
         if logging_obj is not None:
-            await _dispatch_passthrough_dynamic_failure(
-                logging_obj=logging_obj,
-                exception=e,
-                traceback_str=traceback_str,
-            )
-        await proxy_logging_obj.post_call_failure_hook(
+            await dynamic_failure_dispatcher(logging_obj, e, traceback_str)
+        await resolved_proxy_logging.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=request_payload,
@@ -2105,6 +2180,12 @@ async def websocket_passthrough_request(
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
+    proxy_config: ProxyConfig | None = None,
+    dynamic_failure_dispatcher: DynamicFailureDispatcher = _dispatch_passthrough_dynamic_failure,
+    connect_factory: WebSocketConnector | None = None,
+    proxy_logging: ProxyLogging | None = None,
+    passthrough_success_handler: PassThroughEndpointLogging | None = None,
+    logging_worker: _LoggingWorker | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2125,6 +2206,13 @@ async def websocket_passthrough_request(
         PassthroughStandardLoggingPayload,
     )
 
+    resolved_connect_factory: Final = connect_factory if connect_factory is not None else connect
+    resolved_proxy_logging: Final = proxy_logging if proxy_logging is not None else proxy_logging_obj
+    resolved_success_handler: Final = (
+        passthrough_success_handler if passthrough_success_handler is not None else pass_through_endpoint_logging
+    )
+    resolved_logging_worker: Final = logging_worker if logging_worker is not None else GLOBAL_LOGGING_WORKER
+
     # Initialize tracking variables
     start_time: Final = datetime.now()
     websocket_messages: Final[list[dict[str, object]]] = []
@@ -2133,7 +2221,8 @@ async def websocket_passthrough_request(
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
 
     dynamic_success_callbacks, dynamic_failure_callbacks, callback_kwargs = _get_passthrough_logging_init_params(
-        user_api_key_dict=user_api_key_dict
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config,
     )
 
     # Only accept the WebSocket if requested (for generic usage)
@@ -2228,19 +2317,18 @@ async def websocket_passthrough_request(
         },
     )
 
-    ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-    websocket_data: dict[str, object] = {}
-    websocket_data = await proxy_logging_obj.pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        data=websocket_data,
-        call_type="pass_through_endpoint",
-    )
-
     try:
+        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+        await resolved_proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data={},  # mutable-ok: pre-call hooks require a mutable request payload
+            call_type="pass_through_endpoint",
+        )
+
         verbose_proxy_logger.debug(
             "WebSocket passthrough (%s): Establishing upstream connection to %s", endpoint, target
         )
-        async with connect(
+        async with resolved_connect_factory(
             target,
             additional_headers=upstream_headers,
         ) as upstream_ws:
@@ -2326,6 +2414,7 @@ async def websocket_passthrough_request(
                         "WebSocket passthrough (%s): error forwarding client message", endpoint
                     )
                     await upstream_ws.close()
+                    raise
 
             async def forward_upstream_to_client() -> Close | None:
                 """Forward messages from upstream to client WebSocket, returning the upstream's close frame"""
@@ -2474,8 +2563,8 @@ async def websocket_passthrough_request(
             mock_response: Final = MockWebSocketResponse(target)
 
             # Use the same success handler as HTTP passthrough endpoints
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
+            resolved_logging_worker.ensure_initialized_and_enqueue(
+                async_coroutine=resolved_success_handler.pass_through_async_success_handler(
                     httpx_response=mock_response,
                     response_body=websocket_messages,
                     url_route=endpoint or "",
@@ -2490,8 +2579,8 @@ async def websocket_passthrough_request(
             )
 
             # Call the proxy logging success hook
-            if proxy_logging_obj:
-                await proxy_logging_obj.post_call_success_hook(
+            if resolved_proxy_logging:
+                await resolved_proxy_logging.post_call_success_hook(
                     data={},
                     user_api_key_dict=user_api_key_dict,
                     response={"status": "websocket_connection_successful"},
@@ -2508,18 +2597,14 @@ async def websocket_passthrough_request(
         if logging_obj is not None:
             request_payload["litellm_logging_obj"] = logging_obj
 
-        traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
-        await _dispatch_passthrough_dynamic_failure(
-            logging_obj=logging_obj,
-            exception=exc,
-            traceback_str=traceback_str,
-        )
+        invalid_status_traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        await dynamic_failure_dispatcher(logging_obj, exc, invalid_status_traceback_str)
         try:
-            await proxy_logging_obj.post_call_failure_hook(
+            await resolved_proxy_logging.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=exc,
                 request_data=request_payload,
-                traceback_str=traceback_str,
+                traceback_str=invalid_status_traceback_str,
             )
         except Exception:  # noqa: BLE001 - a failing logging callback must never change the WebSocket close behavior
             verbose_proxy_logger.warning(
@@ -2546,13 +2631,9 @@ async def websocket_passthrough_request(
             request_payload["litellm_logging_obj"] = logging_obj
 
         traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
-        await _dispatch_passthrough_dynamic_failure(
-            logging_obj=logging_obj,
-            exception=e,
-            traceback_str=traceback_str,
-        )
+        await dynamic_failure_dispatcher(logging_obj, e, traceback_str)
         try:
-            await proxy_logging_obj.post_call_failure_hook(
+            await resolved_proxy_logging.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=request_payload,
@@ -2633,6 +2714,9 @@ async def _relay_passthrough_response_bytes(
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: str | None,
     success_handler_kwargs: dict,
+    dynamic_failure_dispatcher: DynamicFailureDispatcher,
+    passthrough_success_handler: PassThroughEndpointLogging,
+    logging_worker: _LoggingWorker,
 ) -> AsyncGenerator[bytes, None]:
     """
     Yield upstream bytes to the client without accumulating them, then fire the
@@ -2643,12 +2727,21 @@ async def _relay_passthrough_response_bytes(
     partial deliveries are distinguishable from complete ones in proxy logs.
     """
     bytes_relayed = 0
+    stream_failed = False
     upstream_fully_relayed = False
     try:
         async for chunk in response.aiter_bytes():
             bytes_relayed += len(chunk)
             yield chunk
         upstream_fully_relayed = True
+    except Exception as e:
+        stream_failed = True  # rebind-ok: failure state spans generator cleanup
+        await dynamic_failure_dispatcher(
+            logging_obj,
+            e,
+            traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+        )
+        raise
     finally:
         if not upstream_fully_relayed:
             verbose_proxy_logger.warning(
@@ -2657,21 +2750,22 @@ async def _relay_passthrough_response_bytes(
                 bytes_relayed,
             )
         await response.aclose()
-        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
-                httpx_response=response,
-                response_body=None,
-                url_route=url_route,
-                result="",
-                start_time=start_time,
-                end_time=datetime.now(),
-                logging_obj=logging_obj,
-                cache_hit=False,
-                request_body=request_body,
-                custom_llm_provider=custom_llm_provider,
-                **success_handler_kwargs,
+        if not stream_failed and not logging_obj.model_call_details.get("has_logged_async_failure", False):
+            logging_worker.ensure_initialized_and_enqueue(
+                async_coroutine=passthrough_success_handler.pass_through_async_success_handler(
+                    httpx_response=response,
+                    response_body=None,
+                    url_route=url_route,
+                    result="",
+                    start_time=start_time,
+                    end_time=datetime.now(),
+                    logging_obj=logging_obj,
+                    cache_hit=False,
+                    request_body=request_body,
+                    custom_llm_provider=custom_llm_provider,
+                    **success_handler_kwargs,
+                )
             )
-        )
 
 
 def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) -> str | None:
