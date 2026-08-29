@@ -613,6 +613,73 @@ def test_the_same_deployment_spelled_two_ways_is_not_a_switch():
     assert _savings("claude-opus-5", "anthropic/claude-opus-5", usage) == 0.0
 
 
+def test_two_deployments_of_one_model_are_told_apart_by_deployment_id():
+    """Two deployments of one model can hold different negotiated rates, so routing from
+    the dear deployment to the cheap one is a real saving. Keying identity on the model
+    name alone resolves both sides to the same model and reports it as $0.00; the
+    deployment ids tell them apart."""
+    usage = _usage(fresh=20_000, cached=0, written=0, out=1_000)
+    negotiated_input, negotiated_output = 0.0123, 0.0456
+    reported = compute_autorouter_savings(
+        baseline_model="anthropic/claude-opus-5",
+        selected_model="anthropic/claude-opus-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=_breakdown(negotiated_input, negotiated_output),
+        baseline_deployment_id="deployment-expensive",
+        selected_deployment_id="deployment-cheap",
+    )
+    opus = litellm.get_model_info("claude-opus-5", "anthropic")
+    public = 20_000 * opus["input_cost_per_token"] + 1_000 * opus["output_cost_per_token"]
+    assert reported == pytest.approx(public - (negotiated_input + negotiated_output))
+    assert reported > 0
+
+
+def test_the_same_deployment_id_is_never_a_switch():
+    """One deployment can be recorded under two model spellings, an Azure alias on one
+    side and its base model on the other, which resolve to different canonical models.
+    When the deployment ids agree it is one target, so the name difference must not price
+    as a switch and report a phantom loss."""
+    usage = _usage(fresh=20_000, cached=0, written=0, out=1_000)
+    reported = compute_autorouter_savings(
+        baseline_model="anthropic/claude-opus-5",
+        selected_model="anthropic/claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        baseline_deployment_id="one-deployment",
+        selected_deployment_id="one-deployment",
+    )
+    assert reported == 0.0
+
+
+def test_identity_falls_back_to_model_name_without_both_deployment_ids():
+    """Deployment id is the identity only when both sides carry one. With an id on just
+    one side, an SDK caller, or a row written before ids were threaded through, it falls
+    back to canonical model identity: the same model spelled two ways is still one target,
+    and a genuine switch still prices."""
+    usage = _usage(fresh=20_000, cached=0, written=0, out=1_000)
+    same_model_one_id = compute_autorouter_savings(
+        baseline_model="anthropic/claude-opus-5",
+        selected_model="claude-opus-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        baseline_deployment_id="only-the-baseline-has-one",
+        selected_deployment_id=None,
+    )
+    assert same_model_one_id == 0.0
+    real_switch_no_ids = compute_autorouter_savings(
+        baseline_model="anthropic/claude-opus-5",
+        selected_model="anthropic/claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+    )
+    assert real_switch_no_ids > 0
+
+
 def test_baseline_is_priced_under_its_own_provider():
     """Two providers can serve the same bare model name at different rates, so dropping
     the provider prices the baseline against a vendor the operator never named. Here it

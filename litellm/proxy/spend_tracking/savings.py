@@ -314,6 +314,27 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: 
     )
 
 
+def _is_same_target(
+    baseline_deployment_id: str | None,
+    selected_deployment_id: str | None,
+    baseline: _ModelIdentity,
+    selected: _ModelIdentity,
+) -> bool:
+    """Whether the baseline and served sides are the same priced target.
+
+    Deployment id is the identity when both sides carry one: two deployments of a
+    model can hold different negotiated rates, so routing from the dear one to the
+    cheap one is a real saving that name equality reports as zero, and one
+    deployment can appear under an alias on one side and its base model on the
+    other, which name inequality reports as a phantom loss. Canonical
+    provider/model identity is the fallback when either id is missing, which is
+    every SDK caller and every row written before ids were threaded through.
+    """
+    if baseline_deployment_id and selected_deployment_id:
+        return baseline_deployment_id == selected_deployment_id
+    return baseline == selected
+
+
 def compute_autorouter_savings(
     baseline_model: str | None,
     selected_model: str | None,
@@ -323,6 +344,8 @@ def compute_autorouter_savings(
     selected_info: ModelInfo | None = None,
     baseline_info: ModelInfo | None = None,
     cost_breakdown: Mapping[str, object] | None = None,
+    baseline_deployment_id: str | None = None,
+    selected_deployment_id: str | None = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
 
@@ -358,11 +381,10 @@ def compute_autorouter_savings(
     selected: Final = _resolve_model(selected_model, selected_provider)
     if baseline is None or selected is None:
         return 0.0
-    # Same model is only the same cost when it is also the same deployment. Two
-    # deployments of one model can carry different negotiated rates, and routing from
-    # the dear one to the cheap one is a real saving that short-circuiting on the model
-    # name alone reports as zero.
-    if baseline == selected:
+    # Same model is only the same cost when it is also the same deployment, so the
+    # short-circuit keys on deployment id when both sides carry one and only falls
+    # back to model-name identity when an id is missing.
+    if _is_same_target(baseline_deployment_id, selected_deployment_id, baseline, selected):
         return 0.0
     basis: Final = _pricing_basis(cost_breakdown)
     effective_baseline_info: Final = baseline_info if baseline_info is not None else _model_info(baseline)
@@ -521,6 +543,8 @@ def autorouter_savings_for_request(
         selected_info=_effective_model_info(router_instance, model_id, model or ""),
         baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
         cost_breakdown=cost_breakdown,
+        baseline_deployment_id=baseline_id,
+        selected_deployment_id=model_id,
     )
 
 
