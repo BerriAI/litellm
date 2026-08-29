@@ -2449,6 +2449,7 @@ async def increment_spend_counters(
             return
         for window in key_budget_limits:
             duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            key_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
             key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
             key_window_start = get_budget_window_start(window)
             if key_window_counter not in reserved_counter_keys:
@@ -2462,7 +2463,7 @@ async def increment_spend_counters(
             await _enqueue_window_spend_row_update(
                 entity_type=Litellm_EntityType.KEY,
                 entity_id=hashed_token,
-                window=window,
+                reset_at=key_window_reset_at,
                 window_duration=duration,
                 window_start=key_window_start,
                 increment=cost,
@@ -2490,6 +2491,7 @@ async def increment_spend_counters(
             return
         for window in team_budget_limits:
             duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            team_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
             team_window_counter = f"spend:team:{scope_team_id}:window:{duration}"
             team_window_start = get_budget_window_start(window)
             if team_window_counter not in reserved_counter_keys:
@@ -2503,7 +2505,7 @@ async def increment_spend_counters(
             await _enqueue_window_spend_row_update(
                 entity_type=Litellm_EntityType.TEAM,
                 entity_id=scope_team_id,
-                window=window,
+                reset_at=team_window_reset_at,
                 window_duration=duration,
                 window_start=team_window_start,
                 increment=cost,
@@ -2696,7 +2698,7 @@ async def _init_and_increment_spend_counter(
 async def _enqueue_window_spend_row_update(
     entity_type: Litellm_EntityType,
     entity_id: str,
-    window: Any,
+    reset_at: datetime | str | None,
     window_duration: str,
     window_start: datetime | None,
     increment: float,
@@ -2719,10 +2721,7 @@ async def _enqueue_window_spend_row_update(
     the read path's LiteLLM_SpendLogs fallback rather than rewritten per
     request.
     """
-    if window_start is None:
-        return
-    reset_at: Final = window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
-    if not reset_at:
+    if window_start is None or not reset_at:
         return
     try:
         await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(
