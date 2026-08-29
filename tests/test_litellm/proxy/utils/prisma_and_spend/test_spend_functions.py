@@ -479,7 +479,10 @@ async def test_drain_spend_logs_queue_gives_up_when_time_budget_expires(
     def _now() -> float:
         return monotonic["t"]
 
-    async def _write_and_refill(*args: Any, **kwargs: Any) -> None:
+    async def _write_and_refill(
+        *, data: list[dict[str, object]], skip_duplicates: bool
+    ) -> None:
+        del data, skip_duplicates
         monotonic["t"] += MAX_SPEND_LOG_DRAIN_SECONDS
         mock_prisma_client.spend_log_transactions.append(make_spend_log_row())
 
@@ -495,6 +498,34 @@ async def test_drain_spend_logs_queue_gives_up_when_time_budget_expires(
     # First pass starts under the deadline; the write then consumes the whole
     # budget, so the next loop exits instead of spinning to max iterations.
     assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_logs_queue_requeues_when_write_exceeds_time_budget(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm.proxy.utils as utils_mod
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    row = make_spend_log_row(request_id="r1")
+    mock_prisma_client.spend_log_transactions = [row]
+    monkeypatch.setattr(utils_mod, "MAX_SPEND_LOG_DRAIN_SECONDS", 0.01)
+
+    async def _hang(**_: object) -> None:
+        await asyncio.Event().wait()
+
+    write_mock = AsyncMock(side_effect=_hang)
+    monkeypatch.setattr(utils_mod.ProxyUpdateSpend, "update_spend_logs", write_mock)
+
+    await drain_spend_logs_queue(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+    )
+
+    assert write_mock.await_count == 1
+    assert mock_prisma_client.spend_log_transactions == [row]
 
 
 @pytest.mark.asyncio
