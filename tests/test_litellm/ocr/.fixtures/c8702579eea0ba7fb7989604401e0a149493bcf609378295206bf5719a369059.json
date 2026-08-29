@@ -1,0 +1,88 @@
+{
+  "litellm_input": {
+    "document": {
+      "image_url": "https://dummyjson.com/image/800x300/ffffff/000000?text=AuUPy5&fontSize=35",
+      "type": "image_url"
+    },
+    "include_image_base64": true,
+    "model": "mistral/mistral-ocr-latest"
+  },
+  "provider_response": {
+    "body_b64": "eyJwYWdlcyI6W3siaW5kZXgiOjAsIm1hcmtkb3duIjoiQXVVUHk1IiwiaW1hZ2VzIjpbXSwidGFibGVzIjpbXSwiaHlwZXJsaW5rcyI6W10sImhlYWRlciI6bnVsbCwiZm9vdGVyIjpudWxsLCJkaW1lbnNpb25zIjp7ImRwaSI6MjAwLCJoZWlnaHQiOjMwMCwid2lkdGgiOjgwMH0sImNvbmZpZGVuY2Vfc2NvcmVzIjpudWxsLCJibG9ja3MiOlt7InRvcF9sZWZ0X3giOjMyOSwidG9wX2xlZnRfeSI6MTM0LCJib3R0b21fcmlnaHRfeCI6NDY5LCJib3R0b21fcmlnaHRfeSI6MTcyLCJjb250ZW50IjoiQXVVUHk1IiwiY29uZmlkZW5jZV9zY29yZXMiOm51bGwsInR5cGUiOiJ0ZXh0In1dfV0sIm1vZGVsIjoibWlzdHJhbC1vY3ItbGF0ZXN0IiwiZG9jdW1lbnRfYW5ub3RhdGlvbiI6bnVsbCwidXNhZ2VfaW5mbyI6eyJwYWdlc19wcm9jZXNzZWQiOjEsImRvY19zaXplX2J5dGVzIjo0NDQ5fX0=",
+    "headers": [
+      {
+        "name": "Date",
+        "value": "Sat, 29 Aug 2026 21:29:06 GMT"
+      },
+      {
+        "name": "Content-Type",
+        "value": "application/json"
+      },
+      {
+        "name": "mistral-correlation-id",
+        "value": "01a04f6d-1e94-7169-acf2-331366511208"
+      },
+      {
+        "name": "x-kong-request-id",
+        "value": "01a04f6d-1e94-7169-acf2-331366511208"
+      },
+      {
+        "name": "x-ratelimit-limit-ocr-pages-minute",
+        "value": "60"
+      },
+      {
+        "name": "x-ratelimit-remaining-ocr-pages-minute",
+        "value": "57"
+      },
+      {
+        "name": "x-ratelimit-ocr-pages-query-cost",
+        "value": "1"
+      },
+      {
+        "name": "x-envoy-upstream-service-time",
+        "value": "299"
+      },
+      {
+        "name": "Server",
+        "value": "cloudflare"
+      },
+      {
+        "name": "access-control-allow-origin",
+        "value": "*"
+      },
+      {
+        "name": "x-kong-upstream-latency",
+        "value": "301"
+      },
+      {
+        "name": "x-kong-proxy-latency",
+        "value": "13"
+      },
+      {
+        "name": "cf-cache-status",
+        "value": "DYNAMIC"
+      },
+      {
+        "name": "set-cookie",
+        "value": "__cf_bm=L.iPQSMbMkUfZ6bZqRUnIvFouaL6uaka9sb1RADqE7I-1788038946.371394-1.0.1.1-eP7TRle_nNnnCddZ21LX.mzRWslGV0sv5wZONgMz.g2Es_qbFOGUuPv6K1C0p86Pz6xULpoaVjmqxUOkza6Ug_53VGsNkwHRvyxXuKXvMSB62zZPyrO0PcwTqRZKYFLC; HttpOnly; SameSite=None; Secure; Path=/; Domain=mistral.ai; Expires=Sat, 29 Aug 2026 21:59:06 GMT"
+      },
+      {
+        "name": "Strict-Transport-Security",
+        "value": "max-age=15552000; includeSubDomains; preload"
+      },
+      {
+        "name": "X-Content-Type-Options",
+        "value": "nosniff"
+      },
+      {
+        "name": "CF-RAY",
+        "value": "a32ea636dd4eebe2-SJC"
+      },
+      {
+        "name": "alt-svc",
+        "value": "h3=\":443\"; ma=86400"
+      }
+    ],
+    "status_code": 200
+  }
+}

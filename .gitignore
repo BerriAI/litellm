@@ -1,7 +1,6 @@
 .python-version
 .venv
 tests/e2e/.fixtures/
-tests/test_litellm/ocr/.fixtures/
 .venv-typecheck
 .venv_policy_test
 .venv-mutmut

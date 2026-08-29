@@ -1,0 +1,90 @@
+{
+  "litellm_input": {
+    "document": {
+      "image_url": "https://dummyjson.com/image/800x300/ffffff/000000?text=ZPay&fontSize=24",
+      "type": "image_url"
+    },
+    "id": "utdwr1axd37",
+    "image_min_size": 4099,
+    "model": "mistral/mistral-ocr-latest",
+    "table_format": "markdown"
+  },
+  "provider_response": {
+    "body_b64": "eyJwYWdlcyI6W3siaW5kZXgiOjAsIm1hcmtkb3duIjoiWlBheSIsImltYWdlcyI6W10sInRhYmxlcyI6W10sImh5cGVybGlua3MiOltdLCJoZWFkZXIiOm51bGwsImZvb3RlciI6bnVsbCwiZGltZW5zaW9ucyI6eyJkcGkiOjIwMCwiaGVpZ2h0IjozMDAsIndpZHRoIjo4MDB9LCJjb25maWRlbmNlX3Njb3JlcyI6bnVsbCwiYmxvY2tzIjpbeyJ0b3BfbGVmdF94IjozNzAsInRvcF9sZWZ0X3kiOjEzOCwiYm90dG9tX3JpZ2h0X3giOjQzMCwiYm90dG9tX3JpZ2h0X3kiOjE2NSwiY29udGVudCI6IlpQYXkiLCJjb25maWRlbmNlX3Njb3JlcyI6bnVsbCwidHlwZSI6InRleHQifV19XSwibW9kZWwiOiJtaXN0cmFsLW9jci1sYXRlc3QiLCJkb2N1bWVudF9hbm5vdGF0aW9uIjpudWxsLCJ1c2FnZV9pbmZvIjp7InBhZ2VzX3Byb2Nlc3NlZCI6MSwiZG9jX3NpemVfYnl0ZXMiOjMxNDd9fQ==",
+    "headers": [
+      {
+        "name": "Date",
+        "value": "Sat, 29 Aug 2026 21:29:05 GMT"
+      },
+      {
+        "name": "Content-Type",
+        "value": "application/json"
+      },
+      {
+        "name": "set-cookie",
+        "value": "__cf_bm=_.yDONMxI8Wj6bdeKvgLqylB1uRdIzfx64ReOxc5C1o-1788038945.3530984-1.0.1.1-uwAg3dYolu9XCaCCJsie9eFRumBnKC1ZyQDkHA1Otpe_IUrpEsnokSCiyyPun1WOFenihkYZTLs7xMCwSkdbEUs1gN2O2WkWnKL3v_PA36X9McSO1o5iIlm84TAqmGOJ; HttpOnly; SameSite=None; Secure; Path=/; Domain=mistral.ai; Expires=Sat, 29 Aug 2026 21:59:05 GMT"
+      },
+      {
+        "name": "mistral-correlation-id",
+        "value": "01a04f6d-1a9e-7b54-a1ef-e40d7988227f"
+      },
+      {
+        "name": "x-kong-request-id",
+        "value": "01a04f6d-1a9e-7b54-a1ef-e40d7988227f"
+      },
+      {
+        "name": "x-ratelimit-limit-ocr-pages-minute",
+        "value": "60"
+      },
+      {
+        "name": "x-ratelimit-remaining-ocr-pages-minute",
+        "value": "58"
+      },
+      {
+        "name": "x-ratelimit-ocr-pages-query-cost",
+        "value": "1"
+      },
+      {
+        "name": "x-envoy-upstream-service-time",
+        "value": "388"
+      },
+      {
+        "name": "Server",
+        "value": "cloudflare"
+      },
+      {
+        "name": "access-control-allow-origin",
+        "value": "*"
+      },
+      {
+        "name": "x-kong-upstream-latency",
+        "value": "389"
+      },
+      {
+        "name": "x-kong-proxy-latency",
+        "value": "13"
+      },
+      {
+        "name": "X-Content-Type-Options",
+        "value": "nosniff"
+      },
+      {
+        "name": "cf-cache-status",
+        "value": "DYNAMIC"
+      },
+      {
+        "name": "Strict-Transport-Security",
+        "value": "max-age=15552000; includeSubDomains; preload"
+      },
+      {
+        "name": "CF-RAY",
+        "value": "a32ea6307e391be5-SJC"
+      },
+      {
+        "name": "alt-svc",
+        "value": "h3=\":443\"; ma=86400"
+      }
+    ],
+    "status_code": 200
+  }
+}
