@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
@@ -265,6 +266,29 @@ describe("ComplexityRouterConfig", () => {
       ...llmValue,
       classifier_context_window_size: 7,
     });
+  });
+
+  it("should let the context window size field be cleared instead of refilling the default", () => {
+    const StatefulConfig = () => {
+      const [value, setValue] = useState<ComplexityRouterConfigValue>({
+        ...defaultValue,
+        classifier_type: "llm",
+        classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+      });
+      return <ComplexityRouterConfig modelInfo={mockModelInfo} value={value} onChange={setValue} />;
+    };
+    renderWithProviders(<StatefulConfig />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
+    const input = within(windowSizeSection).getByRole("spinbutton");
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(input).toHaveValue(null);
+
+    fireEvent.change(input, { target: { value: "9" } });
+
+    expect(input).toHaveValue(9);
   });
 
   it("should render the custom technical keywords field", () => {

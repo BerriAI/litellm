@@ -1,7 +1,7 @@
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/shared/NumberInput";
 import { Switch } from "@/components/ui/switch";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -72,12 +72,9 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
           </div>
           <div>
             <span className="mb-1 block text-sm font-medium">Minimum match score</span>
-            <Input
-              type="number"
+            <NumberInput
               value={matchThreshold}
-              onChange={(event) =>
-                onMatchThresholdChange(event.target.value === "" ? DEFAULT_MATCH_THRESHOLD : event.target.valueAsNumber)
-              }
+              onValueChange={(threshold) => onMatchThresholdChange(threshold ?? DEFAULT_MATCH_THRESHOLD)}
               min={0}
               max={1}
               step={0.05}

@@ -4,7 +4,7 @@ import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/shared/NumberInput";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
@@ -367,12 +367,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           </div>
           <div>
             <strong className="block mb-1 font-semibold">Timeout (ms)</strong>
-            <Input
-              type="number"
+            <NumberInput
               value={value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS}
-              onChange={(event) =>
-                handleClassifierTimeoutChange(event.target.value === "" ? null : event.target.valueAsNumber)
-              }
+              onValueChange={handleClassifierTimeoutChange}
               min={1}
               className="w-full"
             />
@@ -481,12 +478,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           </RestrictedSection>
           <div>
             <strong className="block mb-1 font-semibold">Context Window Size</strong>
-            <Input
-              type="number"
+            <NumberInput
               value={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
-              onChange={(event) =>
-                handleClassifierContextWindowSizeChange(event.target.value === "" ? null : event.target.valueAsNumber)
-              }
+              onValueChange={handleClassifierContextWindowSizeChange}
               min={0}
               className="w-full"
             />
@@ -498,12 +492,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           </div>
           <div>
             <strong className="block mb-1 font-semibold">Context Character Budget</strong>
-            <Input
-              type="number"
+            <NumberInput
               value={value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS}
-              onChange={(event) =>
-                handleClassifierContextBudgetCharsChange(event.target.value === "" ? null : event.target.valueAsNumber)
-              }
+              onValueChange={handleClassifierContextBudgetCharsChange}
               min={0}
               className="w-full"
             />

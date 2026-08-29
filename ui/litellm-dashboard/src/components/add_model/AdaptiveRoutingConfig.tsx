@@ -1,5 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/shared/NumberInput";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
@@ -120,12 +120,9 @@ const AdaptiveRoutingConfig: React.FC<AdaptiveRoutingConfigProps> = ({ value, on
           {adaptiveEligible === "all" && (
             <div>
               <strong className="mb-1 block font-semibold">Tier Distance Penalty</strong>
-              <Input
-                type="number"
+              <NumberInput
                 value={tierDistancePenalty}
-                onChange={(event) =>
-                  handleTierDistancePenaltyChange(event.target.value === "" ? null : event.target.valueAsNumber)
-                }
+                onValueChange={handleTierDistancePenaltyChange}
                 min={0}
                 step={0.1}
                 className="w-full"
