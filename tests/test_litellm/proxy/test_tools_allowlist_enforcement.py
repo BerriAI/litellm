@@ -105,6 +105,41 @@ class TestExtractRequestToolNames:
             "dmcp",
         ]
 
+    def test_openai_responses_tools_nested_in_additional_tools_input_item(self):
+        """Codex's responses-lite wire mode declares tools inside an `additional_tools` input
+        item, and providers hoist them into top-level `tools` before dispatch. Reading only
+        `tools` would let a restricted key smuggle any tool through `input`
+        (VERIA finding on PR #37995)."""
+        data = {
+            "input": [
+                {"type": "message", "role": "user", "content": "hi"},
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "web_search"}, {"type": "function", "name": "run_sql"}],
+                },
+            ],
+            "tools": [{"type": "function", "name": "declared_up_front"}],
+        }
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "declared_up_front",
+            "web_search",
+            "run_sql",
+        ]
+
+    def test_openai_responses_malformed_additional_tools_yields_no_name(self):
+        """An `additional_tools` item with a missing or non-list `tools` slot, and a plain string
+        input, must not raise on the auth hot path."""
+        data = {
+            "input": [
+                {"type": "additional_tools"},
+                {"type": "additional_tools", "tools": "not-a-list"},
+                "junk",
+            ]
+        }
+        assert extract_request_tool_names("/v1/responses", data) == []
+        assert extract_request_tool_names("/v1/responses", {"input": "plain string"}) == []
+
     def test_openai_responses_unnamed_tool_yields_no_name(self):
         """A function or custom tool missing its name must not fall back to the bare type:
         that would let "function" satisfy an allowlist that never granted the real tool."""
@@ -279,6 +314,24 @@ class TestCheckToolsAllowlist:
             route="/v1/responses",
         )
         assert body["tools"] == tools
+
+    @pytest.mark.asyncio
+    async def test_disallowed_tool_nested_in_input_raises_on_responses_route(self):
+        token = _token(metadata={"allowed_tools": ["run_sql"]})
+        body = {
+            "input": [
+                {"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]},
+            ]
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "web_search" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):

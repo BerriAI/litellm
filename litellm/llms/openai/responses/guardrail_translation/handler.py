@@ -233,8 +233,28 @@ class OpenAIResponsesHandler(BaseTranslation):
             return str(server_label) if server_label else None
         return str(tool_type) if tool_type else None
 
+    @staticmethod
+    def _tools_nested_in_input_item(item: object) -> tuple[object, ...]:
+        """Tools declared inside an ``additional_tools`` input item. Codex's responses-lite wire
+        mode ships tool definitions there instead of in top-level ``tools``, and providers hoist
+        them back out before dispatch, so reading only ``tools`` would miss them."""
+        if not isinstance(item, dict) or item.get("type") != "additional_tools":
+            return ()
+        tools: Final = item.get("tools")
+        return tuple(tools) if isinstance(tools, list) else ()
+
     def extract_request_tool_names(self, data: dict) -> list[str]:
-        return [name for tool in data.get("tools") or [] if (name := self._request_tool_name(tool)) is not None]
+        input_items: Final = data.get("input")
+        nested: Final = (
+            tuple(tool for item in input_items for tool in self._tools_nested_in_input_item(item))
+            if isinstance(input_items, list)
+            else ()
+        )
+        return [
+            name
+            for tool in (*(data.get("tools") or []), *nested)
+            if (name := self._request_tool_name(tool)) is not None
+        ]
 
     def _extract_and_transform_tools(
         self,
