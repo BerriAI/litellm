@@ -41,26 +41,26 @@ def test_minimax_validate_environment_never_attaches_anthropic_wif_credential(
 ) -> None:
     """Regression test: before the fix, an Anthropic-WIF-configured proxy would mint a real
     Anthropic federation token inside MiniMax's inherited validate_anthropic_messages_environment
-    and send it as the Authorization header on the MiniMax-routed request."""
+    and send it as the Authorization header on the MiniMax-routed request. With no MiniMax
+    credential of its own the deployment must fail closed on the missing key instead."""
     monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_prod")
     monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-prod-uuid")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     token_file = write_token_file(tmp_path, "jwt-assertion-value")
     litellm_params = {"anthropic_identity_token_file": str(token_file)}
 
-    headers, _ = MinimaxMessagesConfig().validate_anthropic_messages_environment(
-        headers={},
-        model="MiniMax-M2.1",
-        messages=[],
-        optional_params={},
-        litellm_params=litellm_params,
-        api_key=None,
-        api_base="https://api.minimax.io/anthropic",
-    )
-
-    assert "authorization" not in headers
-    assert "x-api-key" not in headers
+    with pytest.raises(litellm.AuthenticationError, match="Missing Anthropic API Key"):
+        MinimaxMessagesConfig().validate_anthropic_messages_environment(
+            headers={},
+            model="MiniMax-M2.1",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+            api_key=None,
+            api_base="https://api.minimax.io/anthropic",
+        )
 
 
 def test_tencent_validate_environment_never_attaches_anthropic_wif_credential(
@@ -75,18 +75,16 @@ def test_tencent_validate_environment_never_attaches_anthropic_wif_credential(
     litellm_params = {"anthropic_identity_token_file": str(token_file)}
 
     monkeypatch.setattr(litellm, "api_key", None)
-    headers, _ = TencentAnthropicMessagesConfig().validate_anthropic_messages_environment(
-        headers={},
-        model="deepseek-v4-pro",
-        messages=[],
-        optional_params={},
-        litellm_params=litellm_params,
-        api_key=None,
-        api_base="https://tokenhub-intl.tencentcloudmaas.com",
-    )
-
-    assert "authorization" not in headers
-    assert "x-api-key" not in headers
+    with pytest.raises(litellm.AuthenticationError, match="Missing Anthropic API Key"):
+        TencentAnthropicMessagesConfig().validate_anthropic_messages_environment(
+            headers={},
+            model="deepseek-v4-pro",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+            api_key=None,
+            api_base="https://tokenhub-intl.tencentcloudmaas.com",
+        )
 
 
 def test_wif_token_exchange_reaches_only_anthropic_not_minimax_or_tencent(
