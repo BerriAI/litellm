@@ -23,7 +23,11 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionMessageCustomToolCall,
     Choices,
+    Delta,
+    Message,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -635,7 +639,7 @@ class GoogleGenAIAdapter:
 
     def _transform_openai_message_to_google_genai_parts(
         self,
-        message: Any,
+        message: Message,
     ) -> list[_GenAIPart]:
         """Transform OpenAI message to Google GenAI parts format"""
         parts: Final[list[_GenAIPart]] = []
@@ -647,7 +651,11 @@ class GoogleGenAIAdapter:
         # Add tool calls if present
         if hasattr(message, "tool_calls") and message.tool_calls:
             for tool_call in message.tool_calls:
-                if hasattr(tool_call, "function") and tool_call.function:
+                if (
+                    hasattr(tool_call, "function")
+                    and not isinstance(tool_call, ChatCompletionMessageCustomToolCall)
+                    and tool_call.function
+                ):
                     try:
                         args = (
                             _decode_tool_call_arguments(tool_call.function.arguments)
@@ -668,7 +676,7 @@ class GoogleGenAIAdapter:
         return parts if parts else [{"text": ""}]
 
     def _transform_openai_delta_to_google_genai_parts_with_accumulation(
-        self, delta: Any, wrapper: GoogleGenAIStreamWrapper
+        self, delta: Delta, wrapper: GoogleGenAIStreamWrapper
     ) -> list[_GenAIPart]:
         """Transforms OpenAI delta to Google GenAI parts, accumulating streaming tool calls."""
 
@@ -685,7 +693,7 @@ class GoogleGenAIAdapter:
         tool_calls: Final = delta.tool_calls or []
 
         for tool_call in tool_calls:
-            if not hasattr(tool_call, "function"):
+            if not hasattr(tool_call, "function") or isinstance(tool_call, ChatCompletionDeltaCustomToolCall):
                 continue
 
             # 3. Use `index` as the primary key for accumulation

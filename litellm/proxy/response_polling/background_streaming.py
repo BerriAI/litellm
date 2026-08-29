@@ -10,7 +10,7 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Final, TypedDict, cast
 
 from fastapi import Request, Response
@@ -38,19 +38,55 @@ class _StreamOutputItem(TypedDict, total=False):
     content: ReadOnly[Sequence[_StreamContentPart | None]]
 
 
+class _StreamResponsePayload(TypedDict, total=False):
+    status: ReadOnly[str]
+    error: ReadOnly[dict[str, object] | None]
+    usage: ReadOnly[dict[str, object] | None]
+    reasoning: ReadOnly[dict[str, object] | None]
+    tool_choice: ReadOnly[object]
+    tools: ReadOnly[list[object] | None]
+    model: ReadOnly[str | None]
+    instructions: ReadOnly[str | None]
+    temperature: ReadOnly[float | None]
+    top_p: ReadOnly[float | None]
+    max_output_tokens: ReadOnly[int | None]
+    previous_response_id: ReadOnly[str | None]
+    text: ReadOnly[dict[str, object] | None]
+    truncation: ReadOnly[str | None]
+    parallel_tool_calls: ReadOnly[bool | None]
+    user: ReadOnly[str | None]
+    store: ReadOnly[bool | None]
+    incomplete_details: ReadOnly[dict[str, object] | None]
+    output: ReadOnly[Sequence[_StreamOutputItem]]
+
+
+class _StreamEvent(TypedDict, total=False):
+    type: ReadOnly[str]
+    item: ReadOnly[_StreamOutputItem]
+    item_id: ReadOnly[str]
+    part: ReadOnly[_StreamContentPart]
+    content_index: ReadOnly[int]
+    delta: ReadOnly[str]
+    response: ReadOnly[_StreamResponsePayload]
+
+
+def _parse_stream_event(serialized_event: str) -> _StreamEvent:
+    return json.loads(serialized_event)
+
+
 async def background_streaming_task(
     polling_id: str,
-    data,
+    data: dict[str, object],
     polling_handler: ResponsePollingHandler,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    general_settings,
+    general_settings: dict[str, object],
     llm_router: "Router | None",
     proxy_config: "ProxyConfig",
     proxy_logging_obj: "ProxyLogging",
-    select_data_generator,
-    user_model,
+    select_data_generator: Callable[..., object] | None,
+    user_model: str | None,
     user_temperature: float | None,
     user_request_timeout: float | None,
     user_max_tokens: int | None,
@@ -180,7 +216,7 @@ async def background_streaming_task(
                         break
 
                     try:
-                        event = json.loads(chunk_data)
+                        event = _parse_stream_event(chunk_data)
                         event_type = event.get("type", "")
 
                         # Process different event types based on OpenAI streaming spec

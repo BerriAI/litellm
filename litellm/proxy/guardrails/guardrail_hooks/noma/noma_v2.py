@@ -23,6 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
+from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
@@ -80,7 +81,8 @@ class NomaV2Guardrail(CustomGuardrail):
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
-        super().__init__(**kwargs)
+        base_kwargs: Final[GuardrailBaseInitKwargs] = kwargs
+        super().__init__(**base_kwargs)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -111,7 +113,7 @@ class NomaV2Guardrail(CustomGuardrail):
         return parsed.hostname == _DEFAULT_API_BASE_HOSTNAME
 
     @staticmethod
-    def _get_non_empty_str(value: Any) -> str | None:
+    def _get_non_empty_str(value: object) -> str | None:
         if not isinstance(value, str):
             return None
         stripped: Final = value.strip()
@@ -153,7 +155,7 @@ class NomaV2Guardrail(CustomGuardrail):
                 else model_call_details
             )
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "inputs": inputs,
             "request_data": payload_request_data,
             "input_type": input_type,
@@ -165,7 +167,7 @@ class NomaV2Guardrail(CustomGuardrail):
 
     @staticmethod
     def _sanitize_payload_for_transport(payload: dict) -> dict:
-        def _default(obj: Any) -> Any:
+        def _default(obj: object) -> object:
             if hasattr(obj, "model_dump"):
                 try:
                     return obj.model_dump()
@@ -178,7 +180,7 @@ class NomaV2Guardrail(CustomGuardrail):
         except (ValueError, TypeError):
             json_str = safe_dumps(payload)
 
-        safe_payload: Final = safe_json_loads(json_str, default={})
+        safe_payload: Final[object] = safe_json_loads(json_str, default={})
         if safe_payload == {} and payload:
             verbose_proxy_logger.warning(
                 "Noma v2 guardrail: payload serialization failed, falling back to empty payload"
@@ -215,7 +217,7 @@ class NomaV2Guardrail(CustomGuardrail):
             response.text,
         )
         response.raise_for_status()
-        response_json: Final = response.json()
+        response_json: Final[dict[str, object]] = response.json()
         verbose_proxy_logger.debug(
             "Noma v2 AIDR response parsed: %s",
             json.dumps(response_json, default=str),
@@ -227,7 +229,7 @@ class NomaV2Guardrail(CustomGuardrail):
         request_data: dict,
         start_time: datetime,
         guardrail_status: GuardrailStatus,
-        guardrail_json_response: Any,
+        guardrail_json_response: str | dict[str, object],
     ) -> None:
         end_time: Final = datetime.now()
         duration: Final = (end_time - start_time).total_seconds()
@@ -270,7 +272,7 @@ class NomaV2Guardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         start_time: Final = datetime.now()
         guardrail_status: GuardrailStatus = "success"
-        guardrail_json_response: Any = {}
+        guardrail_json_response: str | dict[str, object] = {}
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
         if not isinstance(dynamic_params, dict):
             dynamic_params = {}
@@ -320,8 +322,9 @@ class NomaV2Guardrail(CustomGuardrail):
 
         except NomaBlockedMessage as e:
             guardrail_status = "guardrail_intervened"
+            blocked_detail: Final[dict[str, object]] = {"error": "blocked"}
             guardrail_json_response = (
-                response_json if isinstance(response_json, dict) else getattr(e, "detail", {"error": "blocked"})
+                response_json if isinstance(response_json, dict) else getattr(e, "detail", blocked_detail)
             )
             raise
         except Exception as e:

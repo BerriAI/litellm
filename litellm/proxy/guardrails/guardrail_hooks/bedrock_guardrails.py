@@ -232,7 +232,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # Resource-less, detect-only InvokeGuardrailChecks mode. Present `checks`
         # routes the guardrail to InvokeGuardrailChecks; absent => ApplyGuardrail.
-        self.checks: dict[str, Any] | None = self._normalize_checks(checks)
+        self.checks: dict[str, object] | None = self._normalize_checks(checks)
         # Per-check block thresholds; a score >= threshold blocks. None => the
         # check is detect-only (logged, never blocks).
         self.content_filter_threshold = content_filter_threshold
@@ -289,7 +289,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         ]
 
     @staticmethod
-    def _normalize_checks(checks: BedrockChecksConfigModel | Mapping[str, object] | None) -> dict[str, Any] | None:
+    def _normalize_checks(checks: BedrockChecksConfigModel | Mapping[str, object] | None) -> dict[str, object] | None:
         """Normalize the configured `checks` into a plain dict for the API body.
 
         Accepts a pydantic ``BedrockChecksConfigModel`` or a raw dict; drops None /
@@ -340,7 +340,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _create_bedrock_output_content_request(
         self,
-        response: Any | ModelResponse,
+        response: object,
         messages: list[AllMessageValues] | None = None,
     ) -> BedrockRequest:
         """
@@ -365,7 +365,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return bedrock_request
 
     def _build_response_content_items(
-        self, response: Any | ModelResponse, has_grounding: bool
+        self, response: object, has_grounding: bool
     ) -> list[BedrockContentItem]:
         """Build content item(s) from the model response. When the request supplied
         grounding, the response is qualified ``guard_content`` so Bedrock can score it.
@@ -390,7 +390,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
-        response: Any | ModelResponse | None = None,
+        response: object | None = None,
     ) -> BedrockRequest:
         """
         Convert the litellm messages/response to the bedrock request format.
@@ -911,7 +911,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _apply_guardrail_content_with_chunking(
         self,
         content: Sequence[BedrockContentItem],
-        base_request_data: Mapping[str, Any],
+        base_request_data: Mapping[str, object],
         credentials: "Credentials",
         aws_region_name: str,
         api_key: str | None,
@@ -1049,7 +1049,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _post_apply_guardrail_content_with_retry(
         self,
         content: Sequence[BedrockContentItem],
-        base_request_data: Mapping[str, Any],
+        base_request_data: Mapping[str, object],
         credentials: "Credentials",
         aws_region_name: str,
         api_key: str | None,
@@ -1099,7 +1099,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _post_apply_guardrail_content(
         self,
         content: Sequence[BedrockContentItem],
-        base_request_data: Mapping[str, Any],
+        base_request_data: Mapping[str, object],
         credentials: "Credentials",
         aws_region_name: str,
         api_key: str | None,
@@ -1827,7 +1827,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return BedrockGuardrailResponse()
 
         credentials, aws_region_name = self._load_credentials()
-        body: Final[dict[str, Any]] = {"messages": checks_messages, "checks": self.checks}
+        body: Final[dict[str, object]] = {"messages": checks_messages, "checks": self.checks}
         api_key: Final[str | None] = request_data.get("api_key") if request_data else None
 
         prepared_request: Final = self._prepare_request(
@@ -2309,7 +2309,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 guardrail_name=self.guardrail_name,
             )
 
-        detail: Final[dict[str, Any]] = {
+        detail: Final[dict[str, object]] = {
             "error": "Violated guardrail policy",
             "bedrock_guardrail_response": bedrock_guardrail_output_text,
         }
@@ -2853,7 +2853,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return updated_messages
 
     def _mask_content_list(
-        self, content_list: list[Any], masked_texts: list[str], masking_index: int
+        self, content_list: Sequence[object], masked_texts: list[str], masking_index: int
     ) -> tuple[list[Any], int]:
         """
         Apply masking to a list of content items.
@@ -2866,7 +2866,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             Updated content list with masked items
         """
-        new_content: Final[list[dict | str]] = []
+        new_content: Final[list[dict[str, object] | str]] = []
         for item in content_list:
             if isinstance(item, dict) and "text" in item:
                 new_item = item.copy()
@@ -2885,7 +2885,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _apply_masking_to_response(
         self,
-        response: ModelResponse | Any,
+        response: object,
         bedrock_guardrail_response: BedrockGuardrailResponse,
     ) -> None:
         """

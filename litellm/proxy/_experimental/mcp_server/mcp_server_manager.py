@@ -13,7 +13,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
@@ -1210,7 +1210,7 @@ def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | No
         return data
 
 
-def _deserialize_json_list(data: Any) -> list[dict[str, Any]] | None:
+def _deserialize_json_list(data: object) -> list[dict[str, Any]] | None:
     """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
 
     Returns ``None`` for empty / null / unparseable input. Accepts strings
@@ -1223,7 +1223,7 @@ def _deserialize_json_list(data: Any) -> list[dict[str, Any]] | None:
         return None
     if isinstance(data, str):
         try:
-            parsed: Final = json.loads(data)
+            parsed: Final[object] = json.loads(data)
         except (json.JSONDecodeError, TypeError):
             return None
         data = parsed
@@ -1918,7 +1918,7 @@ class MCPServerManager:
 
     async def load_servers_from_config(
         self,
-        mcp_servers_config: dict[str, Any],
+        mcp_servers_config: dict[str, MCPServerConfig],
         mcp_aliases: dict[str, str] | None = None,
     ):
         """
@@ -3070,7 +3070,7 @@ class MCPServerManager:
             return {}
 
         cache_key: Final = "toolset_perms:" + ",".join(sorted(toolset_ids))
-        cached: Final = await user_api_key_cache.async_get_cache(key=cache_key)
+        cached: Final[dict[str, list[str]] | None] = await user_api_key_cache.async_get_cache(key=cache_key)
         if cached is not None:
             return cached
 
@@ -5154,7 +5154,7 @@ class MCPServerManager:
 
         # Wrapped so the bridge runs inside the task: the caller only holds the task and
         # gathers it later, so there is no other point that still sees a block here.
-        async def _run_during_call_hook() -> Mapping[str, Any] | None:
+        async def _run_during_call_hook() -> Mapping[str, object] | None:
             try:
                 return await proxy_logging_obj.during_call_hook(
                     user_api_key_dict=user_api_key_auth,
@@ -5655,7 +5655,7 @@ class MCPServerManager:
 
     async def _gather_openapi_tool_tasks(
         self,
-        tasks: list[Any],
+        tasks: Sequence[Awaitable[object]],
         proxy_logging_obj: ProxyLogging | None,
     ) -> CallToolResult:
         """Await OpenAPI tool tasks and return the tool call result."""

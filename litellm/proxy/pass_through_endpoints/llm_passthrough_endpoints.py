@@ -12,7 +12,7 @@ import os
 import re
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final, cast
+from typing import TYPE_CHECKING, Annotated, Final, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -64,6 +64,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.utils import LlmProviders
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
@@ -112,7 +113,21 @@ def is_passthrough_request_streaming(request_body: object) -> bool:
     return bool(request_body.get("stream", False))
 
 
-def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, Any]:
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _string_keyed_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+async def _json_request_body(request: Request) -> Mapping[str, object]:
+    return await request.json()
+
+
+def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
     """
     Build the request metadata carrying key-level spend attribution and the
     pre-call budget reservation for a router-model passthrough request.
@@ -201,7 +216,7 @@ async def llm_passthrough_factory_proxy_route(
     # anthropic is streaming when 'stream' = True is in the body
     if request.method == "POST":
         if "multipart/form-data" not in request.headers.get("content-type", ""):
-            _request_body = await request.json()
+            _request_body = await _json_request_body(request)
         else:
             _request_body = await get_form_data(request)
 
@@ -374,7 +389,7 @@ async def vllm_proxy_route(
                 endpoint=endpoint,
                 request_query_params=request.query_params,
                 request_headers=_safe_get_request_headers(request),
-                stream=request_body.get("stream", False),
+                stream=is_streaming_request,
                 content=None,
                 data=None,
                 files=None,
@@ -802,7 +817,7 @@ async def handle_bedrock_passthrough_router_model(
 
     # Use the common processing path (same as non-router models)
     # This ensures all metadata, hooks, and logging are properly initialized
-    data: Final[dict[str, Any]] = {}
+    data: Final[dict[str, object]] = {}
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
     data["model"] = model
@@ -846,8 +861,8 @@ async def handle_bedrock_count_tokens(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_body: dict[str, Any],
-) -> dict[str, Any]:
+    request_body: dict[str, object],
+) -> dict[str, object]:
     """
     Handle AWS Bedrock CountTokens API requests.
 
@@ -864,7 +879,7 @@ async def handle_bedrock_count_tokens(
         handler: Final = BedrockCountTokensHandler()
 
         # Extract model from request body
-        model: Final = request_body.get("model")
+        model: Final = _optional_str(request_body.get("model"))
         if not model:
             raise HTTPException(status_code=400, detail={"error": "Model is required in request body"})
 
@@ -996,7 +1011,7 @@ async def bedrock_llm_proxy_route(
         "Bedrock passthrough: Using direct Bedrock model '%s' for endpoint '%s'", model, endpoint
     )
 
-    data: Final[dict[str, Any]] = {}
+    data: Final[dict[str, object]] = {}
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
     data["method"] = request.method
@@ -1095,7 +1110,7 @@ async def bedrock_proxy_route(
     headers: Final = {"Content-Type": "application/json"}
     # Assuming the body contains JSON data, parse it
     try:
-        data: Final = await request.json()
+        data: Final = await _json_request_body(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
     _request: Final = AWSRequest(method="POST", url=str(updated_url), data=json.dumps(data), headers=headers)
@@ -1186,7 +1201,7 @@ async def comprehend_medical_proxy_route(
         )
 
     try:
-        data: Final = await request.json()
+        data: Final = await _json_request_body(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1397,7 +1412,7 @@ async def assemblyai_proxy_route(
     is_streaming_request = False
     # assemblyai is streaming when 'stream' = True is in the body
     if request.method == "POST":
-        _request_body: Final = await request.json()
+        _request_body: Final = await _json_request_body(request)
         if _request_body.get("stream"):
             is_streaming_request = True
 
@@ -1504,7 +1519,7 @@ async def azure_proxy_route(
                     endpoint=endpoint,
                     request_query_params=request.query_params,
                     request_headers=_safe_get_request_headers(request),
-                    stream=request_body.get("stream", False),
+                    stream=is_streaming_request,
                     content=None,
                     data=None,
                     files=None,
@@ -1591,7 +1606,7 @@ async def azure_proxy_route(
 
                 extra_headers = auth_credentials.get("headers") or {}
 
-                base_target_url = litellm_params.get("api_base")
+                base_target_url = _optional_str(litellm_params.get("api_base"))
                 if base_target_url is None:
                     raise Exception(f"API base not found for {part}")
                 return await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
@@ -1712,7 +1727,7 @@ def get_vertex_pass_through_handler(
 
 
 def _override_vertex_params_from_router_credentials(
-    router_credentials: Any | None,
+    router_credentials: LiteLLM_ManagedVectorStore | None,
     vertex_project: str | None,
     vertex_location: str | None,
 ) -> tuple[str | None, str | None]:
@@ -1732,14 +1747,14 @@ def _override_vertex_params_from_router_credentials(
 
     verbose_proxy_logger.debug("Using vector store credentials to override vertex project and location")
 
-    litellm_params: Final = router_credentials.get("litellm_params", {})
+    litellm_params: Final = _string_keyed_mapping(router_credentials.get("litellm_params"))
     if not litellm_params:
         verbose_proxy_logger.warning("Vector store credentials found but litellm_params is empty")
         return vertex_project, vertex_location
 
     # Extract vertex_project and vertex_location from litellm_params
-    vector_store_project: Final = litellm_params.get("vertex_project")
-    vector_store_location: Final = litellm_params.get("vertex_location")
+    vector_store_project: Final = _optional_str(litellm_params.get("vertex_project"))
+    vector_store_location: Final = _optional_str(litellm_params.get("vertex_location"))
 
     if vector_store_project:
         verbose_proxy_logger.debug(
@@ -1747,7 +1762,6 @@ def _override_vertex_params_from_router_credentials(
             vertex_project,
             vector_store_project,
         )
-        vertex_project = vector_store_project
     else:
         verbose_proxy_logger.warning("Vector store credentials found but missing vertex_project in litellm_params")
 
@@ -1757,11 +1771,10 @@ def _override_vertex_params_from_router_credentials(
             vertex_location,
             vector_store_location,
         )
-        vertex_location = vector_store_location
     else:
         verbose_proxy_logger.warning("Vector store credentials found but missing vertex_location in litellm_params")
 
-    return vertex_project, vertex_location
+    return vector_store_project or vertex_project, vector_store_location or vertex_location
 
 
 _CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL: Final = (
@@ -1869,8 +1882,8 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
 
 async def _prepare_vertex_auth_headers(
     request: Request,
-    vertex_credentials: Any | None,
-    router_credentials: Any | None,
+    vertex_credentials: VertexPassThroughCredentials | None,
+    router_credentials: LiteLLM_ManagedVectorStore | None,
     vertex_project: str | None,
     vertex_location: str | None,
     base_target_url: str | None,
@@ -1967,7 +1980,7 @@ async def _base_vertex_proxy_route(
     fastapi_response: Response,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-    router_credentials: Any | None = None,
+    router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
     """
     Base function for Vertex AI passthrough routes.
@@ -2851,7 +2864,7 @@ async def watsonx_proxy_route(
     is_streaming_request = False
     if request.method == "POST":
         if "multipart/form-data" not in request.headers.get("content-type", ""):
-            _request_body = await request.json()
+            _request_body = await _json_request_body(request)
         else:
             _request_body = await get_form_data(request)
 

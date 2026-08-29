@@ -2253,6 +2253,10 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
+def _attribute_value(obj: object, name: str) -> object:
+    return getattr(obj, name)
+
+
 def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]:
     field_names: Final = list(type(prompt_tokens_details).model_fields)
     if getattr(prompt_tokens_details, "cache_write_tokens", None) is None:
@@ -2278,7 +2282,7 @@ class BaseTokenUsageProcessor:
         for usage in usage_objects:
             # Handle direct attributes by checking what exists in the model
             for attr in dir(usage):
-                if not attr.startswith("_") and not callable(getattr(usage, attr)):
+                if not attr.startswith("_") and not callable(_attribute_value(usage, attr)):
                     current_val = getattr(combined, attr, 0)
                     new_val = getattr(usage, attr, 0)
                     if (
@@ -2298,7 +2302,7 @@ class BaseTokenUsageProcessor:
                     if (
                         hasattr(usage.prompt_tokens_details, attr)
                         and not attr.startswith("_")
-                        and not callable(getattr(usage.prompt_tokens_details, attr))
+                        and not callable(_attribute_value(usage.prompt_tokens_details, attr))
                     ):
                         current_val = getattr(combined.prompt_tokens_details, attr, 0) or 0
                         new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
@@ -2317,7 +2321,9 @@ class BaseTokenUsageProcessor:
                 # Check what keys exist in the model's completion_tokens_details
                 # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
                 for attr in type(usage.completion_tokens_details).model_fields:
-                    if not attr.startswith("_") and not callable(getattr(usage.completion_tokens_details, attr)):
+                    if not attr.startswith("_") and not callable(
+                        _attribute_value(usage.completion_tokens_details, attr)
+                    ):
                         current_val = getattr(combined.completion_tokens_details, attr, 0) or 0
                         new_val = getattr(usage.completion_tokens_details, attr, 0) or 0
                         if isinstance(new_val, (int, float)):

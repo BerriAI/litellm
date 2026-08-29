@@ -4,7 +4,8 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping, Sequence
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -52,7 +53,7 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 
 # Cache special headers as a frozenset for O(1) lookup performance
-_SPECIAL_HEADERS_CACHE: Final = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
+_SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialHeaders)
 
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
@@ -123,7 +124,7 @@ def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
 _ANTHROPIC_SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
-def _sanitize_for_log(value: Any) -> str:
+def _sanitize_for_log(value: object) -> str:
     """
     Basic log sanitization helper to reduce log-injection risk.
 
@@ -161,7 +162,7 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
-    from litellm.types.proxy.policy_engine import PolicyMatchContext
+    from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
 else:
@@ -318,7 +319,7 @@ _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_overr
 _URL_DESTINATION_REQUEST_FIELDS: Final = ("model", "file_id")
 
 
-def _reject_url_valued_destinations(data: dict[str, Any]) -> None:
+def _reject_url_valued_destinations(data: dict[str, object]) -> None:
     """Reject URL-valued ``model``/``file_id`` unless admin-allowlisted.
 
     Some providers (HuggingFace, Oobabooga, Gemini files) accept a URL in the
@@ -377,7 +378,7 @@ def _invalid_metadata_type_error(field: str, value: object) -> ProxyException:
     )
 
 
-def _normalized_metadata_object(field: str, value: object) -> Mapping[str, Any]:
+def _normalized_metadata_object(field: str, value: object) -> Mapping[str, object]:
     """Return ``value`` as a metadata object or raise a 400 like OpenAI does.
 
     A JSON string that parses to an object is accepted because multipart/form-data
@@ -390,6 +391,23 @@ def _normalized_metadata_object(field: str, value: object) -> Mapping[str, Any]:
     if isinstance(value, str) and isinstance((parsed := safe_json_loads(value)), dict):
         return parsed
     raise _invalid_metadata_type_error(field=field, value=value)
+
+
+def _normalized_metadata_slot(
+    request_data: MutableMapping[str, object], metadata_variable_name: str
+) -> dict[str, object]:
+    """Return the request's metadata slot as a dict, normalising it in place first.
+
+    Metadata can arrive as a JSON string (multipart/form-data, ``extra_body``). Parsing it here keeps
+    existing entries alive through a merge instead of silently overwriting them with an empty dict.
+    """
+    raw: Final = request_data.get(metadata_variable_name)
+    if isinstance(raw, dict):
+        return raw
+    parsed: Final = safe_json_loads(raw) if isinstance(raw, str) else None
+    normalized: Final[dict[str, object]] = parsed if isinstance(parsed, dict) else {}
+    request_data[metadata_variable_name] = normalized
+    return normalized
 
 
 def _strip_untrusted_request_header_controls(
@@ -407,7 +425,7 @@ def _strip_untrusted_request_header_controls(
             headers.pop(header_name, None)
 
 
-def _is_false_like(value: Any) -> bool:
+def _is_false_like(value: object) -> bool:
     if isinstance(value, bool):
         return value is False
     if isinstance(value, str):
@@ -452,7 +470,7 @@ def _key_or_team_allows_client_pricing_override(
     )
 
 
-def _strip_client_message_redaction_opt_out(data: dict[str, Any]) -> None:
+def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
     stripped: Final[list[str]] = []
     if "turn_off_message_logging" in data and _is_false_like(data["turn_off_message_logging"]):
         stripped.append("turn_off_message_logging")
@@ -503,7 +521,7 @@ def _strip_client_callback_credentials(
         )
 
 
-def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
+def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
     """Drop pricing overrides from the request body and any metadata variant.
 
     Skipped only when the calling key/team carries
@@ -556,9 +574,9 @@ def _get_metadata_variable_name(request: Request) -> str:
 
 
 def _promoted_trace_control_fields(
-    requester_metadata: Mapping[str, Any],
-    litellm_metadata: Mapping[str, Any],
-) -> tuple[tuple[str, Any], ...]:
+    requester_metadata: Mapping[str, object],
+    litellm_metadata: Mapping[str, object],
+) -> tuple[tuple[str, object], ...]:
     """Return the caller's trace-control fields that ``litellm_metadata`` does not already set."""
     return tuple(
         (key, value)
@@ -1169,7 +1187,7 @@ class LiteLLMProxyRequestSetup:
     def add_litellm_data_for_backend_llm_call(
         *,
         headers: dict,
-        request_data: Mapping[str, Any],
+        request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         general_settings: dict[str, Any] | None = None,
     ) -> LitellmDataForBackendLLMCall:
@@ -1549,14 +1567,7 @@ class LiteLLMProxyRequestSetup:
             return
 
         _metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_data)
-        metadata = request_data.get(_metadata_variable_name)
-        if isinstance(metadata, str):
-            parsed: Final = safe_json_loads(metadata)
-            metadata = parsed if isinstance(parsed, dict) else {}
-            request_data[_metadata_variable_name] = metadata
-        elif not isinstance(metadata, dict):
-            metadata = {}
-            request_data[_metadata_variable_name] = metadata
+        metadata: Final = _normalized_metadata_slot(request_data, _metadata_variable_name)
 
         existing_tags: Final = metadata.get("tags")
         metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
@@ -1608,18 +1619,7 @@ class LiteLLMProxyRequestSetup:
         # from (litellm_metadata vs metadata) so the merged tags are visible
         # to _tag_max_budget_check.
         _metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_data)
-        metadata = request_data.get(_metadata_variable_name)
-        # metadata can arrive as a JSON string (multipart/form-data, extra_body).
-        # Parse it so existing tags survive the merge — overwriting the string
-        # with {} would let a caller bypass _tag_max_budget_check on an
-        # over-budget body tag by also sending a within-budget header tag.
-        if isinstance(metadata, str):
-            parsed: Final = safe_json_loads(metadata)
-            metadata = parsed if isinstance(parsed, dict) else {}
-            request_data[_metadata_variable_name] = metadata
-        elif not isinstance(metadata, dict):
-            metadata = {}
-            request_data[_metadata_variable_name] = metadata
+        metadata: Final = _normalized_metadata_slot(request_data, _metadata_variable_name)
 
         existing_tags: Final = metadata.get("tags")
         metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
@@ -1759,7 +1759,7 @@ async def add_litellm_data_to_request(
     # admin-injection strip below so the audit / spend-tracking consumers of
     # proxy_server_request["body"] see the cleaned metadata rather than
     # attacker-forged user_api_key_* fields.
-    _litellm_received_at: Final = getattr(request.state, "litellm_received_at", None)
+    _litellm_received_at: Final[datetime | None] = getattr(request.state, "litellm_received_at", None)
     arrival_time: Final = _litellm_received_at.timestamp() if _litellm_received_at is not None else time.time()
     data["proxy_server_request"] = {
         "url": str(request.url),
@@ -2423,16 +2423,16 @@ def _resolve_provider_from_deployment(
         if deployment is None:
             continue
 
-        litellm_params = getattr(deployment, "litellm_params", None)
+        litellm_params: object = getattr(deployment, "litellm_params", None)
         if litellm_params is None:
             continue
 
         custom_provider = getattr(litellm_params, "custom_llm_provider", None)
-        if custom_provider:
+        if isinstance(custom_provider, str) and custom_provider:
             return custom_provider
 
-        deployment_model = getattr(litellm_params, "model", "") or ""
-        if "/" in deployment_model:
+        deployment_model = getattr(litellm_params, "model", "")
+        if isinstance(deployment_model, str) and "/" in deployment_model:
             return deployment_model.split("/", 1)[0]
 
     return None
@@ -2855,8 +2855,8 @@ def _extract_policy_id(s: str) -> str | None:
 def _match_and_track_policies(
     data: dict,
     context: "PolicyMatchContext",
-    request_body_policies: Any,
-    policies_override: dict[str, Any] | None = None,
+    request_body_policies: Sequence[str],
+    policies_override: dict[str, "Policy"] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """
     Match policies via attachments and request body, track them in metadata.
@@ -2914,7 +2914,7 @@ def _apply_resolved_guardrails_to_metadata(
     metadata_variable_name: str,
     context: "PolicyMatchContext",
     policy_names: list[str] | None = None,
-    policies: dict[str, Any] | None = None,
+    policies: dict[str, "Policy"] | None = None,
 ) -> None:
     """Apply resolved guardrails and pipelines to request metadata."""
     from litellm._logging import verbose_proxy_logger
@@ -3044,7 +3044,7 @@ async def add_guardrails_from_policy_engine(
                 request_body_names.append(item)
 
     # Resolve policy versions by ID from in-memory cache (populated by sync job; no DB in hot path)
-    merged_policies: Final[dict[str, Any]] = dict(registry.get_all_policies())
+    merged_policies: Final[dict[str, Policy]] = dict(registry.get_all_policies())
     fetched_policy_names: Final[list[str]] = []
     for policy_id in request_body_version_ids:
         result = registry.get_policy_by_id_for_request(policy_id=policy_id)

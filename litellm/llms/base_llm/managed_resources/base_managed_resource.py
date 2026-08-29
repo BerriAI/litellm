@@ -5,7 +5,8 @@
 import base64
 import json
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Generic, Protocol, TypeVar, cast, runtime_checkable
 
 from litellm import verbose_logger
 from litellm.llms.base_llm.managed_resources.isolation import (
@@ -37,6 +38,30 @@ else:
 ResourceObjectType = TypeVar("ResourceObjectType")
 
 
+@runtime_checkable
+class _HasIdentifier(Protocol):
+    id: str
+
+
+class _ManagedResourceRecord(Protocol[ResourceObjectType]):
+    unified_resource_id: str
+    resource_object: ResourceObjectType
+
+    def model_dump(self) -> dict[str, object]: ...
+
+
+class _ManagedResourceTable(Protocol[ResourceObjectType]):
+    async def create(self, *, data: Mapping[str, object]) -> object: ...
+
+    async def find_first(self, *, where: Mapping[str, object]) -> _ManagedResourceRecord[ResourceObjectType] | None: ...
+
+    async def find_many(
+        self, *, where: Mapping[str, object], take: int, order: Mapping[str, str]
+    ) -> list[_ManagedResourceRecord[ResourceObjectType]]: ...
+
+    async def delete(self, *, where: Mapping[str, object]) -> object: ...
+
+
 class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     """
     Base class for managing resources with target_model_names support.
@@ -62,6 +87,9 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ):
         self.internal_usage_cache = internal_usage_cache
         self.prisma_client = prisma_client
+
+    def _resource_table(self) -> _ManagedResourceTable[ResourceObjectType]:
+        return getattr(self.prisma_client.db, self.table_name)
 
     # ============================================================================
     #                          ABSTRACT METHODS
@@ -136,7 +164,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         litellm_parent_otel_span: Span | None,
         model_mappings: dict[str, str],
         user_api_key_dict: UserAPIKeyAuth,
-        additional_db_fields: dict[str, Any] | None = None,
+        additional_db_fields: Mapping[str, object] | None = None,
     ) -> None:
         """
         Store unified resource ID with model mappings in cache and database.
@@ -152,7 +180,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         verbose_logger.info("Storing LiteLLM Managed %s with id=%s in cache", self.resource_type, unified_resource_id)
 
         # Prepare cache data
-        cache_data: Final = {
+        cache_data: Final[dict[str, object]] = {
             "unified_resource_id": unified_resource_id,
             "resource_object": resource_object,
             "model_mappings": model_mappings,
@@ -175,7 +203,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             )
 
         # Prepare database data
-        db_data: Final = {
+        db_data: Final[dict[str, object]] = {
             "unified_resource_id": unified_resource_id,
             "model_mappings": json.dumps(model_mappings),
             "flat_model_resource_ids": list(model_mappings.values()),
@@ -204,7 +232,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             db_data.update(additional_db_fields)
 
         # Store in database
-        table: Final = getattr(self.prisma_client.db, self.table_name)
+        table: Final = self._resource_table()
         result: Final = await table.create(data=db_data)
 
         verbose_logger.debug(
@@ -239,7 +267,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             return result
 
         # Check database
-        table: Final = getattr(self.prisma_client.db, self.table_name)
+        table: Final = self._resource_table()
         db_object: Final = await table.find_first(where={"unified_resource_id": unified_resource_id})
 
         if db_object:
@@ -263,7 +291,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             The deleted resource object or None if not found
         """
         # Get old value from database
-        table: Final = getattr(self.prisma_client.db, self.table_name)
+        table: Final = self._resource_table()
         initial_value: Final = await table.find_first(where={"unified_resource_id": unified_resource_id})
 
         if initial_value is None:
@@ -514,7 +542,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         user_api_key_dict: UserAPIKeyAuth,
         limit: int | None = None,
         after: str | None = None,
-        additional_filters: dict[str, Any] | None = None,
+        additional_filters: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         """
         List resources created by a user.
@@ -532,7 +560,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         if owner_filter is None:
             return build_list_page([])
 
-        where_clause: Final[dict[str, Any]] = {**owner_filter}
+        where_clause: Final[dict[str, object]] = {**owner_filter}
 
         if after:
             where_clause["id"] = {"gt": after}
@@ -543,14 +571,14 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
         # Fetch resources
         fetch_limit: Final = limit or 20
-        table: Final = getattr(self.prisma_client.db, self.table_name)
+        table: Final = self._resource_table()
         resources: Final = await table.find_many(
             where=where_clause,
             take=fetch_limit,
             order={"created_at": "desc"},
         )
 
-        resource_objects: Final[list[Any]] = []
+        resource_objects: Final[list[object]] = []
         for resource in resources:
             try:
                 # Stop once we have enough
@@ -558,12 +586,13 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
                     break
 
                 # Parse resource object
-                resource_data = resource.resource_object
-                if isinstance(resource_data, str):
-                    resource_data = json.loads(resource_data)
+                stored_resource = resource.resource_object
+                resource_data: object = (
+                    json.loads(stored_resource) if isinstance(stored_resource, str) else stored_resource
+                )
 
                 # Set unified ID
-                if hasattr(resource_data, "id"):
+                if isinstance(resource_data, _HasIdentifier):
                     resource_data.id = resource.unified_resource_id
                 elif isinstance(resource_data, dict):
                     resource_data["id"] = resource.unified_resource_id

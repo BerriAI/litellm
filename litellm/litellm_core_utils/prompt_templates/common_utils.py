@@ -519,10 +519,10 @@ def update_messages_with_model_file_ids(
 
 
 def update_responses_input_with_model_file_ids(
-    input: Any,
+    input: object,
     model_id: str | None = None,
     model_file_id_mapping: dict[str, dict[str, str]] | None = None,
-) -> str | list[dict[str, Any]]:
+) -> object:
     """
     Updates responses API input with provider-specific file IDs.
     File IDs are always inside the content array, not as direct input_file items.
@@ -603,8 +603,8 @@ def update_responses_input_with_model_file_ids(
 
 
 def _decode_vector_store_ids_in_tools(
-    tools: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]] | None:
+    tools: list[dict[str, object]] | None,
+) -> list[dict[str, object]] | None:
     """
     Decodes unified (LiteLLM-managed) vector_store_ids in file_search tools to
     provider-native IDs.  Non-unified IDs are passed through unchanged.
@@ -656,10 +656,10 @@ def _decode_vector_store_ids_in_tools(
 
 
 def update_responses_tools_with_model_file_ids(
-    tools: list[dict[str, Any]] | None,
+    tools: list[dict[str, object]] | None,
     model_id: str | None = None,
     model_file_id_mapping: dict[str, dict[str, str]] | None = None,
-) -> list[dict[str, Any]] | None:
+) -> list[dict[str, object]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
 
@@ -852,7 +852,7 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 # ---------------------------------------------------------------------------
 
 
-def _estimate_json_bytes(obj: Any) -> int:
+def _estimate_json_bytes(obj: object) -> int:
     """Estimate the JSON-serialised byte size of ``obj`` without materialising
     JSON. Walks iteratively (no recursion stack risk).
 
@@ -1747,7 +1747,7 @@ def hoist_images_from_tool_messages(
     ]
 
 
-def _attempt_json_repair(s: str) -> Any | None:
+def _attempt_json_repair(s: str) -> object | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
 
@@ -1863,7 +1863,7 @@ def parse_tool_call_arguments(
         raise ValueError(error_message) from original_error
 
 
-def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
+def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     """
     Split a string that contains one or more concatenated JSON objects into
     a list of parsed dicts.
@@ -1899,7 +1899,7 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
         return []
 
     decoder: Final = json.JSONDecoder()
-    results: Final[list[dict[str, Any]]] = []
+    results: Final[list[dict[str, object]]] = []
     idx = 0
     length: Final = len(raw)
 
