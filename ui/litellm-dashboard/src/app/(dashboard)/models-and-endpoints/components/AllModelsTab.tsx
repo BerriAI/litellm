@@ -81,6 +81,11 @@ const AllModelsTab = ({
   }, [modelNameSearch, debouncedUpdateSearch]);
 
   const teamIdForQuery = selectedTeamValue === PERSONAL_TEAM_VALUE ? undefined : selectedTeamValue;
+  const isConcreteModelGroup =
+    Boolean(selectedModelGroup) &&
+    selectedModelGroup !== ALL_MODEL_GROUPS_VALUE &&
+    selectedModelGroup !== WILDCARD_MODEL_GROUP_VALUE;
+  const modelNameForQuery = isConcreteModelGroup ? selectedModelGroup ?? undefined : undefined;
 
   const sortBy = useMemo(() => {
     if (sorting.length === 0) return undefined;
@@ -108,6 +113,7 @@ const AllModelsTab = ({
     // Auto-routers are routing constructs, not deployments; the sibling Auto-Routers tab
     // lists and manages them. Excluded server-side so total_count stays honest.
     true,
+    modelNameForQuery,
   );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
