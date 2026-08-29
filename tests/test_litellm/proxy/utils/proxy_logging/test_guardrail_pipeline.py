@@ -1284,7 +1284,8 @@ async def test_pre_call_hook_rejects_streaming_request_with_post_call_pipeline(
         )
 
     assert info.value.status_code == 400
-    assert info.value.detail["error"]["policies"] == ["response-governance"]
+    assert info.value.detail["error"]["policies"] == ("response-governance",)
+    assert info.value.detail["error"]["guardrails"] == ("gr-post",)
     assert "stream=false" in info.value.detail["error"]["message"]
 
 
@@ -1304,7 +1305,7 @@ async def test_pre_call_hook_rejects_background_request_with_post_call_pipeline(
         )
 
     assert info.value.status_code == 400
-    assert info.value.detail["error"]["policies"] == ["response-governance"]
+    assert info.value.detail["error"]["policies"] == ("response-governance",)
     assert "background=false" in info.value.detail["error"]["message"]
 
 
@@ -1333,3 +1334,166 @@ def test_raise_for_streaming_post_call_pipelines_ignores_non_streaming_and_pre_c
     )
     assert _raise_for_streaming_post_call_pipelines({"stream": True}) is None
     assert _raise_for_streaming_post_call_pipelines({"background": True}) is None
+
+
+# ---------------------------------------------------------------------------
+# post_call pipelines on streaming responses
+# ---------------------------------------------------------------------------
+
+
+def _unified_stream_guardrail(seen: Dict[str, Any], block: bool = False) -> CustomGuardrail:
+    class UnifiedStreamGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            seen["count"] = seen.get("count", 0) + 1
+            seen["input_type"] = input_type
+            if block:
+                raise HTTPException(status_code=400, detail={"error": "output blocked"})
+            return inputs
+
+    return UnifiedStreamGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)
+
+
+def _stream_chunks() -> List[Any]:
+    return [
+        litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "hello "}, "finish_reason": None}]),
+        litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "world"}, "finish_reason": "stop"}]),
+    ]
+
+
+async def _async_chunk_iter(chunks: List[Any]):
+    for chunk in chunks:
+        yield chunk
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_allows_streaming_when_pipeline_guardrail_supports_unified(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen)])
+    data = _post_call_pipeline_data(stream=True)
+
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=data,
+        call_type="completion",
+        guardrails_only=True,
+    )
+
+    assert out is not None
+    assert out.get("stream") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_lifecycle", [False, True])
+async def test_pre_call_hook_rejects_streaming_when_pipeline_guardrail_lacks_unified_support(
+    proxy_logging, make_user_api_key_auth, monkeypatch, native_lifecycle
+):
+    if native_lifecycle:
+
+        class NativeOnlyGuardrail(CustomGuardrail):
+            use_native_lifecycle_hooks = True
+
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return inputs
+
+    else:
+
+        class NativeOnlyGuardrail(CustomGuardrail):
+            pass
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [NativeOnlyGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)],
+    )
+    data = _post_call_pipeline_data(stream=True)
+
+    with pytest.raises(HTTPException) as info:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=data,
+            call_type="completion",
+            guardrails_only=True,
+        )
+
+    assert info.value.status_code == 400
+    assert info.value.detail["error"]["guardrails"] == ("gr-post",)
+    assert "apply_guardrail" in info.value.detail["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_allow_releases_buffered_chunks(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+    chunks = _stream_chunks()
+
+    delivered = [
+        item
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+            response=_async_chunk_iter(chunks),
+            request_data=data,
+        )
+    ]
+
+    assert [id(item) for item in delivered] == [id(chunk) for chunk in chunks]
+    assert seen["count"] == 1
+    assert seen["input_type"] == "response"
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_block_withholds_all_chunks(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen, block=True)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+    delivered: List[Any] = []
+
+    async def _drain() -> None:
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+            response=_async_chunk_iter(_stream_chunks()),
+            request_data=data,
+        ):
+            delivered.append(item)
+
+    with pytest.raises(HTTPException) as info:
+        await _drain()
+
+    assert delivered == []
+    assert info.value.status_code == 400
+    assert "output blocked" in str(info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_withholds_unresolvable_response_shape(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+    delivered: List[Any] = []
+
+    async def _drain() -> None:
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            response=_async_chunk_iter([object(), object()]),
+            request_data=data,
+        ):
+            delivered.append(item)
+
+    with pytest.raises(HTTPException) as info:
+        await _drain()
+
+    assert delivered == []
+    assert info.value.status_code == 500
+    assert "withheld" in info.value.detail["error"]["message"]
+    assert seen.get("count") is None
