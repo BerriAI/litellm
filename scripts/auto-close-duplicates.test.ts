@@ -14,6 +14,7 @@ import {
   type Comment,
   type GitHubApi,
   type Issue,
+  type Reaction,
   type SweepConfig,
 } from "./auto-close-duplicates";
 
@@ -76,6 +77,15 @@ describe("pendingNotice", () => {
       config,
     );
     expect(reposted.kind).toBe("skip");
+  });
+
+  test("an objection posted before a re-posted notice still keeps the issue open", () => {
+    const verdict = pendingNotice(
+      issue(35, "t"),
+      [notice([10], daysAgo(10)), humanComment(daysAgo(7)), notice([10], daysAgo(4), { id: 902 })],
+      config,
+    );
+    expect(verdict).toEqual({ kind: "skip", reason: "someone replied after the notice" });
   });
 
   test("a zero-day grace period acts on the notice at once", () => {
@@ -155,7 +165,10 @@ describe("sweepIssue", () => {
   const reporter = issue(35, "[Bug]: Gemma 4-e4b fails on Vertex");
   const original = issue(10, "[Bug]: Gemma 4-e4b fails on Vertex");
 
-  function fakeApi(): { readonly api: GitHubApi; readonly writes: readonly string[] } {
+  function fakeApi(
+    comments: readonly Comment[] = [notice([10], daysAgo(5))],
+    reactionsByNotice: Readonly<Record<number, readonly Reaction[]>> = {},
+  ): { readonly api: GitHubApi; readonly writes: readonly string[] } {
     const writes: string[] = [];
     const api: GitHubApi = {
       request: async <T>(method: string, path: string, body?: object): Promise<T> => {
@@ -164,10 +177,11 @@ describe("sweepIssue", () => {
           return {} as T;
         }
         if (path.startsWith("/repos/BerriAI/litellm/issues/35/comments")) {
-          return [notice([10], daysAgo(5))] as T;
+          return comments as T;
         }
-        if (path.startsWith("/repos/BerriAI/litellm/issues/comments/900/reactions")) {
-          return [] as T;
+        const reactionsPath = path.match(/^\/repos\/BerriAI\/litellm\/issues\/comments\/(\d+)\/reactions/);
+        if (reactionsPath) {
+          return (reactionsByNotice[Number(reactionsPath[1])] ?? []) as T;
         }
         if (path === "/repos/BerriAI/litellm/issues/10") {
           return original as T;
@@ -182,6 +196,13 @@ describe("sweepIssue", () => {
     const { api, writes } = fakeApi();
     const verdict = await sweepIssue(api, { ...config, dryRun: true }, reporter);
     expect(verdict).toEqual({ kind: "close", duplicateOf: 10 });
+    expect(writes).toEqual([]);
+  });
+
+  test("a thumbs down on an earlier notice still keeps the issue open", async () => {
+    const { api, writes } = fakeApi([notice([10], daysAgo(9)), notice([10], daysAgo(5), { id: 902 })], { 900: [{ content: "-1" }] });
+    const verdict = await sweepIssue(api, config, reporter);
+    expect(verdict).toEqual({ kind: "skip", reason: "someone gave the notice a thumbs down" });
     expect(writes).toEqual([]);
   });
 
