@@ -159,9 +159,12 @@ def test_handle_model_invocation_job_status_completed(patched_boto3):
 @pytest.mark.parametrize("success_count,error_count", [(100, 0), (86, 14)])
 def test_completed_job_maps_provider_record_counts(patched_boto3, success_count, error_count):
     fake_client, _ = patched_boto3
-    counted_response = _fake_boto3_response()
-    counted_response.update(totalRecordCount=100, successRecordCount=success_count, errorRecordCount=error_count)
-    fake_client.get_model_invocation_job.return_value = counted_response
+    fake_client.get_model_invocation_job.return_value = {
+        **_fake_boto3_response(),
+        "totalRecordCount": 100,
+        "successRecordCount": success_count,
+        "errorRecordCount": error_count,
+    }
 
     batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
 
@@ -180,6 +183,29 @@ def test_missing_record_counts_leave_request_counts_none(patched_boto3):
     batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.request_counts is None
+
+
+def test_total_without_success_count_leaves_request_counts_none(patched_boto3):
+    fake_client, _ = patched_boto3
+    fake_client.get_model_invocation_job.return_value = {**_fake_boto3_response(), "totalRecordCount": 100}
+
+    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+
+    assert batch.request_counts is None
+
+
+def test_missing_error_count_maps_to_zero_failed(patched_boto3):
+    fake_client, _ = patched_boto3
+    fake_client.get_model_invocation_job.return_value = {
+        **_fake_boto3_response(),
+        "totalRecordCount": 100,
+        "successRecordCount": 100,
+    }
+
+    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+
+    assert batch.request_counts is not None
+    assert (batch.request_counts.total, batch.request_counts.completed, batch.request_counts.failed) == (100, 100, 0)
 
 
 @pytest.mark.parametrize(
