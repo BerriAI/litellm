@@ -150,12 +150,36 @@ def test_handle_model_invocation_job_status_completed(patched_boto3):
     assert batch.completed_at == int(END_TIME.timestamp())
     assert batch.failed_at is None
     assert batch.cancelled_at is None
-    # Per-record counts aren't reported by GetModelInvocationJob, so we leave
-    # them zeroed; consumers should parse manifest.json.out for accurate counts.
-    assert batch.request_counts.total == 0
+    assert batch.request_counts is None
     assert batch.metadata["job_arn"] == JOB_ARN
     assert batch.metadata["output_file_uri"] == expected_out
     assert batch.metadata["output_s3_uri"] == OUTPUT_PREFIX
+
+
+@pytest.mark.parametrize("success_count,error_count", [(100, 0), (86, 14)])
+def test_completed_job_maps_provider_record_counts(patched_boto3, success_count, error_count):
+    fake_client, _ = patched_boto3
+    counted_response = _fake_boto3_response()
+    counted_response.update(totalRecordCount=100, successRecordCount=success_count, errorRecordCount=error_count)
+    fake_client.get_model_invocation_job.return_value = counted_response
+
+    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+
+    assert batch.request_counts is not None
+    assert (batch.request_counts.total, batch.request_counts.completed, batch.request_counts.failed) == (
+        100,
+        success_count,
+        error_count,
+    )
+
+
+def test_missing_record_counts_leave_request_counts_none(patched_boto3):
+    fake_client, _ = patched_boto3
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response()
+
+    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+
+    assert batch.request_counts is None
 
 
 @pytest.mark.parametrize(
