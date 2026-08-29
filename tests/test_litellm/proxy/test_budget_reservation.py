@@ -33,6 +33,7 @@ from litellm.proxy.common_utils.reset_budget_job import _model_access_group_coun
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     model_access_group_cache_key,
+    model_access_group_spend_counter_key,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
@@ -47,6 +48,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 
 
 @pytest.fixture()
@@ -3067,3 +3069,117 @@ async def test_model_access_group_counter_blocks_a_request_over_the_group_budget
 
     assert exc_info.value.entity_id == "premium"
     assert exc_info.value.entity_type == Litellm_EntityType.MODEL_ACCESS_GROUP.value
+
+
+async def _cache_model_access_group_budget(key_cache, group, spend, max_budget=None):
+    await key_cache.async_set_cache(
+        key=model_access_group_cache_key(group),
+        value=ModelAccessGroupBudget(access_group_name=group, spend=spend, max_budget=max_budget),
+        model_type=ModelAccessGroupBudget,
+    )
+
+
+async def _reserve_for_model_access_groups(key_cache, groups, estimate):
+    """Reserve against the given groups, whose rows are already cached, so nothing hits the DB."""
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=estimate,
+    ):
+        return await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=UserAPIKeyAuth(
+                api_key="hashed", token="tok-mag-counter", matched_model_access_groups=list(groups)
+            ),
+            team_object=None,
+            user_object=None,
+            prisma_client=_ModelAccessGroupBudgetPrisma(),
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=key_cache),
+        )
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_counter_accumulates_across_calls_without_a_reservation(spend_counter_state):
+    """With reservations disabled nothing writes the counter up front, so the cost callback must.
+
+    Otherwise the read-time budget check enforces against the DB row's spend, which the cache
+    holds for the full TTL, and a caller runs past the ceiling for that whole window.
+    """
+    counter_cache, key_cache = spend_counter_state
+    await _cache_model_access_group_budget(key_cache, "premium", spend=1.0, max_budget=25.0)
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    counter_key = model_access_group_spend_counter_key("premium")
+
+    await increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=0.25, model_access_groups=["premium"]
+    )
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(1.25)
+
+    await increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=0.75, model_access_groups=["premium", "premium", ""]
+    )
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(2.0)
+    assert counter_cache.in_memory_cache.get_cache(key=model_access_group_spend_counter_key("")) is None
+
+
+@pytest.mark.asyncio
+async def test_reserved_model_access_group_is_not_charged_twice(spend_counter_state):
+    """The reservation already wrote this counter, so the post-call pass has to skip it."""
+    counter_cache, key_cache = spend_counter_state
+    await _cache_model_access_group_budget(key_cache, "premium", spend=1.0, max_budget=25.0)
+
+    reservation = await _reserve_for_model_access_groups(key_cache, ["premium"], estimate=0.6)
+    counter_key = model_access_group_spend_counter_key("premium")
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(1.6)
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        response_cost=0.2,
+        budget_reservation=reservation,
+        model_access_groups=["premium"],
+    )
+
+    # 1.0 recorded + the reservation reconciled down to the 0.2 actually spent. A second
+    # increment would land at 1.4.
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(1.2)
+
+
+@pytest.mark.asyncio
+async def test_unreserved_model_access_group_is_charged_alongside_a_reserved_one(spend_counter_state):
+    """A budgetless group reserves nothing, so only the post-call pass can charge it.
+
+    Both groups authorized the request and both get debited, each exactly once, whether or not
+    the reservation path happened to hold a counter for them.
+    """
+    counter_cache, key_cache = spend_counter_state
+    await _cache_model_access_group_budget(key_cache, "premium", spend=1.0, max_budget=25.0)
+    await _cache_model_access_group_budget(key_cache, "starter", spend=4.0)
+
+    reservation = await _reserve_for_model_access_groups(key_cache, ["premium", "starter"], estimate=0.6)
+    assert [entry["entity_id"] for entry in reservation["entries"]] == ["premium"]
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        response_cost=0.2,
+        budget_reservation=reservation,
+        model_access_groups=["premium", "starter", "starter", "premium"],
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key=model_access_group_spend_counter_key("premium")
+    ) == pytest.approx(1.2)
+    assert counter_cache.in_memory_cache.get_cache(
+        key=model_access_group_spend_counter_key("starter")
+    ) == pytest.approx(4.2)

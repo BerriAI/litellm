@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -27,6 +28,7 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
+    get_request_model_access_groups,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
@@ -258,6 +260,7 @@ class _ProxyDBLogger(CustomLogger):
                 sl_object=sl_object,
                 metadata=metadata,
             )
+            model_access_groups: Final = get_request_model_access_groups(kwargs)
 
             if response_cost is not None:
                 user_api_key: Final = metadata.get("user_api_key", None)
@@ -296,6 +299,7 @@ class _ProxyDBLogger(CustomLogger):
                         response_cost=response_cost,
                         budget_reservation=budget_reservation,
                         request_tags=tags,
+                        model_access_groups=model_access_groups,
                     )
 
                     # update cache (fire-and-forget for backward compat:
@@ -572,6 +576,7 @@ async def _update_database_and_spend_counters(
     response_cost: float,
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
+    model_access_groups: Sequence[str] | None = None,
 ) -> None:
     try:
         await proxy_logging_obj.db_spend_update_writer.update_database(
@@ -610,6 +615,7 @@ async def _update_database_and_spend_counters(
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,
             tags=request_tags,
+            model_access_groups=model_access_groups,
         )
     except Exception:
         if budget_reservation is not None:

@@ -1,14 +1,14 @@
 
-import pytest
-
-
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.proxy_track_cost_callback import (
-    _ProxyDBLogger,
     _get_budget_reservation_from_metadata,
+    _ProxyDBLogger,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
 )
@@ -586,6 +586,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         response_cost=0.2,
         budget_reservation=budget_reservation,
         request_tags=["tag-a"],
+        model_access_groups=("premium",),
     )
 
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
@@ -598,6 +599,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         budget_reservation=budget_reservation,
         end_user_id="test_end_user_id",
         tags=["tag-a"],
+        model_access_groups=("premium",),
     )
 
 
@@ -1875,3 +1877,82 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
         assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
             1 if expect_spend_log else 0
         )
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_charges_the_model_access_groups_auth_stamped():
+    """Auth stamps the matched groups onto request metadata; the callback has to carry them through.
+
+    Without this hop nothing writes ``spend:model_access_group:*`` on the normal path, so with
+    reservations disabled the budget check reads a counter no one maintains.
+    """
+    logger = _ProxyDBLogger()
+    kwargs = {
+        "model": "gpt-4",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "user-1",
+                MODEL_ACCESS_GROUP_METADATA_KEY: ["premium", "starter"],
+            },
+        },
+        "standard_logging_object": {"response_cost": 0.25, "request_tags": None},
+        "stream": False,
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as mock_increment_spend_counters,
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    mock_increment_spend_counters.assert_awaited_once()
+    assert mock_increment_spend_counters.await_args.kwargs["model_access_groups"] == (
+        "premium",
+        "starter",
+    )
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_charges_no_model_access_group_when_none_were_stamped():
+    """A request no budgeted group authorized must not debit anything."""
+    logger = _ProxyDBLogger()
+    kwargs = {
+        "model": "gpt-4",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {"user_api_key": "hashed-key", "user_api_key_user_id": "user-1"},
+        },
+        "standard_logging_object": {"response_cost": 0.25, "request_tags": None},
+        "stream": False,
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as mock_increment_spend_counters,
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    mock_increment_spend_counters.assert_awaited_once()
+    assert mock_increment_spend_counters.await_args.kwargs["model_access_groups"] == ()
