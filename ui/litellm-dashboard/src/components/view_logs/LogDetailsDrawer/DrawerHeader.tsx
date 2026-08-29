@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
 import moment from "moment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { LogEntry } from "../columns";
 import { AutoRouterTag } from "@/components/shared/table_cells";
 import { ClassifyTag } from "./ClassifyTag";
+import { SidebarToggle } from "./SidebarToggle";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import {
   DRAWER_HEADER_PADDING,
@@ -47,6 +48,8 @@ export function DrawerHeader({
 }: DrawerHeaderProps) {
   const provider = log.custom_llm_provider || "";
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
+  const showToggleWithProvider = isSidebarCollapsed && Boolean(providerInfo || log.model);
+  const showToggleWithRequestId = isSidebarCollapsed && !showToggleWithProvider;
 
   return (
     <div
@@ -61,15 +64,7 @@ export function DrawerHeader({
     >
       {/* Row 0: Model + Provider with Logo */}
       <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={onToggleSidebar}
-          className="shrink-0"
-          aria-label={isSidebarCollapsed ? "Expand trace sidebar" : "Collapse trace sidebar"}
-        >
-          {isSidebarCollapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
-        </Button>
+        {showToggleWithProvider && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
         <ModelProviderSection
           model={log.model}
           modelGroup={log.model_group}
@@ -81,8 +76,15 @@ export function DrawerHeader({
 
       {/* Row 1: Request ID + Actions */}
       <div
-        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 4,
+          marginBottom: SPACING_MEDIUM,
+        }}
       >
+        {showToggleWithRequestId && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
         <RequestIdSection requestId={log.request_id} />
         <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
       </div>

@@ -8,6 +8,7 @@ import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { ClassifyTag } from "./ClassifyTag";
 import { DrawerHeader } from "./DrawerHeader";
+import { SidebarToggle } from "./SidebarToggle";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
@@ -314,8 +315,12 @@ export function LogDetailsDrawer({
         <div style={{ height: "100%" }} className="flex">
           {!isSidebarCollapsed && (
             <div className="border-r border-border bg-muted flex flex-col shrink-0" style={{ width: SIDEBAR_WIDTH_PX }}>
-              <div className="px-3 py-2 border-b border-border bg-card">
-                <div className="min-w-0">
+              <div className="flex items-start gap-1 py-2 pl-1 pr-3 border-b border-border bg-card">
+                <SidebarToggle
+                  isCollapsed={isSidebarCollapsed}
+                  onToggle={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
+                />
+                <div className="min-w-0 flex-1">
                   <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                     {isSessionMode ? "Session" : "Trace"}
                   </div>
