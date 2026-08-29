@@ -185,6 +185,21 @@ def tag_registry_cache_key() -> str:
     return "tag_registry"
 
 
+#: Cached under ``access_group_registry_cache_key`` when the table exceeds
+#: ``ACCESS_GROUP_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-group lookup.
+ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL: Final = "__access_group_registry_overflow__"
+
+
+def access_group_cache_key(access_group_name: str) -> str:
+    """Cache key one model access group budget row is stored under; shared so auth, spend tracking and the management endpoints cannot drift."""
+    return f"access_group:{access_group_name}"
+
+
+def access_group_registry_cache_key() -> str:
+    """Cache key for the set of model access group names that have a budget row."""
+    return "access_group_registry"
+
+
 #: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds
 #: ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-id fetch.
 END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_registry_overflow__"
