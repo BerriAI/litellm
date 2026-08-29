@@ -173,24 +173,27 @@ describe("AddProviderPanel", () => {
     await user.click(screen.getByRole("button", { name: "Create 3 models" }));
 
     await waitFor(() => expect(createProviderModelCall).toHaveBeenCalledTimes(3));
-    expect(createProviderModelCall).toHaveBeenCalledWith("test-access-token", {
+    const disabledOpusCreation = {
       model_name: "claude-3-opus",
       litellm_params: { model: "anthropic/claude-3-opus", litellm_credential_name: "anthropic-prod" },
       model_info: {},
       blocked: true,
-    });
-    expect(createProviderModelCall).toHaveBeenCalledWith("test-access-token", {
+    };
+    const renamedHaikuCreation = {
       model_name: "claude-3-haiku",
       litellm_params: { model: "anthropic/claude-3-haiku", litellm_credential_name: "anthropic-prod" },
       model_info: {},
       blocked: false,
-    });
-    expect(createProviderModelCall).toHaveBeenCalledWith("test-access-token", {
+    };
+    const manualHiddenCreation = {
       model_name: "claude-hidden",
       litellm_params: { model: "anthropic/claude-hidden", litellm_credential_name: "anthropic-prod" },
       model_info: {},
       blocked: false,
-    });
+    };
+    expect(createProviderModelCall).toHaveBeenCalledWith("test-access-token", disabledOpusCreation);
+    expect(createProviderModelCall).toHaveBeenCalledWith("test-access-token", renamedHaikuCreation);
+    expect(createProviderModelCall).toHaveBeenCalledWith("test-access-token", manualHiddenCreation);
 
     await waitFor(() =>
       expect(setCallbacksCall).toHaveBeenCalledWith("test-access-token", {

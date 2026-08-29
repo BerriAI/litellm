@@ -8,6 +8,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -324,11 +325,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not _carries_caller_credential(headers):
             self._apply_env_auth_header(
                 headers,
-                AnthropicModelInfo.get_auth_header(
-                    api_key,
-                    api_base=api_base,
-                    litellm_params=litellm_params,
-                    allow_workload_identity=self._allows_workload_identity,
+                self._require_auth_header(
+                    AnthropicModelInfo.get_auth_header(
+                        api_key,
+                        api_base=api_base,
+                        litellm_params=litellm_params,
+                        allow_workload_identity=self._allows_workload_identity,
+                    ),
+                    model=model,
                 ),
             )
         return self._finalize_messages_headers(headers, optional_params), api_base
@@ -361,14 +365,30 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not _carries_caller_credential(oauth_headers):
             self._apply_env_auth_header(
                 oauth_headers,
-                await AnthropicModelInfo.aget_auth_header(
-                    oauth_api_key,
-                    api_base=api_base,
-                    litellm_params=litellm_params,
-                    allow_workload_identity=self._allows_workload_identity,
+                self._require_auth_header(
+                    await AnthropicModelInfo.aget_auth_header(
+                        oauth_api_key,
+                        api_base=api_base,
+                        litellm_params=litellm_params,
+                        allow_workload_identity=self._allows_workload_identity,
+                    ),
+                    model=model,
                 ),
             )
         return self._finalize_messages_headers(oauth_headers, optional_params), api_base
+
+    def _require_auth_header(self, auth_header: Mapping[str, str] | None, model: str) -> Mapping[str, str]:
+        if auth_header is None:
+            raise AuthenticationError(
+                message=(
+                    "Missing Anthropic API Key - A call is being made to anthropic but no key is set "
+                    "either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` "
+                    "or `ANTHROPIC_AUTH_TOKEN` in your environment vars"
+                ),
+                llm_provider=self._resolved_provider,
+                model=model,
+            )
+        return auth_header
 
     @staticmethod
     def _apply_env_auth_header(headers: dict, auth_header: Mapping[str, str] | None) -> None:  # mutable-ok: out-param

@@ -6,6 +6,9 @@ import pytest
 
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.experimental_pass_through.messages import (
+    streaming_iterator as streaming_iterator_module,
+)
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
     INCOMPLETE_STREAM_ERROR_MESSAGE,
     AnthropicMessagesStreamHiddenParams,
@@ -26,7 +29,7 @@ class _RecordingLoggingIterator(BaseAnthropicMessagesStreamingIterator):
         self.logged_chunks: list = []
         self.logging_call_count: int = 0
 
-    async def _handle_streaming_logging(self, collected_chunks):
+    async def _handle_streaming_logging(self, collected_chunks, *, stream_teardown=False):
         self.logged_chunks = list(collected_chunks)
         self.logging_call_count += 1
 
@@ -544,3 +547,86 @@ def test_anthropic_messages_response_as_sse_events_no_content_blocks():
     response = {"id": "msg_4", "content": [], "stop_reason": "end_turn"}
     decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
     assert [event_type for event_type, _ in decoded] == ["message_start", "message_delta", "message_stop"]
+
+
+class _RecordingLoggingWorker:
+    def __init__(self):
+        self.enqueued = []
+
+    def ensure_initialized_and_enqueue(self, async_coroutine):
+        self.enqueued.append(async_coroutine)
+
+    def close_enqueued(self):
+        for coroutine in self.enqueued:
+            coroutine.close()
+
+
+async def _noop_deferred_dispatch(logging_coroutine):
+    logging_coroutine.close()
+
+
+async def _stream_of(events):
+    for event in events:
+        yield event
+
+
+COMPLETE_STREAM_EVENTS = TRUNCATED_TOOL_USE_EVENTS + ({"type": "message_stop"},)
+
+
+@pytest.mark.asyncio
+async def test_normal_end_with_deferred_dispatch_armed_parks_logging_coroutine(monkeypatch):
+    """
+    Regression test for LIT-6409: with post_call guardrails active the proxy
+    arms logging_obj._on_deferred_stream_complete, and the native /v1/messages
+    iterator must park its logging coroutine instead of enqueueing it at
+    upstream exhaustion, otherwise the spend log is built before the
+    guardrail end-of-stream scan writes its post_call entry.
+    """
+    worker = _RecordingLoggingWorker()
+    monkeypatch.setattr(streaming_iterator_module, "GLOBAL_LOGGING_WORKER", worker)
+    iterator = _make_iterator("test_deferred_parks_logging_coroutine")
+    iterator.litellm_logging_obj._on_deferred_stream_complete = _noop_deferred_dispatch
+
+    await _collect(iterator, _stream_of(COMPLETE_STREAM_EVENTS))
+
+    parked = getattr(iterator.litellm_logging_obj, "_deferred_stream_complete_args", None)
+    assert worker.enqueued == []
+    assert parked is not None
+    assert len(parked) == 1
+    assert asyncio.iscoroutine(parked[0])
+    parked[0].close()
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_enqueues_immediately_even_when_deferred_dispatch_armed(monkeypatch):
+    """
+    On client disconnect the guardrail end-of-stream scan never runs, so
+    deferral would strand the spend log; the teardown path must keep
+    enqueueing immediately (LIT-5839) even when the deferred callback is armed.
+    """
+    worker = _RecordingLoggingWorker()
+    monkeypatch.setattr(streaming_iterator_module, "GLOBAL_LOGGING_WORKER", worker)
+    iterator = _make_iterator("test_disconnect_enqueues_when_armed")
+    iterator.litellm_logging_obj._on_deferred_stream_complete = _noop_deferred_dispatch
+
+    wrapped = iterator.async_sse_wrapper(_events_then_hang(TRUNCATED_TOOL_USE_EVENTS))
+    for _ in range(len(TRUNCATED_TOOL_USE_EVENTS)):
+        await wrapped.__anext__()
+    await wrapped.aclose()
+
+    assert len(worker.enqueued) == 1
+    assert getattr(iterator.litellm_logging_obj, "_deferred_stream_complete_args", None) is None
+    worker.close_enqueued()
+
+
+@pytest.mark.asyncio
+async def test_normal_end_without_deferred_dispatch_enqueues_immediately(monkeypatch):
+    worker = _RecordingLoggingWorker()
+    monkeypatch.setattr(streaming_iterator_module, "GLOBAL_LOGGING_WORKER", worker)
+    iterator = _make_iterator("test_unarmed_enqueues_at_stream_end")
+
+    await _collect(iterator, _stream_of(COMPLETE_STREAM_EVENTS))
+
+    assert len(worker.enqueued) == 1
+    assert getattr(iterator.litellm_logging_obj, "_deferred_stream_complete_args", None) is None
+    worker.close_enqueued()

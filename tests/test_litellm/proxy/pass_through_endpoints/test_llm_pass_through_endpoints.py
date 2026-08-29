@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import json
 import os
@@ -16,6 +17,7 @@ from starlette.datastructures import FormData
 
 
 import litellm
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
@@ -37,6 +39,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vllm_proxy_route,
 )
 from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -558,7 +561,7 @@ class TestVertexAIPassThroughHandler:
                 "method": "POST",
                 "path": endpoint,
                 "headers": [
-                    (b"authorization", b"Bearer test-creds"),
+                    (b"authorization", b"Bearer sk-test-creds"),
                 ],
             }
         )
@@ -583,7 +586,7 @@ class TestVertexAIPassThroughHandler:
         ):
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
-            mock_auth.return_value = MagicMock()
+            mock_auth.return_value = UserAPIKeyAuth(api_key="sk-test-creds")
 
             with pytest.raises(HTTPException) as exc_info:
                 await vertex_proxy_route(
@@ -1745,7 +1748,10 @@ class TestBedrockAgentRuntimePassthroughToggle:
 
         with (
             patch("litellm.proxy.proxy_server.general_settings", general_settings),
-            patch("litellm.utils.get_secret", return_value="us-east-1"),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="us-east-1",
+            ),
             patch("litellm.llms.bedrock.chat.BedrockConverseLLM", return_value=bedrock_llm),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
@@ -1795,7 +1801,10 @@ class TestBedrockAgentRuntimePassthroughToggle:
     async def test_model_invoke_still_routed_when_agent_runtime_disabled(self):
         with (
             patch("litellm.proxy.proxy_server.general_settings", self.DISABLED),
-            patch("litellm.utils.get_secret", return_value="us-east-1"),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="us-east-1",
+            ),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
                 Mock(),
@@ -3126,14 +3135,14 @@ class TestVertexRawPredictStreamingClassification:
             ),
             mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
             mock.patch(f"{module}.get_litellm_virtual_key", return_value="Bearer test-key"),
-            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value={"api_key": "test-key"})),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=UserAPIKeyAuth(api_key="test-key"))),
             mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
         ):
             await vertex_proxy_route(
                 endpoint=endpoint,
                 request=request,
                 fastapi_response=Response(),
-                user_api_key_dict=UserAPIKeyAuth(token="test-key"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             )
 
         assert captured, "create_pass_through_route was never called"
@@ -3231,6 +3240,13 @@ def test_is_passthrough_request_streaming_tolerates_non_object_bodies(request_bo
     assert is_passthrough_request_streaming(request_body) is expected
 
 
+def _unsigned_jwt(claims: Mapping[str, str]) -> str:
+    def segment(payload: Mapping[str, str]) -> str:
+        return base64.urlsafe_b64encode(json.dumps(dict(payload)).encode()).rstrip(b"=").decode()
+
+    return ".".join((segment({"alg": "RS256", "typ": "JWT"}), segment(claims), "c2lnbmF0dXJl"))
+
+
 class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     """Regression coverage for LIT-5997.
 
@@ -3250,12 +3266,26 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     genuine bring-your-own Google credential that must still pass through. The
     by-value strip also covers a virtual key sent in the operator-configured
     ``general_settings.litellm_key_header_name``, whatever that header is named.
+
+    The by-value strip keys off what actually authenticated the caller (the
+    master key, or the LiteLLM key whose hash ``user_api_key_auth`` resolved as
+    ``api_key``), never off header precedence: a custom auth or JWT that
+    authenticated the caller without consuming ``Authorization`` leaves the
+    caller's own Google token there, and it must keep flowing.
     """
 
     VKEY = "sk-litellm-victim-key"
     ENDPOINT = "v1/projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
 
-    async def _run(self, monkeypatch, headers: list[tuple[bytes, bytes]]) -> tuple[HTTPException | None, dict | None]:
+    async def _run(
+        self,
+        monkeypatch,
+        headers: list[tuple[bytes, bytes]],
+        authenticated: UserAPIKeyAuth | None = None,
+        master_key: str | None = "sk-master-1234",
+    ) -> tuple[HTTPException | None, dict | None]:
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
+        caller: Final = authenticated if authenticated is not None else UserAPIKeyAuth(api_key=self.VKEY)
         from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
@@ -3288,7 +3318,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         raised: HTTPException | None = None
         with (
             mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
-            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=UserAPIKeyAuth(token="hashed"))),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=caller)),
             mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
         ):
             try:
@@ -3296,7 +3326,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                     endpoint=self.ENDPOINT,
                     request=request,
                     fastapi_response=Response(),
-                    user_api_key_dict=UserAPIKeyAuth(token="hashed"),
+                    user_api_key_dict=caller,
                 )
             except HTTPException as exc:
                 raised = exc
@@ -3552,6 +3582,135 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
             "a virtual key in the mapped-route litellm_user_api_key header must be dropped, not forwarded"
         )
         assert raised is not None and raised.status_code == 401
+
+    GOOGLE_OAUTH_TOKEN = "ya29.byo-google-oauth-token"
+
+    LITELLM_JWT_CLAIMS = MappingProxyType({"sub": "jwt-subject", "iss": "https://idp.example.com"})
+    LITELLM_JWT = _unsigned_jwt(LITELLM_JWT_CLAIMS)
+    GOOGLE_SERVICE_ACCOUNT_JWT = _unsigned_jwt(
+        {
+            "sub": "vertex-caller@my-proj.iam.gserviceaccount.com",
+            "iss": "vertex-caller@my-proj.iam.gserviceaccount.com",
+            "aud": "https://aiplatform.googleapis.com/",
+        }
+    )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("master_key", "authenticated"),
+        [
+            pytest.param(
+                "sk-master-1234",
+                UserAPIKeyAuth(api_key="best-api-key-ever", user_role=LitellmUserRoles.PROXY_ADMIN),
+                id="custom-auth-returning-its-own-identifier",
+            ),
+            pytest.param(
+                "sk-master-1234",
+                UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(LITELLM_JWT_CLAIMS)),
+                id="jwt-auth",
+            ),
+            pytest.param(None, UserAPIKeyAuth(api_key=GOOGLE_OAUTH_TOKEN), id="no-master-key-echoes-raw-header"),
+        ],
+    )
+    async def test_google_token_in_authorization_is_forwarded_when_auth_did_not_consume_it(
+        self, monkeypatch, master_key: str | None, authenticated: UserAPIKeyAuth
+    ):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", f"Bearer {self.GOOGLE_OAUTH_TOKEN}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=authenticated,
+            master_key=master_key,
+        )
+        assert raised is None, f"the caller's own Google token must not be mistaken for a LiteLLM key: {raised}"
+        assert forwarded is not None
+        assert forwarded.get("authorization") == f"Bearer {self.GOOGLE_OAUTH_TOKEN}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("credential", "authenticated"),
+        [
+            pytest.param("modified_key", UserAPIKeyAuth(api_key="modified_key"), id="custom-auth-echoing-opaque-credential"),
+            pytest.param(
+                LITELLM_JWT,
+                UserAPIKeyAuth(api_key=LITELLM_JWT, user_id="jwt-subject"),
+                id="custom-auth-echoing-jwt",
+            ),
+            pytest.param(
+                LITELLM_JWT,
+                UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(LITELLM_JWT_CLAIMS)),
+                id="jwt-auth",
+            ),
+            pytest.param(
+                LITELLM_JWT,
+                UserAPIKeyAuth(
+                    api_key=None,
+                    user_id="jwt-subject",
+                    jwt_claims={
+                        **LITELLM_JWT_CLAIMS,
+                        JWTHandler.LITELLM_JWT_ISSUER_CLAIM: "https://idp.example.com",
+                        JWTHandler.LITELLM_USER_ID_CLAIM: "jwt-subject",
+                    },
+                ),
+                id="multi-issuer-jwt-auth-normalized-claims",
+            ),
+        ],
+    )
+    async def test_non_sk_litellm_credential_that_authenticated_is_rejected_not_forwarded(
+        self, monkeypatch, credential: str, authenticated: UserAPIKeyAuth
+    ):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", f"Bearer {credential}".encode()), (b"content-type", b"application/json")],
+            authenticated=authenticated,
+        )
+        assert forwarded is None, "the credential that authenticated the caller must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_jwt_authenticated_caller_keeps_a_different_byo_google_jwt(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.LITELLM_JWT.encode()),
+                (b"authorization", f"Bearer {self.GOOGLE_SERVICE_ACCOUNT_JWT}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(self.LITELLM_JWT_CLAIMS)),
+        )
+        assert raised is None, f"a Google JWT that is not the one that authenticated must keep flowing: {raised}"
+        assert forwarded is not None
+        assert forwarded.get("authorization") == f"Bearer {self.GOOGLE_SERVICE_ACCOUNT_JWT}"
+        assert "x-litellm-api-key" not in forwarded
+
+    @pytest.mark.asyncio
+    async def test_master_key_in_authorization_alone_is_rejected(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
+            authenticated=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert forwarded is None, "the master key must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_master_key_is_stripped_and_byo_x_goog_api_key_forwards(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", b"Bearer sk-master-1234"),
+                (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert "authorization" not in forwarded
+        assert "sk-master-1234" not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
 
 class TestGetAzureAISearchIndexFromEndpoint:

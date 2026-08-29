@@ -25,13 +25,14 @@ describe("buildDiscoveredRows", () => {
   it("defaults every row to enabled, with model_name equal to the discovered id", () => {
     const rows = buildDiscoveredRows(["claude-3-opus", "claude-3-haiku"]);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({
+    const defaultedOpusRow = {
       upstreamId: "claude-3-opus",
       modelName: "claude-3-opus",
       enabled: true,
       alternateNames: [],
       manual: false,
-    });
+    };
+    expect(rows[0]).toMatchObject(defaultedOpusRow);
   });
 
   it("gives every row a unique id even for duplicate upstream ids", () => {
@@ -43,7 +44,8 @@ describe("buildDiscoveredRows", () => {
 describe("buildManualRow", () => {
   it("marks the row manual and enabled by default", () => {
     const row = buildManualRow("hidden-model");
-    expect(row).toMatchObject({ upstreamId: "hidden-model", modelName: "hidden-model", enabled: true, manual: true });
+    const manualEnabledRow = { upstreamId: "hidden-model", modelName: "hidden-model", enabled: true, manual: true };
+    expect(row).toMatchObject(manualEnabledRow);
   });
 });
 
@@ -59,12 +61,13 @@ describe("buildModelCreationPayload", () => {
 
   it("maps enabled=true to blocked=false", () => {
     const payload = buildModelCreationPayload("anthropic", "my-cred", baseRow);
-    expect(payload).toEqual({
+    const unblockedCreation = {
       model_name: "my-claude",
       litellm_params: { model: "anthropic/claude-3-opus", litellm_credential_name: "my-cred" },
       model_info: {},
       blocked: false,
-    });
+    };
+    expect(payload).toEqual(unblockedCreation);
   });
 
   it("maps enabled=false to blocked=true", () => {

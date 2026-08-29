@@ -1909,6 +1909,76 @@ async def test_async_audio_transcriptions_sends_dict_data_as_json_body():
     assert response.text == "transcribed"
 
 
+class _WordTimestampAudioTranscriptionConfig(_JSONBodyAudioTranscriptionConfig):
+    def transform_audio_transcription_response(self, raw_response):
+        payload = raw_response.json()
+        response = TranscriptionResponse(text=payload["text"])
+        response["words"] = payload["words"]
+        return response
+
+
+def test_transform_audio_transcription_response_without_subtitle_opt_in_keeps_text_and_words():
+    words = [
+        {"word": "hello", "start": 0.0, "end": 0.5},
+        {"word": "world", "start": 0.5, "end": 1.0},
+    ]
+    raw_response = httpx.Response(200, json={"text": "hello world", "words": words})
+
+    response = BaseLLMHTTPHandler()._transform_audio_transcription_response(
+        provider_config=_WordTimestampAudioTranscriptionConfig(),
+        model="test-model",
+        response=raw_response,
+        model_response=TranscriptionResponse(),
+        logging_obj=Mock(),
+        optional_params={"response_format": "srt"},
+        api_key=None,
+    )
+
+    assert response.text == "hello world"
+    assert response["words"] == words
+
+
+class _SubtitleSynthesisAudioTranscriptionConfig(_JSONBodyAudioTranscriptionConfig):
+    @property
+    def supports_subtitle_synthesis(self) -> bool:
+        return True
+
+    def transform_audio_transcription_response(self, raw_response):
+        payload = raw_response.json()
+        response = TranscriptionResponse(text=payload["text"])
+        if "words" in payload:
+            response["words"] = payload["words"]
+        return response
+
+
+def _transform_subtitle_response(payload):
+    return BaseLLMHTTPHandler()._transform_audio_transcription_response(
+        provider_config=_SubtitleSynthesisAudioTranscriptionConfig(),
+        model="test-model",
+        response=httpx.Response(200, json=payload),
+        model_response=TranscriptionResponse(),
+        logging_obj=Mock(),
+        optional_params={"response_format": "srt"},
+        api_key=None,
+    )
+
+
+def test_subtitle_synthesis_fallback_without_timings_drops_words():
+    response = _transform_subtitle_response(
+        {"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]}
+    )
+
+    assert response.text == "hello world"
+    assert "words" not in response
+
+
+def test_subtitle_synthesis_without_words_keeps_plain_text():
+    response = _transform_subtitle_response({"text": "hello world"})
+
+    assert response.text == "hello world"
+    assert "words" not in response
+
+
 @pytest.mark.asyncio
 async def test_async_retrieve_file_content_raises_on_http_error():
     """
@@ -2862,3 +2932,176 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
         "seconds": "4",
     }
     assert result.status == "queued"
+
+
+AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
+AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
+
+def _a_tool_with_an_unsupported_field() -> dict:
+    return {
+        "type": "function",
+        "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+        "strict": True,
+    }
+
+A_COMPLETION = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "grok-3",
+    "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "sent"}, "finish_reason": "stop"}
+    ],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+TOOL_LEVEL_REJECTION = "Extra inputs are not permitted: tools[0].strict"
+UNRELATED_REJECTION = "Extra inputs are not permitted: temperature"
+A_REJECTION_THE_PROVIDER_CANNOT_FIX = "The model is not available in this region"
+
+
+class _RecordedAzureAI:
+    def __init__(self, responses: list[httpx.Response]) -> None:
+        self._responses = responses
+        self.bodies: list[dict] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.bodies.append(json.loads(request.content))
+        return self._responses[min(len(self.bodies) - 1, len(self._responses) - 1)]
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+def _rejection(message: str) -> httpx.Response:
+    return httpx.Response(422, json={"error": {"message": message}})
+
+
+def _call_azure_ai(recorder: _RecordedAzureAI, **overrides):
+    import respx
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
+        return litellm.completion(
+            model="azure_ai/grok-3",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[_a_tool_with_an_unsupported_field()],
+            api_base=AZURE_AI_BASE,
+            api_key="fake-key",
+            **overrides,
+        )
+
+
+def test_a_tool_field_the_provider_rejects_is_dropped_and_the_call_retried():
+    recorder = _RecordedAzureAI(
+        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
+    )
+
+    response = _call_azure_ai(recorder)
+
+    assert len(recorder.bodies) == 2
+    assert recorder.bodies[0]["tools"][0]["strict"] is True
+    assert "strict" not in recorder.bodies[1]["tools"][0]
+    assert response.choices[0].message.content == "sent"
+
+
+def test_the_retry_changes_only_the_field_the_provider_named():
+    recorder = _RecordedAzureAI(
+        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
+    )
+
+    _call_azure_ai(recorder)
+
+    first, second = recorder.bodies
+    assert second["messages"] == first["messages"]
+    assert second["model"] == first["model"]
+    assert second["tools"][0]["function"] == first["tools"][0]["function"]
+
+
+def test_a_provider_that_keeps_rejecting_is_not_retried_forever():
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION)])
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        _call_azure_ai(recorder)
+
+    assert len(recorder.bodies) == 2
+    assert raised.value.status_code == 422
+
+
+def test_a_rejection_the_provider_cannot_fix_is_not_retried_at_all():
+    recorder = _RecordedAzureAI([_rejection(A_REJECTION_THE_PROVIDER_CANNOT_FIX)])
+
+    with pytest.raises(litellm.BadRequestError):
+        _call_azure_ai(recorder)
+
+    assert len(recorder.bodies) == 1
+
+
+def test_an_extra_input_outside_a_tool_is_not_retried_unless_dropping_params_was_asked_for():
+    recorder = _RecordedAzureAI([_rejection(UNRELATED_REJECTION)])
+
+    with pytest.raises(litellm.BadRequestError):
+        _call_azure_ai(recorder)
+
+    assert len(recorder.bodies) == 1
+
+
+def test_an_extra_input_outside_a_tool_is_retried_when_dropping_params_was_asked_for():
+    recorder = _RecordedAzureAI(
+        [_rejection(UNRELATED_REJECTION), httpx.Response(200, json=A_COMPLETION)]
+    )
+
+    response = _call_azure_ai(recorder, drop_params=True)
+
+    assert len(recorder.bodies) == 2
+    assert response.choices[0].message.content == "sent"
+
+
+@pytest.mark.asyncio
+async def test_a_tool_field_the_provider_rejects_is_dropped_and_retried_on_the_async_path(
+    httpx_transport,
+):
+    import respx
+
+    recorder = _RecordedAzureAI(
+        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
+        response = await litellm.acompletion(
+            model="azure_ai/grok-3",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[_a_tool_with_an_unsupported_field()],
+            api_base=AZURE_AI_BASE,
+            api_key="fake-key",
+        )
+
+    assert len(recorder.bodies) == 2
+    assert recorder.bodies[0]["tools"][0]["strict"] is True
+    assert "strict" not in recorder.bodies[1]["tools"][0]
+    assert response.choices[0].message.content == "sent"
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_keeps_rejecting_is_not_retried_forever_on_the_async_path(
+    httpx_transport,
+):
+    import respx
+
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION)])
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
+        with pytest.raises(litellm.BadRequestError):
+            await litellm.acompletion(
+                model="azure_ai/grok-3",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[_a_tool_with_an_unsupported_field()],
+                api_base=AZURE_AI_BASE,
+                api_key="fake-key",
+            )
+
+    assert len(recorder.bodies) == 2

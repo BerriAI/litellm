@@ -62,6 +62,9 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -2190,7 +2193,7 @@ async def _get_and_validate_existing_key(
 
         existing_key_row: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
             VerificationTokenRepository(prisma_client)
-        ).find_unique(where={"token": hashed_token})
+        ).find_unique(where={"token": hashed_token}, include={"object_permission": True})
 
         if existing_key_row is None:
             raise ProxyException(
@@ -2294,10 +2297,9 @@ async def _process_single_key_update(
             prisma_client=prisma_client,
         )
 
-    _existing_row_metadata: Final = getattr(existing_key_row, "metadata", None)
     enforce_batch_enqueued_token_limit_is_admin_only(
         data=update_key_request,
-        existing_metadata=_existing_row_metadata if isinstance(_existing_row_metadata, dict) else None,
+        existing_metadata=existing_key_row.metadata,
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
@@ -2443,11 +2445,13 @@ async def _validate_mcp_servers_for_key_update(
             check_db_only=True,
         )
     object_permission_dict: Final = _object_permission_to_dict(data.object_permission)
+    team_unchanged: Final = data.team_id is None or data.team_id == existing_key_row.team_id
     normalized_object_permission: Final = await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
         prisma_client=prisma_client,
         is_proxy_admin=is_proxy_admin,
+        existing_key_object_permission=existing_key_row.object_permission if team_unchanged else None,
     )
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
@@ -5170,6 +5174,125 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
     return reset_to
 
 
+async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
+    """
+    Set a Redis-backed spend counter to `value`, mirror it into the short-lived
+    spend_db_floor marker `_authoritative_floor_spend` reads, and broadcast both
+    to every worker (LIT-3803 pattern: setting, not deleting, means a worker's
+    own self-delivered broadcast still carries the reset value forward).
+
+    Without the floor marker, `_authoritative_floor_spend` can re-derive a
+    stale, pre-reset value from a marker another worker cached moments earlier
+    and raise the just-reset counter right back up via `_repair_stale_spend_counter`.
+    Without the broadcast, a worker that already cached the pre-reset key object
+    or floor marker keeps enforcing against it until its own TTL expires.
+    """
+    from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
+
+    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value, ttl=60)
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value, ttl=60)
+        except Exception as redis_err:
+            verbose_proxy_logger.warning(
+                "Failed to update spend counter %s in Redis: %s. "
+                "Budget checks may use stale value until counter expires.",
+                counter_key,
+                redis_err,
+            )
+
+    floor_key: Final = f"spend_db_floor:{counter_key}"
+    spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+
+    await publish_auth_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
+    await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+
+
+def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple[Mapping[str, object], ...]:
+    """Coerce a key's stored `budget_limits` into a tuple of plain window dicts.
+
+    It is a DB Json column, so a caller reading it straight off `find_unique`
+    gets an already-parsed list; one reading it off `json.dumps`'d text (or a
+    raw SQL row) gets the string form. Either way each entry is a plain dict,
+    except wherever a caller already validated the field through a pydantic
+    model (e.g. `UserAPIKeyAuth.budget_limits`), which yields `BudgetLimitEntry`
+    objects instead -- coerced here via `model_dump()`, matching
+    `_set_budget_reset_at`'s identical coercion in team_endpoints.py.
+    """
+    if not budget_limits:
+        return ()
+    raw_windows: Final = json.loads(budget_limits) if isinstance(budget_limits, str) else budget_limits
+    return tuple(raw_window if isinstance(raw_window, dict) else raw_window.model_dump() for raw_window in raw_windows)
+
+
+def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str, object]:
+    """Restart one budget window from now, by advancing its `reset_at`.
+
+    `window_start` is derived elsewhere as `reset_at - budget_duration`
+    (`get_budget_window_start`), so `reset_at` must be set to `now +
+    budget_duration` -- a window floating from THIS moment -- to make
+    `window_start` land at `now` and exclude the historical spend that
+    triggered the block. Reusing `get_budget_reset_time`/
+    `ResetBudgetJob._reset_expired_window`'s calendar-standardized boundary
+    (e.g. "next midnight") would not do that: for a "1d" window `next
+    midnight - 1d` is simply the START of the calendar day already in
+    progress, which still covers that spend. That reuse is only safe for the
+    scheduled job, which runs right as `reset_at` naturally elapses, so the
+    elapsed boundary it computes is already close to "now". A manual reset
+    can happen at any point mid-window, so it needs the floating form
+    instead. A window with no `budget_duration` is returned unchanged.
+    """
+    duration = window.get("budget_duration")
+    if not isinstance(duration, str) or not duration:
+        return window
+    new_reset_at: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+    return {  # mutable-ok: this is the JSON payload persisted to budget_limits' Json column, which requires a plain dict
+        **window,
+        "reset_at": new_reset_at.isoformat(),
+    }
+
+
+async def _reset_key_budget_windows(
+    prisma_client: PrismaClient,
+    hashed_api_key: str,
+    budget_limits: Sequence[object] | str | None,
+) -> None:
+    """Force-expire every one of a key's own `budget_limits` windows (extra
+    time-windowed caps layered on top of the lifetime max_budget, e.g. a daily
+    limit) so a manual spend reset also clears them, not just the lifetime
+    counter.
+
+    Persists the advanced `reset_at` boundaries BEFORE zeroing any window's
+    Redis counter, not after: a window counter reading zero is only durable
+    once every reader recomputing its floor from the DB sees the new
+    boundary too (`get_current_spend` re-derives a window counter from real
+    `LiteLLM_SpendLogs` rows inside `[window_start, now)` on every read below
+    max_budget, see its `is_window` branch). Zeroing first would let a
+    request racing the DB write compute `window_start` from the stale
+    pre-reset boundary, re-sum the unchanged historical spend, and put the
+    counter right back where it was before the write ever landed.
+    """
+    windows: Final = _budget_limit_windows(budget_limits)
+    if not windows:
+        return
+
+    reset_windows: Final = tuple(_advance_one_key_budget_window(w) for w in windows)
+
+    # prisma-client-py's typed update() takes plain dict literals for `where`/`data`; there is no
+    # frozen-mapping equivalent to pass instead.
+    reset_payload: Final = {"budget_limits": json.dumps(reset_windows, default=str)}  # mutable-ok: prisma data kwarg
+    await VerificationTokenRepository(prisma_client).table.update(
+        where={"token": hashed_api_key},  # mutable-ok: prisma where kwarg
+        data=reset_payload,
+    )
+
+    for window in reset_windows:
+        duration = window.get("budget_duration")
+        if isinstance(duration, str) and duration:
+            counter_key = f"spend:key:{hashed_api_key}:window:{duration}"
+            await _set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
+
+
 @router.post(
     "/key/{key:path}/reset_spend",
     tags=["key management"],
@@ -5235,29 +5358,29 @@ async def reset_key_spend_fn(
                 detail={"error": "Failed to update key spend"},
             )
 
+        # Reset the lifetime spend counter to the new value (not 0.0, so partial
+        # resets are reflected correctly), and force-expire any of the key's own
+        # budget_limits windows, so get_current_spend() returns the correct
+        # amount for every enforcement check immediately instead of the stale
+        # pre-reset value.
+        _counter_key: Final = f"spend:key:{hashed_api_key}"
+        await _set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
+        await _reset_key_budget_windows(
+            prisma_client=prisma_client,
+            hashed_api_key=hashed_api_key,
+            budget_limits=_key_in_db.budget_limits,
+        )
+
+        # Evicting the cached key object LAST (after every DB write above has
+        # committed) matters: a request landing between an earlier eviction and
+        # a later write would re-fetch and re-cache the pre-write row, pinning
+        # that pod to the stale budget_limits/spend for the rest of its own
+        # cache TTL even though the DB is already correct.
         await _delete_cache_key_object(
             hashed_token=hashed_api_key,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-
-        # Set Redis spend counter to the new value so get_current_spend()
-        # returns the correct amount immediately instead of the stale pre-reset value.
-        # We use reset_to (not 0.0) so partial resets are reflected correctly.
-        from litellm.proxy.proxy_server import spend_counter_cache
-
-        _counter_key: Final = f"spend:key:{hashed_api_key}"
-        spend_counter_cache.in_memory_cache.set_cache(key=_counter_key, value=reset_to, ttl=60)
-        if spend_counter_cache.redis_cache is not None:
-            try:
-                await spend_counter_cache.redis_cache.async_set_cache(key=_counter_key, value=reset_to, ttl=60)
-            except Exception as redis_err:
-                verbose_proxy_logger.warning(
-                    "Failed to update spend counter %s in Redis: %s. "
-                    "Budget checks may use stale value until counter expires.",
-                    _counter_key,
-                    redis_err,
-                )
 
         max_budget: Final = updated_key.max_budget
         budget_reset_at: Final = updated_key.budget_reset_at

@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +17,12 @@ from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+from litellm.types.utils import (
+    Delta,
+    ModelResponse,
+    StandardLoggingPayloadErrorInformation,
+    StreamingChoices,
+)
 
 
 def test_anthropic_experimental_pass_through_messages_handler():
@@ -682,8 +688,8 @@ def test_handler_strips_when_no_presanitized_flag():
 
     with patch.object(
         handler,
-        "strip_empty_text_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        "strip_empty_content_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -702,8 +708,8 @@ def test_handler_skips_strip_when_presanitized():
 
     with patch.object(
         handler,
-        "strip_empty_text_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        "strip_empty_content_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -820,8 +826,8 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
         patch("asyncio.get_event_loop", return_value=fake_loop),
         patch.object(
             handler,
-            "strip_empty_text_blocks_from_anthropic_messages",
-            wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+            "strip_empty_content_blocks_from_anthropic_messages",
+            wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
         ) as spy,
     ):
         await handler.anthropic_messages(
@@ -1259,3 +1265,96 @@ class TestMessagesStreamingSuccessLogging:
         assert payload["call_type"] == "acompletion"
         assert payload["total_tokens"] > 0
         assert payload["response_cost"] > 0
+
+
+class _FailureCapture(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.error_information: list[StandardLoggingPayloadErrorInformation] = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        payload = kwargs.get("standard_logging_object") or {}
+        self.error_information.append(payload.get("error_information") or {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream_status, upstream_error_type, expected_exception",
+    [
+        (401, "authentication_error", litellm.AuthenticationError),
+        (403, "permission_error", litellm.PermissionDeniedError),
+    ],
+)
+async def test_anthropic_messages_maps_provider_exception_before_failure_logging(
+    monkeypatch, upstream_status, upstream_error_type, expected_exception
+):
+    """Regression test for LIT-6164. The async /v1/messages entrypoint awaited the
+    provider handler without exception_type mapping, so the @client failure
+    handler (and every logger behind it, e.g. OTel error spans) saw the raw
+    BaseLLMException: error.type=BaseLLMException and no llm_provider.
+
+    The 403 row pins the upstream status on the way through the mapper: Anthropic's
+    documented permission_error must reach the caller as a 403, never as the mapper's
+    APIConnectionError 500 fallthrough."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    capture = _FailureCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+
+    def upstream_rejects_the_request(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            upstream_status,
+            json={"type": "error", "error": {"type": upstream_error_type, "message": "rejected upstream"}},
+            request=request,
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_rejects_the_request))
+
+    with pytest.raises(expected_exception) as excinfo:
+        await handler.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            api_key="sk-invalid",
+            client=upstream,
+        )
+
+    assert excinfo.value.status_code == upstream_status
+    assert excinfo.value.llm_provider == "anthropic"
+    assert "AnthropicException" in excinfo.value.message
+    assert f'"{upstream_error_type}"' in excinfo.value.message
+
+    assert capture.error_information, "the failure handler must have logged the mapped exception"
+    error_information = capture.error_information[0]
+    assert error_information.get("error_class") == expected_exception.__name__
+    assert error_information.get("llm_provider") == "anthropic"
+    assert error_information.get("error_code") == str(upstream_status)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
+    """The mapping boundary is for provider failures only. A request rejected before
+    the provider call (here invalid metadata) must surface as the original exception,
+    not as the mapper's APIConnectionError, whose message embeds a server traceback."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    def upstream_must_not_be_called(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the provider must not be called for a request rejected locally")
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_must_not_be_called))
+
+    with pytest.raises(ValidationError) as excinfo:
+        await handler.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            api_key="sk-invalid",
+            client=upstream,
+            metadata={"user_id": 123},
+        )
+
+    assert "Traceback" not in str(excinfo.value)

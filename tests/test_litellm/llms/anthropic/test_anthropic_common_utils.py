@@ -34,19 +34,37 @@ FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
 class TestOptionallyHandleAnthropicOAuth:
     """Tests for optionally_handle_anthropic_oauth function."""
 
-    def test_oauth_token_in_authorization_header(self):
+    @pytest.mark.parametrize("header_name", ["authorization", "Authorization", "AUTHORIZATION"])
+    def test_oauth_token_in_authorization_header(self, header_name):
         """OAuth token in Authorization header should be detected and headers set correctly."""
         from litellm.llms.anthropic.common_utils import (
             optionally_handle_anthropic_oauth,
         )
 
-        headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        headers = {header_name: f"Bearer {FAKE_OAUTH_TOKEN}"}
         updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(headers, None)
 
         assert extracted_api_key == FAKE_OAUTH_TOKEN
         assert updated_headers["anthropic-beta"] == "oauth-2025-04-20"
         assert updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
         assert "x-api-key" not in updated_headers
+        assert [name for name in updated_headers if name.lower() == "authorization"] == ["authorization"]
+        assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+
+    @pytest.mark.parametrize("api_key_header_name", ["x-api-key", "X-Api-Key"])
+    def test_oauth_removes_x_api_key_any_casing(self, api_key_header_name):
+        """When OAuth wins, a client x-api-key header is removed whatever its casing."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {api_key_header_name: FAKE_REGULAR_KEY, "Authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(headers, None)
+
+        assert extracted_api_key == FAKE_OAUTH_TOKEN
+        assert [name for name in updated_headers if name.lower() == "x-api-key"] == []
+        assert [name for name in updated_headers if name.lower() == "authorization"] == ["authorization"]
+        assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
     def test_oauth_token_in_api_key_directly(self):
         """OAuth token passed as api_key should set Authorization: Bearer header."""
@@ -1215,6 +1233,52 @@ class TestPassthroughAuthToken:
         assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
 
+    def test_passthrough_missing_credentials_raises_authentication_error(self):
+        """Passthrough endpoint should raise locally instead of forwarding an unauthenticated request."""
+        from unittest.mock import patch as mock_patch
+
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(litellm.AuthenticationError, match="Missing Anthropic API Key"):
+                config.validate_anthropic_messages_environment(
+                    headers={},
+                    model="claude-sonnet-4-5-20250929",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={},
+                    api_key=None,
+                    api_base=None,
+                )
+
+    @pytest.mark.parametrize("header_name", ["x-api-key", "X-Api-Key", "X-API-KEY"])
+    def test_passthrough_client_x_api_key_header_is_kept(self, header_name):
+        """A client-forwarded x-api-key header, whatever its casing, should satisfy validation without env credentials."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict("os.environ", {}, clear=True):
+            updated_headers, _ = config.validate_anthropic_messages_environment(
+                headers={header_name: FAKE_REGULAR_KEY},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+        assert [name for name in updated_headers if name.lower() == "x-api-key"] == [header_name]
+        assert updated_headers[header_name] == FAKE_REGULAR_KEY
+
     def test_passthrough_get_complete_url_honours_base_url_env(self):
         """get_complete_url should use ANTHROPIC_BASE_URL when api_base is None."""
         from unittest.mock import patch as mock_patch
@@ -1241,11 +1305,12 @@ class TestPassthroughAuthToken:
 
 
 class TestAnthropicThinkingSignatureSelfHeal:
-    """Helpers for retrying after invalid encrypted thinking signatures."""
+    """Helpers for retrying after invalid thinking blocks in replayed history:
+    invalid encrypted signatures, and blocks with empty thinking text."""
 
-    def test_is_anthropic_invalid_thinking_signature_error_positive(self):
+    def test_is_anthropic_invalid_thinking_block_error_positive(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
         raw = (
@@ -1253,34 +1318,97 @@ class TestAnthropicThinkingSignatureSelfHeal:
             '"message":"messages.3.content.3: Invalid `signature` in `thinking` block"},'
             '"request_id":"req_011Ca2EtQDxp7x6RGUY2jVn9"}'
         )
-        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_signature_error_positive_bedrock(self):
+    def test_is_anthropic_invalid_thinking_block_error_positive_bedrock(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
         # Real user-reported Bedrock scenario
         raw = '{"message":"messages.2.content.0.thinking.signature.str: Input should be a valid string"}'
-        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_signature_error_positive_vertex(self):
+    def test_is_anthropic_invalid_thinking_block_error_positive_vertex(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
         raw = "messages.4.content.1.thinking.signature.str: Input should be a valid string"
-        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_signature_error_negative(self):
+    def test_is_anthropic_invalid_thinking_block_error_negative(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
-        assert is_anthropic_invalid_thinking_signature_error("") is False
-        assert is_anthropic_invalid_thinking_signature_error("rate limit exceeded") is False
-        assert is_anthropic_invalid_thinking_signature_error("invalid_request_error: model not found") is False
-        assert is_anthropic_invalid_thinking_signature_error("thinking signature is malformed") is False
+        assert is_anthropic_invalid_thinking_block_error("") is False
+        assert is_anthropic_invalid_thinking_block_error("rate limit exceeded") is False
+        assert is_anthropic_invalid_thinking_block_error("invalid_request_error: model not found") is False
+        assert is_anthropic_invalid_thinking_block_error("thinking signature is malformed") is False
+
+    def test_is_anthropic_invalid_thinking_block_error_positive_empty_thinking(self):
+        """LIT-6357: replayed history holding {"type": "thinking", "thinking": ""}
+        (produced when a non-Anthropic reasoning model's turn is bridged to the
+        Anthropic surface with no reasoning text) 400s with a message that names
+        no signature, so the pre-rename matcher missed it and the strip-and-retry
+        never fired. Raw string captured live on 2026-08-27."""
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_invalid_thinking_block_error,
+        )
+
+        raw = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.1.content.0.thinking: each thinking block must contain thinking"},'
+            '"request_id":"req_011CeUTxhJj2rTUkK61qtbJ8"}'
+        )
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
+
+    def test_is_empty_thinking_block(self):
+        from litellm.llms.anthropic.common_utils import is_empty_thinking_block
+
+        assert is_empty_thinking_block({"type": "thinking", "thinking": ""}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": " \n\t "}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": None}) is True
+        assert is_empty_thinking_block({"type": "thinking"}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": "", "signature": "sig_abc"}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": "plan", "signature": "sig"}) is False
+        assert is_empty_thinking_block({"type": "redacted_thinking", "data": "opaque"}) is False
+        assert is_empty_thinking_block({"type": "text", "text": ""}) is False
+        assert is_empty_thinking_block("not a dict") is False
+
+    def test_strip_empty_content_blocks_drops_empty_thinking_blocks(self):
+        """LIT-6357 ingestion half: an assistant tool-loop turn carrying an
+        empty (even signed) thinking block keeps its tool_use blocks and loses
+        the poison; whitespace-only counts as empty; a non-empty thinking block
+        and redacted_thinking are untouched."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
+        msgs = [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": "sig_abc"}, tu],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": " \n "},
+                    {"type": "thinking", "thinking": "real plan", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                ],
+            },
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": ""}]},
+        ]
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
+        assert len(out) == 3
+        assert [b["type"] for b in out[1]["content"]] == ["tool_use"]
+        assert [b["type"] for b in out[2]["content"]] == ["thinking", "redacted_thinking"]
+        assert out[2]["content"][0]["thinking"] == "real plan"
+        assert len(msgs[1]["content"]) == 2
 
     def test_strip_thinking_blocks_from_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1347,14 +1475,14 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
-    def test_strip_empty_text_blocks_from_anthropic_messages(self):
+    def test_strip_empty_content_blocks_from_anthropic_messages(self):
         """Covers #22930.  The core regression scenario: an assistant message
         with an empty text block alongside ``tool_use`` loses the empty block
         and keeps the ``tool_use``; a whole message that reduces to no blocks
         is dropped; whitespace-only text counts as empty; the caller's list
         is never mutated."""
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         tu = {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}
@@ -1363,14 +1491,14 @@ class TestAnthropicThinkingSignatureSelfHeal:
             {"role": "assistant", "content": [{"type": "text", "text": "  \n "}, tu]},
             {"role": "assistant", "content": [{"type": "text", "text": ""}]},
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert len(out) == 2 and out[0] is msgs[0]
         assert [b["type"] for b in out[1]["content"]] == ["tool_use"]
         assert len(msgs[1]["content"]) == 2  # caller's content unchanged
 
     def test_strip_empty_text_blocks_preserves_thinking_blocks(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1382,12 +1510,12 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["thinking"]
 
     def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1399,12 +1527,12 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_strip_empty_text_blocks_treats_missing_text_key_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1416,21 +1544,21 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_strip_empty_text_blocks_leaves_non_empty_text_alone(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert out[0] is msgs[0]  # untouched messages keep identity
 
     def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1442,7 +1570,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_flatten_unencrypted_web_search_results_keeps_snippet_evidence(self):
