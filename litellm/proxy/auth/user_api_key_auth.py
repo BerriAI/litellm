@@ -1904,6 +1904,10 @@ async def _user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
+        else:
+            valid_token = update_valid_token_with_end_user_params(
+                valid_token=valid_token, end_user_params=end_user_params
+            )
 
         if valid_token is not None:
             valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
