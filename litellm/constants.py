@@ -809,7 +809,7 @@ openai_compatible_endpoints: Final[list] = [
 
 
 openai_compatible_providers: Final[list] = [
-    "aipg",  # AI Power Grid - JSON-configured provider
+    "aipg",
     "anyscale",
     "groq",
     "nvidia_nim",

@@ -41,9 +41,7 @@ def test_aipg_get_openai_compatible_provider_info():
         },
         clear=True,
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://explicit.example/v1", "explicit-key"
-        )
+        api_base, api_key = config._get_openai_compatible_provider_info("https://explicit.example/v1", "explicit-key")
         assert api_base == "https://explicit.example/v1"
         assert api_key == "explicit-key"
 
@@ -70,27 +68,16 @@ def test_get_llm_provider_aipg():
 
 
 def test_aipg_model_metadata():
-    original_model_cost = litellm.model_cost
-    original_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
-    try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        expected = {
-            "aipg/gpt-oss-120b": (60000, 7.5e-08, 3e-07),
-            "aipg/deepseek-v4-flash-nvfp4": (262144, 7e-08, 1.4e-07),
-            "aipg/Smollm-135m": (2048, 5e-09, 1e-08),
-        }
-        for model, (context, input_cost, output_cost) in expected.items():
-            info = litellm.get_model_info(model)
-            assert info["litellm_provider"] == "aipg"
-            assert info["mode"] == "chat"
-            assert info["max_input_tokens"] == context
-            assert info["input_cost_per_token"] == input_cost
-            assert info["output_cost_per_token"] == output_cost
-    finally:
-        litellm.model_cost = original_model_cost
-        if original_env is None:
-            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-        else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env
+    model_cost = litellm.get_model_cost_map(url="")
+    expected = {
+        "aipg/gpt-oss-120b": (60000, 7.5e-08, 3e-07),
+        "aipg/deepseek-v4-flash-nvfp4": (262144, 7e-08, 1.4e-07),
+        "aipg/Smollm-135m": (2048, 5e-09, 1e-08),
+    }
+    for model, (context, input_cost, output_cost) in expected.items():
+        info = model_cost[model]
+        assert info["litellm_provider"] == "aipg"
+        assert info["mode"] == "chat"
+        assert info["max_input_tokens"] == context
+        assert info["input_cost_per_token"] == input_cost
+        assert info["output_cost_per_token"] == output_cost
