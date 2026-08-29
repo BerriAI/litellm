@@ -54,6 +54,41 @@ def _with_requester_ip_address(request_data: dict[str, object], requester_ip: st
     return {**request_data, key: {**base, "requester_ip_address": requester_ip}}  # mutable-ok: logging needs dicts
 
 
+def _as_proxy_exception(e: Exception) -> ProxyException:
+    """Convert an authentication failure into the ProxyException the client receives."""
+    if isinstance(e, litellm.BudgetExceededError):
+        return ProxyException(
+            message=e.message,
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+        )
+    if isinstance(e, HTTPException):
+        return ProxyException(
+            message=getattr(e, "detail", f"Authentication Error({e})"),
+            type=ProxyErrorTypes.auth_error,
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
+        )
+    if isinstance(e, ProxyException):
+        return e
+    if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+        return ProxyException(
+            message=(
+                "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+            ),
+            type=ProxyErrorTypes.no_db_connection,
+            param="None",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return ProxyException(
+        message="Authentication Error, " + str(e),
+        type=ProxyErrorTypes.auth_error,
+        param=getattr(e, "param", "None"),
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
+
+
 class UserAPIKeyAuthExceptionHandler:
     @staticmethod
     async def _handle_authentication_error(
@@ -115,8 +150,17 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
-            original_exception: Final = e
             is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
+            is_quiet_log: Final = is_invalid_virtual_key and not litellm.log_client_error_tracebacks
+            logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
+            logger.log(
+                logging.WARNING if is_quiet_log else logging.ERROR,
+                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
+                e,
+                requester_ip,
+                exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
+                extra={"requester_ip": requester_ip},
+            )
 
             # Log this exception to OTEL, Datadog etc. Reuse the identity resolved
             # before the failure (team alias/id, metadata, user) so the failed span
@@ -154,7 +198,7 @@ class UserAPIKeyAuthExceptionHandler:
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 request_data=_with_requester_ip_address(request_data, requester_ip),
-                original_exception=original_exception,
+                original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,
                 route=route,
@@ -163,51 +207,4 @@ class UserAPIKeyAuthExceptionHandler:
             if transformed_exception is not None:
                 e = transformed_exception
 
-            proxy_exception: Final
-            if isinstance(e, litellm.BudgetExceededError):
-                proxy_exception = ProxyException(
-                    message=e.message,
-                    type=ProxyErrorTypes.budget_exceeded,
-                    param=None,
-                    code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
-                )
-            elif isinstance(e, HTTPException):
-                proxy_exception = ProxyException(
-                    message=getattr(e, "detail", f"Authentication Error({e})"),
-                    type=ProxyErrorTypes.auth_error,
-                    param=getattr(e, "param", "None"),
-                    code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
-                )
-            elif isinstance(e, ProxyException):
-                proxy_exception = e
-            elif PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
-                proxy_exception = ProxyException(
-                    message=(
-                        "Service Unavailable, the authentication database is "
-                        "temporarily unreachable. Please retry shortly."
-                    ),
-                    type=ProxyErrorTypes.no_db_connection,
-                    param="None",
-                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            else:
-                proxy_exception = ProxyException(
-                    message="Authentication Error, " + str(e),
-                    type=ProxyErrorTypes.auth_error,
-                    param=getattr(e, "param", "None"),
-                    code=status.HTTP_401_UNAUTHORIZED,
-                )
-            final_exception: Final = mark_invalid_virtual_key_error(proxy_exception, is_invalid_virtual_key)
-            is_quiet_log: Final = (
-                is_invalid_virtual_key_error(final_exception) and not litellm.log_client_error_tracebacks
-            )
-            logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
-            logger.log(
-                logging.WARNING if is_quiet_log else logging.ERROR,
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
-                final_exception,
-                requester_ip,
-                exc_info=not (is_expected_client_error(original_exception) and not litellm.log_client_error_tracebacks),
-                extra={"requester_ip": requester_ip},
-            )
-            raise final_exception
+            raise mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)

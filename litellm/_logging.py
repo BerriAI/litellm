@@ -510,23 +510,16 @@ else:
 
     handler.setFormatter(formatter)
 
-verbose_proxy_logger: Final = logging.getLogger("LiteLLM Proxy")
+verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
+# Malformed virtual key rejections log through this child; LevelRoutingStreamHandler
+# writes its WARNING records to stdout. It has no handler or level of its own.
 verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
-verbose_router_logger: Final = logging.getLogger("LiteLLM Router")
-verbose_logger: Final = logging.getLogger("LiteLLM")
-
-verbose_proxy_stdout_handler: Final = LevelRoutingStreamHandler()
-verbose_proxy_stdout_handler.setLevel(logging.WARNING)
-verbose_proxy_stdout_handler.setFormatter(handler.formatter)
-verbose_proxy_stdout_handler.addFilter(_secret_filter)
-verbose_proxy_stdout_handler.addFilter(_correlation_filter)
+verbose_router_logger = logging.getLogger("LiteLLM Router")
+verbose_logger = logging.getLogger("LiteLLM")
 
 # Add the handler to the loggers
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
-verbose_proxy_stdout_logger.setLevel(logging.WARNING)
-verbose_proxy_stdout_logger.addHandler(verbose_proxy_stdout_handler)
-verbose_proxy_stdout_logger.propagate = False
 verbose_logger.addHandler(handler)
 
 # Filters attached to the logger, not the handler, survive callers swapping in their own
@@ -592,7 +585,6 @@ ALL_LOGGERS: Final = [
     verbose_logger,
     verbose_router_logger,
     verbose_proxy_logger,
-    verbose_proxy_stdout_logger,
 ]
 
 
@@ -700,7 +692,6 @@ def _turn_on_json():
     handler: Final = LevelRoutingStreamHandler()
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
-    verbose_proxy_stdout_logger.setLevel(logging.WARNING)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
 

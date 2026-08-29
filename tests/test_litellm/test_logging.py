@@ -928,13 +928,24 @@ def test_records_below_warning_and_invalid_key_warnings_go_to_stdout(capsys):
 
 
 def test_verbose_loggers_route_records_by_level():
-    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger, verbose_proxy_stdout_logger):
+    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
         assert any(isinstance(h, LevelRoutingStreamHandler) for h in lg.handlers), lg.name
-    assert verbose_proxy_stdout_logger.level == logging.WARNING
-    assert verbose_proxy_stdout_logger.handlers[0].level == logging.WARNING
 
 
-def test_invalid_virtual_key_record_does_not_propagate_to_root_handler():
+def test_invalid_key_logger_inherits_proxy_logger_configuration():
+    assert verbose_proxy_stdout_logger.parent is verbose_proxy_logger
+    assert verbose_proxy_stdout_logger.handlers == []
+    assert verbose_proxy_stdout_logger.level == logging.NOTSET
+    assert verbose_proxy_stdout_logger.propagate is True
+    assert verbose_proxy_stdout_logger.getEffectiveLevel() == verbose_proxy_logger.getEffectiveLevel()
+    assert verbose_proxy_stdout_logger not in ALL_LOGGERS
+
+
+def test_invalid_virtual_key_record_propagates_to_root_handler_like_ordinary_records(capsys):
+    proxy_handlers = list(verbose_proxy_logger.handlers)
+    original_levels = [h.level for h in proxy_handlers]
+    for h in proxy_handlers:
+        h.setLevel(logging.WARNING)
     root_logger = logging.getLogger()
     root_stream = StringIO()
     root_handler = logging.StreamHandler(root_stream)
@@ -945,22 +956,34 @@ def test_invalid_virtual_key_record_does_not_propagate_to_root_handler():
         verbose_proxy_stdout_logger.warning("invalid virtual key")
     finally:
         root_logger.removeHandler(root_handler)
+        for h, level in zip(proxy_handlers, original_levels, strict=True):
+            h.setLevel(level)
 
-    assert root_stream.getvalue() == ""
+    out, err = capsys.readouterr()
+    assert out.count("invalid virtual key") == 1
+    assert err == ""
+    assert "ROOT WARNING invalid virtual key" in root_stream.getvalue()
 
 
-def test_turn_on_json_preserves_invalid_key_warning_visibility(monkeypatch, capfd):
-    monkeypatch.setenv("LITELLM_LOG", "ERROR")
-    _turn_on_json()
+def test_error_threshold_suppresses_invalid_key_warning_like_ordinary_warnings(capsys):
+    proxy_handlers = list(verbose_proxy_logger.handlers)
+    original_levels = [h.level for h in proxy_handlers]
+    for h in proxy_handlers:
+        h.setLevel(logging.ERROR)
 
-    verbose_proxy_stdout_logger.warning("invalid virtual key")
+    try:
+        verbose_proxy_stdout_logger.warning("invalid virtual key")
+        verbose_proxy_logger.warning("ordinary proxy warning")
+        verbose_proxy_logger.error("ordinary proxy error")
+    finally:
+        for h, level in zip(proxy_handlers, original_levels, strict=True):
+            h.setLevel(level)
 
-    out, err = capfd.readouterr()
-    assert [raw for raw in err.splitlines() if raw.strip()] == []
-    records = [json.loads(raw) for raw in out.splitlines() if raw.strip()]
-    assert len(records) == 1
-    assert records[0]["component"] == verbose_proxy_stdout_logger.name
-    assert records[0]["level"] == "WARNING"
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "invalid virtual key" not in err
+    assert "ordinary proxy warning" not in err
+    assert "ordinary proxy error" in err
 
 
 def test_ordinary_proxy_records_still_propagate_to_root_handler():

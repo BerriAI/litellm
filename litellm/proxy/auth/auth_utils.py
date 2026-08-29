@@ -76,7 +76,7 @@ def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual
         param=exception.param,
         code=exception.code,
         headers=exception.headers.copy(),
-        openai_code=exception.openai_code,
+        openai_code=None if exception.openai_code is None else str(exception.openai_code),
         provider_specific_fields=exception.provider_specific_fields,
     )
     setattr(marked_exception, _INVALID_VIRTUAL_KEY_ERROR_MARKER, True)

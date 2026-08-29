@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -117,22 +118,12 @@ async def test_handle_authentication_error_permanent_fault_gets_no_fallback_iden
     "prisma_error",
     [
         DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        UniqueViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        ForeignKeyViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        MissingRequiredValueError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        UniqueViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        ForeignKeyViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        MissingRequiredValueError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
         RawQueryError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        TableNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        RecordNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        TableNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        RecordNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
     ],
 )
 async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
@@ -781,46 +772,29 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
     handler = UserAPIKeyAuthExceptionHandler()
 
     with (
-        patch(  # test-quality-ok: handler reads proxy_server globals at call time
-            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-        patch(  # test-quality-ok: handler reads proxy_server globals at call time
-            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
-        ),
+        _auth_failure_boundaries(return_value=None),
         patch(  # test-quality-ok: handler reads this global flag at call time
             "litellm.proxy.auth.auth_exception_handler.litellm.log_client_error_tracebacks",
             log_client_error_tracebacks,
         ),
-        patch(  # test-quality-ok: handler reads proxy_server globals at call time
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": False},
-        ),
     ):
-        verbose_proxy_logger.propagate = True
-        verbose_proxy_stdout_logger.propagate = True
         try:
-            try:
-                raise auth_error
-            except (HTTPException, ProxyException, ValueError) as caught:
-                with caplog.at_level(logging.DEBUG), pytest.raises(ProxyException):
-                    await handler._handle_authentication_error(
-                        caught,
-                        MagicMock(),
-                        {},
-                        "/v1/chat/completions",
-                        None,
-                        "sk-bad-key",
-                    )
-        finally:
-            verbose_proxy_logger.propagate = False
-            verbose_proxy_stdout_logger.propagate = False
+            raise auth_error
+        except (HTTPException, ProxyException, ValueError) as caught:
+            with caplog.at_level(logging.DEBUG), pytest.raises(ProxyException):
+                await handler._handle_authentication_error(
+                    caught,
+                    MagicMock(),
+                    {},
+                    "/v1/chat/completions",
+                    None,
+                    "sk-bad-key",
+                )
 
-    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    records = _auth_failure_records(caplog)
     assert len(records) == 1
     assert records[0].levelno == expected_level
-    assert bool(records[0].exc_info) is expect_traceback
+    assert (records[0].exc_info is not None and records[0].exc_info[1] is auth_error) is expect_traceback
     assert records[0].name == (
         verbose_proxy_stdout_logger.name
         if expected_level == logging.WARNING and not log_client_error_tracebacks
@@ -828,145 +802,127 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
     )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "transformed_exception",
-    [
-        HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Please authenticate again"),
-        ProxyException(
-            message="Please authenticate again",
-            type=ProxyErrorTypes.auth_error,
-            param=None,
-            code=status.HTTP_401_UNAUTHORIZED,
+@contextmanager
+def _auth_failure_boundaries(**failure_hook_kwargs):
+    """Stub the proxy globals the handler reads and let its records reach caplog."""
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            **failure_hook_kwargs,
         ),
-    ],
-)
-async def test_handle_authentication_error_preserves_invalid_virtual_key_marker_after_callback_transform(
-    caplog,
-    transformed_exception,
-):
-    handler = UserAPIKeyAuthExceptionHandler()
-    original_exception = HTTPException(
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity"
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}
+        ),
+    ):
+        verbose_proxy_logger.propagate = True
+        yield
+
+
+def _auth_failure_records(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+
+
+def _invalid_virtual_key_error() -> HTTPException:
+    return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.",
     )
 
-    with (
-        patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
-            new_callable=AsyncMock,
-            return_value=transformed_exception,
-        ),
-        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
-        patch("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}),
-    ):
-        verbose_proxy_stdout_logger.propagate = True
-        try:
-            with pytest.raises(ProxyException) as exc_info:
-                await handler._handle_authentication_error(
-                    original_exception,
-                    MagicMock(),
-                    {},
-                    "/v1/chat/completions",
-                    None,
-                    "undefined",
-                )
-        finally:
-            verbose_proxy_stdout_logger.propagate = False
 
-    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+@pytest.mark.asyncio
+async def test_handle_authentication_error_preserves_invalid_virtual_key_marker_after_callback_transform(caplog):
+    handler = UserAPIKeyAuthExceptionHandler()
+    transformed_exception = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Please authenticate again")
+
+    with _auth_failure_boundaries(return_value=transformed_exception), pytest.raises(ProxyException) as exc_info:
+        await handler._handle_authentication_error(
+            _invalid_virtual_key_error(), MagicMock(), {}, "/v1/chat/completions", None, "undefined"
+        )
+
+    records = _auth_failure_records(caplog)
     assert len(records) == 1
     assert records[0].name == verbose_proxy_stdout_logger.name
     assert records[0].levelno == logging.WARNING
+    assert records[0].exc_info is None
+    assert "LiteLLM Virtual Key expected" in records[0].getMessage()
     assert exc_info.value.message == "Please authenticate again"
+    assert exc_info.value.code == str(status.HTTP_401_UNAUTHORIZED)
     assert getattr(exc_info.value, "_litellm_invalid_virtual_key_error") is True
-    if isinstance(transformed_exception, ProxyException):
-        assert not hasattr(transformed_exception, "_litellm_invalid_virtual_key_error")
 
 
 @pytest.mark.asyncio
-async def test_handle_authentication_error_keeps_unexpected_source_traceback_after_callback_4xx(
-    caplog,
-):
+async def test_handle_authentication_error_keeps_unexpected_source_traceback_after_callback_4xx(caplog):
     handler = UserAPIKeyAuthExceptionHandler()
+    transformed_exception = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Please authenticate again")
 
-    with (
-        patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
-            new_callable=AsyncMock,
-            return_value=HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Please authenticate again",
-            ),
-        ),
-        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
-        patch("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}),
-    ):
-        verbose_proxy_logger.propagate = True
-        try:
-            with pytest.raises(ProxyException) as exc_info:
-                await handler._handle_authentication_error(
-                    ValueError("unexpected internal error"),
-                    MagicMock(),
-                    {},
-                    "/v1/chat/completions",
-                    None,
-                    "sk-bad-key",
-                )
-        finally:
-            verbose_proxy_logger.propagate = False
+    try:
+        raise ValueError("unexpected internal error")
+    except ValueError as caught:
+        source_error = caught
+        with _auth_failure_boundaries(return_value=transformed_exception), pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                source_error, MagicMock(), {}, "/v1/chat/completions", None, "sk-bad-key"
+            )
 
-    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    records = _auth_failure_records(caplog)
     assert len(records) == 1
     assert records[0].name == verbose_proxy_logger.name
     assert records[0].levelno == logging.ERROR
     assert records[0].exc_info is not None
-    assert "Please authenticate again" in records[0].getMessage()
+    assert records[0].exc_info[1] is source_error
+    assert "unexpected internal error" in records[0].getMessage()
+    assert "Please authenticate again" not in records[0].getMessage()
+    assert exc_info.value.message == "Please authenticate again"
     assert exc_info.value.code == str(status.HTTP_401_UNAUTHORIZED)
+    assert not hasattr(exc_info.value, "_litellm_invalid_virtual_key_error")
 
 
 @pytest.mark.asyncio
-async def test_handle_authentication_error_does_not_preserve_invalid_virtual_key_marker_for_callback_503(
-    caplog,
-):
+async def test_handle_authentication_error_does_not_preserve_invalid_virtual_key_marker_for_callback_503(caplog):
     handler = UserAPIKeyAuthExceptionHandler()
-    original_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.",
-    )
     transformed_exception = HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="Authentication service temporarily unavailable",
     )
 
-    with (
-        patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
-            new_callable=AsyncMock,
-            return_value=transformed_exception,
-        ),
-        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
-        patch("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}),
-    ):
-        verbose_proxy_logger.propagate = True
-        try:
-            with pytest.raises(ProxyException) as exc_info:
-                await handler._handle_authentication_error(
-                    original_exception,
-                    MagicMock(),
-                    {},
-                    "/v1/chat/completions",
-                    None,
-                    "undefined",
-                )
-        finally:
-            verbose_proxy_logger.propagate = False
+    with _auth_failure_boundaries(return_value=transformed_exception), pytest.raises(ProxyException) as exc_info:
+        await handler._handle_authentication_error(
+            _invalid_virtual_key_error(), MagicMock(), {}, "/v1/chat/completions", None, "undefined"
+        )
 
-    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    records = _auth_failure_records(caplog)
     assert len(records) == 1
-    assert records[0].name == verbose_proxy_logger.name
-    assert records[0].levelno == logging.ERROR
-    assert records[0].exc_info is not None
-    assert "Authentication service temporarily unavailable" in records[0].getMessage()
+    assert records[0].name == verbose_proxy_stdout_logger.name
+    assert records[0].levelno == logging.WARNING
+    assert records[0].exc_info is None
+    assert "LiteLLM Virtual Key expected" in records[0].getMessage()
+    assert exc_info.value.message == "Authentication service temporarily unavailable"
     assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
     assert not hasattr(exc_info.value, "_litellm_invalid_virtual_key_error")
+
+
+@pytest.mark.asyncio
+async def test_handle_authentication_error_logs_before_the_failure_hook_can_raise(caplog):
+    handler = UserAPIKeyAuthExceptionHandler()
+    hook_error = TypeError("function_setup() got multiple values for keyword argument 'start_time'")
+
+    with _auth_failure_boundaries(side_effect=hook_error), pytest.raises(TypeError) as exc_info:
+        await handler._handle_authentication_error(
+            _invalid_virtual_key_error(),
+            MagicMock(),
+            {"start_time": "client-controlled"},
+            "/v1/chat/completions",
+            None,
+            "undefined",
+        )
+
+    assert exc_info.value is hook_error
+    records = _auth_failure_records(caplog)
+    assert len(records) == 1
+    assert records[0].name == verbose_proxy_stdout_logger.name
+    assert records[0].levelno == logging.WARNING
+    assert "LiteLLM Virtual Key expected" in records[0].getMessage()
