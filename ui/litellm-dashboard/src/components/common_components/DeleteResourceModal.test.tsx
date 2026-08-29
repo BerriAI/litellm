@@ -121,6 +121,19 @@ describe("DeleteResourceModal", () => {
     expect(deleteButton).toBeEnabled();
   });
 
+  it("should enable delete button when the confirmation input matches after surrounding whitespace is trimmed", () => {
+    renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="prod-key" />);
+    const input = screen.getByPlaceholderText("prod-key");
+    fireEvent.change(input, { target: { value: "  prod-key  " } });
+    expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
+  });
+
+  it("should keep delete disabled when trimmed confirmation input still does not match", () => {
+    renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="prod-key" />);
+    fireEvent.change(screen.getByPlaceholderText("prod-key"), { target: { value: "  other-key  " } });
+    expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
+  });
+
   it("should reset requiredConfirmation input when modal opens", async () => {
     const user = userEvent.setup();
     const { rerender } = renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="DELETE" />);
