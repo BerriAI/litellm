@@ -23,6 +23,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.utils import ProxyLogging, _raise_for_streaming_post_call_pipelines
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
@@ -1139,18 +1140,132 @@ def test_handle_pipeline_result_modify_response_carries_original_response():
     assert info.value.original_response is response
 
 
-def test_handle_pipeline_result_allow_discards_modifications_on_post_call():
+def test_handle_pipeline_result_allow_on_post_call_keeps_metadata_writes_only():
     data = {"a": 1, "metadata": {"guardrails": ["other"]}}
     result = MagicMock()
     result.terminal_action = "allow"
-    result.modified_data = {"metadata": {"guardrails": ["gr-post"]}, "response": object()}
+    result.modified_data = {
+        "a": 2,
+        "metadata": {"guardrails": ["other"], "applied_guardrails": ["gr-post"]},
+        "response": object(),
+    }
 
     out = ProxyLogging._handle_pipeline_result(
         result=result, data=data, policy_name="p", original_response=litellm.ModelResponse()
     )
 
     assert out is data
-    assert data == {"a": 1, "metadata": {"guardrails": ["other"]}}
+    assert data["a"] == 1
+    assert "response" not in data
+    assert data["metadata"] == {"guardrails": ["other"], "applied_guardrails": ["gr-post"]}
+
+
+@pytest.mark.asyncio
+async def test_post_call_pipeline_guardrail_metadata_writes_reach_request_data(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    class HeaderWritingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name="gr-post")
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={"verdict": "pass"},
+                request_data=data,
+                guardrail_status="success",
+            )
+            return None
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [HeaderWritingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data()
+
+    await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert data["metadata"]["applied_guardrails"] == ["gr-post"]
+    slg_entries = data["metadata"]["standard_logging_guardrail_information"]
+    assert len(slg_entries) == 1
+    assert slg_entries[0]["guardrail_name"] == "gr-post"
+
+
+@pytest.mark.asyncio
+async def test_post_call_pipeline_managed_parallel_guardrail_runs_exactly_once(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {"count": 0}
+
+    class CountingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            seen["count"] += 1
+            return None
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            CountingGuardrail(
+                guardrail_name="gr-post",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data()
+
+    await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert seen["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_call_pipeline_managed_parallel_guardrail_runs_exactly_once(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {"count": 0}
+
+    class CountingGuardrail(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            seen["count"] += 1
+            return data
+
+    pre_call_pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="gr-pre", on_pass="allow", on_fail="block")],
+    )
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            CountingGuardrail(
+                guardrail_name="gr-pre",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+        ],
+    )
+    data = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "_guardrail_pipelines": [("request-governance", pre_call_pipeline)],
+            "_pipeline_managed_guardrails": {"gr-pre"},
+        },
+    }
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(), data=data, call_type="completion"
+    )
+
+    assert seen["count"] == 1
 
 
 @pytest.mark.asyncio
@@ -1173,6 +1288,26 @@ async def test_pre_call_hook_rejects_streaming_request_with_post_call_pipeline(
     assert "stream=false" in info.value.detail["error"]["message"]
 
 
+@pytest.mark.asyncio
+async def test_pre_call_hook_rejects_background_request_with_post_call_pipeline(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    data = _post_call_pipeline_data(background=True)
+
+    with pytest.raises(HTTPException) as info:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=data,
+            call_type="aresponses",
+            guardrails_only=True,
+        )
+
+    assert info.value.status_code == 400
+    assert info.value.detail["error"]["policies"] == ["response-governance"]
+    assert "background=false" in info.value.detail["error"]["message"]
+
+
 def test_raise_for_streaming_post_call_pipelines_ignores_non_streaming_and_pre_call():
     post_call = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="g", on_fail="block")])
     pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="g", on_fail="block")])
@@ -1180,6 +1315,12 @@ def test_raise_for_streaming_post_call_pipelines_ignores_non_streaming_and_pre_c
     assert (
         _raise_for_streaming_post_call_pipelines(
             {"stream": False, "metadata": {"_guardrail_pipelines": [("p", post_call)]}}
+        )
+        is None
+    )
+    assert (
+        _raise_for_streaming_post_call_pipelines(
+            {"background": False, "metadata": {"_guardrail_pipelines": [("p", post_call)]}}
         )
         is None
     )
@@ -1191,3 +1332,4 @@ def test_raise_for_streaming_post_call_pipelines_ignores_non_streaming_and_pre_c
         is None
     )
     assert _raise_for_streaming_post_call_pipelines({"stream": True}) is None
+    assert _raise_for_streaming_post_call_pipelines({"background": True}) is None
