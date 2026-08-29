@@ -123,4 +123,34 @@ describe("LoggingCallbacksTable", () => {
     expect(screen.getByText("Success")).toBeInTheDocument();
     expect(screen.getByText("Failure")).toBeInTheDocument();
   });
+
+  it("should not show actions menu for read-only (runtime-only) callbacks", () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn();
+    const onDelete = vi.fn();
+    const onTest = vi.fn();
+    const callback = { name: "otel", type: "success" as const, variables: baseVars, read_only: true };
+    render(
+      <LoggingCallbacksTable
+        callbacks={[callback]}
+        availableCallbacks={{
+          otel: {
+            litellm_callback_name: "otel",
+            litellm_callback_params: [],
+            ui_callback_name: "OpenTelemetry",
+          },
+        }}
+        onTest={onTest}
+        onEdit={onEdit}
+        onDelete={onDelete}
+      />,
+    );
+
+    // Verify callback is shown
+    expect(screen.getByText("OpenTelemetry")).toBeInTheDocument();
+
+    // Verify no actions menu exists for read-only callback
+    const actionsButton = screen.queryByTestId("callback-actions-otel-success");
+    expect(actionsButton).not.toBeInTheDocument();
+  });
 });

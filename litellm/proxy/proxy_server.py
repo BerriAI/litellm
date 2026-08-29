@@ -16992,6 +16992,79 @@ async def delete_callback(
         )
 
 
+def _get_runtime_callbacks() -> list[tuple[str, str]]:
+    """
+    Discover callbacks registered in LiteLLM runtime memory (not from config).
+
+    Returns a list of (callback_name, callback_type) tuples where callback_type
+    is one of: "success", "failure", "success_and_failure".
+
+    Only discovers callbacks from known runtime sources:
+    - litellm.success_callback
+    - litellm._async_success_callback
+    - litellm.failure_callback
+    - litellm._async_failure_callback
+    - litellm.callbacks (success_and_failure)
+    """
+    runtime_callbacks: list[tuple[str, str]] = []
+
+    # Discover success callbacks
+    if litellm.success_callback:
+        callbacks = litellm.success_callback if isinstance(litellm.success_callback, list) else [litellm.success_callback]
+        for cb in callbacks:
+            if isinstance(cb, str):
+                runtime_callbacks.append((cb, "success"))
+
+    # Discover async success callbacks
+    if litellm._async_success_callback:
+        callbacks = litellm._async_success_callback if isinstance(litellm._async_success_callback, list) else [litellm._async_success_callback]
+        for cb in callbacks:
+            if isinstance(cb, str):
+                runtime_callbacks.append((cb, "success"))
+
+    # Discover failure callbacks
+    if litellm.failure_callback:
+        callbacks = litellm.failure_callback if isinstance(litellm.failure_callback, list) else [litellm.failure_callback]
+        for cb in callbacks:
+            if isinstance(cb, str):
+                runtime_callbacks.append((cb, "failure"))
+
+    # Discover async failure callbacks
+    if litellm._async_failure_callback:
+        callbacks = litellm._async_failure_callback if isinstance(litellm._async_failure_callback, list) else [litellm._async_failure_callback]
+        for cb in callbacks:
+            if isinstance(cb, str):
+                runtime_callbacks.append((cb, "failure"))
+
+    # Discover success_and_failure callbacks (litellm.callbacks)
+    if litellm.callbacks:
+        callbacks = litellm.callbacks if isinstance(litellm.callbacks, list) else [litellm.callbacks]
+        for cb in callbacks:
+            if isinstance(cb, str):
+                runtime_callbacks.append((cb, "success_and_failure"))
+
+    return runtime_callbacks
+
+
+def _normalize_callback_alias(callback_name: str) -> str:
+    """
+    Normalize callback names to canonical aliases.
+
+    Maps known aliases to their canonical forms:
+    - opentelemetry -> otel
+    - s3_v2 -> s3
+    - aws_sqs -> sqs
+    - custom_callback_api -> generic_api
+    """
+    alias_map = {
+        "opentelemetry": "otel",
+        "s3_v2": "s3",
+        "aws_sqs": "sqs",
+        "custom_callback_api": "generic_api",
+    }
+    return alias_map.get(callback_name, callback_name)
+
+
 @router.get(
     "/get/config/callbacks",
     tags=["config.yaml"],
@@ -17049,14 +17122,39 @@ async def get_config(
 
         """
 
+        # Track which callbacks come from config (to mark them as NOT read_only)
+        config_callback_names: set[str] = set()
+
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
+            callback_obj = process_callback(_callback, "success", environment_variables)
+            _data_to_return.append(callback_obj)
+            config_callback_names.add(_callback)
 
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
+            callback_obj = process_callback(_callback, "failure", environment_variables)
+            _data_to_return.append(callback_obj)
+            config_callback_names.add(_callback)
 
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+            callback_obj = process_callback(_callback, "success_and_failure", environment_variables)
+            _data_to_return.append(callback_obj)
+            config_callback_names.add(_callback)
+
+        # Discover runtime-only callbacks (registered in litellm memory but not in config)
+        runtime_callbacks = _get_runtime_callbacks()
+        runtime_callback_names: set[str] = set()
+
+        for runtime_callback, callback_type in runtime_callbacks:
+            # Normalize the alias
+            normalized_name = _normalize_callback_alias(runtime_callback)
+            runtime_callback_names.add(normalized_name)
+
+            # Only add if not already in config (runtime-only)
+            if normalized_name not in config_callback_names and normalized_name not in {c["name"] for c in _data_to_return}:
+                callback_obj = process_callback(normalized_name, callback_type, environment_variables)
+                # Mark as read_only since it's runtime-only
+                callback_obj["read_only"] = True
+                _data_to_return.append(callback_obj)
 
         _data_to_return = _apply_callback_role_gate(_data_to_return, is_full_admin)
 
