@@ -355,8 +355,35 @@ def resolve_speech_media_type(upstream_content_type: str | None, response_format
 
 
 _OGG_OPUS_HEAD_WINDOW: Final = 64
-_MPEG_FRAME_SYNC_MASK: Final = 0xE0
-_MPEG_FRAME_LAYER_MASK: Final = 0x06
+_ADTS_SYNC_AND_LAYER_MASK: Final = 0xF6
+_ADTS_SYNC_AND_LAYER: Final = 0xF0
+_ADTS_SAMPLE_RATE_INDEX_LIMIT: Final = 13
+_MPEG_SYNC_MASK: Final = 0xE0
+_MPEG_LAYER_MASK: Final = 0x06
+_MPEG_RESERVED_VERSION: Final = 0x01
+_MPEG_INVALID_BITRATE_INDEX: Final = 0x0F
+_MPEG_RESERVED_SAMPLE_RATE_INDEX: Final = 0x03
+
+
+def _adts_aac_frame_media_type(header: bytes) -> str | None:
+    sample_rate_index: Final = (header[2] >> 2) & 0x0F
+    return FILE_MIME_TYPES[FileType.AAC] if sample_rate_index < _ADTS_SAMPLE_RATE_INDEX_LIMIT else None
+
+
+def _mpeg_audio_frame_media_type(header: bytes) -> str | None:
+    version: Final = (header[1] >> 3) & 0x03
+    layer: Final = header[1] & _MPEG_LAYER_MASK
+    bitrate_index: Final = header[2] >> 4
+    sample_rate_index: Final = (header[2] >> 2) & 0x03
+    if (
+        (header[1] & _MPEG_SYNC_MASK) != _MPEG_SYNC_MASK
+        or version == _MPEG_RESERVED_VERSION
+        or layer == 0
+        or bitrate_index == _MPEG_INVALID_BITRATE_INDEX
+        or sample_rate_index == _MPEG_RESERVED_SAMPLE_RATE_INDEX
+    ):
+        return None
+    return FILE_MIME_TYPES[FileType.MP3]
 
 
 def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
@@ -369,7 +396,8 @@ def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
         return FILE_MIME_TYPES[FileType.OPUS if is_opus else FileType.OGG]
     if audio[:3] == b"ID3":
         return FILE_MIME_TYPES[FileType.MP3]
-    if len(audio) < 2 or audio[0] != 0xFF or (audio[1] & _MPEG_FRAME_SYNC_MASK) != _MPEG_FRAME_SYNC_MASK:
+    if len(audio) < 3 or audio[0] != 0xFF:
         return None
-    is_adts_aac: Final = (audio[1] & _MPEG_FRAME_LAYER_MASK) == 0
-    return FILE_MIME_TYPES[FileType.AAC if is_adts_aac else FileType.MP3]
+    if (audio[1] & _ADTS_SYNC_AND_LAYER_MASK) == _ADTS_SYNC_AND_LAYER:
+        return _adts_aac_frame_media_type(audio)
+    return _mpeg_audio_frame_media_type(audio)
