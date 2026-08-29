@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import queue
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, cast
 from urllib.parse import quote
@@ -18,12 +20,11 @@ from litellm.rust_bridge.ocr import use_litellm_rust
 from tests.test_litellm._fixture_recorder import (
     ProviderSpec,
     fixture_directory,
-    parse_generator_args,
     record_cases,
 )
 from tests.test_litellm.ocr.fixture_models import (
     ImageUrlDocument,
-    MistralOcrParityInput,
+    LiteLLMOcrInput,
 )
 
 FIXTURE_DIR_ENV: Final = "LITELLM_OCR_FIXTURE_DIR"
@@ -32,12 +33,20 @@ _TEXT: Final = st.from_regex(r"[A-Za-z0-9 ]{1,24}", fullmatch=True)
 _VALUE_TEXT: Final = st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789 -_", min_size=1, max_size=32)
 
 
+@dataclass(frozen=True, slots=True)
+class GeneratorArgs:
+    concurrency: int
+    examples: int
+    fixture_dir: Path | None
+    model: str
+
+
 def _image_document(text: str, font_size: int) -> ImageUrlDocument:
     url: Final = f"https://dummyjson.com/image/800x300/ffffff/000000?text={quote(text)}&fontSize={font_size}"
     return ImageUrlDocument(type="image_url", image_url=url)
 
 
-def _input_strategy(model: str) -> SearchStrategy[MistralOcrParityInput]:
+def _mistral_input_strategy(model: str) -> SearchStrategy[LiteLLMOcrInput]:
     document_strategy: Final = st.builds(_image_document, _TEXT, st.integers(min_value=12, max_value=36))
     input_values: Final = st.fixed_dictionaries(
         {"model": st.just(model), "document": document_strategy},
@@ -52,7 +61,7 @@ def _input_strategy(model: str) -> SearchStrategy[MistralOcrParityInput]:
             "id": _VALUE_TEXT,
         },
     )
-    return input_values.map(MistralOcrParityInput.model_validate)
+    return input_values.map(LiteLLMOcrInput.model_validate)
 
 
 def _generate_examples(
@@ -62,11 +71,11 @@ def _generate_examples(
     concurrency: int,
     sdk_call: Callable[..., object],
 ) -> None:
-    generated: Final[queue.SimpleQueue[MistralOcrParityInput | None]] = queue.SimpleQueue()
+    generated: Final[queue.SimpleQueue[LiteLLMOcrInput | None]] = queue.SimpleQueue()
 
     @settings(max_examples=examples, deadline=None, derandomize=True)
-    @given(case_input=_input_strategy(spec.model))
-    def generate_case(case_input: MistralOcrParityInput) -> None:
+    @given(case_input=_mistral_input_strategy(spec.model))
+    def generate_case(case_input: LiteLLMOcrInput) -> None:
         generated.put(case_input)
 
     generate_case()
@@ -82,10 +91,25 @@ def _mistral_upstream_base() -> str:
     return configured.removesuffix("/v1")
 
 
+def _parse_args() -> GeneratorArgs:
+    parser: Final = argparse.ArgumentParser()
+    parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--examples", type=int, default=4)
+    parser.add_argument("--fixture-dir", type=Path)
+    parser.add_argument("--model", default="mistral/mistral-ocr-latest")
+    namespace: Final = parser.parse_args()
+    return GeneratorArgs(
+        concurrency=cast(int, namespace.concurrency),
+        examples=cast(int, namespace.examples),
+        fixture_dir=cast(Path | None, namespace.fixture_dir),
+        model=cast(str, namespace.model),
+    )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     load_dotenv()
-    args: Final = parse_generator_args()
+    args: Final = _parse_args()
     api_key: Final = os.environ.get("MISTRAL_API_KEY") or os.environ.get("LITELLM_API_KEY")
     if api_key is None:
         raise SystemExit("MISTRAL_API_KEY is required")
