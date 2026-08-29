@@ -414,6 +414,23 @@ def test_native_anthropic_config_keeps_cache_control_ttl():
     assert payload["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
 
 
+def test_deployment_opt_in_keeps_cache_control_ttl():
+    config = OpenAILikeAnthropicMessagesConfig(cache_control_ttl=True)
+    payload = config.transform_anthropic_messages_request(
+        model="some-model",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            }
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 16},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert payload["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+
 def test_json_provider_constraint_opts_into_cache_control_ttl():
     from litellm.llms.openai_like.json_loader import SimpleProviderConfig
     from litellm.llms.openai_like.messages.transformation import (

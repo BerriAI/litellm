@@ -23,9 +23,14 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     ``{api_base}/v1/messages``, so Anthropic-only features that the
     Anthropic->OpenAI translation would otherwise drop are preserved. The one
     exception is ``cache_control``, whose Anthropic-only extensions (``ttl``)
-    are stripped unless ``supports_cache_control_ttl`` says otherwise. Response
-    parsing and streaming are inherited from the native Anthropic config.
+    are stripped unless the deployment opts in with
+    ``model_info.cache_control_ttl: true``. Response parsing and streaming are
+    inherited from the native Anthropic config.
     """
+
+    def __init__(self, cache_control_ttl: bool = False) -> None:
+        super().__init__()
+        self._cache_control_ttl: Final = cache_control_ttl
 
     def validate_anthropic_messages_environment(
         self,
@@ -58,7 +63,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         return False
 
     def supports_cache_control_ttl(self) -> bool:
-        return False
+        return self._cache_control_ttl
 
     def transform_anthropic_messages_request(
         self,
@@ -114,7 +119,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
     """
 
     def __init__(self, provider: SimpleProviderConfig):
-        super().__init__()
+        super().__init__(cache_control_ttl=bool(provider.constraints.get("cache_control_ttl")))
         self._provider = provider
 
     @property
@@ -123,9 +128,6 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
-
-    def supports_cache_control_ttl(self) -> bool:
-        return bool(self._provider.constraints.get("cache_control_ttl"))
 
     def _resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or get_secret_str(self._provider.api_key_env) or litellm.api_key

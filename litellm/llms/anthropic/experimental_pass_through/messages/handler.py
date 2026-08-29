@@ -99,6 +99,10 @@ def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
     return isinstance(supported_endpoints, (list, tuple)) and "/v1/messages" in supported_endpoints
 
 
+def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
+    return isinstance(model_info, dict) and model_info.get("cache_control_ttl") is True
+
+
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -568,7 +572,9 @@ def anthropic_messages_handler(
             OpenAILikeAnthropicMessagesConfig,
         )
 
-        anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig()
+        anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig(
+            cache_control_ttl=_deployment_supports_cache_control_ttl(kwargs.get("model_info")),
+        )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if _should_route_to_responses_api(custom_llm_provider, original_model, model):
