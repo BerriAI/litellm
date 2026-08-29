@@ -57,7 +57,7 @@ def chat_override(
         json=ReliabilityChatBody(
             model=model,
             messages=[ChatMessage(role="user", content=content)],
-            max_tokens=64,
+            max_tokens=512,
             stream=stream,
             router_settings_override=override,
             cache=cache,
@@ -77,3 +77,13 @@ def content_of(resp: StreamingResponse) -> str | None:
         return None
     message = parsed.choices[0].message
     return message.content if message is not None else None
+
+
+def finish_reason_of(resp: StreamingResponse) -> str | None:
+    try:
+        parsed = ChatResponse.model_validate_json(resp.body)
+    except ValidationError:
+        return None
+    if not parsed.choices:
+        return None
+    return parsed.choices[0].finish_reason
