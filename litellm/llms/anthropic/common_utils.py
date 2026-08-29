@@ -75,8 +75,10 @@ def is_anthropic_oauth_key(value: str | None) -> bool:
     """Check if a value contains an Anthropic OAuth token (sk-ant-oat*)."""
     if value is None:
         return False
-    # Handle both raw token and "Bearer <token>" format
-    value = value.removeprefix("Bearer ")
+    # Handle both raw token and "Bearer <token>" format, case-insensitive scheme
+    scheme, _, token = value.partition(" ")
+    if scheme.lower() == "bearer":
+        value = token
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
 
