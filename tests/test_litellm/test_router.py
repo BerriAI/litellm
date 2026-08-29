@@ -559,6 +559,59 @@ async def test_async_router_acreate_file_does_not_fall_back_across_model_groups(
 
 
 @pytest.mark.asyncio
+async def test_async_router_acancel_batch_does_not_fall_back_across_model_groups(monkeypatch: pytest.MonkeyPatch):
+    """The proxy cancels a managed batch by handing the router the deployment id decoded
+    from the unified batch id. A default (``*``) fallback matches that id like any other
+    model string, and the fallback provider is then asked to cancel a batch it never
+    issued, which can only answer not-found. The router re-raises the owner's error after
+    that wasted round trip, so the pin's observable is the foreign call never happening."""
+    import respx
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-gpt",
+                "litellm_params": {
+                    "model": "azure/my-azure-deployment",
+                    "api_base": "http://127.0.0.1:9",
+                    "api_key": "dummy-key",
+                    "api_version": "2024-06-01",
+                },
+                "model_info": {"id": "azure-batch-dep"},
+            },
+            {
+                "model_name": "openai-gpt",
+                "litellm_params": {"model": "gpt-4o-mini", "api_key": "dummy-key"},
+            },
+        ],
+        default_fallbacks=["openai-gpt"],
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        azure_route = respx_mock.post(host="127.0.0.1").mock(
+            return_value=httpx.Response(401, json={"error": {"code": "401", "message": "invalid subscription key"}})
+        )
+        openai_route = respx_mock.post("https://api.openai.com/v1/batches/batch_owned_by_azure/cancel").mock(
+            return_value=httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "No batch found with id 'batch_owned_by_azure'.",
+                        "type": "invalid_request_error",
+                        "code": "batch_not_found",
+                    }
+                },
+            )
+        )
+        with pytest.raises(openai.AuthenticationError, match="invalid subscription key"):
+            await router.acancel_batch(model="azure-batch-dep", batch_id="batch_owned_by_azure")
+
+    assert azure_route.called
+    assert not openai_route.called
+
+
+@pytest.mark.asyncio
 async def test_async_router_acreate_file_uses_deployment_custom_llm_provider():
     """
     Ensure file routing preserves deployment custom_llm_provider instead of

@@ -252,7 +252,7 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     return fallback_model_group, generic_fallback_idx
 
 
-PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file")
+PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
 PROVIDER_SCOPED_CREATION_FUNCTION_NAMES: Final = frozenset({"_acreate_file"})
 
 
@@ -284,12 +284,12 @@ async def _is_fallback_target_authorized(
 
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     """
-    True when the request names a file that only exists under one provider's credentials.
+    True when the request names a file, batch, or fine-tuning job that only exists under
+    one provider's credentials.
 
-    Batch and fine-tuning jobs are created from a file the caller already uploaded, and
-    that file lives in the account of the deployment that stored it. Handing the id to a
-    different model group can only fail, and the second provider's error replaces the
-    error the caller actually needs to see.
+    Each of those ids lives in the account of the deployment that issued it. Handing it to
+    a different model group asks a provider about an id it never issued, which costs an
+    extra round trip that can only answer not-found.
     """
     return any(kwargs.get(key) for key in PROVIDER_SCOPED_RESOURCE_KEYS)
 
@@ -371,7 +371,7 @@ async def run_async_fallback(
             continue
         if same_model_group_only and _get_fallback_target_model_group(mg) != original_model_group:
             verbose_router_logger.info(
-                "Skipping fallback to model_group = %s: request is pinned to model_group = %s by its uploaded file",
+                "Skipping fallback to model_group = %s: request names a resource owned by model_group = %s",
                 mask_sensitive_structure(mg),
                 original_model_group,
             )
