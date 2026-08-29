@@ -2909,3 +2909,23 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+    def test_tool_result_string_content_wrapped_in_list(self):
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+        from litellm.types.llms.openai import ChatCompletionCachedContent
+
+        message = {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "Sunny"
+        }
+
+        control = ChatCompletionCachedContent(type="ephemeral")
+
+        modified_message = AnthropicCacheControlHook._safe_insert_cache_control_in_message(message, control, False)
+        
+        # Should be converted to a list
+        assert isinstance(modified_message["content"], list)
+        assert len(modified_message["content"]) == 1
+        assert modified_message["content"][0]["type"] == "text"
+        assert modified_message["content"][0]["text"] == "Sunny"
+        assert modified_message["content"][0]["cache_control"] == control
