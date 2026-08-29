@@ -26,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     aggregate_authorize,
     aggregate_token,
     complete_connect_flow,
+    introspect_gateway_token,
     is_gateway_dcr_client_id,
     is_proxy_api_resource,
     native_client_auth_contract,
@@ -41,7 +42,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
     resolve_session_bearer,
     session_keys_from_master_key,
 )
-from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import SESSION_REFRESH_PREFIX
+from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+    SESSION_ISSUER,
+    SESSION_REFRESH_PREFIX,
+    SessionPrincipal,
+    mint_session_refresh_token,
+    mint_session_token,
+)
 
 MASTER_KEY = "sk-gateway-dcr-flow-tests"
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
@@ -1674,3 +1681,87 @@ def test_native_client_auth_contract_points_every_endpoint_at_this_proxy():
 )
 def test_is_proxy_api_resource_matches_only_this_proxy(resource, expected):
     assert is_proxy_api_resource(_request(), resource) is expected
+
+
+def _introspection_fixtures():
+    keys = session_keys_from_master_key(MASTER_KEY)
+    now = datetime.now(timezone.utc)
+    principal = SessionPrincipal(user_id="u1", client_id="llm_dcrc_client", team_id="t1")
+    return keys, now, principal
+
+
+async def _introspect(token, cache=None, reload_user=_reload_user_active, master_key=MASTER_KEY):
+    response = await introspect_gateway_token(
+        token=token, master_key=master_key, reload_user=reload_user, cache=cache or DualCache()
+    )
+    return response.status_code, json.loads(response.body)
+
+
+@pytest.mark.asyncio
+async def test_introspect_active_access_token_reports_rfc7662_claims():
+    keys, now, principal = _introspection_fixtures()
+    minted = mint_session_token(principal, keys, now)
+    status, body = await _introspect(minted.token.get_secret_value())
+    assert status == 200
+    assert body["active"] is True
+    assert body["token_type"] == "Bearer"
+    assert body["iss"] == SESSION_ISSUER
+    assert body["sub"] == "u1"
+    assert body["client_id"] == "llm_dcrc_client"
+    assert body["kind"] == "session"
+    assert body["team_id"] == "t1"
+    assert body["exp"] - body["iat"] == 3600
+    assert body["jti"]
+
+
+@pytest.mark.asyncio
+async def test_introspect_invalid_tokens_answer_active_false():
+    keys, now, principal = _introspection_fixtures()
+    wrong_key = mint_session_token(principal, session_keys_from_master_key("sk-a-rotated-master-key"), now)
+    expired = mint_session_token(principal, keys, now - timedelta(seconds=7200))
+    for candidate in (
+        "sk-not-a-session-token",
+        "llm_session_malformed",
+        wrong_key.token.get_secret_value(),
+        expired.token.get_secret_value(),
+    ):
+        status, body = await _introspect(candidate)
+        assert (status, body) == (200, {"active": False})
+
+
+@pytest.mark.asyncio
+async def test_introspect_refresh_token_goes_inactive_once_rotated():
+    keys, now, _ = _introspection_fixtures()
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    minted = mint_session_refresh_token(SessionPrincipal(user_id="u1", client_id=client_id), keys, now)
+    cache = DualCache()
+    status, body = await _introspect(minted.token.get_secret_value(), cache=cache)
+    assert (status, body["active"], body["kind"]) == (200, True, "session_refresh")
+
+    revoked = await revoke_refresh_token(
+        token=minted.token.get_secret_value(), client_id=client_id, master_key=MASTER_KEY, cache=cache
+    )
+    assert revoked.status_code == 200
+    status, body = await _introspect(minted.token.get_secret_value(), cache=cache)
+    assert (status, body) == (200, {"active": False})
+
+
+@pytest.mark.asyncio
+async def test_introspect_fails_closed_on_dead_user_and_503s_on_outage():
+    keys, now, principal = _introspection_fixtures()
+    minted = mint_session_token(principal, keys, now)
+
+    async def _reload_user_gone(user_id: str):
+        return "unresolvable"
+
+    status, body = await _introspect(minted.token.get_secret_value(), reload_user=_reload_user_gone)
+    assert (status, body) == (200, {"active": False})
+
+    async def _reload_user_outage(user_id: str):
+        return "unavailable"
+
+    status, body = await _introspect(minted.token.get_secret_value(), reload_user=_reload_user_outage)
+    assert (status, body["error"]) == (503, "temporarily_unavailable")
+
+    status, body = await _introspect(minted.token.get_secret_value(), master_key=None)
+    assert (status, body["error"]) == (500, "server_error")

@@ -69,13 +69,19 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
     session_keys_from_master_key,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+    SESSION_ISSUER,
     SESSION_REFRESH_TTL_SECONDS,
     MintedSessionToken,
+    OpenedSessionToken,
     SessionAudience,
     SessionKeys,
     SessionPrincipal,
+    is_session_refresh_token,
+    is_session_token,
     mint_session_refresh_token,
     mint_session_token,
+    open_session_refresh_token,
+    open_session_token,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -884,6 +890,23 @@ class _SingleUseGuard:
         count = await self._cache.async_increment_cache(key, 1, ttl=ttl_seconds, local_only=True)
         return "first" if count == 1 else "replayed"
 
+    async def peek(self, key: str) -> Literal["unclaimed", "claimed", "unavailable"]:
+        """Read-only view of a single-use marker, resolved against the same shared authority as
+        :meth:`claim` so introspection observes exactly the record redemption and revocation wrote.
+        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way."""
+        from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
+
+        redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
+        if redis_cache is not None:
+            try:
+                value = await redis_cache.async_get_cache(key)
+            except Exception as e:  # noqa: BLE001  # ANY Redis fault fails the read closed
+                verbose_logger.warning("mcp gateway single-use peek: shared cache backend unavailable: %s", e)
+                return "unavailable"
+            return "unclaimed" if value is None else "claimed"
+        local: Final = await self._cache.async_get_cache(key, local_only=True)
+        return "unclaimed" if local is None else "claimed"
+
 
 def _session_token_pair(principal: SessionPrincipal, keys: SessionKeys, now: datetime) -> Response:
     access: Final = mint_session_token(principal, keys, now)
@@ -1192,3 +1215,80 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
         if burned == "unavailable":
             return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
     return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
+
+
+def _inactive_introspection_response() -> Response:
+    """RFC 7662 section 2.2: any token the gateway cannot vouch for, whatever the reason
+    (wrong family, bad signature, expired, revoked, or a deactivated user), answers 200
+    with ``active: false`` and nothing else, so introspection is not a token oracle."""
+    return JSONResponse(status_code=200, content={"active": False}, headers=TOKEN_NO_CACHE_HEADERS)
+
+
+def _active_introspection_response(opened: OpenedSessionToken) -> Response:
+    principal: Final = opened.principal
+    optional_claims: Final = {
+        key: value
+        for key, value in (
+            ("team_id", principal.team_id),
+            ("resource_server_id", principal.resource_server_id),
+            ("audience", principal.audience),
+        )
+        if value is not None
+    }
+    return JSONResponse(
+        status_code=200,
+        content={
+            "active": True,
+            "iss": SESSION_ISSUER,
+            "token_type": "Bearer",
+            "sub": principal.user_id,
+            "client_id": principal.client_id,
+            "jti": opened.jti,
+            "iat": opened.iat,
+            "exp": opened.exp,
+            "kind": opened.kind,
+            **optional_claims,
+        },
+        headers=TOKEN_NO_CACHE_HEADERS,
+    )
+
+
+async def introspect_gateway_token(
+    token: str,
+    master_key: str | None,
+    reload_user: ReloadUser,
+    cache: DualCache,
+) -> Response:
+    """RFC 7662 introspection for the gateway's session tokens, so an external gateway
+    (Kong, an API management layer) can validate a LiteLLM-issued MCP session credential
+    without holding the signing secret. The caller is already authenticated by the route
+    (section 2.1). Active means everything admission itself would require: valid signature
+    under the master-key-derived session key, unexpired, not a revoked or rotated refresh
+    token, and a litellm user that is still live, so a deactivated user's outstanding
+    tokens introspect as inactive immediately. A shared-backend or DB outage answers 503
+    rather than guessing in either direction."""
+    if master_key is None:
+        verbose_logger.error("mcp_gateway_dcr introspect rejected: no master_key configured")
+        return _oauth_error(500, "server_error", "the gateway has no master key configured")
+    keys: Final = session_keys_from_master_key(master_key)
+    now: Final = datetime.now(timezone.utc)
+    if is_session_token(token):
+        opened = open_session_token(token, keys, now)
+    elif is_session_refresh_token(token):
+        opened = open_session_refresh_token(token, keys, now)
+    else:
+        return _inactive_introspection_response()
+    if not isinstance(opened, OpenedSessionToken):
+        return _inactive_introspection_response()
+    if opened.kind == "session_refresh":
+        peeked: Final = await _SingleUseGuard(cache).peek(f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}")
+        if peeked == "unavailable":
+            return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
+        if peeked == "claimed":
+            return _inactive_introspection_response()
+    failure: Final = await reload_user(opened.principal.user_id)
+    if failure == "unavailable":
+        return _oauth_error(503, "temporarily_unavailable", "the gateway database is unavailable; retry")
+    if failure is not None:
+        return _inactive_introspection_response()
+    return _active_introspection_response(opened)

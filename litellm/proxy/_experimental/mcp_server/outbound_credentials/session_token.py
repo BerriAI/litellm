@@ -129,12 +129,17 @@ class MintedSessionToken(BaseModel):
 
 
 class OpenedSessionToken(BaseModel):
-    """A validated session token of either kind: the principal it was minted for, plus the
-    ``jti`` so the token endpoint can enforce single-use rotation on a refresh token."""
+    """A validated session token of either kind: the principal it was minted for, the
+    ``jti`` so the token endpoint can enforce single-use rotation on a refresh token, and
+    the signed ``kind``/``iat``/``exp`` so an introspection response can report the
+    token's metadata without re-decoding."""
 
     model_config = ConfigDict(frozen=True)
     principal: SessionPrincipal
     jti: str
+    kind: SessionTokenKind
+    iat: int
+    exp: int
 
 
 class SessionTokenTooLarge(BaseModel):
@@ -353,6 +358,9 @@ def _open(
             team_id=claims.team_id,
         ),
         jti=claims.jti,
+        kind=claims.kind,
+        iat=claims.iat,
+        exp=claims.exp,
     )
 
 
