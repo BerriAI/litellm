@@ -2149,18 +2149,28 @@ async def test_apply_search_filter_honours_exact_model_name_in_db_query():
         model_name="anthropic-sonnet-5",
     )
     where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
-    assert where["AND"] == [{"model_name": "anthropic-sonnet-5"}]
-    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
+    assert where["model_name"] == "anthropic-sonnet-5"
     assert prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["where"] == where
 
     prisma_client.db.litellm_proxymodeltable.count.reset_mock()
+    _, total_count = await _apply_search_filter_to_models(
+        all_models=[],
+        search="opus",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        model_name="anthropic-sonnet-5",
+    )
+    prisma_client.db.litellm_proxymodeltable.count.assert_not_called()
+    assert total_count == 0
+
     await _apply_search_filter_to_models(
         all_models=[],
         search="sonnet",
         prisma_client=prisma_client,
         proxy_config=proxy_config,
     )
-    assert "AND" not in prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
+    where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
+    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
 
 
 @pytest.mark.asyncio
