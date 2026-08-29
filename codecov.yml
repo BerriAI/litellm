@@ -1,5 +1,6 @@
 flags:
   circleci:
-    # line-misaligned with the PR head, so merging it marks blank and
-    # continuation lines as missed and poisons the patch status
+    # carried-forward CircleCI sessions come from older commits, so their line
+    # numbers are misaligned with the head and poison the patch status
+    carryforward: false
     joined: false
