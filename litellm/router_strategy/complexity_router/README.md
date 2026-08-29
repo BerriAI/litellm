@@ -222,6 +222,44 @@ except that the heuristic outcome is the one already computed rather than a seco
 Spend logs record `routing_decision.cause` as `heuristic_first_short_circuit` when the classifier
 was skipped, and `llm_classifier` when it ran, so the two are told apart per request.
 
+### Classifying once per user turn
+
+An agent turn is one human ask followed by however many tool calls it takes to answer it, and every
+one of those continuations comes back as its own inference request. By default each of them is
+classified on its own, so a turn that starts on the reasoning tier can finish on a cheap model
+because the newest message was a chunk of tool output. `classification_mode: user_turn` classifies
+only the requests that carry a new human ask and holds that target for the tool loop the ask sets
+off:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classification_mode: user_turn
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet-4
+          REASONING: o1-preview
+```
+
+One tool loop then runs on one model, which keeps its provider prompt cache warm, and the classifier
+runs once per human turn instead of once per request. The next human ask is classified again and
+replaces the held target, so a cheap follow-up does not inherit the expensive model the last ask
+picked. A request counts as a continuation when its newest turn is tool output or an assistant
+message rather than human text, which covers both the `tool` role on chat completions and
+`tool_result` blocks on the Messages API.
+
+This needs a resolvable `session_id` to key the held target on and falls back to classifying every
+request without one. It is suppressed when `plugins` are configured, for the same reason
+`session_affinity` is, and it is inert under `session_affinity`, which holds one target for the
+whole session and so never reclassifies at all.
+
+Spend logs record `routing_decision.cause` as `user_turn_pin` on the continuations that reused the
+held target, which tells them apart from `session_affinity_pin`.
+
 ### Reasoning Override
 
 If 2+ reasoning markers are detected in the user message, the request is promoted to the REASONING tier even when the weighted score maps lower, so complex reasoning tasks get the appropriate model. The promotion requires the score to reach `reasoning_override_min_score`, which tracks `tier_boundaries.simple_medium` unless set, so stock phrases on an otherwise trivial prompt cannot buy the top tier. Set it to `0` to promote on the markers alone.

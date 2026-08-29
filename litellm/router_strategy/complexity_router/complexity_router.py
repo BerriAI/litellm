@@ -2271,8 +2271,7 @@ class ComplexityRouter(CustomLogger):
     @property
     def _uses_tier_pin(self) -> bool:
         return bool(
-            (self.config.session_affinity or self.config.classification_mode == "user_turn")
-            and not self.config.plugins
+            (self.config.session_affinity or self.config.classification_mode == "user_turn") and not self.config.plugins
         )
 
     @property
