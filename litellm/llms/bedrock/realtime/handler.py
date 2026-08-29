@@ -12,6 +12,7 @@ from typing import Any, Final
 from pydantic import TypeAdapter
 
 from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 from ..base_aws_llm import BaseAWSLLM
@@ -81,7 +82,7 @@ class BedrockRealtime(BaseAWSLLM):
         elif aws_bedrock_runtime_endpoint is not None:
             endpoint_uri = aws_bedrock_runtime_endpoint
         else:
-            endpoint_uri = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+            endpoint_uri = f"https://bedrock-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
 
         verbose_proxy_logger.debug("Bedrock Realtime: Connecting to %s with model %s", endpoint_uri, model)
 

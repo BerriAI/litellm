@@ -8,6 +8,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -106,10 +107,11 @@ class SagemakerLLM(BaseAWSLLM):
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         sigv4: Final = SigV4Auth(credentials, "sagemaker", aws_region_name)
+        dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
         if optional_params.get("stream") is True:
-            api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations-response-stream"
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations-response-stream"
         else:
-            api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations"
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations"
 
         sagemaker_base_url: Final = optional_params.get("sagemaker_base_url", None)
         if sagemaker_base_url is not None:
