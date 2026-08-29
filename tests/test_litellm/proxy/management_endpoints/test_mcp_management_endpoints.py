@@ -1961,6 +1961,20 @@ class TestTemporaryMCPSessionEndpoints:
         assert where == {"OR": [{"approval_status": None}, {"approval_status": {"not": "draft"}}]}
 
     @pytest.mark.asyncio
+    async def test_get_all_mcp_servers_propagates_read_failures(self):
+        """Regression: a swallowed read failure returned [] and silently disabled the bulk-import
+        dedupe, so a flaky DB read turned a re-import into duplicate servers."""
+        from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers
+
+        find_rows = AsyncMock(side_effect=RuntimeError("db down"))
+        with patch(  # test-quality-ok: the helper takes its row reader from module scope, matching the suite's pattern
+            "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_rows",
+            find_rows,
+        ):
+            with pytest.raises(RuntimeError, match="db down"):
+                await get_all_mcp_servers(MagicMock())
+
+    @pytest.mark.asyncio
     async def test_resolve_session_server_id_refuses_an_unknown_caller_supplied_id(self):
         """Regression: two concurrent sessions must never land on one id.
 
@@ -6855,6 +6869,7 @@ class TestImportMCPServers:
         create_mock = AsyncMock(return_value=created)
         mock_manager = MagicMock()
         mock_manager.reload_servers_from_database = AsyncMock()
+        mock_manager.add_server = AsyncMock()
 
         with ExitStack() as stack:
             for p in self._import_patches([existing], create_mock, mock_manager):
@@ -6869,6 +6884,7 @@ class TestImportMCPServers:
         create_mock.assert_awaited_once()
         sent_request = create_mock.await_args[0][1]
         assert sent_request.credentials == {"auth_value": "tok"}
+        mock_manager.add_server.assert_awaited_once_with(created)
         mock_manager.reload_servers_from_database.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -6891,6 +6907,7 @@ class TestImportMCPServers:
         create_mock = AsyncMock(return_value=created)
         mock_manager = MagicMock()
         mock_manager.reload_servers_from_database = AsyncMock()
+        mock_manager.add_server = AsyncMock()
 
         with ExitStack() as stack:
             for p in self._import_patches([], create_mock, mock_manager):
@@ -6901,6 +6918,7 @@ class TestImportMCPServers:
         assert len(result.skipped) == 1
         assert "Duplicate connector name" in result.skipped[0].reason
         create_mock.assert_awaited_once()
+        mock_manager.add_server.assert_awaited_once_with(created)
 
     @pytest.mark.asyncio
     async def test_no_imports_skips_registry_refresh(self):
@@ -6917,6 +6935,7 @@ class TestImportMCPServers:
         create_mock = AsyncMock()
         mock_manager = MagicMock()
         mock_manager.reload_servers_from_database = AsyncMock()
+        mock_manager.add_server = AsyncMock()
 
         with ExitStack() as stack:
             for p in self._import_patches([existing], create_mock, mock_manager):
@@ -6925,4 +6944,30 @@ class TestImportMCPServers:
 
         assert result.imported == ()
         create_mock.assert_not_awaited()
+        mock_manager.add_server.assert_not_awaited()
         mock_manager.reload_servers_from_database.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_registration_failure_keeps_the_import_result(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            MCPConnectorImportRequest,
+            import_mcp_servers,
+        )
+
+        payload = MCPConnectorImportRequest.model_validate(
+            {"mcpServers": {"new-server": {"url": "https://new.example/mcp"}}}
+        )
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+        created = generate_mock_mcp_server_db_record(server_id="created-1", alias="new_server")
+        create_mock = AsyncMock(return_value=created)
+        mock_manager = MagicMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+        mock_manager.add_server = AsyncMock(side_effect=RuntimeError("registration boom"))
+
+        with ExitStack() as stack:
+            for p in self._import_patches([], create_mock, mock_manager):
+                stack.enter_context(p)
+            result = await import_mcp_servers(payload=payload, user_api_key_dict=admin)
+
+        assert [entry.name for entry in result.imported] == ["new-server"]
+        mock_manager.reload_servers_from_database.assert_awaited_once()

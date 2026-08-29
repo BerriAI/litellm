@@ -14,7 +14,7 @@ from typing import Final
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from litellm.proxy._types import MCPApprovalStatus, NewMCPServerRequest
-from litellm.types.mcp import MCPAuth, MCPCredentials, MCPTransport
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPCredentials, MCPTransport
 
 
 class MCPConnectorEntry(BaseModel):
@@ -119,8 +119,7 @@ def _convert_entry(name: str, entry: MCPConnectorEntry) -> ConvertedConnector | 
         return ConnectorConversionError(name=name, error=f"Unsupported connector type '{entry.type}'.")
 
     transport: Final = MCPTransport.sse if entry_type in _SSE_TYPES else MCPTransport.http
-    token: Final = entry.authorization_token or _header_bearer_token(entry.headers)
-    static_headers: Final = entry.headers if entry.authorization_token else _non_auth_headers(entry.headers)
+    auth: Final = _remote_auth(entry)
     try:
         remote_request: Final = NewMCPServerRequest(
             server_name=sanitized_name,
@@ -129,38 +128,37 @@ def _convert_entry(name: str, entry: MCPConnectorEntry) -> ConvertedConnector | 
             approval_status=MCPApprovalStatus.active,
             transport=transport,
             url=entry.url,
-            auth_type=MCPAuth.bearer_token if token else MCPAuth.none,
-            credentials=_bearer_credentials(token),
-            static_headers=dict(static_headers) if static_headers is not None else None,
+            auth_type=auth.auth_type,
+            credentials=auth.credentials,
+            static_headers=auth.static_headers,
         )
     except ValidationError as e:
         return ConnectorConversionError(name=name, error=_first_validation_message(e))
     return ConvertedConnector(name=name, request=remote_request)
 
 
-def _bearer_credentials(token: str | None) -> MCPCredentials | None:
-    if not token:
-        return None
-    credentials: Final[MCPCredentials] = {"auth_value": token}
-    return credentials
+@dataclass(frozen=True, slots=True)
+class _RemoteAuth:
+    auth_type: MCPAuthType
+    credentials: MCPCredentials | None
+    static_headers: dict[str, str] | None
 
 
+_AUTHORIZATION_HEADER: Final = "authorization"
 _BEARER_PREFIX: Final = "bearer "
 
 
-def _header_bearer_token(headers: Mapping[str, str] | None) -> str | None:
-    values: Final = tuple(value for key, value in (headers or {}).items() if key.lower() == "authorization")
-    if not values:
-        return None
-    value: Final = values[0]
-    return value[len(_BEARER_PREFIX) :] if value.lower().startswith(_BEARER_PREFIX) else value
-
-
-def _non_auth_headers(headers: Mapping[str, str] | None) -> Mapping[str, str] | None:
-    if headers is None:
-        return None
-    remaining: Final = {key: value for key, value in headers.items() if key.lower() != "authorization"}
-    return remaining or None
+def _remote_auth(entry: MCPConnectorEntry) -> _RemoteAuth:
+    headers: Final[Mapping[str, str]] = entry.headers or {}
+    header_value: Final = next((value for key, value in headers.items() if key.lower() == _AUTHORIZATION_HEADER), None)
+    remaining: Final = {key: value for key, value in headers.items() if key.lower() != _AUTHORIZATION_HEADER} or None
+    if entry.authorization_token:
+        return _RemoteAuth(MCPAuth.bearer_token, {"auth_value": entry.authorization_token}, remaining)
+    if not header_value:
+        return _RemoteAuth(MCPAuth.none, None, remaining)
+    if header_value.lower().startswith(_BEARER_PREFIX):
+        return _RemoteAuth(MCPAuth.bearer_token, {"auth_value": header_value[len(_BEARER_PREFIX) :]}, remaining)
+    return _RemoteAuth(MCPAuth.authorization, {"auth_value": header_value}, remaining)
 
 
 def _first_validation_message(error: ValidationError) -> str:

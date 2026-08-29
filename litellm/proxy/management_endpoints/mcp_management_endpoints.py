@@ -1711,6 +1711,12 @@ if MCP_AVAILABLE:
             except Exception as e:  # noqa: BLE001  # any create failure must become a per-entry error, not a 500
                 verbose_proxy_logger.exception("Error importing mcp server %s: %s", conversion.name, e)
                 return MCPConnectorImportFailure(name=conversion.name, error=str(e))
+            try:
+                await global_mcp_server_manager.add_server(created)
+            except Exception as e:  # noqa: BLE001  # the row is committed; the reload after the loop retries registration
+                verbose_proxy_logger.exception(
+                    "Imported mcp server %s committed but in-memory registration failed: %s", conversion.name, e
+                )
             return MCPConnectorImportResult(
                 name=conversion.name, server_id=created.server_id, alias=created.alias or ""
             )
