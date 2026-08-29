@@ -1353,6 +1353,40 @@ class TestArmDeferredStreamDispatch:
         assert recorded["prefer_async_handlers"] is True
 
     @pytest.mark.asyncio
+    async def test_router_wrapped_bridged_iterator_gets_csw_arg_shape(self):
+        """The router wraps iterators without _hidden_params in
+        HiddenParamsAsyncIteratorWrapper before the proxy arms deferral, so
+        every production streamed /v1/responses reaches arming wrapped;
+        sniffing the wrapper instead of the inner iterator armed the 1-arg
+        native closure against the CSW's 2-arg stored shape and leaked a
+        TypeError 500 frame into the stream."""
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+        from litellm.router_utils.add_retry_fallback_headers import (
+            HiddenParamsAsyncIteratorWrapper,
+        )
+
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
+        wrapped = HiddenParamsAsyncIteratorWrapper(object.__new__(LiteLLMCompletionStreamingIterator))
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=wrapped,
+            route_type="aresponses",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+
+        assembled = object()
+        logging_obj._deferred_stream_complete_args = (assembled, False)
+        ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+        await asyncio.sleep(0)
+
+        assert recorded["result"] is assembled
+        assert recorded["cache_hit"] is False
+        assert recorded["prefer_async_handlers"] is True
+
+    @pytest.mark.asyncio
     async def test_native_stream_closure_enqueues_single_coroutine(self):
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 

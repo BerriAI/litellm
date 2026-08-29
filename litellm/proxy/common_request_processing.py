@@ -3045,10 +3045,17 @@ class ProxyBaseLLMRequestProcessing:
 
         Raw async generators from passthrough routes bypass all three and
         would orphan the closure, so they are not armed here.
+
+        The router wraps iterators that cannot carry _hidden_params in
+        HiddenParamsAsyncIteratorWrapper, so class sniffing runs on the
+        unwrapped inner iterator.
         """
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.router_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
 
-        if isinstance(response, CustomStreamWrapper):
+        unwrapped: Final = response._inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
+
+        if isinstance(unwrapped, CustomStreamWrapper):
             # Intentionally a live reference (not a copy) — mirrors
             # ProxyLogging.post_call_success_hook which also mutates
             # data["guardrail_to_apply"] during iteration.
@@ -3075,7 +3082,7 @@ class ProxyBaseLLMRequestProcessing:
             LiteLLMCompletionStreamingIterator,
         )
 
-        if isinstance(response, LiteLLMCompletionStreamingIterator):
+        if isinstance(unwrapped, LiteLLMCompletionStreamingIterator):
             _captured_bridge_logging_obj: Final = logging_obj
 
             async def _on_deferred_bridged_stream_complete(assembled_response: object, cache_hit: object) -> None:
