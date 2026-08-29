@@ -2721,7 +2721,8 @@ _SPEND_LOG_LIST_COLUMNS: Final = """
                 cache_hit, cache_key, request_tags, team_id,
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
-                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
+                COALESCE(request_duration_ms,
+                    (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
 """
 
 _SESSION_KEY_EXPR: Final = "COALESCE(session_id, request_id)"
