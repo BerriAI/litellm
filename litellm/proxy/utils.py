@@ -497,7 +497,7 @@ def _pipeline_step_rewrites_streamed_content(guardrail_name: str) -> bool:
     if callback is None:
         return False
     transform_mode: Final = unified_guardrail.resolve_streaming_flag(callback, "streaming_transform_mode", "block_only")
-    return callback.mask_response_content or transform_mode == "incremental_diff"
+    return callback.rewrites_streamed_output() or transform_mode == "incremental_diff"
 
 
 class _PipelineErrorBody(TypedDict):
@@ -518,10 +518,10 @@ def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object], user_ap
     Background responses skip the post_call hooks entirely, so a pipeline
     governing one would silently never execute. Streaming responses execute
     pipelines against the buffered stream through the endpoint guardrail
-    translation of the request route, releasing the buffered chunks verbatim
-    on allow. That needs every step's guardrail to support the unified
-    apply_guardrail interface and to only allow or block (a step that rewrites
-    streamed content, via mask_response_content or
+    translation of the request route, releasing the buffered chunks on allow.
+    That needs every step's guardrail to support the unified apply_guardrail
+    interface and to only allow or block (a step that rewrites streamed
+    content, via mask_response_content, a MASK action, or
     streaming_transform_mode=incremental_diff, would have its rewrite silently
     dropped), and needs the route to have a translation at all; anything else
     keeps the 400 rather than letting ungoverned output stream through.
@@ -577,8 +577,8 @@ def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object], user_ap
             "error": {
                 "message": (
                     "Policies with post_call guardrail pipelines cannot govern streaming responses "
-                    "because these pipeline guardrails rewrite streamed content (mask_response_content "
-                    "or streaming_transform_mode=incremental_diff), which pipeline steps would release "
+                    "because these pipeline guardrails rewrite streamed content (mask_response_content, "
+                    "a MASK action, or streaming_transform_mode=incremental_diff), which pipeline steps would release "
                     f"unmodified: {', '.join(rewriting_guardrails)}. Retry with stream=false, or drop "
                     "them from the pipeline steps so guardrails.add applies them to streamed output."
                 ),

@@ -762,6 +762,9 @@ class CustomGuardrail(CustomLogger):
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
+    def rewrites_streamed_output(self) -> bool:
+        return self.mask_response_content
+
     def _deployment_pre_call_target(self) -> "CustomLogger":
         if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
