@@ -19,6 +19,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use tower::limit::ConcurrencyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 
 use crate::state::AppState;
 
@@ -32,6 +33,12 @@ pub fn app(state: AppState) -> Router {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1000);
 
+    // Slow loris protection: timeout for entire request processing
+    let request_timeout = std::env::var("REQUEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300u64);
+
     Router::new()
         .merge(health::router())
         .merge(gil::router())
@@ -42,6 +49,7 @@ pub fn app(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
         .layer(ConcurrencyLimitLayer::new(max_concurrent))
+        .layer(TimeoutLayer::new(std::time::Duration::from_secs(request_timeout)))
         .with_state(state)
 }
 

@@ -33,6 +33,7 @@ futures = "0.3"
 rand = "0.8"
 prometheus = "0.13"
 tower = { version = "0.5.3", features = ["limit"] }
+tower-http = { version = "0.6", features = ["timeout"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 notify = "7"
 

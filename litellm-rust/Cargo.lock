@@ -1919,6 +1919,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tower",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3755,6 +3756,7 @@ dependencies = [
  "http 1.4.2",
  "http-body 1.1.0",
  "pin-project-lite",
+ "tokio",
  "tower",
  "tower-layer",
  "tower-service",
