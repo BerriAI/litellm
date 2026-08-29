@@ -502,7 +502,7 @@ def _as_success_dispatcher(logging_obj: _DispatchesSuccessHandlers) -> _Dispatch
     return logging_obj
 
 
-def _serialize_http_exception_detail(
+def serialize_http_exception_detail(
     detail: object,
 ) -> tuple[str, dict | None]:
     """
@@ -803,7 +803,7 @@ async def _buffer_first_chunk_honoring_disconnect(
     raise _ClientDisconnectedBeforeFirstChunk()
 
 
-def _sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
+def sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
     """Build the ProxyException-shaped ``{"error": ...}`` body used in SSE error frames.
 
     Matches ``ProxyException.to_dict()`` so streaming and non-streaming error frames
@@ -812,7 +812,7 @@ def _sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
     # Preserve status code from HTTPException (e.g. guardrail blocks)
     error_status: Final = getattr(exc, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
     raw_detail: Final = _getattr_object(exc, "detail", "Error processing stream start")
-    message, structured_fields = _serialize_http_exception_detail(raw_detail)
+    message, structured_fields = serialize_http_exception_detail(raw_detail)
 
     existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
     merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
@@ -927,7 +927,7 @@ async def create_response(
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception("Error consuming first chunk from generator: %s", e)
 
-        error_status, error_obj = _sse_error_payload(e)
+        error_status, error_obj = sse_error_payload(e)
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
             for frame in _sse_error_frames(error_obj):
@@ -1104,7 +1104,7 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                _, error_obj = _sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
+                _, error_obj = sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
                 for frame in _sse_error_frames(error_obj):
                     yield frame.encode()
                 return
@@ -2374,7 +2374,7 @@ class ProxyBaseLLMRequestProcessing:
                     logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
                 elif (
                     _post_call_guardrails_active
-                    and route_type == "anthropic_messages"
+                    and route_type in ("anthropic_messages", "aresponses")
                     and self._is_streaming_response(response)
                 ):
                     from litellm.litellm_core_utils.logging_worker import (
@@ -3245,7 +3245,7 @@ class ProxyBaseLLMRequestProcessing:
 
         if isinstance(e, HTTPException):
             raw_detail: Final = _getattr_object(e, "detail", str(e))
-            message, structured_fields = _serialize_http_exception_detail(raw_detail)
+            message, structured_fields = serialize_http_exception_detail(raw_detail)
             existing_fields: Final = getattr(e, "provider_specific_fields", None) or {}
             if structured_fields:
                 merged_fields: dict | None = {**existing_fields, **structured_fields}

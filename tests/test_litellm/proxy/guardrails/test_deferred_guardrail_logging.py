@@ -1228,3 +1228,72 @@ class TestFireDeferredStreamLogging:
         assert info is not None, "guardrail_information should be populated"
         assert len(info) == 1
         assert info[0]["guardrail_name"] == "info-writer"
+
+
+class TestResponsesIteratorDeferredLogging:
+    """Regression for PR #38722 defect 2 on /v1/responses streams: when the
+    proxy arms _on_deferred_stream_complete, the responses streaming iterator
+    must store the logging coroutine for ProxyLogging._fire_deferred_stream_logging
+    (which runs AFTER end-of-stream guardrail scans write guardrail_information)
+    instead of dispatching immediately with a premature metadata snapshot."""
+
+    def _iterator(self, logging_obj):
+        from litellm.responses.streaming_iterator import (
+            BaseResponsesAPIStreamingIterator,
+        )
+
+        iterator = object.__new__(BaseResponsesAPIStreamingIterator)
+        iterator.logging_obj = logging_obj
+        iterator.start_time = None
+        iterator.completed_response = None
+        iterator._completed_response_logged = False
+        iterator._completed_response_cache_hit = None
+        iterator._persist_completed_response_before_logging = False
+        return iterator
+
+    def _logging_obj(self):
+        recorded = {}
+
+        async def dispatch_success_handlers(result=None, **kwargs):
+            recorded["dispatched"] = True
+
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = dispatch_success_handlers
+        return logging_obj, recorded
+
+    @pytest.mark.asyncio
+    async def test_armed_iterator_stores_deferred_coroutine(self):
+        logging_obj, recorded = self._logging_obj()
+        logging_obj._on_deferred_stream_complete = MagicMock()
+        iterator = self._iterator(logging_obj)
+
+        with patch("asyncio.create_task") as mock_create_task:
+            iterator._log_completed_response(is_async=True)
+
+        mock_create_task.assert_not_called()
+        args = logging_obj._deferred_stream_complete_args
+        assert isinstance(args, tuple) and len(args) == 1
+        assert "dispatched" not in recorded
+        await args[0]
+        assert recorded["dispatched"] is True
+
+    @pytest.mark.asyncio
+    async def test_unarmed_iterator_dispatches_immediately(self):
+        logging_obj, recorded = self._logging_obj()
+        logging_obj._on_deferred_stream_complete = None
+        iterator = self._iterator(logging_obj)
+
+        created = []
+        real_create_task = asyncio.create_task
+
+        def tracking_create_task(coro):
+            task = real_create_task(coro)
+            created.append(task)
+            return task
+
+        with patch("asyncio.create_task", side_effect=tracking_create_task):
+            iterator._log_completed_response(is_async=True)
+
+        assert len(created) == 1
+        await created[0]
+        assert recorded["dispatched"] is True
