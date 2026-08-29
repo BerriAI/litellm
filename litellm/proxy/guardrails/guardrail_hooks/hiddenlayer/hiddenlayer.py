@@ -37,6 +37,9 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
+_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0
+
+
 class _HiddenlayerEvaluation(TypedDict, total=False):
     action: str
     threat_level: str
@@ -157,10 +160,10 @@ def is_saas(host: str) -> bool:
     return False
 
 
-def _get_jwt(auth_url, api_id, api_key) -> str:
+def _get_jwt(auth_url, api_id, api_key, timeout: float = _AUTH_TIMEOUT_SECONDS) -> str:
     token_url: Final = f"{auth_url}/oauth2/token?grant_type=client_credentials"
 
-    resp: Final = requests.post(token_url, auth=HTTPBasicAuth(api_id, api_key))
+    resp: Final = requests.post(token_url, auth=HTTPBasicAuth(api_id, api_key), timeout=timeout)
 
     if not resp.ok:
         raise RuntimeError(

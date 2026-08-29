@@ -2957,6 +2957,8 @@ class StandardLoggingHiddenParams(TypedDict):
     litellm_overhead_time_ms: float | None
     additional_headers: StandardLoggingAdditionalHeaders | None
     batch_models: list[str] | None
+    batch_successful_requests: ReadOnly[int | None]
+    batch_failed_requests: ReadOnly[int | None]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -3503,6 +3505,7 @@ agentic_loop_internal_litellm_params: Final = [
     "_code_interpreter_interception_converted_stream",
     "_websearch_interception_emit_native_blocks",
     "_websearch_interception_converted_stream",
+    "_headroom_interception_converted_stream",
 ]
 
 # Proxy-owned callback credentials, stamped from admin-configured team/key callback

@@ -6,6 +6,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 from jsonschema import validate
 
 
@@ -4432,6 +4433,53 @@ class TestVertexEmbeddingEncodingFormat:
         assert optional_params.get("outputDimensionality") == 256
 
 
+class TestBedrockCohereEmbeddingDispatch:
+    """All bedrock cohere.embed models must route to BedrockCohereEmbeddingConfig,
+    not just multilingual-v3/v4: english-v3 was falling into the unmapped
+    else-branch and rejecting encoding_format. Issue #38659."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.embed-english-v3",
+            "cohere.embed-multilingual-v3",
+            "cohere.embed-v4:0",
+        ],
+    )
+    def test_cohere_embed_models_accept_encoding_format(self, model):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model=model,
+            encoding_format="float",
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("embedding_types") == ["float"]
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.embed-english-v3",
+            "cohere.embed-multilingual-v3",
+            "cohere.embed-v4:0",
+        ],
+    )
+    def test_cohere_embed_models_map_base64_to_float(self, model):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model=model,
+            encoding_format="base64",
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("embedding_types") == ["float"]
+
+    def test_cohere_embed_english_v3_maps_dimensions(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="cohere.embed-english-v3",
+            encoding_format="float",
+            dimensions=512,
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("output_dimension") == 512
+
+
 @pytest.mark.parametrize(
     "model",
     [
@@ -5689,3 +5737,31 @@ class TestDefaultReasoningEffortHydration:
 
         model_info = dict(_get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
         assert model_info.get("default_reasoning_effort") is None
+
+
+class TestHuggingFaceConfigFetch:
+    """The Hugging Face config.json fetch runs on background logging threads during cost
+    calculation, so an unbounded request can hang a whole test job; the timeout is the fix."""
+
+    @pytest.fixture
+    def hf_config_route(self):
+        with respx.mock(assert_all_called=True) as respx_mock:
+            yield respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(
+                json={"max_position_embeddings": 512}
+            )
+
+    def test_get_max_tokens_reads_hf_config_with_a_bounded_timeout(self, hf_config_route):
+        from litellm.constants import HF_CONFIG_FETCH_TIMEOUT_SECONDS
+        from litellm.utils import get_max_tokens
+
+        assert get_max_tokens("huggingface/some-org/some-model") == 512
+        request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
+        assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
+
+    def test_get_max_position_embeddings_reads_hf_config_with_a_bounded_timeout(self, hf_config_route):
+        from litellm.constants import HF_CONFIG_FETCH_TIMEOUT_SECONDS
+        from litellm.utils import _get_max_position_embeddings
+
+        assert _get_max_position_embeddings("some-org/some-model") == 512
+        request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
+        assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS

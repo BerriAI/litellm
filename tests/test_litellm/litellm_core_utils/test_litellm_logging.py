@@ -580,9 +580,17 @@ class TestRetrieveBatchCostPassesModelIdentity:
 
         captured: dict[str, object] = {}
 
-        async def fake_handle_completed_batch(**kwargs: object) -> tuple[float, Usage, list[str]]:
+        from litellm.batches.batch_utils import BatchCostUsageResult
+
+        async def fake_handle_completed_batch(**kwargs: object) -> BatchCostUsageResult:
             captured.update(kwargs)
-            return 1.25, Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800), ["m"]
+            return BatchCostUsageResult(
+                cost=1.25,
+                usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
+                models=["m"],
+                successful_requests=1,
+                failed_requests=0,
+            )
 
         monkeypatch.setattr(logging_module, "_handle_completed_batch", fake_handle_completed_batch)
 

@@ -2858,6 +2858,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config_overrides/cyberark": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cyberark Config
+         * @description Get current CyberArk Conjur configuration.
+         *     Returns decrypted values from DB, or falls back to current env vars.
+         *     Sensitive fields are masked before leaving the server.
+         */
+        get: operations["get_cyberark_config_config_overrides_cyberark_get"];
+        put?: never;
+        /**
+         * Update Cyberark Config
+         * @description Update CyberArk Conjur secret manager configuration.
+         *     Sets environment variables, encrypts sensitive fields, and stores in DB.
+         *     Reinitializes the secret manager on this pod.
+         */
+        post: operations["update_cyberark_config_config_overrides_cyberark_post"];
+        /**
+         * Delete Cyberark Config
+         * @description Delete CyberArk Conjur configuration. Idempotent.
+         */
+        delete: operations["delete_cyberark_config_config_overrides_cyberark_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config_overrides/cyberark/test_connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Cyberark Connection
+         * @description Test the connection to the currently configured CyberArk Conjur server.
+         *     Uses the already-initialized secret manager client. Does not modify any state.
+         */
+        post: operations["test_cyberark_connection_config_overrides_cyberark_test_connection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config_overrides/hashicorp_vault": {
         parameters: {
             query?: never;
@@ -6968,6 +7021,30 @@ export interface paths {
          *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
          */
         post: operations["cancel_interaction_interactions__interaction_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/introspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Introspect Endpoint
+         * @description RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /
+         *     ``llm_srefresh_``), so an external gateway can validate them without the signing
+         *     secret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by
+         *     the route dependency); any token the gateway cannot vouch for answers
+         *     ``{"active": false}`` with no further detail.
+         */
+        post: operations["introspect_endpoint_introspect_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -23474,6 +23551,11 @@ export interface components {
             /** Mask[] */
             "mask[]"?: string[] | null;
         };
+        /** Body_introspect_endpoint_introspect_post */
+        Body_introspect_endpoint_introspect_post: {
+            /** Token */
+            token: string;
+        };
         /** Body_revoke_endpoint_revoke_post */
         Body_revoke_endpoint_revoke_post: {
             /** Client Id */
@@ -25811,6 +25893,52 @@ export interface components {
             spend: number;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * CyberArkConfig
+         * @description Configuration for CyberArk Conjur secret manager integration.
+         */
+        CyberArkConfig: {
+            /**
+             * Client Cert
+             * @description Path to the client TLS certificate for certificate-based authentication
+             */
+            client_cert?: string | null;
+            /**
+             * Client Key
+             * @description Path to the client TLS private key for certificate-based authentication
+             */
+            client_key?: string | null;
+            /**
+             * Cyberark Account
+             * @description The Conjur organization account name
+             */
+            cyberark_account?: string | null;
+            /**
+             * Cyberark Api Base
+             * @description The address of the CyberArk Conjur server (e.g., https://conjur.example.com)
+             */
+            cyberark_api_base?: string | null;
+            /**
+             * Cyberark Api Key
+             * @description API key for Conjur API-key authentication
+             */
+            cyberark_api_key?: string | null;
+            /**
+             * Cyberark Username
+             * @description The Conjur username (login) to authenticate as
+             */
+            cyberark_username?: string | null;
+            /**
+             * Refresh Interval
+             * @description Auth token cache TTL in seconds (default: 300)
+             */
+            refresh_interval?: string | null;
+            /**
+             * Ssl Verify
+             * @description Set to false to disable SSL verification (e.g., for self-signed certificates)
+             */
+            ssl_verify?: string | null;
         };
         /** DailySpendData */
         DailySpendData: {
@@ -42757,6 +42885,120 @@ export interface operations {
             };
         };
     };
+    get_cyberark_config_config_overrides_cyberark_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigOverrideSettingsResponse"];
+                };
+            };
+        };
+    };
+    update_cyberark_config_config_overrides_cyberark_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CyberArkConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_cyberark_config_config_overrides_cyberark_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_cyberark_connection_config_overrides_cyberark_test_connection_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+    };
     get_hashicorp_vault_config_config_overrides_hashicorp_vault_get: {
         parameters: {
             query?: never;
@@ -47630,6 +47872,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    introspect_endpoint_introspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_introspect_endpoint_introspect_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
