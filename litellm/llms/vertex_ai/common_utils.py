@@ -724,8 +724,9 @@ def set_schema_property_ordering(schema: dict[str, object], depth: int = 0) -> d
         # retain propertyOrdering as an escape hatch if user already specifies it
         if "propertyOrdering" not in schema:
             schema["propertyOrdering"] = [k for k, v in schema["properties"].items()]
-        for k, v in schema["properties"].items():
-            set_schema_property_ordering(v, depth + 1)
+        for v in schema["properties"].values():
+            if isinstance(v, dict):
+                set_schema_property_ordering(cast("dict[str, object]", v), depth + 1)  # cast-ok: JSON Schema child
     items: Final = schema.get("items")
     if isinstance(items, dict):
         set_schema_property_ordering(cast("dict[str, object]", items), depth + 1)  # cast-ok: JSON Schema child
