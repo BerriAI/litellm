@@ -69,6 +69,10 @@ def write_to_file(file_path: str, data: dict[str, object]) -> None:
 def transform_openrouter_data(data):
     transformed = {}
     for row in data:
+        if float(row["pricing"]["prompt"]) < 0 or float(row["pricing"]["completion"]) < 0:
+            print(f"Skipping openrouter/{row['id']}: the catalog lists no usable per-token price for it.")
+            continue
+
         # Add the fields 'max_tokens' and 'input_cost_per_token'
         obj = {
             "max_tokens": row["context_length"],
@@ -106,8 +110,10 @@ def transform_openrouter_data(data):
 def _vercel_entry(model: VercelModel) -> dict[str, object] | None:
     mode: Final = VERCEL_TYPE_TO_MODE[model.type]
     pricing: Final = model.pricing if model.pricing is not None else VercelPricing()
-    if pricing.input is None or (mode == "chat" and pricing.output is None):
-        print(f"Skipping vercel_ai_gateway/{model.id}: the catalog lists no per-token price for it.")
+    input_price_unusable: Final = pricing.input is None or pricing.input < 0
+    output_price_unusable: Final = mode == "chat" and (pricing.output is None or pricing.output < 0)
+    if input_price_unusable or output_price_unusable:
+        print(f"Skipping vercel_ai_gateway/{model.id}: the catalog lists no usable per-token price for it.")
         return None
     candidate: Final = {
         "max_tokens": model.max_tokens,

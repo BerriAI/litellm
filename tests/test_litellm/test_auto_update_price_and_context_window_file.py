@@ -40,11 +40,31 @@ VIDEO_ROW = {
     "pricing": {"video_duration_pricing": [{"resolution": "720p", "price_per_second": "0.4"}]},
 }
 IMAGE_ROW = {"id": "openai/gpt-image-1", "type": "image"}
+NEGATIVE_PRICE_LANGUAGE_ROW = {
+    "id": "openrouter/auto",
+    "type": "language",
+    "context_window": 2000000,
+    "max_tokens": 2000000,
+    "pricing": {"input": "-1", "output": "-1"},
+}
+OPENROUTER_ROW = {
+    "id": "anthropic/claude-sonnet-4.5",
+    "context_length": 1000000,
+    "pricing": {"prompt": "0.000003", "completion": "0.000015", "image": "0"},
+    "top_provider": {"max_completion_tokens": 64000},
+    "architecture": {"modality": "text+image->text"},
+}
+OPENROUTER_VARIABLE_PRICE_ROW = {
+    "id": "openrouter/auto",
+    "context_length": 2000000,
+    "pricing": {"prompt": "-1", "completion": "-1"},
+    "top_provider": {"max_completion_tokens": None},
+}
 
 
 def test_vercel_rows_without_per_token_pricing_are_skipped_instead_of_crashing() -> None:
     result = price_sync.transform_vercel_ai_gateway_data(
-        [LANGUAGE_ROW, EMBEDDING_ROW, UNPRICED_LANGUAGE_ROW, VIDEO_ROW, IMAGE_ROW]
+        [LANGUAGE_ROW, EMBEDDING_ROW, UNPRICED_LANGUAGE_ROW, VIDEO_ROW, IMAGE_ROW, NEGATIVE_PRICE_LANGUAGE_ROW]
     )
 
     assert result == {
@@ -68,6 +88,21 @@ def test_vercel_rows_without_per_token_pricing_are_skipped_instead_of_crashing()
             "litellm_provider": "vercel_ai_gateway",
             "mode": "embedding",
         },
+    }
+
+
+def test_openrouter_variable_priced_rows_are_skipped_so_the_schema_gate_stays_green() -> None:
+    result = price_sync.transform_openrouter_data([OPENROUTER_ROW, OPENROUTER_VARIABLE_PRICE_ROW])
+
+    assert result == {
+        "openrouter/anthropic/claude-sonnet-4.5": {
+            "max_tokens": 1000000,
+            "max_output_tokens": 64000,
+            "input_cost_per_token": 3e-06,
+            "output_cost_per_token": 1.5e-05,
+            "litellm_provider": "openrouter",
+            "mode": "chat",
+        }
     }
 
 
