@@ -3431,9 +3431,6 @@ class ProxyLogging:
                     ),
                 )
 
-        # Policy pipelines run last, over the fully buffered stream, so a
-        # pipeline verdict covers whatever the flat guardrail chain above
-        # already let through.
         if post_call_pipelines:
             current_response = self._pipeline_gated_stream(
                 response=current_response,
