@@ -7,11 +7,8 @@ transformations for the Responses API.
 Source: litellm/llms/github_copilot/responses/transformation.py
 """
 
-import sys
-import os
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
 import litellm
@@ -439,10 +436,9 @@ class TestGithubCopilotResponsesAPIRouting:
         catalog entries that lack ``mode``).
 
         Exercises the real ``_cached_get_model_info_helper`` plumbing via
-        ``register_model`` (no mock). ``supported_endpoints`` is not carried on
-        the normalized ``ModelInfoBase`` the helper returns, so the gate must
-        read it from the raw ``litellm.model_cost`` entry; a mock-based test
-        would mask that.
+        ``register_model`` (no mock). The gate reads ``supported_endpoints``
+        from the raw ``litellm.model_cost`` entry; a mock-based test would
+        mask that.
         """
         litellm.register_model(
             {

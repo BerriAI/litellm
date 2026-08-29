@@ -6,7 +6,6 @@ non-streaming pass-through responses. Addresses issue #20270.
 """
 
 import json
-import sys
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +17,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.proxy._types import ProxyException
 
 _PT_MOD = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 _COLLECT = "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails"
@@ -64,21 +64,6 @@ def _make_mock_request():
     mock_request.headers.copy.return_value = {}
     return mock_request
 
-
-def _ensure_proxy_server_mock():
-    """Insert a mock proxy_server module if the real one can't import."""
-    key = "litellm.proxy.proxy_server"
-    if key not in sys.modules:
-        mock_mod = MagicMock()
-        mock_mod.proxy_logging_obj = MagicMock()
-        sys.modules[key] = mock_mod
-    import litellm.proxy
-
-    if not hasattr(litellm.proxy, "proxy_server"):
-        litellm.proxy.proxy_server = sys.modules[key]
-
-
-_ensure_proxy_server_mock()
 
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     pass_through_request,
@@ -251,7 +236,7 @@ class TestPassthroughPostCallGuardrails:
         )
 
         with _common_patches(mock_proxy_logging, mock_response):
-            with pytest.raises(Exception):
+            with pytest.raises(ProxyException):
                 await pass_through_request(
                     request=_make_mock_request(),
                     target="https://example.com/v1/generateContent",

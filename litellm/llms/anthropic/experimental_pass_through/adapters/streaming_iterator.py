@@ -624,6 +624,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     return self.chunk_queue.popleft()
 
                 if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(processed_chunk):
+                    # A tool_use block opens with empty arguments (Bedrock Converse's
+                    # ``contentBlockStart``, OpenAI's ``arguments: ""``), so flush the
+                    # block start queued above instead of waiting for the next upstream
+                    # chunk, which on a trailing-burst provider is the whole generation.
+                    if self.chunk_queue:
+                        return self.chunk_queue.popleft()
                     continue
 
                 if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
@@ -847,6 +853,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(
                         processed_chunk
                     ):
+                        # See ``__next__``: flush the queued block start (issue #32004).
+                        if self.chunk_queue:
+                            return self.chunk_queue.popleft()
                         continue
 
                     if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
@@ -1020,6 +1029,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     @staticmethod
     def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
+        from litellm.llms.anthropic.common_utils import is_empty_thinking_block
+
         choice: Final = chunk.choices[0]
         if choice.finish_reason is not None:
             return False
@@ -1030,7 +1041,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             return False
         if getattr(delta, "reasoning_content", None):
             return False
-        if getattr(delta, "thinking_blocks", None):
+        # thinking_blocks whose entries are all empty (even if signed) must not
+        # open a block: the emitted {"type": "thinking", "thinking": ""} gets
+        # replayed as history and Anthropic rejects it (LIT-6357).
+        thinking_blocks: Final = getattr(delta, "thinking_blocks", None)
+        if thinking_blocks and any(isinstance(b, dict) and not is_empty_thinking_block(b) for b in thinking_blocks):
             return False
         return True
 

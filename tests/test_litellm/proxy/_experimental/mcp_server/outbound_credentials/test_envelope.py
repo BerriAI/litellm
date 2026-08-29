@@ -3,9 +3,9 @@
 The envelope is the single client-held bearer carrying both a litellm identity and the
 encrypted upstream grant, with zero server-side storage. These tests pin the security
 contract: an envelope opens only under the exact keys that minted it, tampering with any
-signed byte is detected, expiry is enforced against the injected clock (capped by the
-module TTL ceiling), oversized envelopes are rejected rather than truncated, and no
-error value, model repr, or raised exception ever contains the inner access token.
+signed byte is detected, expiry is enforced against the injected clock and provider
+lifetime, oversized envelopes are rejected rather than truncated, and no error value,
+model repr, or raised exception ever contains the inner access token.
 """
 
 import base64
@@ -30,6 +30,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     DecryptFailed,
     EnvelopeIdentity,
     EnvelopeKeys,
+    EnvelopeLifetimeUnrepresentable,
+    EnvelopeMintError,
     EnvelopeTooLarge,
     Expired,
     MalformedPayload,
@@ -159,6 +161,20 @@ def test_claim_layout_and_no_plaintext_token_in_envelope():
     assert _REFRESH_TOKEN not in json.dumps(claims)
 
 
+def test_unrepresentable_access_lifetime_is_a_typed_mint_error():
+    grant = UpstreamTokenGrant(
+        access_token=SecretStr(_ACCESS_TOKEN),
+        token_type="Bearer",
+        expires_in=10**30,
+    )
+
+    result = mint_envelope(_IDENTITY, grant, _KEYS, _NOW)
+
+    assert isinstance(result, EnvelopeLifetimeUnrepresentable)
+    assert result.tag == "envelope_lifetime_unrepresentable"
+    assert result.expires_in == 10**30
+
+
 def _refresh_credential() -> RefreshCredential:
     return RefreshCredential(refresh_token=SecretStr(_REFRESH_TOKEN), scope="read:tools", expires_in=None)
 
@@ -243,11 +259,11 @@ def test_refresh_envelope_never_leaks_the_refresh_token_in_plaintext():
     "expires_in, expected_ttl",
     [
         (600, 600),
-        (MAX_ENVELOPE_TTL_SECONDS + 82800, MAX_ENVELOPE_TTL_SECONDS),
+        (MAX_ENVELOPE_TTL_SECONDS + 82800, MAX_ENVELOPE_TTL_SECONDS + 82800),
         (None, MAX_ENVELOPE_TTL_SECONDS),
     ],
 )
-def test_exp_is_min_of_upstream_expires_in_and_cap(expires_in, expected_ttl):
+def test_exp_matches_upstream_lifetime_or_uses_missing_lifetime_fallback(expires_in: int | None, expected_ttl: int):
     grant = UpstreamTokenGrant(access_token=SecretStr(_ACCESS_TOKEN), token_type="Bearer", expires_in=expires_in)
     sealed = mint_envelope(_IDENTITY, grant, _KEYS, _NOW)
     assert isinstance(sealed, SealedEnvelope)
@@ -261,13 +277,13 @@ def test_expiry_honored_against_injected_clock():
     assert isinstance(open_envelope(token, _KEYS, _NOW + timedelta(seconds=601)), Expired)
 
 
-def test_ttl_cap_enforced_on_open_even_when_upstream_token_lives_longer():
+def test_upstream_token_lifetime_is_enforced_on_open():
     grant = UpstreamTokenGrant(access_token=SecretStr(_ACCESS_TOKEN), token_type="Bearer", expires_in=86400)
     token = _sealed_token(grant)
-    just_before_cap = _NOW + timedelta(seconds=MAX_ENVELOPE_TTL_SECONDS - 1)
-    at_cap = _NOW + timedelta(seconds=MAX_ENVELOPE_TTL_SECONDS)
-    assert isinstance(open_envelope(token, _KEYS, just_before_cap), OpenedEnvelope)
-    assert isinstance(open_envelope(token, _KEYS, at_cap), Expired)
+    just_before_expiry = _NOW + timedelta(seconds=86399)
+    at_expiry = _NOW + timedelta(seconds=86400)
+    assert isinstance(open_envelope(token, _KEYS, just_before_expiry), OpenedEnvelope)
+    assert isinstance(open_envelope(token, _KEYS, at_expiry), Expired)
 
 
 def test_tampering_any_payload_or_signature_byte_is_bad_signature():
@@ -420,7 +436,7 @@ def test_decryptable_blob_that_is_not_a_grant_is_malformed_payload():
     assert isinstance(open_envelope(forged, _KEYS, _NOW), MalformedPayload)
 
 
-def _mint_with_token_len(n: int) -> SealedEnvelope | EnvelopeTooLarge:
+def _mint_with_token_len(n: int) -> SealedEnvelope | EnvelopeMintError:
     grant = UpstreamTokenGrant(access_token=SecretStr("a" * n), token_type="Bearer")
     return mint_envelope(_IDENTITY, grant, _KEYS, _NOW)
 

@@ -24,10 +24,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
+    is_provider_native_tool_dict,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     anthropic_tool_name,
+    anthropic_tool_names,
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -408,7 +410,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         structured_messages: Final = [full_structured_messages[index] for index in scoped_message_indices]
 
         tools_to_check: Final[list[ChatCompletionToolParam]] = (
-            [] if scan_only_tool_results else chat_completion_compatible_request.get("tools", [])
+            []
+            if scan_only_tool_results
+            else [
+                tool
+                for tool in chat_completion_compatible_request.get("tools", [])
+                if not is_provider_native_tool_dict(tool)
+            ]
         )
 
         # Step 1: Extract all text content and images
@@ -467,7 +475,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                         tool_name=anthropic_tool_name,
                     )
                     if scan_only_tool_results
-                    else anthropic_tools
+                    else [
+                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
+                        *anthropic_tools,
+                    ]
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
@@ -548,6 +559,39 @@ class AnthropicMessagesHandler(BaseTranslation):
         )  # mutable-ok: API message payload
 
     @staticmethod
+    def _fold_leading_systems_into_top_level(
+        data: dict[str, object],  # mutable-ok: API message payload
+        leading_systems: Sequence[object],
+        include_existing_system: bool,
+    ) -> None:
+        """Deliver leading system rows through Anthropic's top-level system param, which rejects them in messages."""
+        existing: Final = data.get("system") if include_existing_system else None
+        existing_blocks: Final[list[object]] = (  # mutable-ok: API message payload
+            [{"type": "text", "text": existing}]
+            if isinstance(existing, str) and existing
+            else list(existing)
+            if isinstance(existing, list)
+            else []
+        )
+        converted_rows: Final = tuple(
+            AnthropicMessagesHandler._openai_system_message_to_anthropic(message)
+            for message in leading_systems
+            if isinstance(message, dict)
+        )
+        folded: Final[list[object]] = existing_blocks + [  # mutable-ok: API message payload
+            block
+            for row in converted_rows
+            if row is not None
+            for block in (
+                [{"type": "text", "text": row["content"]}] if isinstance(row["content"], str) else row["content"]
+            )
+        ]
+        if folded:
+            data["system"] = folded  # rebind-ok: write-back mutates the request payload in place
+        else:
+            data.pop("system", None)
+
+    @staticmethod
     def _is_hoisted_top_level_system(message: object, hoisted_system_message: object) -> bool:
         """Match the hoisted prompt by identity, or by value after serialization."""
         if hoisted_system_message is None:
@@ -623,9 +667,24 @@ class AnthropicMessagesHandler(BaseTranslation):
                 )
 
         ordered: Final = AnthropicMessagesHandler._defer_systems_inside_tool_exchanges(structured_messages)
+        leading_count: Final = next(
+            (index for index, message in enumerate(ordered) if not _is_system(message)),
+            len(ordered),
+        )
+        leading_systems: Final = ordered[:leading_count]
+        hoisted_in_leading: Final = any(
+            AnthropicMessagesHandler._is_hoisted_top_level_system(message, hoisted_system_message)
+            for message in leading_systems
+        )
+        if leading_systems and not (leading_count == 1 and hoisted_in_leading):
+            AnthropicMessagesHandler._fold_leading_systems_into_top_level(
+                data,
+                leading_systems,
+                include_existing_system=hoisted_system_message is None,
+            )
         run: Final[list] = []  # mutable-ok: API message payload
-        hoisted_dropped = False  # rebind-ok: flips once the hoisted prompt is dropped
-        for message in ordered:
+        hoisted_dropped = hoisted_in_leading  # rebind-ok: flips once the hoisted prompt is dropped
+        for message in ordered[leading_count:]:
             if not _is_system(message):
                 run.append(message)
                 continue
@@ -677,12 +736,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
-        """Extract tool names from Anthropic messages request (tools[].name)."""
-        names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
-            if isinstance(tool, dict) and tool.get("name"):
-                names.append(str(tool["name"]))
-        return names
+        """Extract every tool name in an Anthropic messages request: tools[].name, plus
+        tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
+        return [name for tool in data.get("tools") or [] for name in anthropic_tool_names(tool)]
 
     @classmethod
     def _extract_input_text_and_images(

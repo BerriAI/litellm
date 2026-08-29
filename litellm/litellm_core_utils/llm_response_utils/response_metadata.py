@@ -178,7 +178,7 @@ def update_response_metadata(
         - response._hidden_params["litellm_overhead_time_ms"]
         - response.response_time_ms
     """
-    if result is None:
+    if result is None or not hasattr(result, "_hidden_params"):
         return
 
     metadata: Final = ResponseMetadata(result)

@@ -57,7 +57,7 @@ from ..result import PolyfillResult
 # so the summary's spend is attributed to the same scopes. The list mirrors the
 # fields populated by
 # ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata``.
-# ``user_api_key_model_max_budget`` / ``user_api_key_end_user_model_max_budget``
+# The three ``*_model_max_budget`` fields
 # are what ``_PROXY_VirtualKeyModelMaxBudgetLimiter`` reads post-call to update
 # the per-model spend caches, so without them the summary spend would never
 # count against the caller's model budget. ``user_api_key_end_user_id`` /
@@ -77,6 +77,7 @@ _PROPAGATED_METADATA_KEYS: Final = (
     "user_api_key_end_user_id",
     "user_api_end_user_max_budget",
     "user_api_key_model_max_budget",
+    "user_api_key_user_model_max_budget",
     "user_api_key_end_user_model_max_budget",
     "litellm_call_id",
     "litellm_parent_otel_span",
@@ -111,7 +112,10 @@ class _SummaryOptionalKwargs(TypedDict, total=False):
 
 class _SummaryAcompletion(Protocol):
     def __call__(
-        self, *, messages: Sequence[Mapping[str, object]], **kwargs: Unpack[_SummaryCallKwargs]
+        self,
+        *,
+        messages: Sequence[Mapping[str, object]],
+        **kwargs: Unpack[_SummaryCallKwargs],  # kwargs-ok: forwarded verbatim to acompletion, which owns them
     ) -> "Awaitable[ModelResponse | CustomStreamWrapper]": ...
 
 
@@ -386,10 +390,14 @@ async def _check_summary_model_budget(
     The summary subrequest never passes back through ``user_api_key_auth``, so
     without this gate a caller whose ``model_max_budget`` for
     ``context_management_summary_model`` is exhausted could keep consuming that
-    model via compaction. Mirrors the ``model_max_budget`` /
-    ``end_user_model_max_budget`` enforcement that ``user_api_key_auth`` runs for
-    the client-requested model. Returns True outside the proxy or when no
+    model via compaction. Mirrors the per-model budget enforcement that
+    ``user_api_key_auth`` runs for the client-requested model. Returns True outside the proxy or when no
     per-model budget is configured.
+
+    All three scopes are checked because the summary's spend is charged to all
+    three: this file propagates the key, user and end-user budgets into the
+    subrequest's metadata, so enforcing only two of them would let compaction
+    increment a counter it can never be refused by.
     """
     if user_api_key_auth is None:
         return True
@@ -411,6 +419,25 @@ async def _check_summary_model_budget(
         except Exception as e:
             verbose_logger.warning(
                 "compact_20260112: unexpected error during key model-budget check for summary_model=%s; denying: %s",
+                summary_model,
+                e,
+            )
+            return False
+
+    user_model_max_budget: Final = user_api_key_auth.user_model_max_budget
+    user_id: Final = user_api_key_auth.user_id
+    if isinstance(user_model_max_budget, dict) and user_model_max_budget and user_id is not None:
+        try:
+            await model_max_budget_limiter.is_user_within_model_budget(
+                user_id=user_id,
+                user_model_max_budget=user_model_max_budget,
+                model=summary_model,
+            )
+        except litellm.BudgetExceededError:
+            return False
+        except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the key and end-user scopes do
+            verbose_logger.warning(
+                "compact_20260112: unexpected error during user model-budget check for summary_model=%s; denying: %s",
                 summary_model,
                 e,
             )
@@ -623,7 +650,7 @@ def _augment_system_with_summary(
     return [{"type": "text", "text": prefix.rstrip()}, *system]
 
 
-def _resolve_trigger_tokens(edit_spec: dict[str, object]) -> tuple[int, list[str]]:
+def _resolve_trigger_tokens(edit_spec: Mapping[str, object]) -> tuple[int, list[str]]:
     """Validate and resolve ``trigger.value``.
 
     Raises ``AnthropicContextManagementError`` if the explicitly-supplied value
@@ -657,7 +684,7 @@ def _resolve_trigger_tokens(edit_spec: dict[str, object]) -> tuple[int, list[str
     return value, warnings
 
 
-def _build_summary_prompt(edit_spec: dict[str, object], tools: list[dict[str, object]] | None) -> str:
+def _build_summary_prompt(edit_spec: Mapping[str, object], tools: Sequence[Mapping[str, object]] | None) -> str:
     custom: Final = edit_spec.get("instructions")
     if isinstance(custom, str) and custom.strip():
         return custom

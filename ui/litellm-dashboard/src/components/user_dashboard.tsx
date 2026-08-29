@@ -1,6 +1,5 @@
 "use client";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
-import { Col, Grid } from "@tremor/react";
 import { jwtDecode } from "jwt-decode";
 import React, { useEffect, useState } from "react";
 import { fetchTeams } from "./common_components/fetch_teams";
@@ -217,27 +216,25 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const canCreateKey = userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
 
   return (
-    <div className="mx-4 h-[75vh]">
-      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-        <Col numColSpan={1} className="flex flex-col gap-2">
-          <VirtualKeysTable
-            headerActions={
-              canCreateKey ? (
-                <CreateKey
-                  key={selectedTeam ? selectedTeam.team_id : null}
-                  team={selectedTeam as Team | null}
-                  teams={teams as Team[]}
-                  data={keys}
-                  addKey={addKey}
-                  autoOpenCreate={autoOpenCreate}
-                  prefillData={prefillData}
-                />
-              ) : undefined
-            }
-          />
-        </Col>
-      </Grid>
-    </div>
+    <main className="h-[75vh] p-8">
+      <div className="flex h-full flex-col">
+        <VirtualKeysTable
+          headerActions={
+            canCreateKey ? (
+              <CreateKey
+                key={selectedTeam ? selectedTeam.team_id : null}
+                team={selectedTeam as Team | null}
+                teams={teams as Team[]}
+                data={keys}
+                addKey={addKey}
+                autoOpenCreate={autoOpenCreate}
+                prefillData={prefillData}
+              />
+            ) : undefined
+          }
+        />
+      </div>
+    </main>
   );
 };
 

@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _base_vertex_proxy_route,
 )
@@ -323,6 +324,7 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
             vertex_location="us-central1",
             base_target_url="https://us-central1-aiplatform.googleapis.com",
             get_vertex_pass_through_handler=mock_handler,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-secret-key"),
         )
 
         # Verify that allowlisted headers are preserved
@@ -417,6 +419,7 @@ async def test_vertex_passthrough_does_not_forward_litellm_auth_token():
             vertex_location="us-central1",
             base_target_url="https://us-central1-aiplatform.googleapis.com",
             get_vertex_pass_through_handler=mock_handler,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-secret-key"),
         )
 
         # The ONLY Authorization header should be the Vertex token
@@ -565,6 +568,32 @@ def test_forward_headers_custom_wins_case_insensitive_over_request_authorization
     assert "authorization" not in result
     assert result["Content-Type"] == "application/json"
     assert "content-type" not in result
+    assert result["x-request-id"] == "req-123"
+
+
+def test_forward_headers_never_forwards_client_accept_encoding():
+    """
+    The client's Accept-Encoding must not reach the upstream provider: the proxy's
+    HTTP client decodes the upstream body and advertises only encodings it can
+    decode. Forwarding e.g. "br" on an install without the brotli package makes
+    the proxy relay raw compressed bytes with the content-encoding header stripped
+    (garbled JSON for /v1/models and count_tokens through the Anthropic passthrough).
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    request_headers = {
+        "accept-encoding": "gzip, deflate, br, zstd",
+        "x-pass-accept-encoding": "br",
+        "x-request-id": "req-123",
+    }
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers,
+        headers={},
+        forward_headers=True,
+    )
+
+    assert "accept-encoding" not in result
     assert result["x-request-id"] == "req-123"
 
 
