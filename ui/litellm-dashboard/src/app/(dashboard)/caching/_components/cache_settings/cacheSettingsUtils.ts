@@ -86,14 +86,18 @@ const saveValueForField = (field: CacheField, raw: CacheFormValue): CacheSavePay
 export const buildCachePayload = (
   redisType: RedisType,
   values: CacheFormValues,
-  { forTesting }: { forTesting: boolean },
+  { forTesting, configSourcedFields }: { forTesting: boolean; configSourcedFields?: ReadonlySet<string> },
 ): CacheSavePayload => {
   const type = !forTesting && redisType === "semantic" ? "redis-semantic" : "redis";
 
-  const entries = CACHE_FIELDS.filter((field) => isFieldVisible(field, redisType)).flatMap((field) => {
+  const excludedFromSave = forTesting ? new Set<string>() : configSourcedFields ?? new Set<string>();
+
+  const entries = CACHE_FIELDS.filter(
+    (field) => isFieldVisible(field, redisType) && !excludedFromSave.has(field.name),
+  ).flatMap((field) => {
     const value = saveValueForField(field, values[field.name]);
     return value === undefined ? [] : [[field.name, value] as const];
   });
 
-  return { type, ...Object.fromEntries(entries) };
+  return excludedFromSave.has("type") ? Object.fromEntries(entries) : { type, ...Object.fromEntries(entries) };
 };

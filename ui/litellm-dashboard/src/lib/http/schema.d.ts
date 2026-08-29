@@ -23965,6 +23965,11 @@ export interface components {
         /** CacheSettingsResponse */
         CacheSettingsResponse: {
             /**
+             * Config Sourced Fields
+             * @description Settings whose effective value comes from litellm_settings.cache_params in the config file. These take precedence over stored values and cannot be changed from this endpoint.
+             */
+            config_sourced_fields?: string[];
+            /**
              * Current Values
              * @description Current values of cache settings
              */

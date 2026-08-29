@@ -11,6 +11,7 @@ interface CacheFieldSectionProps {
   gridCols?: string;
   headingLevel?: "h4" | "h5";
   configuredSecrets?: ReadonlySet<string>;
+  configSourcedFields?: ReadonlySet<string>;
 }
 
 const CacheFieldSection: React.FC<CacheFieldSectionProps> = ({
@@ -21,6 +22,7 @@ const CacheFieldSection: React.FC<CacheFieldSectionProps> = ({
   gridCols = "grid-cols-1 gap-6 sm:grid-cols-2",
   headingLevel = "h4",
   configuredSecrets,
+  configSourcedFields,
 }) => {
   const fields = fieldsForSection(section, redisType);
   if (fields.length === 0) {
@@ -39,6 +41,7 @@ const CacheFieldSection: React.FC<CacheFieldSectionProps> = ({
             field={field}
             embeddingModels={embeddingModels}
             isSecretConfigured={configuredSecrets?.has(field.name) ?? false}
+            isConfigSourced={configSourcedFields?.has(field.name) ?? false}
           />
         ))}
       </div>

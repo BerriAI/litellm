@@ -4,6 +4,7 @@ Unit tests for cache settings management endpoints
 
 import asyncio
 import json
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,6 +19,8 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
     CacheSettingsManager,
     CacheSettingsUpdateRequest,
     CacheTestRequest,
+    _apply_config_yaml_precedence,
+    _config_yaml_cache_params,
     _merge_over_saved,
     _overlay_environment,
     _parse_stored_settings,
@@ -823,9 +826,7 @@ async def test_get_cache_settings_redacts_password_with_marker(monkeypatch):
     for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
         monkeypatch.delenv(var, raising=False)
     cache_row = MagicMock()
-    cache_row.cache_settings = json.dumps(
-        {"type": "redis", "host": "h", "password": "supersecret", "namespace": "ns"}
-    )
+    cache_row.cache_settings = json.dumps({"type": "redis", "host": "h", "password": "supersecret", "namespace": "ns"})
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=cache_row)
     proxy_config = MagicMock()
@@ -967,9 +968,7 @@ async def test_update_applies_new_password(monkeypatch):
         patch("litellm.proxy.proxy_server.store_model_in_db", True),
     ):
         await update_cache_settings(
-            request=CacheSettingsUpdateRequest(
-                cache_settings={"type": "redis", "host": "h", "password": "brandnewpw"}
-            ),
+            request=CacheSettingsUpdateRequest(cache_settings={"type": "redis", "host": "h", "password": "brandnewpw"}),
             user_api_key_dict=_admin_auth(),
             litellm_changed_by=None,
         )
@@ -1109,9 +1108,7 @@ async def test_test_cache_connection_does_not_replay_saved_password_to_new_host(
     ):
         mock_cache_class.return_value = cache_instance
         await test_cache_connection(
-            request=CacheTestRequest(
-                cache_settings={"type": "redis", "host": "attacker.example.com", "port": "6379"}
-            ),
+            request=CacheTestRequest(cache_settings={"type": "redis", "host": "attacker.example.com", "port": "6379"}),
             user_api_key_dict=_admin_auth(),
         )
 
@@ -1119,3 +1116,297 @@ async def test_test_cache_connection_does_not_replay_saved_password_to_new_host(
     # the stored password is NOT sent to the attacker-chosen host
     assert called_kwargs.get("password") != "realredispw"
     assert "password" not in called_kwargs
+
+
+def _proxy_config_with_yaml_cache_params(cache_params: dict | None) -> MagicMock:
+    proxy_config = MagicMock()
+    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config._encrypt_env_variables = MagicMock(
+        side_effect=lambda environment_variables: dict(environment_variables)
+    )
+    proxy_config.get_config_state = MagicMock(
+        return_value={"litellm_settings": {"cache": True, "cache_params": cache_params}}
+        if cache_params is not None
+        else {}
+    )
+    return proxy_config
+
+
+def _prisma_with_cache_row(stored: dict | None) -> MagicMock:
+    row = None
+    if stored is not None:
+        row = MagicMock()
+        row.cache_settings = json.dumps(stored)
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_cacheconfig.upsert = AsyncMock(return_value=row)
+    return mock_prisma
+
+
+@contextmanager
+def _proxy_server_state(prisma: MagicMock, proxy_config: MagicMock):
+    with (
+        patch(  # test-quality-ok: the cache endpoints read this proxy_server module global at call time, so there is no seam to inject through
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch("litellm.proxy.proxy_server.proxy_config", proxy_config),  # test-quality-ok: same module-global seam
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: same module-global seam
+    ):
+        yield
+
+
+class TestConfigYamlCacheParams:
+    @pytest.mark.asyncio
+    async def test_get_surfaces_config_yaml_params(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        with _proxy_server_state(
+            _prisma_with_cache_row(None),
+            _proxy_config_with_yaml_cache_params(
+                {
+                    "type": "redis",
+                    "namespace": "yamlns",
+                    "ttl": 1234,
+                    "supported_call_types": ["acompletion", "atext_completion"],
+                }
+            ),
+        ):
+            response = await get_cache_settings(user_api_key_dict=_admin_auth())
+
+        assert response.current_values["namespace"] == "yamlns"
+        assert response.current_values["ttl"] == 1234
+        assert response.current_values["supported_call_types"] == ["acompletion", "atext_completion"]
+
+    @pytest.mark.asyncio
+    async def test_get_marks_config_sourced_fields(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        with _proxy_server_state(
+            _prisma_with_cache_row({"type": "redis", "host": "h"}),
+            _proxy_config_with_yaml_cache_params({"namespace": "yamlns", "ttl": 1234}),
+        ):
+            response = await get_cache_settings(user_api_key_dict=_admin_auth())
+
+        assert set(response.config_sourced_fields) == {"namespace", "ttl"}
+        assert "host" not in response.config_sourced_fields
+
+    @pytest.mark.asyncio
+    async def test_get_config_yaml_wins_over_stored_row(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        with _proxy_server_state(
+            _prisma_with_cache_row({"type": "redis", "host": "h", "ttl": 60}),
+            _proxy_config_with_yaml_cache_params({"ttl": 1234}),
+        ):
+            response = await get_cache_settings(user_api_key_dict=_admin_auth())
+
+        assert response.current_values["ttl"] == 1234
+
+    @pytest.mark.asyncio
+    async def test_save_omitting_config_yaml_fields_does_not_drop_them(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        proxy_config = _proxy_config_with_yaml_cache_params(
+            {
+                "type": "redis",
+                "namespace": "yamlns",
+                "supported_call_types": ["acompletion", "atext_completion"],
+            }
+        )
+
+        monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True, raising=False)
+        with _proxy_server_state(_prisma_with_cache_row(None), proxy_config):
+            await update_cache_settings(
+                request=CacheSettingsUpdateRequest(
+                    cache_settings={
+                        "type": "redis",
+                        "port": "6379",
+                        "ssl": False,
+                        "ssl_check_hostname": False,
+                        "ttl": 600,
+                    }
+                ),
+                user_api_key_dict=_admin_auth(),
+            )
+
+        applied = proxy_config._init_cache.call_args.kwargs["cache_params"]
+        assert applied["namespace"] == "yamlns"
+        assert applied["supported_call_types"] == ["acompletion", "atext_completion"]
+        assert applied["ttl"] == 600
+
+    @pytest.mark.asyncio
+    async def test_db_reload_overlays_config_yaml_params(self):
+        proxy_config = _proxy_config_with_yaml_cache_params({"namespace": "yamlns", "ttl": 1234})
+        CacheSettingsManager._last_cache_params = None
+
+        await CacheSettingsManager.init_cache_settings_in_db(
+            prisma_client=_prisma_with_cache_row({"type": "redis", "host": "h"}),
+            proxy_config=proxy_config,
+        )
+
+        applied = proxy_config._init_cache.call_args.kwargs["cache_params"]
+        assert applied["namespace"] == "yamlns"
+        assert applied["ttl"] == 1234
+        assert applied["host"] == "h"
+
+    @pytest.mark.asyncio
+    async def test_config_yaml_params_ignored_when_cache_not_enabled(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        proxy_config = MagicMock()
+        proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+        proxy_config.get_config_state = MagicMock(
+            return_value={"litellm_settings": {"cache_params": {"namespace": "yamlns", "ttl": 1234}}}
+        )
+
+        with _proxy_server_state(_prisma_with_cache_row({"type": "redis", "host": "h"}), proxy_config):
+            response = await get_cache_settings(user_api_key_dict=_admin_auth())
+
+        assert "namespace" not in response.current_values
+        assert response.config_sourced_fields == ()
+
+    def test_config_yaml_env_references_are_resolved(self, monkeypatch):
+        monkeypatch.setenv("LIT3863_TEST_PASSWORD", "resolved-secret")
+        proxy_config = MagicMock()
+        proxy_config.get_config_state = MagicMock(
+            return_value={
+                "litellm_settings": {
+                    "cache": True,
+                    "cache_params": {"type": "redis", "password": "os.environ/LIT3863_TEST_PASSWORD"},
+                }
+            }
+        )
+
+        resolved = _config_yaml_cache_params(proxy_config)
+
+        assert resolved["password"] == "resolved-secret"
+
+    def test_config_yaml_discrete_connection_supersedes_a_stored_url(self):
+        merged = _apply_config_yaml_precedence(
+            {"type": "redis", "url": "redis://dbhost:6379/0"},
+            {"type": "redis", "host": "yamlhost", "port": 7000},
+        )
+
+        assert "url" not in merged
+        assert merged["host"] == "yamlhost"
+
+    def test_config_yaml_url_supersedes_stored_discrete_connection(self):
+        merged = _apply_config_yaml_precedence(
+            {"type": "redis", "host": "dbhost", "port": 6379, "db": 2},
+            {"type": "redis", "url": "redis://yamlhost:7000/5"},
+        )
+
+        assert merged["url"] == "redis://yamlhost:7000/5"
+        assert "host" not in merged and "port" not in merged and "db" not in merged
+
+    @pytest.mark.asyncio
+    async def test_save_keeps_the_stored_value_for_a_config_owned_field(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        proxy_config = _proxy_config_with_yaml_cache_params({"type": "redis", "namespace": "yamlns"})
+        prisma = _prisma_with_cache_row({"type": "redis", "host": "h", "namespace": "stored-ns"})
+
+        with _proxy_server_state(prisma, proxy_config):
+            await update_cache_settings(
+                request=CacheSettingsUpdateRequest(
+                    cache_settings={"type": "redis", "host": "h", "ttl": 600},
+                ),
+                user_api_key_dict=_admin_auth(),
+            )
+
+        persisted = json.loads(
+            prisma.db.litellm_cacheconfig.upsert.call_args.kwargs["data"]["update"]["cache_settings"]
+        )
+        assert persisted["namespace"] == "stored-ns"
+        assert proxy_config._init_cache.call_args.kwargs["cache_params"]["namespace"] == "yamlns"
+
+    @pytest.mark.asyncio
+    async def test_save_response_reports_what_is_actually_in_force(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        proxy_config = _proxy_config_with_yaml_cache_params({"type": "redis", "namespace": "yamlns", "ttl": 1234})
+
+        with _proxy_server_state(_prisma_with_cache_row(None), proxy_config):
+            result = await update_cache_settings(
+                request=CacheSettingsUpdateRequest(
+                    cache_settings={"type": "redis", "host": "h", "namespace": "ignored", "ttl": 55555},
+                ),
+                user_api_key_dict=_admin_auth(),
+            )
+
+        assert result["settings"]["namespace"] == "yamlns"
+        assert result["settings"]["ttl"] == 1234
+
+    @pytest.mark.asyncio
+    async def test_connection_test_uses_the_config_yaml_value_not_the_stored_one(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        proxy_config = _proxy_config_with_yaml_cache_params(
+            {"type": "redis", "host": "yaml-host", "password": "yaml-pw"}
+        )
+        prisma = _prisma_with_cache_row({"type": "redis", "host": "stored-host", "password": "stored-pw"})
+        connected_with: dict[str, object] = {}
+
+        class _RecordingCache:
+            def __init__(self, **kwargs: object) -> None:
+                connected_with.update(kwargs)
+                self.cache = MagicMock()
+                self.cache.test_connection = AsyncMock(return_value={"status": "healthy", "message": "ok"})
+
+        with (
+            _proxy_server_state(prisma, proxy_config),
+            patch(  # test-quality-ok: the endpoint constructs the cache itself, so recording its constructor args is the only way to see what it connected with
+                "litellm.Cache", _RecordingCache
+            ),
+        ):
+            result = await test_cache_connection(
+                request=CacheTestRequest(cache_settings={"type": "redis"}),
+                user_api_key_dict=_admin_auth(),
+            )
+
+        assert result.status == "healthy"
+        assert connected_with["password"] == "yaml-pw"
+        assert connected_with["host"] == "yaml-host"
+
+    @pytest.mark.asyncio
+    async def test_a_config_yaml_url_drops_its_own_discrete_fields_everywhere(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        yaml_params = {"type": "redis", "url": "redis://cfg:6379/2", "host": "cfg-discrete", "port": 7000}
+        proxy_config = _proxy_config_with_yaml_cache_params(yaml_params)
+
+        with _proxy_server_state(_prisma_with_cache_row(None), proxy_config):
+            reported = await get_cache_settings(user_api_key_dict=_admin_auth())
+            await update_cache_settings(
+                request=CacheSettingsUpdateRequest(cache_settings={"type": "redis"}),
+                user_api_key_dict=_admin_auth(),
+            )
+
+        applied = proxy_config._init_cache.call_args.kwargs["cache_params"]
+        assert "host" not in reported.current_values
+        assert "host" not in applied
+        assert applied["url"] == "redis://cfg:6379/2"
+        assert set(reported.config_sourced_fields) == {"type", "url"}
+
+    @pytest.mark.asyncio
+    async def test_a_config_yaml_semantic_cache_reports_the_semantic_topology(self, monkeypatch):
+        for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        proxy_config = _proxy_config_with_yaml_cache_params(
+            {"type": "redis-semantic", "host": "h", "similarity_threshold": 0.9}
+        )
+
+        with _proxy_server_state(_prisma_with_cache_row(None), proxy_config):
+            reported = await get_cache_settings(user_api_key_dict=_admin_auth())
+
+        assert reported.current_values["redis_type"] == "semantic"

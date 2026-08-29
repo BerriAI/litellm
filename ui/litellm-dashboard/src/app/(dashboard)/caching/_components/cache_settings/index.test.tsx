@@ -144,4 +144,100 @@ describe("CacheSettings", () => {
       expect(updateCacheSettingsCall.mock.calls[0][1]).toMatchObject({ db: 2, url: "redis://host:6379/1" });
     });
   });
+  describe("when a field is set in config.yaml", () => {
+    const configSourcedResponse = {
+      current_values: { type: "redis", host: "localhost", namespace: "yamlns", ttl: 1234 },
+      config_sourced_fields: ["namespace", "ttl"],
+    };
+
+    it("should render the config-sourced fields disabled and explain where they come from", async () => {
+      getCacheSettingsCall.mockResolvedValue(configSourcedResponse);
+      const user = userEvent.setup();
+      renderSettings();
+
+      await user.click(await screen.findByText("Advanced Settings"));
+
+      expect(await screen.findByLabelText("Namespace")).toBeDisabled();
+      expect(screen.getByLabelText("TTL (seconds)")).toBeDisabled();
+      expect(screen.getByLabelText("Host")).toBeEnabled();
+      expect(
+        screen.getAllByText("Set in config.yaml. Change it there, or remove it to edit this here.").length,
+      ).toBeGreaterThan(0);
+    });
+
+    it("should exclude config-sourced fields from the save payload so a save cannot clear them", async () => {
+      getCacheSettingsCall.mockResolvedValue(configSourcedResponse);
+      const user = userEvent.setup();
+      renderSettings();
+
+      fireEvent.change(await screen.findByLabelText("Host"), { target: { value: "newhost" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(updateCacheSettingsCall).toHaveBeenCalled());
+      const payload = updateCacheSettingsCall.mock.calls[0][1];
+      expect(payload).toMatchObject({ host: "newhost" });
+      expect(payload).not.toHaveProperty("namespace");
+      expect(payload).not.toHaveProperty("ttl");
+    });
+
+    it("should omit type from the save payload when config.yaml owns it", async () => {
+      getCacheSettingsCall.mockResolvedValue({
+        current_values: { type: "redis", host: "localhost", namespace: "yamlns" },
+        config_sourced_fields: ["type", "namespace"],
+      });
+      const user = userEvent.setup();
+      renderSettings();
+
+      fireEvent.change(await screen.findByLabelText("Host"), { target: { value: "newhost" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(updateCacheSettingsCall).toHaveBeenCalled());
+      expect(updateCacheSettingsCall.mock.calls[0][1]).not.toHaveProperty("type");
+    });
+
+    it("should still let the deployment topology be switched when config.yaml only pins type redis", async () => {
+      getCacheSettingsCall.mockResolvedValue({
+        current_values: { type: "redis", host: "localhost" },
+        config_sourced_fields: ["type"],
+      });
+      const user = userEvent.setup();
+      renderSettings();
+
+      await user.click(await screen.findByLabelText("Redis Type"));
+
+      expect(await screen.findByRole("option", { name: "Semantic" })).toHaveAttribute("data-disabled");
+      expect(screen.getByRole("option", { name: "Cluster" })).not.toHaveAttribute("data-disabled");
+
+      await user.click(screen.getByRole("option", { name: "Cluster" }));
+      expect(await screen.findByLabelText("Startup Nodes")).toBeInTheDocument();
+    });
+
+    it("should show a config.yaml semantic cache as Semantic and lock the plain topologies", async () => {
+      getCacheSettingsCall.mockResolvedValue({
+        current_values: { type: "redis-semantic", redis_type: "semantic", host: "localhost" },
+        config_sourced_fields: ["type"],
+      });
+      const user = userEvent.setup();
+      renderSettings();
+
+      expect(await screen.findByLabelText("Similarity Threshold")).toBeInTheDocument();
+
+      expect(screen.getByLabelText("Redis Type")).toHaveTextContent("Semantic");
+
+      await user.click(screen.getByLabelText("Redis Type"));
+      expect(await screen.findByRole("option", { name: "Node (Single Instance)" })).toHaveAttribute("data-disabled");
+      expect(screen.getByRole("option", { name: "Semantic" })).not.toHaveAttribute("data-disabled");
+    });
+
+    it("should still send config-sourced fields when testing the connection", async () => {
+      getCacheSettingsCall.mockResolvedValue(configSourcedResponse);
+      const user = userEvent.setup();
+      renderSettings();
+
+      await user.click(await screen.findByRole("button", { name: /test connection/i }));
+
+      await waitFor(() => expect(testCacheConnectionCall).toHaveBeenCalled());
+      expect(testCacheConnectionCall.mock.calls[0][1]).toMatchObject({ namespace: "yamlns", ttl: 1234 });
+    });
+  });
 });

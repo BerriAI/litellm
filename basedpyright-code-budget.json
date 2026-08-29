@@ -105,13 +105,13 @@
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 38721
+    "limit": 38720
   },
   "reportUnknownParameterType": {
     "limit": 19778
   },
   "reportUnknownVariableType": {
-    "limit": 30290
+    "limit": 30285
   },
   "reportUnnecessaryCast": {
     "limit": 117
