@@ -1167,6 +1167,10 @@ def _mergeable_branch(
     return expanded
 
 
+def _is_object_schema(schema: Mapping[str, object]) -> bool:
+    return schema.get("type") == "object" or ("type" not in schema and "properties" in schema)
+
+
 def _flatten_schema_against_root(
     schema: Mapping[str, object],
     root: Mapping[str, object],
@@ -1198,8 +1202,8 @@ def _flatten_schema_against_root(
         (combinator, tuple(branch for branch in group if branch is not None)) for combinator, group in raw_branch_groups
     )
     branches: Final = tuple(branch for _, group in branch_groups for branch in group)
-    is_object_schema: Final = schema.get("type") == "object" or (
-        "type" not in schema and branches != () and all("properties" in branch for branch in branches)
+    is_object_schema: Final = _is_object_schema(schema) or (
+        "type" not in schema and branches != () and all(_is_object_schema(branch) for branch in branches)
     )
     if not is_object_schema:
         return schema

@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -1761,3 +1762,57 @@ class TestFlattenToolSchemaCombinatorsWiring:
         )
 
         assert "anyOf" in result["tools"][0]["parameters"]
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gpt-4o",
+            "gpt-4.1-mini",
+            "gpt-4-turbo",
+            "o1",
+            "o3-pro",
+            "o4-mini",
+            "openai/gpt-4o",
+            "ft:gpt-4o-2024-08-06:org::abc",
+        ],
+    )
+    def test_openai_flattens_for_models_whose_validator_rejects_combinators(self, model):
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model=model,
+            input="hi",
+            response_api_optional_request_params={"tools": [self._flat_function_tool()]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "anyOf" not in result["tools"][0]["parameters"]
+
+    @pytest.mark.parametrize(
+        "model", ["gpt-5", "gpt-5-nano", "gpt-5.4-mini", "gpt-5.4-codex", "gpt-5.5", "openai/gpt-5.2"]
+    )
+    def test_openai_keeps_combinators_for_models_that_accept_them(self, model):
+        tool = self._flat_function_tool()
+
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model=model,
+            input="hi",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0] is tool
+
+    def test_openai_leaves_non_dict_tool_entries_alone(self):
+        opaque_tool = SimpleNamespace(type="function", name="automation_update")
+
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-4o",
+            input="hi",
+            response_api_optional_request_params={"tools": [opaque_tool, self._flat_function_tool()]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0] is opaque_tool
+        assert "anyOf" not in result["tools"][1]["parameters"]
