@@ -2,14 +2,10 @@ import asyncio
 import io
 import json
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.cost_calculator import default_video_cost_calculator
@@ -151,7 +147,7 @@ class TestVideoGeneration:
             "video_generation_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 video_generation(prompt="Test video", model="sora-2")
 
     def test_video_generation_provider_config(self):
@@ -242,7 +238,6 @@ class TestVideoGeneration:
     def test_video_generation_cost_calculation(self):
         """Test video generation cost calculation."""
         import json
-        import os
 
         # Try to load the local model cost map, skip if not found
         cost_map_path = "model_prices_and_context_window.json"
@@ -425,6 +420,117 @@ class TestVideoGeneration:
             litellm_logging_obj=mock_logging_obj,
         )
         assert cost == 0.5
+
+    def test_completion_cost_video_custom_pricing_under_litellm_metadata(self):
+        """Video routes store deployment model_info under litellm_metadata, not metadata.
+
+        Regression for https://github.com/BerriAI/litellm/issues/36483: custom video
+        pricing was silently ignored because completion_cost only read metadata.
+        """
+        from litellm.cost_calculator import completion_cost
+
+        mock_response = MagicMock()
+        mock_response.usage = {"duration_seconds": 10.0}
+        type(mock_response)._hidden_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {
+                    "output_cost_per_video_per_second": 0.18,
+                }
+            }
+        }
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="runwayml/seedance2",
+            call_type="create_video",
+            custom_llm_provider="runwayml",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert abs(cost - 1.8) < 0.001
+
+    def test_completion_cost_video_uses_provider_reported_cost_without_custom_pricing(self):
+        """With no custom pricing, the provider's own reported cost wins over a duration estimate."""
+        from litellm.cost_calculator import completion_cost
+
+        mock_response = MagicMock()
+        mock_response.usage = {
+            "duration_seconds": 5.0,
+            "video_resolution": "720p",
+            "provider_reported_cost_usd": 0.31,
+        }
+        type(mock_response)._hidden_params = {}
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="runwayml/gen4_turbo",
+            call_type="create_video",
+            custom_llm_provider="runwayml",
+        )
+        assert cost == 0.31
+
+    def test_completion_cost_video_custom_pricing_beats_provider_reported_cost(self):
+        """Deployment-level custom pricing overrides the provider's reported cost."""
+        from litellm.cost_calculator import completion_cost
+
+        mock_response = MagicMock()
+        mock_response.usage = {
+            "duration_seconds": 10.0,
+            "provider_reported_cost_usd": 0.31,
+        }
+        type(mock_response)._hidden_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {
+                    "output_cost_per_video_per_second": 0.18,
+                }
+            }
+        }
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="runwayml/seedance2",
+            call_type="create_video",
+            custom_llm_provider="runwayml",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert abs(cost - 1.8) < 0.001
+
+    def test_completion_cost_video_resolution_tiers_from_cost_map(self, monkeypatch):
+        """The 480p/1080p/4k tier keys resolve from the shipped runwayml cost map entries."""
+        from litellm.cost_calculator import completion_cost
+
+        local_map_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json"
+        )
+        with open(local_map_path, "r") as f:
+            monkeypatch.setattr(litellm, "model_cost", json.load(f))
+
+        def cost_for(model: str, resolution: str | None, duration: float) -> float:
+            mock_response = MagicMock()
+            mock_response.usage = {
+                "duration_seconds": duration,
+                **({"video_resolution": resolution} if resolution else {}),
+            }
+            type(mock_response)._hidden_params = {}
+            return completion_cost(
+                completion_response=mock_response,
+                model=model,
+                call_type="create_video",
+                custom_llm_provider="runwayml",
+            )
+
+        assert abs(cost_for("runwayml/seedance2", "4k", 8.0) - 12.0) < 0.001
+        assert abs(cost_for("runwayml/seedance2", "1080p", 8.0) - 3.2) < 0.001
+        assert abs(cost_for("runwayml/seedance2", "720p", 8.0) - 2.88) < 0.001
+        assert abs(cost_for("runwayml/seedance2_5", "480p", 8.0) - 1.6) < 0.001
+        assert abs(cost_for("runwayml/gen4.5", None, 8.0) - 0.96) < 0.001
 
     def test_video_generation_with_files(self):
         """Test video generation with file uploads."""
@@ -739,7 +845,7 @@ class TestVideoGeneration:
             "video_status_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 video_status(video_id="test_video_id", model="sora-2")
 
     def test_video_status_request_transformation(self):
@@ -2003,7 +2109,7 @@ class TestVideoEdit:
         """Verify JSON body with video.id for POST /videos/edits."""
         config = OpenAIVideoConfig()
 
-        url, data = config.transform_video_edit_request(
+        url, data, files = config.transform_video_edit_request(
             prompt="make it brighter",
             video_id="video_abc123",
             api_base="https://api.openai.com/v1/videos",
@@ -2014,12 +2120,13 @@ class TestVideoEdit:
         assert url == "https://api.openai.com/v1/videos/edits"
         assert data["prompt"] == "make it brighter"
         assert data["video"]["id"] == "video_abc123"
+        assert files is None
 
     def test_video_edit_transform_request_with_extra_body(self):
         """Extra body params are merged into request data."""
         config = OpenAIVideoConfig()
 
-        url, data = config.transform_video_edit_request(
+        url, data, files = config.transform_video_edit_request(
             prompt="darken it",
             video_id="video_abc123",
             api_base="https://api.openai.com/v1/videos",
@@ -2029,6 +2136,7 @@ class TestVideoEdit:
         )
 
         assert data["resolution"] == "1080p"
+        assert files is None
 
     def test_video_edit_mock_response(self):
         """video_edit returns VideoObject on mock_response."""
@@ -2054,7 +2162,7 @@ class TestVideoEdit:
         config = OpenAIVideoConfig()
 
         encoded_id = encode_video_id_with_provider("raw_video_id", "openai", None)
-        url, data = config.transform_video_edit_request(
+        url, data, files = config.transform_video_edit_request(
             prompt="test",
             video_id=encoded_id,
             api_base="https://api.openai.com/v1/videos",
@@ -2064,6 +2172,7 @@ class TestVideoEdit:
 
         # The video.id in the request body should be the raw ID, not the encoded one
         assert data["video"]["id"] == "raw_video_id"
+        assert files is None
 
 
 class TestVideoExtension:
@@ -2319,6 +2428,72 @@ def test_edit_and_extension_support_custom_provider_from_extra_body(
 
     assert response.status_code == 200, response.text
     assert captured_data["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.parametrize(
+    "handler_name, path, form",
+    [
+        (
+            "video_edit",
+            "/v1/videos/edits",
+            {"model": "my-video-model", "prompt": "brighter", "video": "video_123"},
+        ),
+        (
+            "video_extension",
+            "/v1/videos/extensions",
+            {"model": "my-video-model", "prompt": "continue", "seconds": "4", "video": "video_123"},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
+    handler_name, path, form
+):
+    from urllib.parse import urlencode
+
+    from fastapi import Response
+    from starlette.requests import Request
+
+    import litellm.proxy.video_endpoints.endpoints as endpoints
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+    body = urlencode(form).encode()
+    stream = {"sent": False}
+
+    async def receive():
+        if stream["sent"]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        stream["sent"] = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [
+                (b"content-type", b"application/x-www-form-urlencoded"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+            "query_string": b"",
+        },
+        receive,
+    )
+
+    await _read_request_body(request=request)
+
+    handler = getattr(endpoints, handler_name)
+    with pytest.raises(ProxyException) as exc_info:
+        await handler(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        )
+
+    message = str(exc_info.value)
+    assert "Stream consumed" not in message
+    assert "my-video-model" in message
 
 
 @pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])

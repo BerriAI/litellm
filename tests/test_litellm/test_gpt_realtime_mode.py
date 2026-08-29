@@ -10,6 +10,7 @@ from litellm.types.utils import ModelInfoBase
 REALTIME_ONLY_GPT_MODELS = (
     "azure/gpt-realtime-2025-08-28",
     "azure/gpt-realtime-1.5-2026-02-23",
+    "azure/gpt-realtime-mini",
     "azure/gpt-realtime-mini-2025-10-06",
     "gpt-realtime",
     "gpt-realtime-1.5",
