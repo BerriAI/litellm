@@ -83,3 +83,56 @@ async def test_write_and_read_json_secret():
                     secret_name=test_secret_name
                 )
                 assert delete_resp is not None
+
+
+def _prepare_request_endpoint(monkeypatch, region_name, extra_optional_params=None):
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    secret_manager = AWSSecretsManagerV2(aws_region_name=region_name)
+    endpoint_url, _headers, _body = secret_manager._prepare_request(
+        action="GetSecretValue",
+        secret_name="my-secret",
+        optional_params={
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+            **(extra_optional_params or {}),
+        },
+    )
+    return endpoint_url
+
+
+@pytest.mark.parametrize(
+    "region_name,expected_endpoint",
+    [
+        ("cn-north-1", "https://secretsmanager.cn-north-1.amazonaws.com.cn"),
+        ("cn-northwest-1", "https://secretsmanager.cn-northwest-1.amazonaws.com.cn"),
+        ("us-gov-west-1", "https://secretsmanager.us-gov-west-1.amazonaws.com"),
+        ("us-east-1", "https://secretsmanager.us-east-1.amazonaws.com"),
+    ],
+)
+def test_prepare_request_builds_partition_endpoint(monkeypatch, region_name, expected_endpoint):
+    assert _prepare_request_endpoint(monkeypatch, region_name) == expected_endpoint
+
+
+def test_prepare_request_explicit_bedrock_runtime_endpoint_param_still_wins(monkeypatch):
+    endpoint_url = _prepare_request_endpoint(
+        monkeypatch,
+        "cn-north-1",
+        {"aws_bedrock_runtime_endpoint": "https://bedrock-runtime.my-vpce.example.com"},
+    )
+    assert endpoint_url == "https://secretsmanager.my-vpce.example.com"
+
+
+def test_prepare_request_env_bedrock_runtime_endpoint_still_wins(monkeypatch):
+    monkeypatch.setenv(
+        "AWS_BEDROCK_RUNTIME_ENDPOINT", "https://bedrock-runtime.eu-west-1.amazonaws.com"
+    )
+    secret_manager = AWSSecretsManagerV2(aws_region_name="cn-north-1")
+    endpoint_url, _headers, _body = secret_manager._prepare_request(
+        action="GetSecretValue",
+        secret_name="my-secret",
+        optional_params={
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+        },
+    )
+    assert endpoint_url == "https://secretsmanager.eu-west-1.amazonaws.com"
