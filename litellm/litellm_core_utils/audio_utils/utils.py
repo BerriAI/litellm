@@ -7,7 +7,12 @@ import os
 from dataclasses import dataclass
 from typing import Final
 
-from litellm.types.files import get_file_mime_type_from_extension
+from litellm.types.files import (
+    AUDIO_FILE_TYPES,
+    FILE_EXTENSIONS,
+    FILE_MIME_TYPES,
+    get_file_mime_type_from_extension,
+)
 from litellm.types.utils import FileTypes
 
 
@@ -323,3 +328,26 @@ def calculate_request_duration(file: FileTypes) -> float | None:
     except Exception:
         # Silently fail if duration extraction fails
         return None
+
+
+DEFAULT_SPEECH_MEDIA_TYPE: Final = "audio/mpeg"
+
+
+def _speech_media_type_for_response_format(response_format: str) -> str | None:
+    file_type: Final = next(
+        (candidate for candidate, extensions in FILE_EXTENSIONS.items() if response_format.lower() in extensions),
+        None,
+    )
+    if file_type is None or file_type not in AUDIO_FILE_TYPES:
+        return None
+    return FILE_MIME_TYPES[file_type]
+
+
+def resolve_speech_media_type(upstream_content_type: str | None, response_format: str | None) -> str:
+    upstream_media_type: Final = (upstream_content_type or "").split(";", 1)[0].strip().lower()
+    if upstream_media_type.startswith("audio/"):
+        return upstream_media_type
+    requested_media_type: Final = (
+        None if response_format is None else _speech_media_type_for_response_format(response_format)
+    )
+    return requested_media_type or DEFAULT_SPEECH_MEDIA_TYPE
