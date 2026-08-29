@@ -26,9 +26,7 @@ def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
     """Pin litellm.model_cost to the bundled local backup so tests don't depend
     on remote catalog fetches (and don't change behavior across remote refreshes)."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(
-        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
-    )
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
     litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
@@ -44,23 +42,19 @@ class TestGithubCopilotResponsesAPITransformation:
             provider=LlmProviders.GITHUB_COPILOT,
         )
 
-        assert (
-            config is not None
-        ), "Config should not be None for GitHub Copilot provider"
-        assert isinstance(
-            config, GithubCopilotResponsesAPIConfig
-        ), f"Expected GithubCopilotResponsesAPIConfig, got {type(config)}"
-        assert (
-            config.custom_llm_provider == LlmProviders.GITHUB_COPILOT
-        ), "custom_llm_provider should be GITHUB_COPILOT"
+        assert config is not None, "Config should not be None for GitHub Copilot provider"
+        assert isinstance(config, GithubCopilotResponsesAPIConfig), (
+            f"Expected GithubCopilotResponsesAPIConfig, got {type(config)}"
+        )
+        assert config.custom_llm_provider == LlmProviders.GITHUB_COPILOT, "custom_llm_provider should be GITHUB_COPILOT"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_github_copilot_responses_endpoint_url(self, mock_authenticator_class):
         """Test that get_complete_url returns correct GitHub Copilot endpoint"""
         # Mock authenticator to return default base
         mock_auth_instance = MagicMock()
-        mock_auth_instance.get_api_base.return_value = (
-            "https://api.individual.githubcopilot.com"
+        mock_auth_instance.get_api_base.side_effect = lambda api_base=None: (
+            api_base or "https://api.individual.githubcopilot.com"
         )
         mock_authenticator_class.return_value = mock_auth_instance
 
@@ -68,50 +62,89 @@ class TestGithubCopilotResponsesAPITransformation:
 
         # Test with default GitHub Copilot API base (from authenticator)
         url = config.get_complete_url(api_base=None, litellm_params={})
-        assert (
-            url == "https://api.individual.githubcopilot.com/responses"
-        ), f"Expected GitHub Copilot responses endpoint, got {url}"
-
-        # Test with custom api_base (overrides authenticator)
-        custom_url = config.get_complete_url(
-            api_base="https://custom.githubcopilot.com", litellm_params={}
+        assert url == "https://api.individual.githubcopilot.com/responses", (
+            f"Expected GitHub Copilot responses endpoint, got {url}"
         )
-        assert (
-            custom_url == "https://custom.githubcopilot.com/responses"
-        ), f"Expected custom endpoint, got {custom_url}"
 
-        # Test with trailing slash
-        url_with_slash = config.get_complete_url(
-            api_base="https://api.githubcopilot.com/", litellm_params={}
-        )
-        assert (
-            url_with_slash == "https://api.githubcopilot.com/responses"
-        ), "Should handle trailing slash"
+        custom_url = config.get_complete_url(api_base="https://api.business.githubcopilot.com", litellm_params={})
+        assert custom_url == "https://api.business.githubcopilot.com/responses"
+
+        url_with_slash = config.get_complete_url(api_base="https://api.githubcopilot.com/", litellm_params={})
+        assert url_with_slash == "https://api.githubcopilot.com/responses"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_default_headers(self, mock_authenticator_class):
-        """Test that validate_environment generates correct default headers"""
-        # Mock the authenticator
+    def test_validate_environment_default_headers(self, mock_authenticator_class, monkeypatch):
+        for environment_variable in (
+            "GITHUB_COPILOT_OPENAI_INTENT",
+            "GITHUB_COPILOT_API_VERSION",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION",
+        ):
+            monkeypatch.delenv(environment_variable, raising=False)
+
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_key.return_value = "test-api-key-123"
         mock_authenticator_class.return_value = mock_auth_instance
 
         config = GithubCopilotResponsesAPIConfig()
+        headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params={})
 
-        headers = config.validate_environment(
-            headers={}, model="gpt-5.1-codex", litellm_params={}
-        )
-
-        # Check required headers
         assert headers["Authorization"] == "Bearer test-api-key-123"
+        assert headers["accept"] == "application/json"
         assert headers["content-type"] == "application/json"
         assert headers["copilot-integration-id"] == "vscode-chat"
-        assert headers["editor-version"] == "vscode/1.95.0"
+        assert headers["editor-version"] == "vscode/1.115.0"
         assert headers["editor-plugin-version"] == "copilot-chat/0.26.7"
         assert headers["user-agent"] == "GitHubCopilotChat/0.26.7"
-        assert headers["openai-intent"] == "conversation-panel"
-        assert headers["x-github-api-version"] == "2025-04-01"
-        assert "x-request-id" in headers
+        assert "openai-intent" not in headers
+        assert "x-github-api-version" not in headers
+        assert "x-request-id" not in headers
+        assert "x-vscode-user-agent-library-version" not in headers
+
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    def test_validate_environment_headers_from_environment(self, mock_authenticator_class):
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "test-api-key-123"
+        mock_authenticator_class.return_value = mock_auth_instance
+        environment = {
+            "GITHUB_COPILOT_ACCEPT": "application/vnd.github+json",
+            "GITHUB_COPILOT_CONTENT_TYPE": "application/custom+json",
+            "GITHUB_COPILOT_INTEGRATION_ID": "custom-integration",
+            "GITHUB_COPILOT_EDITOR_VERSION": "custom-editor/1.0",
+            "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION": "custom-plugin/2.0",
+            "GITHUB_COPILOT_USER_AGENT": "CustomAgent/2.0",
+            "GITHUB_COPILOT_OPENAI_INTENT": "custom-intent",
+            "GITHUB_COPILOT_API_VERSION": "2099-01-01",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION": "custom-library",
+        }
+
+        with patch.dict(os.environ, environment):
+            headers = GithubCopilotResponsesAPIConfig().validate_environment(
+                headers={}, model="gpt-5.1-codex", litellm_params={}
+            )
+
+        assert headers["Authorization"] == "Bearer test-api-key-123"
+        assert headers["accept"] == "application/vnd.github+json"
+        assert headers["content-type"] == "application/custom+json"
+        assert headers["copilot-integration-id"] == "custom-integration"
+        assert headers["editor-version"] == "custom-editor/1.0"
+        assert headers["editor-plugin-version"] == "custom-plugin/2.0"
+        assert headers["user-agent"] == "CustomAgent/2.0"
+        assert headers["openai-intent"] == "custom-intent"
+        assert headers["x-github-api-version"] == "2099-01-01"
+        assert headers["x-vscode-user-agent-library-version"] == "custom-library"
+
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    def test_empty_environment_header_omits_default(self, mock_authenticator_class):
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "test-api-key-123"
+        mock_authenticator_class.return_value = mock_auth_instance
+
+        with patch.dict(os.environ, {"GITHUB_COPILOT_USER_AGENT": ""}):
+            headers = GithubCopilotResponsesAPIConfig().validate_environment(
+                headers={}, model="gpt-5.1-codex", litellm_params={}
+            )
+
+        assert "user-agent" not in headers
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_user_headers_override(self, mock_authenticator_class):
@@ -127,9 +160,7 @@ class TestGithubCopilotResponsesAPITransformation:
             "custom-header": "custom-value",
         }
 
-        headers = config.validate_environment(
-            headers=custom_headers, model="gpt-5.1-codex", litellm_params={}
-        )
+        headers = config.validate_environment(headers=custom_headers, model="gpt-5.1-codex", litellm_params={})
 
         # User header should override default
         assert headers["editor-version"] == "custom/2.0.0"
@@ -182,9 +213,7 @@ class TestGithubCopilotResponsesAPITransformation:
         """Test _has_vision_input detects input_image type"""
         config = GithubCopilotResponsesAPIConfig()
 
-        input_with_vision = [
-            {"role": "user", "content": [{"type": "input_image", "data": "base64..."}]}
-        ]
+        input_with_vision = [{"role": "user", "content": [{"type": "input_image", "data": "base64..."}]}]
 
         has_vision = config._has_vision_input(input_with_vision)
         assert has_vision is True, "Should detect input_image type"
@@ -246,13 +275,11 @@ class TestGithubCopilotResponsesAPITransformation:
             }
         ]
 
-        headers = config.validate_environment(
-            headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params
-        )
+        headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params)
 
-        assert (
-            headers.get("copilot-vision-request") == "true"
-        ), "Should add copilot-vision-request header for vision input"
+        assert headers.get("copilot-vision-request") == "true", (
+            "Should add copilot-vision-request header for vision input"
+        )
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_with_x_initiator(self, mock_authenticator_class):
@@ -270,21 +297,15 @@ class TestGithubCopilotResponsesAPITransformation:
             {"role": "assistant", "content": "Hi"},
         ]
 
-        headers = config.validate_environment(
-            headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params
-        )
+        headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params)
 
-        assert (
-            headers.get("X-Initiator") == "agent"
-        ), "Should set X-Initiator to 'agent' for assistant role"
+        assert headers.get("X-Initiator") == "agent", "Should set X-Initiator to 'agent' for assistant role"
 
     def test_map_openai_params_no_transformation(self):
         """Test that map_openai_params passes through parameters unchanged"""
         config = GithubCopilotResponsesAPIConfig()
 
-        params = ResponsesAPIOptionalRequestParams(
-            temperature=0.7, max_output_tokens=1000, stream=False
-        )
+        params = ResponsesAPIOptionalRequestParams(temperature=0.7, max_output_tokens=1000, stream=False)
 
         result = config.map_openai_params(
             response_api_optional_params=params,
@@ -338,9 +359,9 @@ class TestGithubCopilotResponsesAPITransformation:
         result = config._handle_reasoning_item(reasoning_item)
 
         # encrypted_content should be preserved
-        assert (
-            result.get("encrypted_content") == "encrypted-blob-abc123"
-        ), "encrypted_content must be preserved for GitHub Copilot multi-turn conversations"
+        assert result.get("encrypted_content") == "encrypted-blob-abc123", (
+            "encrypted_content must be preserved for GitHub Copilot multi-turn conversations"
+        )
         # status=None should be filtered out
         assert "status" not in result, "status=None should be filtered out"
         # content=None should be filtered out
@@ -393,9 +414,7 @@ class TestGithubCopilotResponsesAPIRouting:
     in the (already-merged) model info; otherwise returns None so the dispatcher
     routes through the chat-completions translation bridge."""
 
-    @patch(
-        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
-    )
+    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
     def test_returns_config_when_mode_is_responses(self, mock_get_info):
         """``mode=responses`` returns native config."""
         mock_get_info.return_value = {"mode": "responses"}
@@ -405,9 +424,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert isinstance(config, GithubCopilotResponsesAPIConfig)
 
-    @patch(
-        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
-    )
+    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
     def test_returns_none_when_mode_is_chat(self, mock_get_info):
         """``mode=chat`` returns None so dispatcher uses bridge."""
         mock_get_info.return_value = {"mode": "chat"}
@@ -417,9 +434,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert config is None
 
-    @patch(
-        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
-    )
+    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
     def test_returns_none_when_mode_is_unset_and_no_endpoints(self, mock_get_info):
         """Entry without ``mode`` and without ``supported_endpoints`` returns None
         (conservative default)."""
@@ -499,9 +514,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert isinstance(config, GithubCopilotResponsesAPIConfig)
 
-    @patch(
-        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
-    )
+    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
     def test_returns_none_when_get_model_info_raises(self, mock_get_info):
         """Catalog lookup failure (model not registered) returns None
         (conservative default; bridge handles unknown models safely)."""
@@ -512,9 +525,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert config is None
 
-    @patch(
-        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
-    )
+    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
     def test_user_override_via_register_model(self, mock_get_info):
         """User-supplied per-deployment ``model_info`` flows through
         ``litellm.register_model`` (called by the router) into the merged
@@ -528,9 +539,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert isinstance(config, GithubCopilotResponsesAPIConfig)
 
-    @patch(
-        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
-    )
+    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
     def test_realistic_chat_only_entry_returns_none(self, mock_get_info):
         """Realistic ``model_prices_and_context_window.json`` shape for a
         chat-only Copilot model (e.g. github_copilot/gemini-3.1-pro-preview)
@@ -554,9 +563,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert config is None
 
-    @patch(
-        "litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper"
-    )
+    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
     def test_realistic_responses_only_entry_returns_config(self, mock_get_info):
         """Realistic catalog entry for a Responses-only Copilot model
         (e.g. github_copilot/gpt-5.5) returns the native config."""
@@ -592,9 +599,7 @@ class TestGithubCopilotReasoningStreamItemIdNormalization:
     output_index group to the id from its output_item.added."""
 
     def _config(self):
-        with patch(
-            "litellm.llms.github_copilot.responses.transformation.Authenticator"
-        ):
+        with patch("litellm.llms.github_copilot.responses.transformation.Authenticator"):
             return GithubCopilotResponsesAPIConfig()
 
     def _transform(self, config, chunk):
