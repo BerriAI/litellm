@@ -108,9 +108,7 @@ def test_request_params_max_completion_tokens_fallback():
 
 def test_server_info_from_api_base():
     assert ServerInfo.from_api_base(None) is None
-    assert ServerInfo.from_api_base("api.host.com:8080") == ServerInfo(
-        "api.host.com", 8080
-    )
+    assert ServerInfo.from_api_base("api.host.com:8080") == ServerInfo("api.host.com", 8080)
     assert ServerInfo.from_api_base("https://h.com/v1") == ServerInfo("h.com", None)
     # scheme present but empty netloc -> no hostname
     assert ServerInfo.from_api_base("http:///v1") is None
@@ -144,18 +142,12 @@ def test_service_span_data_from_payload():
 
 
 def test_name_builders():
-    assert (
-        proxy_request_span_name(ProxyRequestSpanData("POST", "/chat/completions"))
-        == "POST /chat/completions"
-    )
+    assert proxy_request_span_name(ProxyRequestSpanData("POST", "/chat/completions")) == "POST /chat/completions"
     # "{service} {call_type}" so same-service calls stay distinguishable; the
     # service name alone when there's no call type.
     assert service_span_name(ServiceSpanData("redis", call_type="set")) == "redis set"
     assert service_span_name(ServiceSpanData("redis")) == "redis"
-    assert (
-        guardrail_span_name(GuardrailSpanData("presidio"))
-        == "execute_guardrail presidio"
-    )
+    assert guardrail_span_name(GuardrailSpanData("presidio")) == "execute_guardrail presidio"
 
 
 # --- registry validator failure paths --------------------------------------- #
@@ -168,11 +160,7 @@ def test_validate_registry_detects_role_mismatch():
 
 
 def test_validate_registry_detects_unknown_parent():
-    bad = {
-        SpanRole.LLM_CALL: SpanSpec(
-            SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-        )
-    }
+    bad = {SpanRole.LLM_CALL: SpanSpec(SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST)}
     with pytest.raises(ValueError, match="unknown parent"):
         validate_registry(bad)
 
@@ -257,9 +245,7 @@ def test_genai_mapper_stamps_input_output_messages():
         {"role": "system", "content": "Be concise."},
         {"role": "user", "content": "What's the weather?"},
     ]
-    assert json.loads(attrs[GenAI.OUTPUT_MESSAGES]) == [
-        {"role": "assistant", "content": "Sunny."}
-    ]
+    assert json.loads(attrs[GenAI.OUTPUT_MESSAGES]) == [{"role": "assistant", "content": "Sunny."}]
 
 
 def test_genai_mapper_omits_messages_when_content_not_captured():
@@ -319,10 +305,7 @@ def test_genai_mapper_cost_breakdown_absent():
 
     attrs = GenAIMapper().map(_full_llm_call())
     assert attrs[f"{LiteLLM.COST_PREFIX}total"] == 0.002
-    assert not any(
-        k.startswith(LiteLLM.COST_PREFIX) and k != f"{LiteLLM.COST_PREFIX}total"
-        for k in attrs
-    )
+    assert not any(k.startswith(LiteLLM.COST_PREFIX) and k != f"{LiteLLM.COST_PREFIX}total" for k in attrs)
 
 
 def test_llm_cost_from_breakdown_maps_costbreakdown_keys():
@@ -377,6 +360,33 @@ def test_genai_mapper_guardrail_and_service():
     internal = GenAIMapper().map(ServiceSpanData("router", call_type="acompletion"))
     assert internal[LiteLLM.SERVICE_NAME] == "router"
     assert "db.system.name" not in internal
+
+
+def test_genai_mapper_guardrail_billing_attrs():
+    """Billing counters and USD cost stamped on StandardLoggingGuardrailInformation
+    surface on the guardrail span: usage JSON-serialized, cost numeric under the
+    litellm.cost.* namespace."""
+    from litellm.integrations.otel.model.semconv import LiteLLM
+
+    entry = {
+        "guardrail_name": "azure-shield",
+        "guardrail_status": "success",
+        "guardrail_usage": {"requests": 2, "input_characters": 12000, "text_records": 12},
+        "guardrail_cost": 0.00456,
+    }
+    data = GuardrailSpanData.from_logging_entry(entry)
+    assert data.cost == 0.00456
+    assert data.usage_json is not None and '"text_records": 12' in data.usage_json
+
+    attrs = GenAIMapper().map(data)
+    assert attrs[LiteLLM.GUARDRAIL_COST] == 0.00456
+    assert LiteLLM.GUARDRAIL_COST == "litellm.cost.guardrail"
+    assert attrs[LiteLLM.GUARDRAIL_USAGE] == data.usage_json
+
+    # A guardrail without billing data keeps a sparse span: neither key present.
+    unbilled = GenAIMapper().map(GuardrailSpanData("presidio", mode="pre"))
+    assert LiteLLM.GUARDRAIL_COST not in unbilled
+    assert LiteLLM.GUARDRAIL_USAGE not in unbilled
 
 
 def test_legacy_mapper_all_request_params():
@@ -451,6 +461,30 @@ def test_parse_headers():
     assert providers.parse_headers("no-equals") == {}
 
 
+def test_parse_headers_percent_decodes_values():
+    """A percent-encoded OTLP header value reaches the exporter decoded.
+
+    ``OTEL_EXPORTER_OTLP_HEADERS`` is W3C Baggage encoded, and Grafana Cloud
+    documents ``Authorization=Basic%20<token>``. Forwarding the literal ``%20``
+    makes the backend reject the export as a malformed credential.
+    """
+    token = "MTMzNzc4MzpnbGNfZXlKdklqb2lNVEl6TkNJPQ=="
+    assert providers.parse_headers(f"Authorization=Basic%20{token}") == {"authorization": f"Basic {token}"}
+    assert providers.parse_headers("x-scope-orgid=team%20a") == {"x-scope-orgid": "team a"}
+
+
+def test_parse_headers_keeps_unencoded_values_working():
+    """Values that are not percent-encoded keep parsing unchanged.
+
+    Vendors that document a bare space, and litellm's own presets, must survive
+    the switch to the spec-compliant parser. Base64 padding also means a value
+    can contain ``=``, so only the first one may split the pair.
+    """
+    assert providers.parse_headers("Authorization=Bearer sk-123") == {"authorization": "Bearer sk-123"}
+    assert providers.parse_headers("api_key=abc,space_id=xyz") == {"api_key": "abc", "space_id": "xyz"}
+    assert providers.parse_headers("api_key=YWJjZA==") == {"api_key": "YWJjZA=="}
+
+
 def test_otlp_traces_endpoint_normalization():
     norm = providers._otlp_traces_endpoint
     # A base endpoint gets the signal path appended (the common OTLP env shape).
@@ -461,10 +495,7 @@ def test_otlp_traces_endpoint_normalization():
     # Another signal's path is rewritten to traces.
     assert norm("http://collector:4318/v1/logs") == "http://collector:4318/v1/traces"
     # Splunk's path is preserved; None passes through.
-    assert (
-        norm("https://x.splunk.com/v2/trace/otlp")
-        == "https://x.splunk.com/v2/trace/otlp"
-    )
+    assert norm("https://x.splunk.com/v2/trace/otlp") == "https://x.splunk.com/v2/trace/otlp"
     assert norm(None) is None
 
 
@@ -481,10 +512,24 @@ def test_build_span_exporter_variants():
         providers.build_span_exporter(OpenTelemetryV2Config(exporter="unknown")),
         ConsoleSpanExporter,
     )
-    http_exporter = providers.build_span_exporter(
-        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
-    )
+    http_exporter = providers.build_span_exporter(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
     assert "OTLPSpanExporter" in type(http_exporter).__name__
+
+
+def test_otlp_metric_exporter_uses_cumulative_histogram_temporality():
+    """Histograms must export as cumulative, not delta.
+
+    Prometheus-backed OTLP receivers (Grafana Cloud / Mimir) reject delta
+    histograms with ``invalid temporality and type combination`` and drop the
+    entire metric batch, so a delta default silently loses every GenAI metric.
+    """
+    from opentelemetry.sdk.metrics import Histogram
+    from opentelemetry.sdk.metrics.export import AggregationTemporality
+
+    reader = providers.build_metric_reader(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
+    temporality = reader._exporter._preferred_temporality  # noqa: SLF001  # exporter exposes no public accessor
+
+    assert temporality[Histogram] is AggregationTemporality.CUMULATIVE
 
 
 def test_otlp_logs_endpoint_normalization():
@@ -517,9 +562,7 @@ def test_build_log_exporter_variants():
         providers.build_log_exporter(OpenTelemetryV2Config(exporter="unknown")),
         ConsoleLogExporter,
     )
-    http_exporter = providers.build_log_exporter(
-        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
-    )
+    http_exporter = providers.build_log_exporter(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
     assert "OTLPLogExporter" in type(http_exporter).__name__
 
 
@@ -546,23 +589,17 @@ def test_build_logger_provider_picks_processor_by_exporter_kind():
         processor_of(providers.build_logger_provider(cfg, log_exporter=ConsoleLogExporter())),
         SimpleLogRecordProcessor,
     )
-    http_exporter = providers.build_log_exporter(
-        OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318")
-    )
+    http_exporter = providers.build_log_exporter(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
     assert isinstance(
         processor_of(providers.build_logger_provider(cfg, log_exporter=http_exporter)),
         BatchLogRecordProcessor,
     )
-    grpc_exporter = providers.build_span_exporter(
-        OpenTelemetryV2Config(exporter="otlp_grpc", endpoint="http://h:4317")
-    )
+    grpc_exporter = providers.build_span_exporter(OpenTelemetryV2Config(exporter="otlp_grpc", endpoint="http://h:4317"))
     assert "OTLPSpanExporter" in type(grpc_exporter).__name__
 
 
 def test_build_resource_includes_deployment_environment():
-    resource = providers.build_resource(
-        OpenTelemetryV2Config(service_name="svc", deployment_environment="prod")
-    )
+    resource = providers.build_resource(OpenTelemetryV2Config(service_name="svc", deployment_environment="prod"))
     assert resource.attributes["service.name"] == "svc"
     assert resource.attributes["deployment.environment"] == "prod"
 
@@ -570,9 +607,7 @@ def test_build_resource_includes_deployment_environment():
 def test_build_tracer_provider_processor_selection():
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     simple = providers.build_tracer_provider(cfg, exporter=InMemorySpanExporter())
-    batch = providers.build_tracer_provider(
-        cfg, exporter=ConsoleSpanExporter(), use_simple_processor=False
-    )
+    batch = providers.build_tracer_provider(cfg, exporter=ConsoleSpanExporter(), use_simple_processor=False)
     # both build without error; assert the requested processor type was used
     simple_procs = simple._active_span_processor._span_processors
     batch_procs = batch._active_span_processor._span_processors
@@ -1009,3 +1044,25 @@ def test_sanitize_event_metadata_caps_value_length_and_handles_none():
     assert sanitize_event_metadata(None) == {}
     big = sanitize_event_metadata({"k": "v" * 5000})
     assert len(big["k"]) == 1024
+
+
+def test_genai_mapper_guardrail_cost_in_spend_attr():
+    """guardrail_cost_in_spend surfaces on the span so trace consumers can tell a
+    billed guardrail cost (already inside litellm.cost.total) from a report-only
+    one; absent means billed and the attribute stays off the span."""
+    from litellm.integrations.otel.model.semconv import LiteLLM
+
+    entry = {
+        "guardrail_name": "azure-shield",
+        "guardrail_status": "success",
+        "guardrail_usage": {"text_records": 1},
+        "guardrail_cost": 0.00038,
+        "guardrail_cost_in_spend": False,
+    }
+    attrs = GenAIMapper().map(GuardrailSpanData.from_logging_entry(entry))
+    assert attrs[LiteLLM.GUARDRAIL_COST_IN_SPEND] is False
+    assert LiteLLM.GUARDRAIL_COST_IN_SPEND == "litellm.guardrail.cost_in_spend"
+
+    billed = dict(entry)
+    del billed["guardrail_cost_in_spend"]
+    assert LiteLLM.GUARDRAIL_COST_IN_SPEND not in GenAIMapper().map(GuardrailSpanData.from_logging_entry(billed))

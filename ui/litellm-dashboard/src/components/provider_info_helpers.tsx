@@ -50,6 +50,7 @@ import replicateLogo from "../../public/assets/logos/replicate.svg";
 import runwayLogo from "../../public/assets/logos/runway.png";
 import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
 import sapLogo from "../../public/assets/logos/sap.png";
+import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
@@ -85,6 +86,7 @@ export enum Providers {
   CLARIFAI = "Clarifai",
   CLOUDFLARE = "Cloudflare",
   CODESTRAL = "Codestral",
+  Cognition = "Cognition",
   Cohere = "Cohere",
   COHERE_CHAT = "Cohere Chat",
   COMETAPI = "Cometapi",
@@ -110,7 +112,7 @@ export enum Providers {
   GradientAI = "GradientAI",
   Groq = "Groq",
   HEROKU = "Heroku",
-  Hosted_Vllm = "vllm",
+  Hosted_Vllm = "Hosted vLLM",
   HUGGINGFACE = "Huggingface",
   HYPERBOLIC = "Hyperbolic",
   Infinity = "Infinity",
@@ -130,6 +132,7 @@ export enum Providers {
   NOVITA = "Novita",
   NSCALE = "Nscale",
   NVIDIA_NIM = "Nvidia Nim",
+  NVIDIA_RIVA = "Nvidia Riva",
   Ollama = "Ollama",
   OLLAMA_CHAT = "Ollama Chat",
   OOBABOOGA = "Oobabooga",
@@ -151,6 +154,7 @@ export enum Providers {
   SAGEMAKER_LEGACY = "Sagemaker",
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
+  SCX_AI = "SCX.ai",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
@@ -161,7 +165,7 @@ export enum Providers {
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   VERTEX_AI_BETA = "Vertex Ai Beta",
-  VLLM = "Vllm",
+  VLLM = "Local vLLM",
   VolcEngine = "VolcEngine",
   Voyage = "Voyage AI",
   WANDB = "Wandb",
@@ -193,6 +197,7 @@ export const provider_map: Record<string, string> = {
   CLARIFAI: "clarifai",
   CLOUDFLARE: "cloudflare",
   CODESTRAL: "codestral",
+  Cognition: "cognition",
   Cohere: "cohere",
   COHERE_CHAT: "cohere_chat",
   COMETAPI: "cometapi",
@@ -238,6 +243,7 @@ export const provider_map: Record<string, string> = {
   NOVITA: "novita",
   NSCALE: "nscale",
   NVIDIA_NIM: "nvidia_nim",
+  NVIDIA_RIVA: "nvidia_riva",
   Ollama: "ollama",
   OLLAMA_CHAT: "ollama_chat",
   OOBABOOGA: "oobabooga",
@@ -260,6 +266,7 @@ export const provider_map: Record<string, string> = {
   SageMaker: "sagemaker_chat",
   Sambanova: "sambanova",
   SAP: "sap",
+  SCX_AI: "scx-ai",
   Snowflake: "snowflake",
   Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
@@ -283,7 +290,7 @@ export const provider_map: Record<string, string> = {
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
 
-export const providerLogoMap: Record<string, string> = {
+export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
   [Providers.AI21_CHAT]: ai21Logo.src,
@@ -334,6 +341,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.NEBIUS]: nebiusLogo.src,
   [Providers.NOVITA]: novitaLogo.src,
   [Providers.NVIDIA_NIM]: nvidiaNimLogo.src,
+  [Providers.NVIDIA_RIVA]: nvidiaNimLogo.src,
   [Providers.Ollama]: ollamaLogo.src,
   [Providers.OLLAMA_CHAT]: ollamaLogo.src,
   [Providers.OOBABOOGA]: openaiSmallLogo.src,
@@ -351,6 +359,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.SAGEMAKER_LEGACY]: bedrockLogo.src,
   [Providers.Sambanova]: sambanovaLogo.src,
   [Providers.SAP]: sapLogo.src,
+  [Providers.SCX_AI]: scxAiLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
@@ -395,53 +404,39 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 
   // Get the display name from Providers enum and logo from map
   const displayName = Providers[enumKey as keyof typeof Providers];
-  const logo = resolveLogoSrc(providerLogoMap[displayName as keyof typeof providerLogoMap]) ?? "";
+  const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
 
   return { logo, displayName };
 };
 
+const providerPlaceholderMap: Partial<Record<Providers, string>> = {
+  [Providers.AIML]: "aiml/flux-pro/v1.1",
+  [Providers.Anthropic]: "claude-3-opus",
+  [Providers.Azure]: "my-deployment",
+  [Providers.Azure_AI_Studio]: "azure_ai/command-r-plus",
+  [Providers.Bedrock]: "claude-3-opus",
+  [Providers.Cognition]: "cognition/swe-1.7",
+  [Providers.Cursor]: "cursor/claude-4-sonnet",
+  [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
+  [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
+  [Providers.Google_AI_Studio]: "gemini-pro",
+  [Providers.JinaAI]: "jina_ai/",
+  [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
+  [Providers.Oracle]: "oci/xai.grok-4",
+  [Providers.RunwayML]: "runwayml/gen4_turbo",
+  [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
+  [Providers.SCX_AI]: "scx-ai/GLM-5.2",
+  [Providers.Snowflake]: "snowflake/mistral-7b",
+  [Providers.Vertex_AI]: "gemini-pro",
+  [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
+  [Providers.Voyage]: "voyage/",
+  [Providers.WATSONX]: "watsonx/ibm/granite-3-3-8b-instruct",
+  [Providers.ZAI]: "zai/glm-4.5",
+};
+
 export const getPlaceholder = (selectedProvider: string): string => {
-  if (selectedProvider === Providers.AIML) {
-    return "aiml/flux-pro/v1.1";
-  } else if (selectedProvider === Providers.Vertex_AI) {
-    return "gemini-pro";
-  } else if (selectedProvider == Providers.Anthropic) {
-    return "claude-3-opus";
-  } else if (selectedProvider == Providers.Bedrock) {
-    return "claude-3-opus";
-  } else if (selectedProvider == Providers.SageMaker) {
-    return "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b";
-  } else if (selectedProvider == Providers.Google_AI_Studio) {
-    return "gemini-pro";
-  } else if (selectedProvider == Providers.Azure_AI_Studio) {
-    return "azure_ai/command-r-plus";
-  } else if (selectedProvider == Providers.Azure) {
-    return "my-deployment";
-  } else if (selectedProvider == Providers.Oracle) {
-    return "oci/xai.grok-4";
-  } else if (selectedProvider == Providers.Snowflake) {
-    return "snowflake/mistral-7b";
-  } else if (selectedProvider == Providers.Voyage) {
-    return "voyage/";
-  } else if (selectedProvider == Providers.JinaAI) {
-    return "jina_ai/";
-  } else if (selectedProvider == Providers.VolcEngine) {
-    return "volcengine/<any-model-on-volcengine>";
-  } else if (selectedProvider == Providers.DeepInfra) {
-    return "deepinfra/<any-model-on-deepinfra>";
-  } else if (selectedProvider == Providers.FalAI) {
-    return "fal_ai/fal-ai/flux-pro/v1.1-ultra";
-  } else if (selectedProvider == Providers.RunwayML) {
-    return "runwayml/gen4_turbo";
-  } else if (selectedProvider === Providers.WATSONX) {
-    return "watsonx/ibm/granite-3-3-8b-instruct";
-  } else if (selectedProvider === Providers.Cursor) {
-    return "cursor/claude-4-sonnet";
-  } else if (selectedProvider === Providers.ZAI) {
-    return "zai/glm-4.5";
-  } else {
-    return "gpt-3.5-turbo";
-  }
+  const resolvedProvider = Providers[selectedProvider as keyof typeof Providers] ?? (selectedProvider as Providers);
+  return providerPlaceholderMap[resolvedProvider] ?? "gpt-3.5-turbo";
 };
 
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {

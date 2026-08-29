@@ -109,7 +109,7 @@ async def test_authenticate_user_admin_login_with_ui_credentials():
 
 
 @pytest.mark.asyncio
-async def test_authenticate_user_admin_login_with_master_key_as_password():
+async def test_authenticate_user_admin_login_with_master_key_as_password(monkeypatch):
     """Test admin login when UI_PASSWORD is not set, should use master_key"""
     master_key = "sk-1234"
     ui_username = "admin"
@@ -131,39 +131,35 @@ async def test_authenticate_user_admin_login_with_master_key_as_password():
 
     with patch.dict(os.environ, env_vars, clear=False):
         # Explicitly remove UI_PASSWORD if it exists
-        original_ui_password = os.environ.pop("UI_PASSWORD", None)
-        try:
+        monkeypatch.delenv("UI_PASSWORD", raising=False)
+        with patch(
+            "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_generate_key:
+            mock_generate_key.return_value = {
+                "token": "test-token-123",
+                "user_id": LITELLM_PROXY_ADMIN_NAME,
+            }
+
             with patch(
-                "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+                "litellm.proxy.auth.login_utils.user_update",
                 new_callable=AsyncMock,
-            ) as mock_generate_key:
-                mock_generate_key.return_value = {
-                    "token": "test-token-123",
-                    "user_id": LITELLM_PROXY_ADMIN_NAME,
-                }
-
+                return_value=None,
+            ) as mock_user_update:
                 with patch(
-                    "litellm.proxy.auth.login_utils.user_update",
-                    new_callable=AsyncMock,
-                    return_value=None,
-                ) as mock_user_update:
-                    with patch(
-                        "litellm.proxy.auth.login_utils.get_secret_bool",
-                        return_value=False,
-                    ):
-                        result = await authenticate_user(
-                            username=ui_username,
-                            password=master_key,
-                            master_key=master_key,
-                            prisma_client=mock_prisma_client,
-                        )
+                    "litellm.proxy.auth.login_utils.get_secret_bool",
+                    return_value=False,
+                ):
+                    result = await authenticate_user(
+                        username=ui_username,
+                        password=master_key,
+                        master_key=master_key,
+                        prisma_client=mock_prisma_client,
+                    )
 
-                        assert isinstance(result, LoginResult)
-                        assert result.user_id == LITELLM_PROXY_ADMIN_NAME
-                        assert result.user_role == LitellmUserRoles.PROXY_ADMIN
-        finally:
-            if original_ui_password:
-                os.environ["UI_PASSWORD"] = original_ui_password
+                    assert isinstance(result, LoginResult)
+                    assert result.user_id == LITELLM_PROXY_ADMIN_NAME
+                    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
 @pytest.mark.asyncio
@@ -176,9 +172,7 @@ async def test_authenticate_user_invalid_credentials():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
-    with patch.dict(
-        os.environ, {"UI_USERNAME": ui_username, "UI_PASSWORD": "correct-password"}
-    ):
+    with patch.dict(os.environ, {"UI_USERNAME": ui_username, "UI_PASSWORD": "correct-password"}):
         with pytest.raises(ProxyException) as exc_info:
             await authenticate_user(
                 username=ui_username,
@@ -227,9 +221,7 @@ async def test_authenticate_user_wrong_password():
     )
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
-        return_value=mock_user
-    )
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=mock_user)
 
     with patch.dict(
         os.environ,
@@ -279,9 +271,7 @@ async def test_authenticate_user_email_case_insensitive_login():
         return None
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
-        side_effect=mock_find_first
-    )
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(side_effect=mock_find_first)
 
     with patch.dict(
         os.environ,
@@ -325,7 +315,7 @@ async def test_authenticate_user_email_case_insensitive_login():
 
 
 @pytest.mark.asyncio
-async def test_authenticate_user_database_required_for_admin():
+async def test_authenticate_user_database_required_for_admin(monkeypatch):
     """Test that database is required for admin login"""
     master_key = "sk-1234"
     ui_username = "admin"
@@ -334,9 +324,7 @@ async def test_authenticate_user_database_required_for_admin():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
-    with patch.dict(
-        os.environ, {"UI_USERNAME": ui_username, "UI_PASSWORD": ui_password}
-    ):
+    with patch.dict(os.environ, {"UI_USERNAME": ui_username, "UI_PASSWORD": ui_password}):
         with patch(
             "litellm.proxy.auth.login_utils.user_update",
             new_callable=AsyncMock,
@@ -361,7 +349,7 @@ async def test_authenticate_user_database_required_for_admin():
                 assert "No Database connected" in exc_info.value.message
             finally:
                 if original_db_url:
-                    os.environ["DATABASE_URL"] = original_db_url
+                    monkeypatch.setenv("DATABASE_URL", original_db_url)
 
 
 @pytest.mark.asyncio
@@ -429,9 +417,7 @@ def test_authenticate_user_non_ascii_direct_comparison():
     assert result is True
 
     # And correctly returns False for different passwords
-    result = secrets.compare_digest(
-        password.encode("utf-8"), "different£pass".encode("utf-8")
-    )
+    result = secrets.compare_digest(password.encode("utf-8"), "different£pass".encode("utf-8"))
     assert result is False
 
 
@@ -531,9 +517,7 @@ async def test_authenticate_user_database_login_with_non_ascii_password():
         return None
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
-        side_effect=mock_find_first
-    )
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(side_effect=mock_find_first)
 
     with patch.dict(
         os.environ,
@@ -559,3 +543,58 @@ async def test_authenticate_user_database_login_with_non_ascii_password():
             assert isinstance(result, LoginResult)
             assert result.user_id == "test-user-123"
             assert result.user_email == user_email
+
+
+class TestEncodeUiSessionJwt:
+    """The UI session cookie must carry a bounded exp so it does not stay
+    signature-valid until the master key rotates, and so the session-cookie readers
+    that require a bounded lifetime (the MCP interactive sign-in) accept it."""
+
+    def _decode(self, token: str) -> dict:
+        import jwt
+
+        return jwt.decode(token, "sk-master-for-tests", algorithms=["HS256"])
+
+    def test_encoded_cookie_carries_bounded_exp(self):
+        import time
+
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        token_object = {"user_id": "u1", "key": "sk-abc", "login_method": "username_password"}
+        with patch("litellm.proxy.auth.login_utils.LITELLM_UI_SESSION_DURATION", "24h"):
+            token = encode_ui_session_jwt(token_object, "sk-master-for-tests")
+        claims = self._decode(token)
+        assert claims["user_id"] == "u1"
+        assert claims["login_method"] == "username_password"
+        remaining = claims["exp"] - int(time.time())
+        assert 23 * 3600 < remaining <= 24 * 3600
+
+    def test_duration_is_honored_from_env(self):
+        import time
+
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        with patch("litellm.proxy.auth.login_utils.LITELLM_UI_SESSION_DURATION", "1h"):
+            token = encode_ui_session_jwt({"user_id": "u1"}, "sk-master-for-tests")
+        remaining = self._decode(token)["exp"] - int(time.time())
+        assert 0 < remaining <= 3600
+
+    def test_cookie_is_accepted_by_the_exp_requiring_session_reader(self):
+        """The regression this change exists for: before it, the UI cookie carried no
+        exp and _user_id_from_session_cookie (require=["exp"]) rejected every real login,
+        so the MCP interactive sign-in could never capture identity. A cookie minted by
+        this helper must now be accepted."""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
+            _user_id_from_session_cookie,
+        )
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        token_object = {"user_id": "cornell-user", "key": "sk-abc", "login_method": "sso"}
+        with patch("litellm.proxy.auth.login_utils.LITELLM_UI_SESSION_DURATION", "24h"):
+            token = encode_ui_session_jwt(token_object, "sk-master-for-tests")
+        request = MagicMock()
+        request.cookies = {"token": token}
+        with patch("litellm.proxy.proxy_server.master_key", "sk-master-for-tests"):
+            assert _user_id_from_session_cookie(request) == "cornell-user"

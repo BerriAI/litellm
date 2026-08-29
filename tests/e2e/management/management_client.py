@@ -9,11 +9,30 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+import jwt
+
+from e2e_config import MASTER_KEY
 from proxy_client import ProxyClient
-from e2e_http import NoBody, ProbeResult, Result, StreamingResponse, Success, UnknownApiError, unwrap
+from e2e_http import (
+    AuthHeaders,
+    NetworkError,
+    NoBody,
+    ProbeResult,
+    Result,
+    StreamingResponse,
+    Success,
+    UnknownApiError,
+    unwrap,
+)
 from models import (
     ChatBody,
     ChatMessage,
+    ConnectionTestBody,
+    ConnectionTestResponse,
+    CustomerDeleteBody,
+    CustomerInfoParams,
+    CustomerNewBody,
+    CustomerResponse,
     KeyBlockBody,
     KeyDeleteBody,
     KeyGenerateBody,
@@ -44,6 +63,9 @@ from models import (
     TeamNewBody,
     TeamNewResponse,
     TeamUpdateBody,
+    UiLoginBody,
+    UiLoginResponse,
+    UiSessionClaims,
     UserDeleteBody,
     UserDeleteResponse,
     UserInfoParams,
@@ -57,38 +79,73 @@ from models import (
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
+DASHBOARD_SESSION_TEAM_ID = "litellm-dashboard"
 _TEAM_READY_ATTEMPTS = 15
 _TEAM_READY_SLEEP_SECONDS = 0.4
+_KEY_WRITE_ATTEMPTS = 5
+_TRANSIENT_BACKEND_MARKERS = ("connecting to redis", "name resolution")
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardSession:
+    """What a dashboard sign-in hands the Admin UI: the session key it sends as
+    its bearer on every subsequent call, the claims it renders the signed-in user
+    from, and where it lands the browser."""
+
+    session_key: str
+    claims: UiSessionClaims
+    redirect_url: str
 
 
 @dataclass(frozen=True, slots=True)
 class ManagementClient:
     proxy: ProxyClient
+    master_key: str
 
     def llm_only_key(self) -> str:
         return self.proxy.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
 
-    def update_key_models(self, key: str, models: list[str]) -> None:
-        last: Result[NoBody] | None = None
-        for attempt in range(5):
+    def generate_key(self, body: KeyGenerateBody, *, caller_key: str | None = None) -> Result[KeyGenerateResponse]:
+        """POST /key/generate. `caller_key` is who is creating the key: the master
+        key by default, or a virtual key (an admin filling in Create New Key on the
+        dashboard creates it under the session key their sign-in minted). Returns
+        the outcome rather than unwrapping it, so a caller can poll a route that is
+        only transiently refusing."""
+        headers = self.proxy.transport.master if caller_key is None else self.proxy.transport.bearer(caller_key)
+        return self.proxy.transport.post(
+            "/key/generate",
+            headers=headers,
+            json=body,
+            response_type=KeyGenerateResponse,
+        )
+
+    def update_key(self, body: KeyUpdateBody, *, caller_key: str | None = None) -> Result[NoBody]:
+        """POST /key/update. `caller_key` is who is editing: the master key by
+        default, or a virtual key (the dashboard edits under the session key its
+        sign-in minted, never the master key). Returns the outcome rather than
+        unwrapping it, so a caller can poll a route that is only transiently
+        refusing; `update_key_models` is the unwrapping shorthand."""
+        headers = self.proxy.transport.master if caller_key is None else self.proxy.transport.bearer(caller_key)
+        last: Result[NoBody] = NetworkError(message="/key/update was never attempted")
+        for attempt in range(_KEY_WRITE_ATTEMPTS):
             last = self.proxy.transport.post(
                 "/key/update",
-                headers=self.proxy.transport.master,
-                json=KeyUpdateBody(key=key, models=models),
+                headers=headers,
+                json=body,
                 response_type=NoBody,
             )
             match last:
-                case Success():
-                    return
-                case UnknownApiError(body=body) if (
-                    "connecting to redis" in body.lower() or "name resolution" in body.lower()
+                case UnknownApiError(body=error_body) if any(
+                    marker in error_body.lower() for marker in _TRANSIENT_BACKEND_MARKERS
                 ):
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 case _:
                     break
-        assert last is not None
-        raise AssertionError(last)
+        return last
+
+    def update_key_models(self, key: str, models: list[str]) -> None:
+        _ = unwrap(self.update_key(KeyUpdateBody(key=key, models=models)))
 
     def delete_key_strict(self, key: str) -> None:
         """Strict delete for the act phase of a test: a failed delete is a hard
@@ -114,6 +171,17 @@ class ManagementClient:
             )
         )
 
+    def connection_test(self, body: ConnectionTestBody) -> Result[ConnectionTestResponse]:
+        """POST /health/test_connection, the call behind the Admin UI's Test
+        Connection button, probing the live provider with the supplied params."""
+        return self.proxy.transport.post(
+            "/health/test_connection",
+            headers=self.proxy.transport.master,
+            json=body,
+            response_type=ConnectionTestResponse,
+            timeout=120.0,
+        )
+
     def block_key(self, key: str) -> None:
         _ = unwrap(
             self.proxy.transport.post(
@@ -133,15 +201,42 @@ class ManagementClient:
             )
         ).key
 
+    def key_list(self, key_alias: str, *, caller_key: str | None = None) -> Result[KeyListResponse]:
+        """GET /key/list, the Virtual Keys page's own inventory call. `caller_key` is
+        who is asking: the master key by default, or a virtual key."""
+        headers = self.proxy.transport.master if caller_key is None else self.proxy.transport.bearer(caller_key)
+        return self.proxy.transport.get(
+            "/key/list",
+            headers=headers,
+            params=KeyListParams(key_alias=key_alias),
+            response_type=KeyListResponse,
+        )
+
     def key_alias_count(self, key_alias: str) -> int:
-        return unwrap(
-            self.proxy.transport.get(
-                "/key/list",
-                headers=self.proxy.transport.master,
-                params=KeyListParams(key_alias=key_alias),
-                response_type=KeyListResponse,
+        return unwrap(self.key_list(key_alias)).total_count
+
+    def dashboard_login(self, username: str, password: str) -> DashboardSession:
+        """POST /v2/login, the call the Admin UI's sign-in form makes.
+
+        The proxy authenticates the credentials, mints a UI session key for the
+        signed-in user, and hands it back inside a JWT signed with the master key.
+        Decoding that JWT is the only way to reach the session key, and it is what
+        the dashboard itself does before it can call a single management route."""
+        response = unwrap(
+            self.proxy.transport.post(
+                "/v2/login",
+                headers=AuthHeaders(),
+                json=UiLoginBody(username=username, password=password),
+                response_type=UiLoginResponse,
             )
-        ).total_count
+        )
+        decoded: object = jwt.decode(response.token, self.master_key, algorithms=["HS256"])
+        claims = UiSessionClaims.model_validate(decoded)
+        return DashboardSession(
+            session_key=claims.key,
+            claims=claims,
+            redirect_url=response.redirect_url,
+        )
 
     def create_team(self, body: TeamNewBody) -> str:
         team_id = unwrap(
@@ -269,6 +364,35 @@ class ManagementClient:
                 response_type=UserNewResponse,
             )
         ).user_id
+
+    def create_customer(self, user_id: str) -> str:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/customer/new",
+                headers=self.proxy.transport.master,
+                json=CustomerNewBody(user_id=user_id),
+                response_type=CustomerResponse,
+            )
+        )
+        return user_id
+
+    def customer_info(self, end_user_id: str) -> CustomerResponse:
+        return unwrap(
+            self.proxy.transport.get(
+                "/customer/info",
+                headers=self.proxy.transport.master,
+                params=CustomerInfoParams(end_user_id=end_user_id),
+                response_type=CustomerResponse,
+            )
+        )
+
+    def delete_customer(self, user_id: str) -> None:
+        _ = self.proxy.transport.post(
+            "/customer/delete",
+            headers=self.proxy.transport.master,
+            json=CustomerDeleteBody(user_ids=[user_id]),
+            response_type=NoBody,
+        )
 
     def update_user(self, body: UserUpdateBody) -> None:
         _ = unwrap(
@@ -419,4 +543,4 @@ class ManagementClient:
 
 
 def build_client(proxy: ProxyClient) -> ManagementClient:
-    return ManagementClient(proxy=proxy)
+    return ManagementClient(proxy=proxy, master_key=MASTER_KEY)

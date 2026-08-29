@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     oauth_protected_resource_path,
@@ -163,6 +164,26 @@ def test_client_credentials_omits_audience_when_unset():
     assert spec is not None
     assert isinstance(spec.config, ClientCredentialsConfig)
     assert spec.config.audience is None
+    assert spec.config.upstream_resource is None
+
+
+def test_client_credentials_resolves_upstream_resource_onto_the_config():
+    """The adapter is the one MCPServer -> config chokepoint, so it resolves the RFC 8707 send value
+    (auto here derives the canonical server URI) and every M2M token request inherits it."""
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            url="https://up.example.com/mcp",
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            upstream_resource="auto",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.upstream_resource == "https://up.example.com/mcp"
 
 
 def test_client_credentials_with_incomplete_grant_fields_is_owned_for_fail_closed():
@@ -559,3 +580,111 @@ def test_id_jag_honors_explicit_subject_token_type():
 def test_id_jag_half_configured_defers_to_v1(server):
     # A half-configured server must defer (None) rather than 500 at IdJagConfig construction.
     assert to_server_spec(server) is None
+
+
+def test_client_credentials_uses_admin_entered_token_url_when_issuer_yield_empties_resolved():
+    """A pinned issuer empties the resolved token_url while configured_token_url keeps the
+    admin-entered value; the M2M spec must carry it so egress can mint."""
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            url="https://up.example.com/mcp",
+            token_url=None,
+            configured_token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.token_url == "https://idp.example.com/token"
+
+
+_M2M_FIELDS = dict(
+    auth_type=MCPAuth.oauth2,
+    oauth2_flow="client_credentials",
+    client_id="cid",
+    client_secret="csec",
+    token_url="https://idp.example.com/token",
+)
+_OBO_FIELDS = dict(
+    auth_type=MCPAuth.oauth2_token_exchange,
+    client_id="cid",
+    client_secret="csec",
+    token_exchange_endpoint="https://idp.example.com/token",
+)
+_ID_JAG_FIELDS = dict(
+    auth_type=MCPAuth.oauth2_id_jag,
+    client_id="cid",
+    client_secret="csec",
+    token_exchange_endpoint="https://idp.example.com/token",
+    id_jag_resource_token_endpoint="https://mcp-as.example.com/token",
+    audience="api://mcp",
+)
+_AUTHZ_CODE_FIELDS = dict(auth_type=MCPAuth.oauth2, url="https://up.example.com/mcp")
+_STATIC_FIELDS = dict(auth_type=MCPAuth.bearer_token, authentication_token="static-tok")
+
+_ARM_FIELDS = (
+    ("client_credentials", _M2M_FIELDS),
+    ("token_exchange", _OBO_FIELDS),
+    ("id_jag", _ID_JAG_FIELDS),
+    ("authorization_code", _AUTHZ_CODE_FIELDS),
+    ("api_key", _STATIC_FIELDS),
+)
+
+
+@pytest.mark.parametrize("name,fields", _ARM_FIELDS, ids=[n for n, _ in _ARM_FIELDS])
+def test_upstream_token_header_reaches_every_arms_config(name, fields):
+    # to_server_spec builds each arm's config from a hand-written kwargs list, so an arm that
+    # forgets to read the field fails silently: the server keeps writing to Authorization.
+    spec = to_server_spec(_server(upstream_token_header="esb-oauth", **fields))
+    assert spec is not None
+    assert spec.config.header_name == "esb-oauth"
+
+
+@pytest.mark.parametrize("name,fields", _ARM_FIELDS, ids=[n for n, _ in _ARM_FIELDS])
+def test_omitting_the_field_keeps_each_arms_shipped_default(name, fields):
+    spec = to_server_spec(_server(**fields))
+    assert spec is not None
+    assert spec.config.header_name == "Authorization"
+
+
+def test_api_key_scheme_default_survives_when_the_field_is_unset():
+    spec = to_server_spec(_server(auth_type=MCPAuth.api_key, authentication_token="k"))
+    assert spec is not None
+    assert spec.config.header_name == "X-API-Key"
+    assert spec.config.value_prefix == ""
+
+
+def test_the_field_overrides_the_api_key_scheme_default():
+    spec = to_server_spec(_server(auth_type=MCPAuth.api_key, authentication_token="k", upstream_token_header="X-Esb"))
+    assert spec is not None
+    assert spec.config.header_name == "X-Esb"
+
+
+@pytest.mark.parametrize("bad", ["with space", "has:colon", "trailing\r\nX-Injected", 'quoted"name'])
+def test_a_malformed_header_name_is_refused_when_the_server_is_built(bad):
+    """Validation belongs at ingestion, not at spec building. Raising inside to_server_spec would
+    abort the whole aggregate tools/list, so one mistyped server would silently empty the tool list
+    for every other server too. Refusing at MCPServer construction fails the config load loudly
+    instead, and means no malformed value can ever reach an arm.
+    """
+    with pytest.raises(ValidationError):
+        _server(upstream_token_header=bad, **_M2M_FIELDS)
+
+
+def test_a_valid_header_name_is_trimmed_at_ingestion():
+    assert _server(upstream_token_header="  esb-oauth  ", **_M2M_FIELDS).upstream_token_header == "esb-oauth"
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_header_name_means_unset_rather_than_an_error(blank):
+    """The management API treats a blank as "not supplied" and stores it, so raising here made every
+    later rebuild of that server 500 instead of falling back to the default Authorization behavior.
+    """
+    server = _server(upstream_token_header=blank, **_M2M_FIELDS)
+    assert server.upstream_token_header is None
+    spec = to_server_spec(server)
+    assert spec is not None
+    assert spec.config.header_name == "Authorization"

@@ -7,15 +7,18 @@ Each span kind declares its schema as a flat ``attribute key -> extractor``
 table: one lambda per mapping operation, applied against the typed span data.
 """
 
-from typing import Callable
+from collections.abc import Callable
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     collect,
-    drop_none,
     output_messages,
     serialize_messages,
+    tool_definition_attrs,
 )
+from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -25,20 +28,21 @@ from litellm.integrations.otel.model.payloads import (
     ToolDefinition,
 )
 from litellm.integrations.otel.model.semconv import (
-    DB,
     MCP,
     Error,
     GenAI,
+    JsonRpc,
     LiteLLM,
+    RpcSystem,
     Server,
 )
-from litellm.integrations.otel.model.spans import db_system
 
 
 class GenAIMapper:
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
+        GenAI.OUTPUT_TYPE: lambda d: d.output_type.value if d.output_type else None,
         GenAI.REQUEST_MODEL: lambda d: d.request_model or None,
         GenAI.REQUEST_TEMPERATURE: lambda d: d.request_params.temperature,
         GenAI.REQUEST_TOP_P: lambda d: d.request_params.top_p,
@@ -62,6 +66,7 @@ class GenAIMapper:
         Server.ADDRESS: lambda d: d.server.address if d.server else None,
         Server.PORT: lambda d: d.server.port if d.server else None,
         LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
+        LiteLLM.CALL_TYPE: lambda d: d.call_type,
         # The provider/underlying model is only known once routing has picked a
         # deployment, so it can't ride identity Baggage (seeded at auth, before
         # routing) onto the boundary-born LLM span — stamp it directly here.
@@ -92,11 +97,14 @@ class GenAIMapper:
 
     _MCP_ATTRS: dict[str, Callable[[MCPToolCallSpanData], AttrValue | None]] = {
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
+        JsonRpc.SYSTEM: lambda d: RpcSystem.JSONRPC.value if d.server_address and d.server_port else None,
         MCP.METHOD_NAME: lambda d: d.method,
         MCP.SESSION_ID: lambda d: d.session_id,
         GenAI.TOOL_NAME: lambda d: d.tool_name or None,
         GenAI.TOOL_CALL_ARGUMENTS: lambda d: d.arguments_json,
         GenAI.TOOL_CALL_RESULT: lambda d: d.result_json,
+        Server.ADDRESS: lambda d: d.server_address,
+        Server.PORT: lambda d: d.server_port,
         LiteLLM.MCP_SERVER_NAME: lambda d: d.server_name,
         LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
         f"{LiteLLM.COST_PREFIX}total": lambda d: d.response_cost,
@@ -128,12 +136,18 @@ class GenAIMapper:
         LiteLLM.GUARDRAIL_ID: lambda d: d.guardrail_id,
         LiteLLM.GUARDRAIL_POLICY_TEMPLATE: lambda d: d.policy_template,
         LiteLLM.GUARDRAIL_DETECTION_METHOD: lambda d: d.detection_method,
+        LiteLLM.GUARDRAIL_USAGE: lambda d: d.usage_json,
+        LiteLLM.GUARDRAIL_COST: lambda d: d.cost,
+        LiteLLM.GUARDRAIL_COST_IN_SPEND: lambda d: d.cost_in_spend,
     }
 
     _SERVICE_ATTRS: dict[str, Callable[[ServiceSpanData], AttrValue | None]] = {
         LiteLLM.SERVICE_NAME: lambda d: d.service_name,
         LiteLLM.SERVICE_CALL_TYPE: lambda d: d.call_type,
     }
+
+    def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
+        self._tool_attr_budget = tool_attr_budget
 
     def map(self, data: SpanData) -> AttributeMap:
         match data:
@@ -150,18 +164,18 @@ class GenAIMapper:
             case _:
                 return {}
 
-    @classmethod
-    def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
-        attrs = collect(cls._LLM_CALL_ATTRS, data)
-        attrs.update(
-            drop_none(
-                {
-                    f"gen_ai.tool.{idx}.{suffix}": extract(tool)
-                    for idx, tool in enumerate(data.tools)
-                    for suffix, extract in cls._TOOL_ATTRS.items()
-                }
+    def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
+        attrs: Final = collect(self._LLM_CALL_ATTRS, data)
+        if data.tools:
+            attrs[LiteLLM.TOOLS_DECLARED] = len(data.tools)
+            attrs.update(
+                tool_definition_attrs(
+                    lambda idx, suffix: f"gen_ai.tool.{idx}.{suffix}",
+                    data.tools,
+                    self._TOOL_ATTRS,
+                    self._tool_attr_budget,
+                )
             )
-        )
         return attrs
 
     @classmethod
@@ -170,14 +184,10 @@ class GenAIMapper:
 
     @classmethod
     def _service(cls, data: ServiceSpanData) -> AttributeMap:
-        attrs = collect(cls._SERVICE_ATTRS, data)
+        attrs: Final = collect(cls._SERVICE_ATTRS, data)
         # An outbound datastore call (DB_CALL / CLIENT span) also carries db.*
-        # semconv. Internal services (router, budget jobs, …) have no db.system,
-        # so they get only the litellm.service.* keys above.
-        system = db_system(data.service_name)
-        if system is not None:
-            attrs[DB.SYSTEM_NAME] = system
-            if data.call_type:
-                attrs[DB.OPERATION_NAME] = data.call_type
+        # semconv naming the server it reached. Internal services (router, budget
+        # jobs, …) have no db.system, so they get only the litellm.service.* keys.
+        attrs.update(db_span_attributes(data.service_name, data.call_type))
         attrs.update({f"{LiteLLM.METADATA_PREFIX}{key}": value for key, value in data.event_metadata.items()})
         return attrs

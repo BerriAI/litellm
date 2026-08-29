@@ -62,6 +62,17 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Groq]);
     });
 
+    it("should map scx-ai slug and SCX_AI enum key to the SCX.ai display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("scx-ai");
+      expect(fromSlug.displayName).toBe(Providers.SCX_AI);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.SCX_AI]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("SCX_AI");
+      expect(fromEnumKey.displayName).toBe(Providers.SCX_AI);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -94,6 +105,24 @@ describe("provider_info_helpers", () => {
       expect(result.displayName).toBe(Providers.ZAI);
     });
 
+    it("should give hosted_vllm and vllm distinct display names", () => {
+      const hosted = getProviderLogoAndName("hosted_vllm");
+      const local = getProviderLogoAndName("vllm");
+      expect(hosted.displayName).toBe("Hosted vLLM");
+      expect(local.displayName).toBe("Local vLLM");
+      expect(hosted.displayName.toLowerCase()).not.toBe(local.displayName.toLowerCase());
+      expect(hosted.logo).toBe(providerLogoMap[Providers.Hosted_Vllm]);
+      expect(local.logo).toBe(providerLogoMap[Providers.VLLM]);
+    });
+
+    it("should resolve the nvidia_riva provider value to the Nvidia Riva display name and logo", () => {
+      const result = getProviderLogoAndName("nvidia_riva");
+      expect(result.displayName).toBe(Providers.NVIDIA_RIVA);
+      expect(provider_map.NVIDIA_RIVA).toBe("nvidia_riva");
+      expect(result.logo).toBe(providerLogoMap[Providers.NVIDIA_RIVA]);
+      expect(result.logo).toBeTruthy();
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);
@@ -114,13 +143,36 @@ describe("provider_info_helpers", () => {
   });
 
   describe("provider logo bundled assets", () => {
-    it("should expose every provider logo as a truthy bundled URL, never a raw /ui/assets path", () => {
-      const logos = Object.values(providerLogoMap);
-      expect(logos.length).toBeGreaterThan(0);
-      logos.forEach((logo) => {
-        expect(typeof logo).toBe("string");
-        expect(logo.length).toBeGreaterThan(0);
-        expect(logo.startsWith("/ui/assets/")).toBe(false);
+    it("should map every provider to a bundled logo except the known logoless set, never a raw /ui/assets path", () => {
+      const knownLogolessProviders = [
+        Providers.AUTO_ROUTER,
+        Providers.BYTEZ,
+        Providers.CLARIFAI,
+        Providers.Cognition,
+        Providers.COMPACTIFAI,
+        Providers.DATAROBOT,
+        Providers.DOCKER_MODEL_RUNNER,
+        Providers.DOTPROMPT,
+        Providers.EMPOWER,
+        Providers.GALADRIEL,
+        Providers.GradientAI,
+        Providers.HEROKU,
+        Providers.LEMONADE,
+        Providers.LLAMAFILE,
+        Providers.MARITALK,
+        Providers.NLP_CLOUD,
+        Providers.NSCALE,
+        Providers.OVHCLOUD,
+        Providers.PETALS,
+        Providers.PG_VECTOR,
+        Providers.PREDIBASE,
+        Providers.WANDB,
+        Providers.ZAI,
+      ];
+      const logolessProviders = Object.values(Providers).filter((provider) => !providerLogoMap[provider]);
+      expect([...logolessProviders].sort()).toEqual([...knownLogolessProviders].sort());
+      Object.values(providerLogoMap).forEach((logo) => {
+        expect(logo?.startsWith("/ui/assets/")).toBe(false);
       });
     });
 
@@ -137,6 +189,10 @@ describe("provider_info_helpers", () => {
 
     it("should return gemini-pro placeholder for Vertex_AI provider", () => {
       expect(getPlaceholder(Providers.Vertex_AI)).toBe("gemini-pro");
+    });
+
+    it("should return an scx-ai model placeholder for SCX_AI provider", () => {
+      expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {
@@ -201,6 +257,19 @@ describe("provider_info_helpers", () => {
 
     it("should return zai/glm-4.5 placeholder for Z.AI provider", () => {
       expect(getPlaceholder(Providers.ZAI)).toBe("zai/glm-4.5");
+    });
+
+    it("should return the riva asr placeholder for NVIDIA_RIVA provider", () => {
+      expect(getPlaceholder(Providers.NVIDIA_RIVA)).toBe("nvidia_riva/nvidia/parakeet-ctc-1_1b-asr");
+    });
+
+    it("should resolve enum keys from the provider dropdown, not just enum values", () => {
+      expect(getPlaceholder("NVIDIA_RIVA")).toBe("nvidia_riva/nvidia/parakeet-ctc-1_1b-asr");
+      expect(getPlaceholder("WATSONX")).toBe("watsonx/ibm/granite-3-3-8b-instruct");
+    });
+
+    it("should return cognition/swe-1.7 placeholder for Cognition provider", () => {
+      expect(getPlaceholder(Providers.Cognition)).toBe("cognition/swe-1.7");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {

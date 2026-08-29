@@ -1,17 +1,5 @@
 import React, { useState, useEffect } from "react";
-import {
-  Icon,
-  Button as TremorButton,
-  Col,
-  Text,
-  Grid,
-  TabGroup,
-  TabList,
-  Tab,
-  TabPanels,
-  TabPanel,
-} from "@tremor/react";
-import { RefreshIcon } from "@heroicons/react/outline";
+import { RefreshCw } from "lucide-react";
 import {
   vectorStoreListCall,
   vectorStoreDeleteCall,
@@ -25,8 +13,12 @@ import DeleteResourceModal from "@/components/common_components/DeleteResourceMo
 import VectorStoreInfoView from "./vector_store_info";
 import CreateVectorStore from "./CreateVectorStore";
 import TestVectorStoreTab from "./TestVectorStoreTab";
-import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import IndexesTab from "./IndexesTab";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { toast } from "@/lib/toast";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 
 interface VectorStoreProps {
   accessToken: string | null;
@@ -45,6 +37,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | null>(null);
   const [editVectorStore, setEditVectorStore] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const { onTabChange, hasVisited } = useVisitedTabs("create");
 
   const fetchVectorStores = async () => {
     if (!accessToken) {
@@ -56,7 +49,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
       setVectorStores(response.data || []);
     } catch (error) {
       console.error("Error fetching vector stores:", error);
-      NotificationsManager.fromBackend("Error fetching vector stores: " + error);
+      toast.fromError("Error fetching vector stores: " + error);
     } finally {
       setIsLoadingVectorStores(false);
     }
@@ -69,7 +62,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
       setCredentials(response.credentials || []);
     } catch (error) {
       console.error("Error fetching credentials:", error);
-      NotificationsManager.fromBackend("Error fetching credentials: " + error);
+      toast.fromError("Error fetching credentials: " + error);
     }
   };
 
@@ -106,11 +99,11 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
     setIsDeleting(true);
     try {
       await vectorStoreDeleteCall(accessToken, vectorStoreToDelete);
-      NotificationsManager.success("Vector store deleted successfully");
+      toast.success("Vector store deleted successfully");
       fetchVectorStores();
     } catch (error) {
       console.error("Error deleting vector store:", error);
-      NotificationsManager.fromBackend("Error deleting vector store: " + error);
+      toast.fromError("Error deleting vector store: " + error);
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -147,61 +140,67 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
     <div className="mx-4 h-[75vh]">
       <div className="gap-2 p-8 h-[75vh] w-full mt-2">
         <div className="flex justify-between mt-2 w-full items-center mb-4">
-          <h1>Vector Store Management</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">Vector Store Management</h1>
           <div className="flex items-center space-x-2">
-            {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-            <Icon
-              icon={RefreshIcon}
-              variant="shadow"
-              size="xs"
-              className="self-center cursor-pointer"
-              onClick={handleRefreshClick}
-            />
+            {lastRefreshed && <p className="text-sm text-muted-foreground">Last Refreshed: {lastRefreshed}</p>}
+            <Button variant="outline" size="icon-sm" aria-label="Refresh" onClick={handleRefreshClick}>
+              <RefreshCw className="size-4" />
+            </Button>
           </div>
         </div>
 
-        <Text className="mb-4">
-          <p>You can use vector stores to store and retrieve LLM embeddings.</p>
-        </Text>
+        <p className="mb-4 text-sm text-muted-foreground">
+          You can use vector stores to store and retrieve LLM embeddings.
+        </p>
 
-        <TabGroup>
-          <TabList className="mb-6">
-            <Tab>Create Vector Store</Tab>
-            <Tab>Manage Vector Stores</Tab>
-            <Tab>Test Vector Store</Tab>
-          </TabList>
+        <Tabs defaultValue="create" onValueChange={onTabChange}>
+          <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
+            <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
+              Create Vector Store
+            </TabsTrigger>
+            <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
+              Manage Vector Stores
+            </TabsTrigger>
+            <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
+              Test Vector Store
+            </TabsTrigger>
+            {isProxyAdminRole(userRole || "") && (
+              <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
+                Indexes
+              </TabsTrigger>
+            )}
+          </TabsList>
 
-          <TabPanels>
-            {/* Tab 1: Create Vector Store */}
-            <TabPanel>
-              <CreateVectorStore accessToken={accessToken} onSuccess={handleVectorStoreCreated} />
-            </TabPanel>
+          <TabsContent keepMounted={hasVisited("create")} value="create">
+            <CreateVectorStore accessToken={accessToken} onSuccess={handleVectorStoreCreated} />
+          </TabsContent>
 
-            {/* Tab 2: Manage Vector Stores */}
-            <TabPanel>
-              <TremorButton className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
-                + Add Vector Store
-              </TremorButton>
+          <TabsContent keepMounted={hasVisited("manage")} value="manage">
+            <Button className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
+              + Add Vector Store
+            </Button>
 
-              <Grid numItems={1} className="gap-2 pt-2 pb-2 w-full mt-2">
-                <Col numColSpan={1}>
-                  <VectorStoreTable
-                    data={vectorStores}
-                    isLoading={isLoadingVectorStores}
-                    onView={handleView}
-                    onEdit={handleEdit}
-                    onDelete={handleDelete}
-                  />
-                </Col>
-              </Grid>
-            </TabPanel>
+            <div className="grid grid-cols-1 gap-2 pt-2 pb-2 w-full mt-2">
+              <VectorStoreTable
+                data={vectorStores}
+                isLoading={isLoadingVectorStores}
+                onView={handleView}
+                onEdit={handleEdit}
+                onDelete={handleDelete}
+              />
+            </div>
+          </TabsContent>
 
-            {/* Tab 3: Test Vector Store */}
-            <TabPanel>
-              <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+          <TabsContent keepMounted={hasVisited("test")} value="test">
+            <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
+          </TabsContent>
+
+          {isProxyAdminRole(userRole || "") && (
+            <TabsContent keepMounted={hasVisited("indexes")} value="indexes">
+              <IndexesTab accessToken={accessToken} vectorStores={vectorStores} onViewVectorStore={handleView} />
+            </TabsContent>
+          )}
+        </Tabs>
 
         {/* Create Vector Store Modal */}
         <VectorStoreForm

@@ -1,12 +1,7 @@
-import os
-import sys
 
 import pytest
 import requests
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 import responses
@@ -143,7 +138,7 @@ def test_list_invalid_api_keys(base_url, api_key):
     assert "Authorization" not in request.headers
 
 
-def test_client_initialization_strips_trailing_slash():
+def test_models_client_initialization_strips_trailing_slash():
     """Test that the client properly strips trailing slashes from base_url during initialization"""
     client = ModelsManagementClient(base_url="http://localhost:8000/////")
     assert client._base_url == "http://localhost:8000"
@@ -472,14 +467,14 @@ def test_get_invalid_params():
     client = ModelsManagementClient(base_url="http://localhost:8000")
 
     # Test with no parameters
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Exactly one of model_id or model_name must be provided') as exc_info:
         client.get()
     assert "Exactly one of model_id or model_name must be provided" in str(
         exc_info.value
     )
 
     # Test with both parameters
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Exactly one of model_id or model_name must be provided') as exc_info:
         client.get(model_id="123", model_name="gpt-4")
     assert "Exactly one of model_id or model_name must be provided" in str(
         exc_info.value

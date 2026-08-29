@@ -9,7 +9,7 @@ import base64
 import hashlib
 import re
 import uuid
-from typing import Dict, Optional, Tuple
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -21,10 +21,10 @@ from litellm.types.utils import LlmProviders
 from .authenticator import get_access_token, get_access_token_async
 
 # GigaChat API endpoint
-GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
+GIGACHAT_BASE_URL: Final = "https://gigachat.devices.sberbank.ru/api/v1"
 
 # Simple in-memory cache for file IDs
-_file_cache: Dict[str, str] = {}
+_file_cache: Final[dict[str, str]] = {}
 
 
 def _get_url_hash(url: str) -> str:
@@ -32,57 +32,57 @@ def _get_url_hash(url: str) -> str:
     return hashlib.sha256(url.encode()).hexdigest()
 
 
-def _parse_data_url(data_url: str) -> Optional[Tuple[bytes, str, str]]:
+def _parse_data_url(data_url: str) -> tuple[bytes, str, str] | None:
     """
     Parse data URL (base64 image).
 
     Returns:
         Tuple of (content_bytes, content_type, extension) or None
     """
-    match = re.match(r"data:([^;]+);base64,(.+)", data_url)
+    match: Final = re.match(r"data:([^;]+);base64,(.+)", data_url)
     if not match:
         return None
 
-    content_type = match.group(1)
-    base64_data = match.group(2)
-    content_bytes = base64.b64decode(base64_data)
-    ext = content_type.split("/")[-1].split(";")[0] or "jpg"
+    content_type: Final = match.group(1)
+    base64_data: Final = match.group(2)
+    content_bytes: Final = base64.b64decode(base64_data)
+    ext: Final = content_type.split("/")[-1].split(";")[0] or "jpg"
 
     return content_bytes, content_type, ext
 
 
-def _download_image_sync(url: str) -> Tuple[bytes, str, str]:
+def _download_image_sync(url: str) -> tuple[bytes, str, str]:
     """Download image from URL synchronously."""
-    client = _get_httpx_client(params={"ssl_verify": False})
-    response = client.get(url)
+    client: Final = _get_httpx_client(params={"ssl_verify": False})
+    response: Final = client.get(url)
     response.raise_for_status()
 
-    content_type = response.headers.get("content-type", "image/jpeg")
-    ext = content_type.split("/")[-1].split(";")[0] or "jpg"
+    content_type: Final = response.headers.get("content-type", "image/jpeg")
+    ext: Final = content_type.split("/")[-1].split(";")[0] or "jpg"
 
     return response.content, content_type, ext
 
 
-async def _download_image_async(url: str) -> Tuple[bytes, str, str]:
+async def _download_image_async(url: str) -> tuple[bytes, str, str]:
     """Download image from URL asynchronously."""
-    client = get_async_httpx_client(
+    client: Final = get_async_httpx_client(
         llm_provider=LlmProviders.GIGACHAT,
         params={"ssl_verify": False},
     )
-    response = await client.get(url)
+    response: Final = await client.get(url)
     response.raise_for_status()
 
-    content_type = response.headers.get("content-type", "image/jpeg")
-    ext = content_type.split("/")[-1].split(";")[0] or "jpg"
+    content_type: Final = response.headers.get("content-type", "image/jpeg")
+    ext: Final = content_type.split("/")[-1].split(";")[0] or "jpg"
 
     return response.content, content_type, ext
 
 
 def upload_file_sync(
     image_url: str,
-    credentials: Optional[str] = None,
-    api_base: Optional[str] = None,
-) -> Optional[str]:
+    credentials: str | None = None,
+    api_base: str | None = None,
+) -> str | None:
     """
     Upload file to GigaChat and return file_id (sync).
 
@@ -94,34 +94,34 @@ def upload_file_sync(
     Returns:
         file_id string or None if upload failed
     """
-    url_hash = _get_url_hash(image_url)
+    url_hash: Final = _get_url_hash(image_url)
 
     # Check cache
     if url_hash in _file_cache:
-        verbose_logger.debug(f"Image found in cache: {url_hash[:16]}...")
+        verbose_logger.debug("Image found in cache: %s...", url_hash[:16])
         return _file_cache[url_hash]
 
     try:
         # Get image data
-        parsed = _parse_data_url(image_url)
+        parsed: Final = _parse_data_url(image_url)
         if parsed:
             content_bytes, content_type, ext = parsed
             verbose_logger.debug("Decoded base64 image")
         else:
-            verbose_logger.debug(f"Downloading image from URL: {image_url[:80]}...")
+            verbose_logger.debug("Downloading image from URL: %s...", image_url[:80])
             content_bytes, content_type, ext = _download_image_sync(image_url)
 
-        filename = f"{uuid.uuid4()}.{ext}"
+        filename: Final = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token = get_access_token(credentials)
+        access_token: Final = get_access_token(credentials)
 
         # Upload to GigaChat
-        base_url = api_base or GIGACHAT_BASE_URL
-        upload_url = f"{base_url}/files"
+        base_url: Final = api_base or GIGACHAT_BASE_URL
+        upload_url: Final = f"{base_url}/files"
 
-        client = _get_httpx_client(params={"ssl_verify": False})
-        response = client.post(
+        client: Final = _get_httpx_client(params={"ssl_verify": False})
+        response: Final = client.post(
             upload_url,
             headers={"Authorization": f"Bearer {access_token}"},
             files={"file": (filename, content_bytes, content_type)},
@@ -129,25 +129,25 @@ def upload_file_sync(
             timeout=60,
         )
         response.raise_for_status()
-        result = response.json()
+        result: Final = response.json()
 
-        file_id = result.get("id")
+        file_id: Final = result.get("id")
         if file_id:
             _file_cache[url_hash] = file_id
-            verbose_logger.debug(f"File uploaded successfully, file_id: {file_id}")
+            verbose_logger.debug("File uploaded successfully, file_id: %s", file_id)
 
         return file_id
 
     except Exception as e:
-        verbose_logger.error(f"Error uploading file to GigaChat: {e}")
+        verbose_logger.error("Error uploading file to GigaChat: %s", e)
         return None
 
 
 async def upload_file_async(
     image_url: str,
-    credentials: Optional[str] = None,
-    api_base: Optional[str] = None,
-) -> Optional[str]:
+    credentials: str | None = None,
+    api_base: str | None = None,
+) -> str | None:
     """
     Upload file to GigaChat and return file_id (async).
 
@@ -159,37 +159,37 @@ async def upload_file_async(
     Returns:
         file_id string or None if upload failed
     """
-    url_hash = _get_url_hash(image_url)
+    url_hash: Final = _get_url_hash(image_url)
 
     # Check cache
     if url_hash in _file_cache:
-        verbose_logger.debug(f"Image found in cache: {url_hash[:16]}...")
+        verbose_logger.debug("Image found in cache: %s...", url_hash[:16])
         return _file_cache[url_hash]
 
     try:
         # Get image data
-        parsed = _parse_data_url(image_url)
+        parsed: Final = _parse_data_url(image_url)
         if parsed:
             content_bytes, content_type, ext = parsed
             verbose_logger.debug("Decoded base64 image")
         else:
-            verbose_logger.debug(f"Downloading image from URL: {image_url[:80]}...")
+            verbose_logger.debug("Downloading image from URL: %s...", image_url[:80])
             content_bytes, content_type, ext = await _download_image_async(image_url)
 
-        filename = f"{uuid.uuid4()}.{ext}"
+        filename: Final = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token = await get_access_token_async(credentials)
+        access_token: Final = await get_access_token_async(credentials)
 
         # Upload to GigaChat
-        base_url = api_base or GIGACHAT_BASE_URL
-        upload_url = f"{base_url}/files"
+        base_url: Final = api_base or GIGACHAT_BASE_URL
+        upload_url: Final = f"{base_url}/files"
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=LlmProviders.GIGACHAT,
             params={"ssl_verify": False},
         )
-        response = await client.post(
+        response: Final = await client.post(
             upload_url,
             headers={"Authorization": f"Bearer {access_token}"},
             files={"file": (filename, content_bytes, content_type)},
@@ -197,15 +197,15 @@ async def upload_file_async(
             timeout=60,
         )
         response.raise_for_status()
-        result = response.json()
+        result: Final = response.json()
 
-        file_id = result.get("id")
+        file_id: Final = result.get("id")
         if file_id:
             _file_cache[url_hash] = file_id
-            verbose_logger.debug(f"File uploaded successfully, file_id: {file_id}")
+            verbose_logger.debug("File uploaded successfully, file_id: %s", file_id)
 
         return file_id
 
     except Exception as e:
-        verbose_logger.error(f"Error uploading file to GigaChat: {e}")
+        verbose_logger.error("Error uploading file to GigaChat: %s", e)
         return None

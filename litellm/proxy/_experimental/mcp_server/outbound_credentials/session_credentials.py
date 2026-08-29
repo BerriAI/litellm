@@ -18,30 +18,33 @@ prefixes, and claim shapes.
 import hashlib
 from datetime import datetime
 from functools import lru_cache
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+    AsymmetricSessionKeys,
     OpenedSessionToken,
     SessionExpired,
     SessionKeys,
     SessionPrincipal,
+    SessionRotatedPublicKey,
+    SessionSigningKeys,
     is_session_refresh_token,
     is_session_token,
     open_session_refresh_token,
     open_session_token,
 )
 
-_SESSION_SIGNING_KEY_DOMAIN = b"litellm-mcp-gateway:session-signing:"
+_SESSION_SIGNING_KEY_DOMAIN: Final = b"litellm-mcp-gateway:session-signing:"
 
 # scrypt work factors (RFC 7914), identical to the envelope KDF: memory-hard so a captured
 # session token is not a cheap offline oracle for the master key.
-_SCRYPT_N = 2**15
-_SCRYPT_R = 8
-_SCRYPT_P = 1
-_SCRYPT_MAXMEM = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
-_DERIVED_KEY_BYTES = 32
+_SCRYPT_N: Final = 2**15
+_SCRYPT_R: Final = 8
+_SCRYPT_P: Final = 1
+_SCRYPT_MAXMEM: Final = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
+_DERIVED_KEY_BYTES: Final = 32
 
 
 @lru_cache(maxsize=8)
@@ -56,7 +59,7 @@ def session_keys_from_master_key(master_key: str) -> SessionKeys:
     ``master_key`` invalidates every outstanding session, which is the intended behavior
     for a signing-key change.
     """
-    signing = hashlib.scrypt(
+    signing: Final = hashlib.scrypt(
         master_key.encode(),
         salt=_SESSION_SIGNING_KEY_DOMAIN,
         n=_SCRYPT_N,
@@ -66,6 +69,99 @@ def session_keys_from_master_key(master_key: str) -> SessionKeys:
         dklen=_DERIVED_KEY_BYTES,
     ).hex()
     return SessionKeys(signing_key=SecretStr(signing))
+
+
+class SessionSigningPreviousKey(BaseModel):
+    """One retired key in ``mcp_session_token_signing.previous_public_keys``: its ``kid``
+    and the PEM public half (inline or an ``os.environ/`` reference)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kid: str = Field(min_length=1)
+    public_key: str = Field(min_length=1)
+
+
+class MCPSessionTokenSigningSettings(BaseModel):
+    """The ``general_settings.mcp_session_token_signing`` block: opt-in asymmetric signing
+    for the gateway session tokens. Absent, the gateway keeps the backward-compatible
+    HS256 key derived from ``master_key``. ``private_key`` and each ``public_key`` accept
+    a PEM string inline or an ``os.environ/<NAME>`` (or secret manager) reference."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    algorithm: Literal["RS256"]
+    kid: str = Field(min_length=1)
+    private_key: str = Field(min_length=1)
+    previous_public_keys: tuple[SessionSigningPreviousKey, ...] = ()
+
+
+class SessionSigningConfigError(BaseModel):
+    """``mcp_session_token_signing`` is present but unusable (bad shape, unresolvable
+    secret reference, or a key that is not a loadable RSA PEM); the caller fails closed
+    with a server error instead of silently falling back to HS256."""
+
+    model_config = ConfigDict(frozen=True)
+    tag: Literal["session_signing_config_error"] = "session_signing_config_error"
+    detail: str
+
+
+def _resolve_key_material(value: str) -> str | None:
+    if not value.startswith("os.environ/"):
+        return value
+    from litellm.secret_managers.main import get_secret_str  # noqa: PLC0415  # heavy import kept off the pure path
+
+    return get_secret_str(value)
+
+
+def resolve_session_signing_keys(
+    master_key: str,
+    raw_settings: object | None,
+) -> SessionSigningKeys | SessionSigningConfigError:
+    """Turn the operator's ``mcp_session_token_signing`` setting into signing key material.
+
+    ``None`` (the setting absent) keeps the backward-compatible HS256 key derived from
+    ``master_key``. A present setting must fully validate into RS256 material; any defect
+    is a ``SessionSigningConfigError`` value so token issuance and admission fail closed
+    rather than minting under a key the operator did not intend.
+    """
+    if raw_settings is None:
+        return session_keys_from_master_key(master_key)
+    try:
+        settings: Final = MCPSessionTokenSigningSettings.model_validate(raw_settings)
+    except ValidationError as exc:
+        return SessionSigningConfigError(detail=f"mcp_session_token_signing is malformed: {exc}")
+    private_pem: Final = _resolve_key_material(settings.private_key)
+    if private_pem is None:
+        return SessionSigningConfigError(detail="mcp_session_token_signing.private_key reference did not resolve")
+    resolved_previous: Final = tuple(
+        (previous.kid, _resolve_key_material(previous.public_key)) for previous in settings.previous_public_keys
+    )
+    unresolved: Final = tuple(kid for kid, pem in resolved_previous if pem is None)
+    if unresolved:
+        return SessionSigningConfigError(
+            detail=f"mcp_session_token_signing.previous_public_keys reference did not resolve for kid(s): {', '.join(unresolved)}"
+        )
+    try:
+        return AsymmetricSessionKeys(
+            private_key_pem=SecretStr(private_pem),
+            kid=settings.kid,
+            previous_public_keys=tuple(
+                SessionRotatedPublicKey(kid=kid, public_key_pem=pem)
+                for kid, pem in resolved_previous
+                if pem is not None
+            ),
+        )
+    except ValidationError as exc:
+        return SessionSigningConfigError(
+            detail=f"mcp_session_token_signing keys are not usable RSA PEM material: {exc}"
+        )
+
+
+def active_session_signing_keys(master_key: str) -> SessionSigningKeys | SessionSigningConfigError:
+    """Wiring helper for the token endpoint and the admission edge: resolve the signing
+    keys from the live ``general_settings.mcp_session_token_signing`` block, or derive the
+    default HS256 key from ``master_key`` when the block is absent."""
+    from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415  # circular import at module load
+
+    return resolve_session_signing_keys(master_key, general_settings.get("mcp_session_token_signing"))
 
 
 class NotSessionBearer(BaseModel):
@@ -98,7 +194,7 @@ SessionBearerResult: TypeAlias = NotSessionBearer | SessionBearerAdmitted | Sess
 
 
 def _strip_bearer(value: str) -> str:
-    parts = value.split(None, 1)
+    parts: Final = value.split(None, 1)
     if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1]
     return value
@@ -110,13 +206,13 @@ def is_session_bearer_shaped(authorization_value: str) -> bool:
     for an access token (to admit) and for a refresh token (to reject it explicitly, since
     a refresh credential is never usable at the tool-call edge); anything else falls
     through to normal admission."""
-    candidate = _strip_bearer(authorization_value)
+    candidate: Final = _strip_bearer(authorization_value)
     return is_session_token(candidate) or is_session_refresh_token(candidate)
 
 
 def resolve_session_bearer(
     authorization_value: str,
-    keys: SessionKeys,
+    keys: SessionSigningKeys,
     now: datetime,
 ) -> SessionBearerResult:
     """Classify an ``Authorization`` value presented at the aggregate MCP edge.
@@ -131,12 +227,12 @@ def resolve_session_bearer(
     only ever presented back to the token endpoint, so admission must fail it closed rather
     than let it fall through to another arm.
     """
-    candidate = _strip_bearer(authorization_value)
+    candidate: Final = _strip_bearer(authorization_value)
     if is_session_refresh_token(candidate):
         return SessionBearerInvalid()
     if not is_session_token(candidate):
         return NotSessionBearer()
-    opened = open_session_token(candidate, keys, now)
+    opened: Final = open_session_token(candidate, keys, now)
     if isinstance(opened, OpenedSessionToken):
         return SessionBearerAdmitted(principal=opened.principal)
     return SessionBearerInvalid(expired=isinstance(opened, SessionExpired))
@@ -149,6 +245,7 @@ class SessionRefreshOpened(BaseModel):
     model_config = ConfigDict(frozen=True)
     tag: Literal["opened"] = "opened"
     principal: SessionPrincipal
+    jti: str
 
 
 class SessionRefreshInvalid(BaseModel):
@@ -165,7 +262,7 @@ SessionRefreshResult: TypeAlias = SessionRefreshOpened | SessionRefreshInvalid
 
 def open_session_refresh_bearer(
     refresh_value: str,
-    keys: SessionKeys,
+    keys: SessionSigningKeys,
     now: datetime,
     expected_client_id: str,
 ) -> SessionRefreshResult:
@@ -179,12 +276,12 @@ def open_session_refresh_bearer(
     ``client_id`` is not a secret (the caller presents it), so a plain equality check is
     sufficient and, unlike ``hmac.compare_digest`` on ``str``, does not raise on non-ASCII.
     """
-    candidate = _strip_bearer(refresh_value)
+    candidate: Final = _strip_bearer(refresh_value)
     if not is_session_refresh_token(candidate):
         return SessionRefreshInvalid()
-    opened = open_session_refresh_token(candidate, keys, now)
+    opened: Final = open_session_refresh_token(candidate, keys, now)
     if not isinstance(opened, OpenedSessionToken):
         return SessionRefreshInvalid()
     if opened.principal.client_id != expected_client_id:
         return SessionRefreshInvalid()
-    return SessionRefreshOpened(principal=opened.principal)
+    return SessionRefreshOpened(principal=opened.principal, jti=opened.jti)

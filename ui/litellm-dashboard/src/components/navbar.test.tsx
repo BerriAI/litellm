@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import React, { useState } from "react";
+import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
@@ -30,7 +30,6 @@ const mockUserDropdownData = vi.hoisted(() => ({
 vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
   const React = await import("react");
   const { useState } = React;
-  const { Button } = await import("antd");
   const localStorageUtils = await import("@/utils/localStorageUtils");
   return {
     default: function MockUserDropdown({ onLogout }: { onLogout: () => void }) {
@@ -38,9 +37,9 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
       const [open, setOpen] = useState(false);
       return (
         <div>
-          <Button type="text" aria-label="Open account menu" onClick={() => setOpen(!open)}>
+          <button type="button" aria-label="Open account menu" onClick={() => setOpen(!open)}>
             Account
-          </Button>
+          </button>
           {open && (
             <div data-testid="user-dropdown-content">
               <span>{userId}</span>
@@ -96,7 +95,7 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
 let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
-let mockUseAuthorizedImpl = () => ({
+const mockUseAuthorizedImpl = () => ({
   userId: "test-user",
   userEmail: "test@example.com",
   userRole: "Admin",
@@ -150,6 +149,27 @@ describe("Navbar", () => {
     expect(screen.getByRole("button", { name: /^notifications$/i })).toBeInTheDocument();
     expect(screen.getByText("Docs")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
+  });
+
+  it("should link the logo to the UI home route rather than the proxy origin", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: /litellm brand/i })).toHaveAttribute("href", "/ui");
+  });
+
+  it("pairs the logo with a dark-mode variant that swaps on the dark class", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm brand/i }).querySelectorAll("img"));
+    const classesOf = (el: Element) => new Set(el.className.split(/\s+/));
+
+    const lightSrc = light.getAttribute("src") ?? "";
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image$/));
+    expect(dark).toHaveAttribute("src", `${lightSrc}?theme=dark`);
+    expect(classesOf(light).has("dark:hidden")).toBe(true);
+    expect(classesOf(light).has("hidden")).toBe(false);
+    expect(classesOf(dark).has("hidden")).toBe(true);
+    expect(classesOf(dark).has("dark:block")).toBe(true);
   });
 
   it("should display user information in dropdown", async () => {

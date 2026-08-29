@@ -569,6 +569,103 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
     )
 
 
+_BATCH_DEPLOYMENT_ID = "8d0eaa7e6c6f54a425dfd0062cb6b0dc"
+
+
+def _managed_batch_router():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+                "model_info": {"id": _BATCH_DEPLOYMENT_ID},
+            },
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"id": "a-different-deployment-id"},
+            },
+        ]
+    )
+
+
+def _encode_managed_id(decoded: str) -> str:
+    return base64.urlsafe_b64encode(decoded.encode()).decode().rstrip("=")
+
+
+_MANAGED_BATCH_ID = _encode_managed_id(
+    f"litellm_proxy;model_id:{_BATCH_DEPLOYMENT_ID};llm_batch_id:provider-batch-123"
+)
+_MANAGED_BATCH_OUTPUT_FILE_ID = _encode_managed_id(
+    f"litellm_proxy;model_id:{_BATCH_DEPLOYMENT_ID};llm_batch_id:provider-batch-123;"
+    "llm_output_file_id:provider-file-456"
+)
+
+
+@pytest.mark.parametrize(
+    "route, request_data",
+    [
+        ("/v1/batches/{batch_id}", {"batch_id": _MANAGED_BATCH_ID}),
+        ("/v1/batches/{batch_id}/cancel", {"batch_id": _MANAGED_BATCH_ID}),
+        ("/v1/files/{file_id}", {"file_id": _MANAGED_BATCH_OUTPUT_FILE_ID}),
+        ("/v1/files/{file_id}/content", {"file_id": _MANAGED_BATCH_OUTPUT_FILE_ID}),
+    ],
+)
+def test_get_model_from_request_resolves_batch_id_deployment_to_model_name(route, request_data):
+    """Regression for #32580: managed batch retrieve/cancel and managed batch output
+    file reads encode the deployment model_id into the resource id. The auth layer must
+    resolve that id back to the public model group name so model-access checks compare
+    against the model group, not the raw deployment id."""
+    assert (
+        get_model_from_request(
+            request_data=request_data,
+            route=route,
+            llm_router=_managed_batch_router(),
+        )
+        == "bedrock-batch-model"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, request_data",
+    [
+        ("/v1/batches/{batch_id}", {"batch_id": _MANAGED_BATCH_ID}),
+        ("/v1/batches/{batch_id}/cancel", {"batch_id": _MANAGED_BATCH_ID}),
+        ("/v1/files/{file_id}/content", {"file_id": _MANAGED_BATCH_OUTPUT_FILE_ID}),
+    ],
+)
+async def test_managed_batch_routes_pass_team_model_access_check(route, request_data):
+    """End-to-end regression for #32580: a team scoped to the batch model group got
+    ``team_model_access_denied`` on retrieve/cancel because the deployment id, not the
+    model group, was authorized. Fails pre-fix with the deployment id in the message."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    llm_router = _managed_batch_router()
+    model = get_model_from_request(request_data=request_data, route=route, llm_router=llm_router)
+
+    assert (
+        await can_team_access_model(
+            model=model,
+            team_object=LiteLLM_TeamTable(team_id="team-batch", models=["bedrock-batch-model"]),
+            llm_router=llm_router,
+        )
+        is True
+    )
+
+    with pytest.raises(Exception, match="team not allowed to access model"):
+        await can_team_access_model(
+            model=model,
+            team_object=LiteLLM_TeamTable(team_id="team-other", models=["some-other-model"]),
+            llm_router=llm_router,
+        )
+
+
 def test_get_model_from_request_resolves_character_id_model_with_router():
     from litellm.types.videos.utils import encode_character_id_with_provider
 
@@ -1491,7 +1588,7 @@ class TestCheckCompleteCredentialsBlocksSSRF:
             "litellm.proxy.auth.auth_utils.validate_url",
             side_effect=SSRFError(f"blocked: {blocked_url}"),
         ):
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(ValueError, match='is rejected by the SSRF guard') as exc_info:
                 check_complete_credentials(
                     {
                         "model": "gpt-4",
@@ -1587,7 +1684,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         }
         out = get_dynamic_litellm_params(
             litellm_params=dict(admin_params),
-            request_kwargs={"base_url": "https://attacker.example"},
+            request_kwargs={"base_url": "https://attacker.example", "api_key": "sk-caller"},
         )
         assert "aws_access_key_id" not in out
         assert "aws_secret_access_key" not in out
@@ -1608,7 +1705,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         }
         out = get_dynamic_litellm_params(
             litellm_params=dict(admin_params),
-            request_kwargs={"api_base": "self-hosted.example.com:50051"},
+            request_kwargs={"api_base": "self-hosted.example.com:50051", "api_key": "sk-caller"},
         )
         assert out["api_base"] == "self-hosted.example.com:50051"
         assert "nvcf_function_id" not in out
@@ -1626,7 +1723,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         }
         out = get_dynamic_litellm_params(
             litellm_params=dict(admin_params),
-            request_kwargs={"api_base": "self-hosted.example.com:50051"},
+            request_kwargs={"api_base": "self-hosted.example.com:50051", "api_key": "sk-caller"},
         )
         assert out["api_base"] == "self-hosted.example.com:50051"
         assert "use_ssl" not in out
@@ -1651,6 +1748,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
             },
             request_kwargs={
                 "api_base": "https://attacker.example",
+                "api_key": "sk-caller",
                 "organization": "org-attacker",
                 "extra_body": {"attacker": "value"},
             },
@@ -1674,6 +1772,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
             },
             request_kwargs={
                 "api_base": "https://attacker.example",
+                "api_key": "sk-caller",
                 "organization": "",
                 "extra_body": "",
             },
@@ -1700,6 +1799,310 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["organization"] == "org-admin"
         assert out["api_version"] == "2026-04-01"
         assert out["api_base"] == "https://admin.upstream/v1"
+
+    def test_client_api_key_used_when_supplied_with_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        out = get_dynamic_litellm_params(
+            litellm_params={
+                "model": "gpt-4",
+                "api_key": "sk-admin-secret",
+                "api_base": "https://admin.upstream/v1",
+            },
+            request_kwargs={
+                "api_base": "https://attacker.example",
+                "api_key": "sk-client-byok",
+            },
+        )
+        assert out["api_key"] == "sk-client-byok"
+        assert "sk-admin-secret" not in str(out)
+
+
+_OPENAI_CHAT_RESPONSE = {
+    "id": "chatcmpl-x",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+class TestClientsideBaseOverrideOutboundKey:
+    """Drive a completion through the router and assert on the outbound request
+    when the caller overrides ``api_base``."""
+
+    def _router(self):
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "sk-SERVER-CONFIG",
+                        "api_base": "https://admin.upstream/v1",
+                    },
+                }
+            ]
+        )
+
+    @pytest.fixture(autouse=True)
+    def _ambient_server_key(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-SERVER-ENV")
+        monkeypatch.setattr(litellm, "api_key", None, raising=False)
+
+    def test_caller_key_override_sends_caller_key_never_server_key(self):
+        import httpx
+        import respx
+
+        with respx.mock:
+            route = respx.post("https://caller.example/v1/chat/completions").mock(
+                return_value=httpx.Response(200, json=_OPENAI_CHAT_RESPONSE)
+            )
+            self._router().completion(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://caller.example/v1",
+                api_key="sk-CALLER",
+            )
+            authorization = route.calls.last.request.headers.get("authorization")
+            assert authorization == "Bearer sk-CALLER"
+            assert "SERVER" not in (authorization or "")
+
+
+def _rounds_deep_api_base_payload(rounds, field):
+    """Build a fallbacks payload with ``api_base`` on a target nested ``rounds``
+    fallback-rounds deep, each round wrapped in its own grouping dict."""
+    node = {"model": "leaf", "api_base": "https://attacker.example"}
+    for i in range(rounds):
+        node = {"model": f"m{i}", field: [{"grp": [node]}]}
+    return {"model": "gpt-4", field: [{"grp": [node]}]}
+
+
+class TestIsRequestBodySafeBlocksFallbackSmuggle:
+    """``is_request_body_safe`` runs the banned-param check on every dict target
+    inside the fallback lists."""
+
+    @pytest.fixture(autouse=True)
+    def _disable_url_validation(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+
+    @pytest.mark.parametrize(
+        "fallback_key",
+        ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"],
+    )
+    def test_api_base_smuggled_via_nested_fallback_is_rejected(self, fallback_key):
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    fallback_key: [
+                        {
+                            "gpt-4": [
+                                {"model": "evil", "api_base": "https://attacker.example"},
+                            ]
+                        }
+                    ],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_string_only_fallbacks_are_accepted(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "fallbacks": [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_benign_dict_fallback_entry_is_accepted(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "fallbacks": [{"gpt-4": [{"model": "gpt-3.5-turbo"}]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_smuggled_fallback_allowed_under_proxy_wide_opt_in(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "fallbacks": [
+                        {"gpt-4": [{"model": "byok", "api_base": "https://my-byok.example"}]}
+                    ],
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "fallback_field",
+        ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"],
+    )
+    @pytest.mark.parametrize("surface", ["top_level", "router_settings_override"])
+    def test_deeply_nested_api_base_smuggle_rejected_on_both_surfaces(self, fallback_field, surface):
+        nested = [
+            {
+                "always-fail": [
+                    {
+                        "model": "x",
+                        fallback_field: [
+                            {"x": [{"model": "deepseek-chat", "api_base": "http://attacker"}]}
+                        ],
+                    }
+                ]
+            }
+        ]
+        request_body = {"model": "gpt-4"}
+        if surface == "top_level":
+            request_body[fallback_field] = nested
+        else:
+            request_body["router_settings_override"] = {fallback_field: nested}
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body=request_body,
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_router_settings_override_single_level_api_base_rejected(self):
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "router_settings_override": {
+                        "fallbacks": [{"gpt-4": [{"model": "x", "api_base": "http://attacker"}]}]
+                    },
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_model_less_config_dict_api_base_rejected(self):
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "fallbacks": [{"gpt-4": [{"api_base": "http://attacker"}]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_nested_api_base_caught_across_router_fallback_rounds(self):
+        """An ``api_base`` target nested ``ROUTER_MAX_FALLBACKS - 1`` rounds deep
+        is still reached and rejected."""
+        import litellm
+
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body=_rounds_deep_api_base_payload(litellm.ROUTER_MAX_FALLBACKS - 1, "fallbacks"),
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_grouping_only_deep_chain_is_rejected_at_depth_limit(self):
+        """A deep grouping-only chain (``{"g": [{"g": [...]}]}``) is rejected at the
+        validation-depth limit rather than accepted or raising RecursionError."""
+        node: object = ["safe-model"]
+        for _ in range(5000):
+            node = [{"grp": node}]
+        with pytest.raises(ValueError, match="depth"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "fallbacks": node},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_pathologically_deep_model_nesting_is_rejected(self):
+        with pytest.raises(ValueError, match="depth"):
+            is_request_body_safe(
+                request_body=_rounds_deep_api_base_payload(5000, "fallbacks"),
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+
+class TestIsRequestBodySafeRejectsUrlValuedFallback:
+    @pytest.mark.parametrize("fallback_field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+    def test_url_valued_string_fallback_is_rejected(self, fallback_field):
+        with pytest.raises(ValueError, match="URL-valued fallback"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    fallback_field: [{"gpt-4": ["huggingface/http://attacker.example/path"]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    @pytest.mark.parametrize("fallback_field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+    def test_url_valued_dict_model_fallback_is_rejected(self, fallback_field):
+        with pytest.raises(ValueError, match="URL-valued fallback"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    fallback_field: [{"gpt-4": [{"model": "huggingface/http://attacker.example/path"}]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_ordinary_string_fallback_is_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "fallbacks": [{"gpt-4": ["gpt-4-backup"]}]},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_ordinary_dict_model_fallback_is_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "fallbacks": [{"gpt-4": [{"model": "gpt-4-backup"}]}]},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
 
 
 class TestIsRequestBodySafeBlocksEndpointTargetingFields:
@@ -1741,7 +2144,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         ],
     )
     def test_endpoint_targeting_field_in_request_body_is_rejected(self, field):
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={"model": "gpt-4", field: "https://attacker.example"},
                 general_settings={},
@@ -1762,7 +2165,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         # on the blocklist into an SSRF / credential-exfil hole. Verify
         # that supplying an api_key (alongside the banned param) does NOT
         # bypass the gate — it can only be opened by an admin opt-in.
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -1816,6 +2219,106 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
                     "aws_bedrock_project_id": "proj_byok000000",
                 },
                 general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeBlocksRustOptIn:
+    """``rust`` hands the whole call to the Rust core, which signs and sends
+    with its own HTTP client rather than the one the deployment configured, and
+    reports no ``post_call``. The proxy splats the request body straight into
+    the router, and ``rust`` is a litellm param, so it lands in
+    ``litellm_params`` and the gate honours it: without this entry any
+    authenticated caller picks a transport and a callback surface the admin
+    never chose. It stays a deployment decision, liftable only by the same
+    admin opt-in as the rest of the list."""
+
+    def test_rust_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="rust"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "rust": True},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_rust_under_extra_body_is_rejected(self):
+        with pytest.raises(ValueError, match="not allowed in request body"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "extra_body": {"rust": True}},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_api_key_does_not_bypass_the_rust_block(self):
+        with pytest.raises(ValueError, match="rust"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "api_key": "sk-anything", "rust": True},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_rust(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "rust": True},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_body_without_rust_is_still_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "temperature": 0.7},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeBlocksVertexCredentialAlias:
+    @pytest.mark.parametrize("field", ["vertex_ai_credentials"])
+    def test_field_in_request_body_is_rejected(self, field):
+        with pytest.raises(ValueError, match=field):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", field: "attacker-supplied"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    @pytest.mark.parametrize("field", ["vertex_ai_credentials"])
+    def test_admin_opt_in_proxy_wide_allows(self, field):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", field: "byok-supplied"},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_legitimate_request_body_param_still_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "temperature": 0.7,
+                    "max_tokens": 128,
+                    "user": "end-user-123",
+                },
+                general_settings={},
                 llm_router=None,
                 model="gpt-4",
             )
@@ -2210,8 +2713,6 @@ class TestObservabilityCallbackBans:
             "posthog_api_url",
             "braintrust_api_key",
             "braintrust_project",
-            "phoenix_project_name",
-            "phoenix_project_name_override",
             "wandb_api_key",
             "weave_project_id",
             "gcs_bucket_name",
@@ -2221,7 +2722,7 @@ class TestObservabilityCallbackBans:
         ],
     )
     def test_observability_field_in_request_body_root_is_rejected(self, field):
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={"model": "gpt-4", field: "attacker-value"},
                 general_settings={},
@@ -2242,8 +2743,7 @@ class TestObservabilityCallbackBans:
             "langsmith_api_key",
             "posthog_api_url",
             "braintrust_project",
-            "phoenix_project_name",
-            "phoenix_project_name_override",
+            "user_api_key_auth_metadata",
         ],
     )
     def test_observability_field_in_metadata_dict_is_rejected(
@@ -2252,7 +2752,7 @@ class TestObservabilityCallbackBans:
         # Verifies the metadata walk: a value smuggled inside ``metadata``
         # or ``litellm_metadata`` is just as dangerous as the same field
         # at the body root, and must hit the same gate.
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -2264,8 +2764,30 @@ class TestObservabilityCallbackBans:
             )
         assert field in str(exc.value)
 
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    @pytest.mark.parametrize(
+        "field",
+        ["phoenix_project_name", "phoenix_project_name_override"],
+    )
+    def test_phoenix_project_fields_in_metadata_are_accepted(self, metadata_key, field):
+        # The Phoenix integrations only honor the project from
+        # ``user_api_key_auth_metadata`` on the proxy, so the bare metadata
+        # fields are inert and must not 400 SDK-style callers that send them.
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    metadata_key: {field: "client-project"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
     def test_observability_field_in_litellm_params_metadata_is_rejected(self):
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request: turn_off_message_logging is not allowed') as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -2292,7 +2814,7 @@ class TestObservabilityCallbackBans:
         # the ``isinstance(dict)`` guard.
         import json
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request: langfuse_host is not allowed in request') as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -2365,7 +2887,7 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
         lambda model, param, request_body_value, llm_router: param == "api_base",
     )
 
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(ValueError, match='Rejected Request: langfuse_host is not allowed in request') as exc:
         is_request_body_safe(
             request_body={
                 "model": "gpt-4",
@@ -2436,7 +2958,7 @@ class TestPricingInjectionBlocked:
         ],
     )
     def test_pricing_field_rejected_by_default(self, field, value):
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={"model": "gpt-4", field: value},
                 general_settings={},
@@ -2567,3 +3089,193 @@ class TestGetKeyTagRateLimits:
     def test_returns_none_when_unset(self):
         key = UserAPIKeyAuth(api_key="sk-123")
         assert get_key_tag_rpm_limit(key) is None
+
+
+class TestIsRequestBodySafeChecksBracketNotationMetadata:
+    """Bracket notation is how multipart callers express nested metadata; it is
+    validated the same way the dict form is."""
+
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    def test_bracket_notation_banned_param_is_rejected(self, metadata_key):
+        with pytest.raises(ValueError, match="langfuse_host"):
+            is_request_body_safe(
+                request_body={
+                    "purpose": "assistants",
+                    f"{metadata_key}[langfuse_host]": "https://example.invalid",
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_bracket_notation_api_base_is_rejected(self):
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={"litellm_metadata[api_base]": "https://example.invalid"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_bracket_notation_allowed_under_proxy_wide_opt_in(self):
+        assert (
+            is_request_body_safe(
+                request_body={"litellm_metadata[langfuse_host]": "https://byok.example"},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_benign_bracket_notation_metadata_is_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "purpose": "assistants",
+                    "litellm_metadata[spend_logs_metadata][owner]": "john",
+                    "litellm_metadata[tags]": "production",
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_bracket_notation_matches_json_encoding_for_deeper_nesting(self):
+        """A value nested below the first level is treated the same either way:
+        the check descends one level into metadata, for both encodings."""
+        deep_bracket = {
+            "litellm_metadata[spend_logs_metadata][langfuse_host]": "https://example.invalid"
+        }
+        deep_json = {
+            "litellm_metadata": {"spend_logs_metadata": {"langfuse_host": "https://example.invalid"}}
+        }
+        kwargs = dict(general_settings={}, llm_router=None, model="gpt-4")
+        assert is_request_body_safe(request_body=deep_bracket, **kwargs) is True
+        assert is_request_body_safe(request_body=deep_json, **kwargs) is True
+
+    def test_body_without_bracket_keys_is_unaffected(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+class TestHasUserSetupSso:
+    """_has_user_setup_sso must treat SAML IdP metadata as SSO configured.
+
+    Regression: UI discovery used this helper for sso_configured, but it only
+    checked OAuth client IDs, so SAML-only setups left the login button gray.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_sso_env(self, monkeypatch):
+        for key in (
+            "MICROSOFT_CLIENT_ID",
+            "GOOGLE_CLIENT_ID",
+            "GENERIC_CLIENT_ID",
+            "SAML_IDP_METADATA_URL",
+            "SAML_IDP_METADATA_XML",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_false_when_no_sso_env(self):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        assert _has_user_setup_sso() is False
+
+    def test_true_for_oauth_client_ids(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client")
+        assert _has_user_setup_sso() is True
+
+    def test_true_for_saml_metadata_url(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        monkeypatch.setenv(
+            "SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml"
+        )
+        assert _has_user_setup_sso() is True
+
+    def test_true_for_saml_metadata_xml(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        monkeypatch.setenv("SAML_IDP_METADATA_XML", "<EntityDescriptor/>")
+        assert _has_user_setup_sso() is True
+
+
+class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
+    """A caller must not be able to redirect Bedrock signing to another identity
+    reachable from the proxy host. ``get_credentials`` prefers a named profile
+    and the AssumeRole knobs over the deployment's static keys, and the file /
+    batch endpoints fold the request body and the deployment credentials into a
+    single params dict, so these have to be rejected at the boundary (#36155).
+    """
+
+    @pytest.mark.parametrize(
+        "selector",
+        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+    )
+    def test_aws_identity_selector_in_batch_body_is_rejected(self, selector):
+        with pytest.raises(ValueError, match=selector):
+            is_request_body_safe(
+                request_body={
+                    "input_file_id": "file-abc123",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                    "model": "bedrock-batch-model",
+                    selector: "attacker-chosen",
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+
+    @pytest.mark.parametrize(
+        "selector",
+        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+    )
+    def test_aws_identity_selector_under_extra_body_is_rejected(self, selector):
+        with pytest.raises(ValueError, match=selector):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-model",
+                    "extra_body": {selector: "attacker-chosen"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+
+    def test_aws_identity_selector_allowed_under_proxy_wide_opt_in(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-model",
+                    "aws_profile_name": "admin-approved-profile",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+            is True
+        )
+
+    def test_upload_body_without_identity_selectors_is_accepted(self):
+        assert (
+            is_request_body_safe(
+                request_body={"purpose": "batch", "model": "bedrock-batch-model"},
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-model",
+            )
+            is True
+        )
