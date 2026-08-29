@@ -838,11 +838,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     # strict consumers require a sequence, and null / missing
                     # / empty lists (omitted by pydantic serialization) cause
                     # the whole added frame to be rejected.
+                    # model_validate (rather than `**{...}`) so the fields read
+                    # as a payload, keeping the strict-ruff kwargs budget clear;
+                    # the model allows extras, so the validation result is the
+                    # same object the constructor would build.
                     _reasoning_added: Final = OutputItemAddedEvent(
                         type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                         output_index=0,
-                        item=BaseLiteLLMOpenAIResponseObject(
-                            **{
+                        item=BaseLiteLLMOpenAIResponseObject.model_validate(
+                            {
                                 "id": self._cached_reasoning_item_id,
                                 "type": "reasoning",
                                 "status": "in_progress",
@@ -902,23 +906,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._reasoning_done_emitted = True
                         self._reasoning_active = False
                     self._message_item_added_emitted = True
-                    self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
-                    self._sequence_number += 1
-                    _msg_added: Final = OutputItemAddedEvent(
-                        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                        output_index=0,
-                        item=BaseLiteLLMOpenAIResponseObject(
-                            **{
-                                "id": self._cached_item_id,
-                                "type": "message",
-                                "role": "assistant",
-                                "status": "in_progress",
-                                "content": [],
-                            }
-                        ),
-                    )
-                    _msg_added.__dict__["sequence_number"] = self._sequence_number
-                    self._pending_response_events.append(_msg_added)
+                    self._pending_response_events.append(self.create_output_item_added_event())
                     if not self.sent_content_part_added_event:
                         self.sent_content_part_added_event = True
                         _content_part_event: Final = self.create_content_part_added_event()

@@ -6,9 +6,27 @@ as tool/function response parts; if the tool output is passed as a list of input
 we normalize it to text/image blocks or a string.
 """
 
+import pytest
+
 from litellm.responses.litellm_completion_transformation.transformation import (
+    TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_cached_tool_use_definition():
+    """
+    TOOL_CALLS_CACHE is module-level state shared by every test in a worker:
+    transforming a completion that carries tool_calls stores the definition
+    under the call id, and this transformation prepends that assistant turn
+    when the ids match. Under xdist there is no per-module litellm reload to
+    clear it, so drop the id around each test -- otherwise the message count
+    below depends on whichever tests happened to run earlier in the worker.
+    """
+    TOOL_CALLS_CACHE.delete_cache(key="call_1")
+    yield
+    TOOL_CALLS_CACHE.delete_cache(key="call_1")
 
 
 def test_function_call_output_list_input_text_is_converted_to_tool_string_content():
