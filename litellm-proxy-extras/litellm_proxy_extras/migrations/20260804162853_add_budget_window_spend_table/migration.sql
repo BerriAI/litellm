@@ -1,4 +1,3 @@
--- CreateTable
 CREATE TABLE IF NOT EXISTS "LiteLLM_BudgetWindowSpend" (
     "entity_type" TEXT NOT NULL,
     "entity_id" TEXT NOT NULL,
