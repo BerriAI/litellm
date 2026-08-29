@@ -5867,3 +5867,202 @@ def test_scoped_spend_report_range_at_max_allowed(client, monkeypatch):
         mock_prisma.db.query_raw.assert_awaited_once()
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_parse_session_cursor():
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _parse_session_cursor,
+    )
+
+    assert _parse_session_cursor(None) is None
+    assert _parse_session_cursor("no-delimiter") is None
+    assert _parse_session_cursor("|missing-ts") is None
+    assert _parse_session_cursor("2026-08-29 10:00:00|") is None
+    assert _parse_session_cursor("2026-08-29 10:00:00|sess-1") == (
+        "2026-08-29 10:00:00",
+        "sess-1",
+    )
+    assert _parse_session_cursor("2026-08-29 10:00:00.123|sess|with|pipes") == (
+        "2026-08-29 10:00:00.123",
+        "sess|with|pipes",
+    )
+
+
+def _session_grouped_mock_prisma(session_page_rows, session_total, representative_rows):
+    """Mock prisma dispatching the three raw queries the grouped path emits."""
+
+    async def mock_query_raw(sql_query, *params):
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": session_total}]
+        if "DISTINCT ON" in sql_query:
+            return representative_rows
+        if "COALESCE(SUM(spend)" in sql_query:
+            return []
+        return session_page_rows
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    mock_prisma.db.litellm_spendlogs = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[
+            {"session_id": "sess-1", "_count": {"session_id": 3}},
+        ]
+    )
+    return mock_prisma
+
+
+def _session_representative_row(request_id, session_id):
+    return {
+        "request_id": request_id,
+        "call_type": "acompletion",
+        "api_key": "hashed-key",
+        "spend": 0.01,
+        "total_tokens": 10,
+        "prompt_tokens": 5,
+        "completion_tokens": 5,
+        "startTime": "2026-08-29T10:00:00Z",
+        "endTime": "2026-08-29T10:00:01Z",
+        "model": "gpt-4o",
+        "metadata": {},
+        "session_id": session_id,
+        "session_key": session_id or request_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatch):
+    """One row per session, session-count total, and a keyset cursor for the next page."""
+    page_rows = [
+        {"session_key": "sess-1", "last_activity": "2026-08-29 10:00:00"},
+        {"session_key": "req-solo", "last_activity": "2026-08-29 09:00:00"},
+        {"session_key": "sess-extra", "last_activity": "2026-08-29 08:00:00"},
+    ]
+    reps = [
+        _session_representative_row("req-1", "sess-1"),
+        _session_representative_row("req-solo", None),
+    ]
+    mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page_size": 2,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["total"] == 3
+        assert data["has_more"] is True
+        assert data["next_session_cursor"] == "2026-08-29 09:00:00|req-solo"
+        request_ids = [row["request_id"] for row in data["data"]]
+        assert request_ids == ["req-1", "req-solo"]
+        assert data["data"][0]["session_total_count"] == 3
+
+        page_query_sql = mock_prisma.db.query_raw.await_args_list[0].args[0]
+        assert 'GROUP BY COALESCE(session_id, request_id)' in page_query_sql
+        assert "OFFSET" not in page_query_sql
+        assert "HAVING" not in page_query_sql
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypatch):
+    """A session_cursor becomes a HAVING keyset predicate instead of an OFFSET."""
+    page_rows = [
+        {"session_key": "sess-2", "last_activity": "2026-08-29 07:00:00"},
+    ]
+    reps = [_session_representative_row("req-2", "sess-2")]
+    mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "session_cursor": "2026-08-29 09:00:00|req-solo",
+                "page_size": 2,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["has_more"] is False
+        assert data["next_session_cursor"] is None
+        assert [row["request_id"] for row in data["data"]] == ["req-2"]
+
+        page_query_call = mock_prisma.db.query_raw.await_args_list[0]
+        page_query_sql = page_query_call.args[0]
+        assert 'HAVING (MAX("startTime"), COALESCE(session_id, request_id)) <' in page_query_sql
+        assert "2026-08-29 09:00:00" in page_query_call.args
+        assert "req-solo" in page_query_call.args
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_ignored_for_non_starttime_sort(
+    client, monkeypatch
+):
+    """Sorting by another column falls back to the flat per-request listing."""
+    mock_prisma = _session_grouped_mock_prisma([], 0, [])
+
+    async def mock_query_raw(sql_query, *params):
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": 0}]
+        return []
+
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "sort_by": "spend",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert "next_session_cursor" not in data
+        emitted_sql = " ".join(
+            call.args[0] for call in mock_prisma.db.query_raw.await_args_list
+        )
+        assert "GROUP BY COALESCE(session_id, request_id)" not in emitted_sql
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)

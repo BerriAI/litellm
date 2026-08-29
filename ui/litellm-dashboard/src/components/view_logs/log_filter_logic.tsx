@@ -15,6 +15,8 @@ export interface PaginatedResponse {
   page_size: number;
   total_pages: number;
   total_is_capped?: boolean;
+  next_session_cursor?: string | null;
+  has_more?: boolean;
 }
 
 export const LOG_FILTER_IDS = {
@@ -109,6 +111,7 @@ export function useLogFilterLogic({
   pagination,
   isCustomDate,
   sorting,
+  sessionCursors = {},
 }: {
   accessToken: string | null;
   token: string | null;
@@ -123,11 +126,14 @@ export function useLogFilterLogic({
   pagination: PaginationState;
   isCustomDate: boolean;
   sorting: SortingState;
+  sessionCursors?: Record<number, string>;
 }) {
   const pageSize = pagination.pageSize || defaultPageSize;
   const activeSort = sorting[0] ?? DEFAULT_LOGS_SORTING[0];
   const sortBy: LogsSortField = isSortField(activeSort.id) ? activeSort.id : "startTime";
   const sortOrder: "asc" | "desc" = activeSort.desc ? "desc" : "asc";
+  const isSessionGrouped = sortBy === "startTime";
+  const sessionCursor = isSessionGrouped ? sessionCursors[pagination.pageIndex] : undefined;
 
   const logsQueryOptions: UseQueryOptions<PaginatedResponse> = {
     queryKey: [
@@ -142,6 +148,7 @@ export function useLogFilterLogic({
       sortBy,
       sortOrder,
       excludeInternalHealthChecks,
+      sessionCursor,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -181,6 +188,8 @@ export function useLogFilterLogic({
           sort_by: sortBy,
           sort_order: sortOrder,
           exclude_internal_health_checks: excludeInternalHealthChecks,
+          group_by_session: isSessionGrouped,
+          session_cursor: sessionCursor,
         },
       });
     },
@@ -218,5 +227,6 @@ export function useLogFilterLogic({
     logsQuery,
     filteredLogs,
     allTeams,
+    isSessionGrouped,
   };
 }

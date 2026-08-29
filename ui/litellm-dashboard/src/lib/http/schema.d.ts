@@ -55388,6 +55388,10 @@ export interface operations {
                 sort_order?: string | null;
                 /** @description Exclude LiteLLM internal health check requests from results */
                 exclude_internal_health_checks?: boolean;
+                /** @description Return one row per session (keyset-paginated by last activity). UI route only */
+                group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<session_key>' from a previous group_by_session page */
+                session_cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -55500,6 +55504,10 @@ export interface operations {
                 sort_order?: string | null;
                 /** @description Exclude LiteLLM internal health check requests from results */
                 exclude_internal_health_checks?: boolean;
+                /** @description Return one row per session (keyset-paginated by last activity). UI route only */
+                group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<session_key>' from a previous group_by_session page */
+                session_cursor?: string | null;
             };
             header?: never;
             path?: never;

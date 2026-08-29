@@ -2283,6 +2283,14 @@ async def ui_view_spend_logs(
         default=False,
         description="Exclude LiteLLM internal health check requests from results",
     ),
+    group_by_session: bool = fastapi.Query(
+        default=False,
+        description="Return one row per session (keyset-paginated by last activity). UI route only",
+    ),
+    session_cursor: str | None = fastapi.Query(
+        default=None,
+        description="Keyset cursor '<last_activity>|<session_key>' from a previous group_by_session page",
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -2616,6 +2624,18 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{error_message}%")
             p += 1
 
+        if group_by_session and not is_v2 and not is_request_id_lookup and sort_by == "startTime":
+            return await _ui_session_grouped_spend_logs(
+                prisma_client=prisma_client,
+                sql_conditions=sql_conditions,
+                sql_params=sql_params,
+                next_param_index=p,
+                page=page,
+                page_size=page_size,
+                sort_desc=order_direction != "asc",
+                session_cursor=session_cursor,
+            )
+
         # Build the ORDER BY expression. ttft_ms is computed from
         # completionStartTime - startTime; non-streaming rows (where
         # completionStartTime is null or equals endTime) yield NULL, so we
@@ -2655,14 +2675,7 @@ async def ui_view_spend_logs(
 
         sql_query: Final = f"""
             SELECT
-                request_id, call_type, api_key, spend, total_tokens,
-                prompt_tokens, completion_tokens, "startTime", "endTime",
-                "completionStartTime", model, model_id, model_group,
-                custom_llm_provider, api_base, "user", metadata,
-                cache_hit, cache_key, request_tags, team_id,
-                organization_id, end_user, requester_ip_address,
-                session_id, status, mcp_namespaced_tool_name, agent_id,
-                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
+                {_SPEND_LOG_LIST_COLUMNS}
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
             ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
@@ -2692,6 +2705,166 @@ async def ui_view_spend_logs(
     except Exception as e:
         verbose_proxy_logger.exception("Error in ui_view_spend_logs: %s", e)
         raise handle_exception_on_proxy(e)
+
+
+class _SessionPageRow(TypedDict):
+    session_key: ReadOnly[str]
+    last_activity: ReadOnly[str]
+
+
+_SPEND_LOG_LIST_COLUMNS: Final = """
+                request_id, call_type, api_key, spend, total_tokens,
+                prompt_tokens, completion_tokens, "startTime", "endTime",
+                "completionStartTime", model, model_id, model_group,
+                custom_llm_provider, api_base, "user", metadata,
+                cache_hit, cache_key, request_tags, team_id,
+                organization_id, end_user, requester_ip_address,
+                session_id, status, mcp_namespaced_tool_name, agent_id,
+                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
+"""
+
+_SESSION_KEY_EXPR: Final = "COALESCE(session_id, request_id)"
+
+
+def _parse_session_cursor(session_cursor: str | None) -> tuple[str, str] | None:
+    if session_cursor is None or "|" not in session_cursor:
+        return None
+    last_activity, _, session_key = session_cursor.partition("|")
+    if not last_activity or not session_key:
+        return None
+    return (last_activity, session_key)
+
+
+async def _fetch_session_representatives(
+    prisma_client: "PrismaClient",
+    where_clause: str,
+    sql_params: Sequence[object],
+    next_param_index: int,
+    session_keys: Sequence[str],
+) -> list[dict[str, object]]:
+    """Fetch the most recent spend-log row of each session, in ``session_keys`` order."""
+    rep_query: Final = f"""
+        SELECT * FROM (
+            SELECT DISTINCT ON ({_SESSION_KEY_EXPR})
+                {_SPEND_LOG_LIST_COLUMNS},
+                {_SESSION_KEY_EXPR} AS session_key
+            FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause} AND {_SESSION_KEY_EXPR} = ANY(${next_param_index}::text[])
+            ORDER BY {_SESSION_KEY_EXPR}, "startTime" DESC
+        ) AS session_representatives
+    """
+    rep_rows: Final[Sequence[Mapping[str, object]]] = await _query_raw(
+        prisma_client, rep_query, *sql_params, list(session_keys)
+    )
+    rep_by_key: Final = {row["session_key"]: dict(row) for row in rep_rows}
+    return [
+        {key: value for key, value in rep_by_key[session_key].items() if key != "session_key"}
+        for session_key in session_keys
+        if session_key in rep_by_key
+    ]
+
+
+async def _ui_session_grouped_spend_logs(
+    prisma_client: "PrismaClient",
+    sql_conditions: Sequence[str],
+    sql_params: Sequence[object],
+    next_param_index: int,
+    page: int,
+    page_size: int,
+    sort_desc: bool,
+    session_cursor: str | None,
+) -> dict[str, object]:
+    """
+    One row per session, keyset-paginated by session last activity.
+
+    Sessions are derived on the fly from ``LiteLLM_SpendLogs`` (no extra
+    table): rows sharing a ``session_id`` form a session, rows without one
+    are singletons keyed by ``request_id``. A page is the next ``page_size``
+    sessions ordered by ``(MAX(startTime), session_key)``, resumed from the
+    ``session_cursor`` keyset ``'<last_activity>|<session_key>'`` instead of
+    an OFFSET, so page depth does not degrade the query plan. Each session
+    is represented by its most recent row, enriched by
+    ``_build_ui_spend_logs_response`` exactly like the flat listing, and the
+    response carries ``next_session_cursor`` / ``has_more`` while ``total``
+    counts sessions (capped like the flat total).
+    """
+    where_clause: Final = " AND ".join(sql_conditions) if sql_conditions else "TRUE"
+    cmp_op: Final = "<" if sort_desc else ">"
+    direction: Final = "DESC" if sort_desc else "ASC"
+
+    cursor: Final = _parse_session_cursor(session_cursor)
+    having_clause: Final = (
+        f'HAVING (MAX("startTime"), {_SESSION_KEY_EXPR}) {cmp_op} '
+        f"(${next_param_index}::timestamp, ${next_param_index + 1})"
+        if cursor
+        else ""
+    )
+    cursor_params: Final[tuple[object, ...]] = cursor if cursor else ()
+    limit_index: Final = next_param_index + len(cursor_params)
+
+    page_query: Final = f"""
+        SELECT {_SESSION_KEY_EXPR} AS session_key,
+               MAX("startTime")::text AS last_activity
+        FROM "LiteLLM_SpendLogs"
+        WHERE {where_clause}
+        GROUP BY {_SESSION_KEY_EXPR}
+        {having_clause}
+        ORDER BY MAX("startTime") {direction}, {_SESSION_KEY_EXPR} {direction}
+        LIMIT ${limit_index}
+    """
+    page_rows: Final[Sequence[_SessionPageRow]] = await _query_raw(
+        prisma_client, page_query, *sql_params, *cursor_params, page_size + 1
+    )
+
+    has_more: Final = len(page_rows) > page_size
+    visible_rows: Final = page_rows[:page_size]
+    next_cursor: Final = (
+        f"{visible_rows[-1]['last_activity']}|{visible_rows[-1]['session_key']}" if has_more and visible_rows else None
+    )
+
+    count_query: Final = f"""
+        SELECT COUNT(*) AS total_count
+        FROM (
+            SELECT 1
+            FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause}
+            GROUP BY {_SESSION_KEY_EXPR}
+            LIMIT ${next_param_index}
+        ) AS bounded_sessions
+    """
+    count_rows: Final[Sequence[_SpendLogsCountRow]] = await _query_raw(
+        prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
+    )
+    raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
+    total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
+    total_records: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
+
+    session_keys: Final = tuple(row["session_key"] for row in visible_rows)
+    data: Final[list[dict[str, object]]] = (
+        await _fetch_session_representatives(
+            prisma_client=prisma_client,
+            where_clause=where_clause,
+            sql_params=sql_params,
+            next_param_index=next_param_index,
+            session_keys=session_keys,
+        )
+        if session_keys
+        else []
+    )
+    _hydrate_spend_log_metadata(data)
+
+    total_pages: Final = (total_records + page_size - 1) // page_size
+    response: Final[dict[str, object]] = await _build_ui_spend_logs_response(
+        prisma_client,
+        data,
+        total_records,
+        page,
+        page_size,
+        total_pages,
+        enrich_session_counts=True,
+        total_is_capped=total_is_capped,
+    )
+    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}
 
 
 class RequestResponsePayload(NamedTuple):
@@ -4063,7 +4236,7 @@ async def _build_ui_spend_logs_response(
     total_pages: int,
     enrich_session_counts: bool = True,
     total_is_capped: bool = False,
-) -> dict:
+) -> dict[str, object]:
     """
     Build the paginated response for the UI spend-logs endpoint.
 

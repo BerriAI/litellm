@@ -138,37 +138,87 @@ describe("RequestLogsPanel", () => {
     respondWith([]);
   });
 
-  describe("multi-call session collapsing", () => {
+  describe("session-grouped listing", () => {
     const sessionRows = [
-      logEntry({ request_id: "req-mcp", call_type: "call_mcp_tool", session_id: "sess-1", session_total_count: 3 }),
       logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
-      logEntry({ request_id: "req-llm-2", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
     ];
 
-    it("collapses a multi-call session to a single representative row", async () => {
-      respondWith(sessionRows);
-      renderPanel();
-
-      await waitFor(() => expect(row("req-mcp") ?? row("req-llm") ?? row("req-llm-2")).not.toBeNull());
-
-      const rendered = ["req-mcp", "req-llm", "req-llm-2"].filter((id) => row(id) !== null);
-      expect(rendered).toHaveLength(1);
-    });
-
-    it("prefers an LLM call over an MCP call as the session's representative", async () => {
+    it("requests server-side session grouping on the default startTime sort", async () => {
       respondWith(sessionRows);
       renderPanel();
 
       await waitFor(() => expect(row("req-llm")).not.toBeNull());
-      expect(row("req-mcp")).toBeNull();
+      const call = lastCall();
+      expect(call?.params?.group_by_session).toBe(true);
+      expect(call?.params?.session_cursor).toBeUndefined();
     });
 
-    it("shows the session's call count and composition on the representative row", async () => {
+    it("renders the server's representative rows without re-collapsing them", async () => {
+      respondWith([
+        logEntry({ request_id: "req-a", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-b", session_id: "sess-2", session_total_count: 5 }),
+      ]);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      expect(row("req-b")).not.toBeNull();
+    });
+
+    it("shows the session's call count on the representative row", async () => {
       respondWith(sessionRows);
       renderPanel();
 
       await waitFor(() => expect(row("req-llm")).not.toBeNull());
       expect(within(row("req-llm") as HTMLElement).getByText("3")).toBeInTheDocument();
+    });
+
+    it("passes the server keyset cursor when navigating to the next page", async () => {
+      const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
+      vi.mocked(uiSpendLogsCall).mockResolvedValue({
+        data: firstPage,
+        total: 80,
+        page: 1,
+        page_size: 50,
+        total_pages: 2,
+        next_session_cursor: "2026-07-07 09:50:13|sess-1",
+        has_more: true,
+      });
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      fireEvent.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => {
+        const call = lastCall();
+        expect(call?.params?.session_cursor).toBe("2026-07-07 09:50:13|sess-1");
+        expect(call?.page).toBe(2);
+      });
+    });
+
+    it("drops the cursor and returns to the first page when a filter changes", async () => {
+      const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
+      vi.mocked(uiSpendLogsCall).mockResolvedValue({
+        data: firstPage,
+        total: 80,
+        page: 1,
+        page_size: 50,
+        total_pages: 2,
+        next_session_cursor: "2026-07-07 09:50:13|sess-1",
+        has_more: true,
+      });
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      fireEvent.click(screen.getByTestId("pagination-next"));
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "req-elsewhere" } });
+
+      await waitFor(() => {
+        const call = lastCall();
+        expect(call?.page).toBe(1);
+        expect(call?.params?.session_cursor).toBeUndefined();
+      });
     });
 
     it("leaves single-call rows untouched", async () => {

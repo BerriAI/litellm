@@ -45,6 +45,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [sessionCursors, setSessionCursors] = useState<Record<number, string>>({});
 
   const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
   const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
@@ -80,7 +81,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sessionStorage.setItem("excludeInternalHealthChecks", JSON.stringify(excludeInternalHealthChecks));
   }, [excludeInternalHealthChecks]);
 
-  const { logsQuery, filteredLogs, allTeams } = useLogFilterLogic({
+  const { logsQuery, filteredLogs, allTeams, isSessionGrouped } = useLogFilterLogic({
     accessToken,
     token,
     userRole,
@@ -94,6 +95,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     pagination,
     isCustomDate,
     sorting,
+    sessionCursors,
   });
 
   // Follow the table's own last fetch so a live-tail refresh carries the filter
@@ -159,6 +161,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const rows = useMemo<LogEntry[]>(() => {
     const searchedLogs = filteredLogs.data;
+    if (isSessionGrouped) return searchedLogs;
 
     const sessionCompositionById = searchedLogs.reduce<Record<string, SessionComposition>>((acc, log) => {
       if (!log.session_id) return acc;
@@ -199,7 +202,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
         return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
       });
-  }, [filteredLogs.data]);
+  }, [filteredLogs.data, isSessionGrouped]);
 
   const searchTerm = useMemo(() => {
     const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.REQUEST_ID);
@@ -211,22 +214,51 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
       const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.REQUEST_ID);
       return value === "" ? others : [...others, { id: LOG_FILTER_IDS.REQUEST_ID, value }];
     });
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
   const handleSortingChange = useCallback<OnChangeFn<SortingState>>((updaterOrValue) => {
     setSorting(updaterOrValue);
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
   const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
     setColumnFilters(updaterOrValue);
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
   const resetToFirstPage = useCallback(() => {
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
+
+  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
+    (updaterOrValue) => {
+      const requested = typeof updaterOrValue === "function" ? updaterOrValue(pagination) : updaterOrValue;
+      if (!isSessionGrouped) {
+        setPagination(requested);
+        return;
+      }
+      if (requested.pageSize !== pagination.pageSize) {
+        setSessionCursors({});
+        setPagination({ ...requested, pageIndex: 0 });
+        return;
+      }
+      if (requested.pageIndex <= pagination.pageIndex) {
+        setPagination(requested);
+        return;
+      }
+      const nextCursor = filteredLogs.next_session_cursor;
+      if (!nextCursor) return;
+      const nextPageIndex = pagination.pageIndex + 1;
+      setSessionCursors((previous) => ({ ...previous, [nextPageIndex]: nextCursor }));
+      setPagination({ ...requested, pageIndex: nextPageIndex });
+    },
+    [isSessionGrouped, pagination, filteredLogs.next_session_cursor],
+  );
 
   const handleExcludeInternalHealthChecksChange = useCallback(
     (value: boolean) => {
@@ -305,7 +337,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         isLoading={logsQuery.isLoading}
         isRefreshing={logsQuery.isFetching}
         pagination={pagination}
-        onPaginationChange={setPagination}
+        onPaginationChange={handlePaginationChange}
         sorting={sorting}
         onSortingChange={handleSortingChange}
         columnFilters={columnFilters}
