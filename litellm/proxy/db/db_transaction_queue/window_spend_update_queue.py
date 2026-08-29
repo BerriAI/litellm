@@ -30,6 +30,11 @@ class WindowSpendTransaction(TypedDict):
     own ~2s poll and will usually have persisted these rows before the window
     queue flushes; without the exclusion the seed and the increment would each
     count them.
+
+    started_at is the earliest request start in the batch. The seed only
+    subtracts a request_id whose LiteLLM_SpendLogs.startTime is at or after it,
+    so a client that replays an old id through x-litellm-call-id cannot make the
+    seed drop the historical row that id already paid for.
     """
 
     entity_type: str
@@ -38,6 +43,7 @@ class WindowSpendTransaction(TypedDict):
     window_start: str
     spend: float
     request_ids: Sequence[str]
+    started_at: str | None
 
 
 def to_naive_utc(value: datetime) -> datetime:
@@ -65,6 +71,7 @@ def build_window_spend_transaction(
     window_start: datetime,
     spend: float,
     request_id: str | None = None,
+    started_at: datetime | None = None,
 ) -> WindowSpendTransaction:
     return WindowSpendTransaction(
         entity_type=entity_type,
@@ -73,6 +80,9 @@ def build_window_spend_transaction(
         window_start=to_naive_utc(window_start).isoformat(timespec="microseconds"),
         spend=spend,
         request_ids=() if request_id is None else (request_id,),
+        started_at=None
+        if started_at is None
+        else to_naive_utc(started_at.astimezone(timezone.utc)).isoformat(timespec="microseconds"),
     )
 
 
@@ -80,6 +90,9 @@ def _merge_window_spend_transactions(
     payloads: tuple[WindowSpendTransaction, ...],
 ) -> WindowSpendTransaction:
     first: Final = payloads[0]
+    started_ats: Final = tuple(
+        started_at for payload in payloads if (started_at := payload.get("started_at")) is not None
+    )
     return WindowSpendTransaction(
         entity_type=first["entity_type"],
         entity_id=first["entity_id"],
@@ -87,6 +100,7 @@ def _merge_window_spend_transactions(
         window_start=first["window_start"],
         spend=math.fsum(payload["spend"] for payload in payloads),
         request_ids=tuple(sorted(frozenset(chain.from_iterable(payload["request_ids"] for payload in payloads)))),
+        started_at=min(started_ats) if started_ats else None,
     )
 
 

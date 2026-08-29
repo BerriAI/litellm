@@ -11235,6 +11235,32 @@ async def test_window_spend_row_carries_the_spend_log_request_id():
 
 
 @pytest.mark.asyncio
+async def test_window_spend_row_carries_the_request_start_time():
+    """The seed only excludes a batch id whose LiteLLM_SpendLogs.startTime is at
+    or after this, so it must be the same start the spend log was written with."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    key_obj = MagicMock()
+    key_obj.budget_limits = [
+        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}
+    ]
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(
+            token="hashed-token",
+            team_id=None,
+            user_id=None,
+            response_cost=0.25,
+            request_id="chatcmpl-abc123",
+            request_started_at=datetime(2026, 8, 10, 12, 0, 0, 500_000, tzinfo=timezone.utc),
+        )
+        enqueued = await _drain(queue)
+
+    assert enqueued[0]["started_at"] == "2026-08-10T12:00:00.500000"
+
+
+@pytest.mark.asyncio
 async def test_window_spend_row_without_a_request_id_excludes_nothing():
     from litellm.proxy.proxy_server import increment_spend_counters
 
