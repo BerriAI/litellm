@@ -62,7 +62,8 @@ class _PreparedRustOCRCall:
 
 _RUST_OCR_PROVIDERS: Final = {
     "mistral",
-    "reducto",
+    "azure_ai",
+    "vertex_ai",
 }
 
 
@@ -190,11 +191,6 @@ def _prepare_ocr_request(
 def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
     if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native":
         return False
-    if prepared_request.custom_llm_provider == "reducto":
-        source: Final = prepared_request.document.get(
-            "document_url"
-        ) or prepared_request.document.get("image_url")
-        return prepared_request.model == "parse-v3" and isinstance(source, str) and source.startswith("reducto://")
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
 
 
@@ -304,17 +300,7 @@ def _run_rust_ocr(
     )
     if rust_response is None:
         return None
-    return _ocr_response_from_rust(rust_response)
-
-
-def _ocr_response_from_rust(rust_response: dict[str, object]) -> OCRResponse:
-    reducto_raw: Final = rust_response.get("reducto_raw")
-    response: Final = OCRResponse.model_validate(
-        {key: value for key, value in rust_response.items() if key != "reducto_raw"}
-    )
-    if isinstance(reducto_raw, dict):
-        response._hidden_params["reducto_raw"] = reducto_raw
-    return response
+    return OCRResponse.model_validate(rust_response)
 
 
 async def _run_rust_aocr(
@@ -339,7 +325,7 @@ async def _run_rust_aocr(
     )
     if rust_response is None:
         return None
-    return _ocr_response_from_rust(rust_response)
+    return OCRResponse.model_validate(rust_response)
 
 
 @client
