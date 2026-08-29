@@ -77,6 +77,7 @@ class MockBatcher:
         self.litellm_teammembership = _Table("team_membership", self)
         self.litellm_organizationtable = _Table("org", self)
         self.litellm_tagtable = _Table("tag", self)
+        self.litellm_modelaccessgroupbudgettable = _Table("model_access_group", self)
         self.litellm_endusertable = _Table("enduser", self)
 
     async def commit(self):
@@ -91,6 +92,7 @@ class MockDB:
         self.litellm_endusertable = MockTable()
         self.litellm_organizationtable = MockTable()
         self.litellm_tagtable = MockTable()
+        self.litellm_modelaccessgroupbudgettable = MockTable()
         self.batch_calls: List[Dict[str, Any]] = []
         self.batchers: List[MockBatcher] = []
 
@@ -521,6 +523,7 @@ _LINKED_TABLE_CASES = [
     ),
     ("org", {"budget_id": {"in": ["7d-budget-tier"]}, "spend": {"gt": 0}}),
     ("tag", {"budget_id": {"in": ["7d-budget-tier"]}, "spend": {"gt": 0}}),
+    ("model_access_group", {"budget_id": {"in": ["7d-budget-tier"]}, "spend": {"gt": 0}}),
 ]
 
 
@@ -1299,13 +1302,19 @@ _INVALIDATION_CASES = [
         "spend:tag:tenant-42",
         {"tag:tenant-42"},
     ),
+    (
+        "litellm_modelaccessgroupbudgettable",
+        type("AccessGroup", (), {"access_group_name": "gpt-4-group"}),
+        "spend:model_access_group:gpt-4-group",
+        {"model_access_group:gpt-4-group"},
+    ),
 ]
 
 
 @pytest.mark.parametrize(
     "table_attr, linked_row, counter_key, cache_keys",
     _INVALIDATION_CASES,
-    ids=["team_membership", "key", "org", "tag"],
+    ids=["team_membership", "key", "org", "tag", "model_access_group"],
 )
 def test_budget_table_reset_invalidates_counters_and_management_cache(
     reset_budget_job, mock_prisma_client, monkeypatch, table_attr, linked_row, counter_key, cache_keys
@@ -1357,6 +1366,102 @@ def test_budget_table_reset_commits_even_when_cache_eviction_fails(reset_budget_
 
     assert len(_batch_writes(mock_prisma_client, "tag", op="update_many")) == 1
     assert mock_prisma_client.db.batchers[0].committed is True
+
+
+# ---------------------------------------------------------------------------
+# Model access group budgets ride the same cascade
+# ---------------------------------------------------------------------------
+
+
+def _model_access_group_row(name: str = "gpt-4-group", spend: float = 12.0, budget_id: str = "budget-1"):
+    """A LiteLLM_ModelAccessGroupBudgetTable row, shaped like prisma hands it back."""
+    return type("AccessGroup", (), {"access_group_name": name, "spend": spend, "budget_id": budget_id})
+
+
+def test_access_group_reset_only_matches_rows_that_have_spend(reset_budget_job, mock_prisma_client, monkeypatch):
+    """Both the read and the write are filtered to spend > 0 on the due tiers.
+
+    A group sitting at spend 0 has nothing to reset, and a group hanging off a
+    tier that is not due yet must not be swept along: both are excluded by the
+    filter, not by anything downstream.
+    """
+    _make_counter_invalidation_job(monkeypatch)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-due", budget_duration="7d")]
+    mock_prisma_client.db.litellm_modelaccessgroupbudgettable.set_find_many_results(
+        [_model_access_group_row(budget_id="budget-due")]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    expected_where = {"budget_id": {"in": ["budget-due"]}, "spend": {"gt": 0}}
+    assert mock_prisma_client.db.litellm_modelaccessgroupbudgettable.find_many_calls == [{"where": expected_where}]
+    writes = _batch_writes(mock_prisma_client, "model_access_group", op="update_many")
+    assert len(writes) == 1
+    assert writes[0]["where"] == expected_where
+    assert writes[0]["data"] == {"spend": 0}
+
+
+def test_access_groups_are_untouched_when_no_budget_is_due(reset_budget_job, mock_prisma_client, monkeypatch):
+    """No due tier means the group table is never read, written or evicted."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    mock_prisma_client.db.litellm_modelaccessgroupbudgettable.set_find_many_results([_model_access_group_row()])
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert mock_prisma_client.db.litellm_modelaccessgroupbudgettable.find_many_calls == []
+    assert _batch_writes(mock_prisma_client, "model_access_group") == []
+    counter_cache.in_memory_cache.set_cache.assert_not_called()
+    counter_cache.user_api_key_cache.async_delete_cache.assert_not_awaited()
+
+
+def test_budget_table_reset_invalidates_every_access_group_not_just_the_first(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """When several groups share the expiring tier, all of them are evicted."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-1")]
+    mock_prisma_client.db.litellm_modelaccessgroupbudgettable.set_find_many_results(
+        [_model_access_group_row(name=name) for name in ("group-a", "group-b", "group-c")]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    deleted = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    assert deleted == {"model_access_group:group-a", "model_access_group:group-b", "model_access_group:group-c"}
+    for name in ("group-a", "group-b", "group-c"):
+        counter_cache.in_memory_cache.set_cache.assert_any_call(key=f"spend:model_access_group:{name}", value=0.0, ttl=60)
+
+
+def test_budget_cascade_carries_access_group_overage_when_rollover_enabled(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """A group 5 over the tier cap keeps a spend of 5 in the next window, the
+    same way a tag or a team member does: over-cap rows are decremented by the
+    cap, the rest are zeroed, and the counter is seeded with the carried spend."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-roll", budget_duration="7d", max_budget=10.0)]
+    mock_prisma_client.db.litellm_modelaccessgroupbudgettable.set_find_many_results(
+        [_model_access_group_row(spend=15.0, budget_id="budget-roll")]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    writes = _batch_writes(mock_prisma_client, "model_access_group")
+    assert {
+        "table": "model_access_group",
+        "op": "update_many",
+        "where": {"budget_id": "budget-roll", "spend": {"gt": 10.0}},
+        "data": {"spend": {"decrement": 10.0}},
+    } in writes
+    assert {
+        "table": "model_access_group",
+        "op": "update_many",
+        "where": {"budget_id": "budget-roll", "spend": {"gt": 0, "lte": 10.0}},
+        "data": {"spend": 0},
+    } in writes
+    assert _replay_spend_writes(writes, 15.0) == 5.0
+    assert _replay_spend_writes(writes, 8.0) == 0
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:model_access_group:gpt-4-group", value=5.0, ttl=60)
 
 
 # ---------------------------------------------------------------------------
@@ -1471,6 +1576,7 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
         ("key", "update_many"),
         ("org", "update_many"),
         ("tag", "update_many"),
+        ("model_access_group", "update_many"),
         ("enduser", "update_many"),
         ("budget", "update_many"),
     }
@@ -1506,7 +1612,7 @@ def test_failed_cascade_is_logged_as_a_cascade_failure(monkeypatch):
     assert mock_exception.call_count == 1
     message = mock_exception.call_args.args[0]
     assert "cascade" in message
-    for mentioned in ("team member", "enduser", "org", "tag", "budget_reset_at"):
+    for mentioned in ("team member", "enduser", "org", "tag", "model access group", "budget_reset_at"):
         assert mentioned in message, f"failure log should mention {mentioned}: {message}"
 
 
