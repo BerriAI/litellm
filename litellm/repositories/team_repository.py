@@ -4,9 +4,8 @@ Team repository for database operations on LiteLLM_TeamTable.
 
 import json
 from collections.abc import Mapping, Sequence
-from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
@@ -14,19 +13,13 @@ from litellm.models.team import LiteLLM_TeamTable, Member
 from litellm.repositories.base_repository import (
     BaseRepository,
     DbRecord,
-    PrismaCrudActions,
     record_to_dict,
 )
+from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
     from prisma import Prisma
-
-
-class _TeamTables(Protocol):
-    """The Prisma tables this repository reaches, on the client or inside a transaction."""
-
-    litellm_teamtable: PrismaCrudActions
-    litellm_deletedteamtable: PrismaCrudActions
+    from prisma import models as prisma_models
 
 
 class _TeamArrays(Protocol):
@@ -47,12 +40,6 @@ def _team_arrays(team: LiteLLM_TeamTable) -> _TeamArrays:
     return team
 
 
-class _TeamDatabase(_TeamTables, Protocol):
-    """The Prisma client surface used for team reads, writes, and archival transactions."""
-
-    def tx(self) -> AbstractAsyncContextManager[_TeamTables]: ...
-
-
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
 _JSON_ENCODED_TEAM_FIELDS: Final = (
     "metadata",
@@ -68,16 +55,12 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     """Repository for team database operations."""
 
     @property
-    def _db(self) -> _TeamDatabase:
-        return self.prisma_client.db
+    def table(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
+        return self.prisma_client.db.litellm_teamtable
 
     @property
-    def table(self) -> Any:  # any-ok: callers reach model-specific actions this repository does not use
-        return self._db.litellm_teamtable
-
-    @property
-    def deleted_table(self) -> PrismaCrudActions:
-        return self._db.litellm_deletedteamtable
+    def deleted_table(self) -> TableActions["prisma_models.LiteLLM_DeletedTeamTable"]:
+        return self.prisma_client.db.litellm_deletedteamtable
 
     @property
     def model_class(self) -> type[LiteLLM_TeamTable]:
@@ -96,19 +79,22 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         return LiteLLM_TeamTable.model_validate(data)
 
     async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> list[Member] | None:
-        """Return the team's members_with_roles, locking the row FOR UPDATE.
+        """Return the team's members_with_roles. The caller must already hold
+        ``TEAM_ADVISORY_LOCK_SQL`` for this team_id on ``tx`` before calling this.
 
-        ``None`` when the team row is gone, which a caller holding the lock can
-        only see if a delete committed under it, as opposed to ``[]`` for a team
-        that simply has no members.
+        ``None`` when the team row is gone, which is only possible under that lock if
+        a delete committed before this read, as opposed to ``[]`` for a team that
+        simply has no members.
 
-        Must be called inside a transaction so the row lock is held until
-        commit. This serializes concurrent membership writers on the team row
-        so the losing writer appends onto the winner's committed result instead
-        of overwriting it from a stale snapshot.
+        A plain read is enough here because the advisory lock, not a row lock, is what
+        serializes this against a concurrent writer: ``SELECT ... FOR UPDATE`` would
+        additionally take a row lock on ``LiteLLM_TeamTable``, and the access-group
+        endpoints lock an access group and then a team row, so a team-row-first lock
+        here can deadlock with them. The advisory lock cannot, since those endpoints
+        never take it.
         """
         rows: Final = await tx.query_raw(
-            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1',
             team_id,
         )
         if not rows:
@@ -124,24 +110,24 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
     async def find_by_alias(self, team_alias: str) -> LiteLLM_TeamTable | None:
         """Find a team by alias."""
-        records: Final = await self._crud_actions.find_many(where={"team_alias": team_alias})
+        records: Final = await self.table.find_many(where={"team_alias": team_alias})
         if records:
             return self._to_model(records[0])
         return None
 
     async def find_by_organization_id(self, organization_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams belonging to an organization."""
-        records: Final = await self._crud_actions.find_many(where={"organization_id": organization_id})
+        records: Final = await self.table.find_many(where={"organization_id": organization_id})
         return self._to_model_list(records)
 
     async def find_by_member(self, user_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams where user is a member."""
-        records: Final = await self._crud_actions.find_many(where={"members": {"has": user_id}})
+        records: Final = await self.table.find_many(where={"members": {"has": user_id}})
         return self._to_model_list(records)
 
     async def find_by_admin(self, user_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams where user is an admin."""
-        records: Final = await self._crud_actions.find_many(where={"admins": {"has": user_id}})
+        records: Final = await self.table.find_many(where={"admins": {"has": user_id}})
         return self._to_model_list(records)
 
     async def create_team(
@@ -270,7 +256,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         archive_data["litellm_changed_by"] = litellm_changed_by
         archive_data["deleted_at"] = datetime.utcnow()
 
-        async with self._db.tx() as tx:
+        async with self.prisma_client.db.tx() as tx:
             await tx.litellm_deletedteamtable.create(data=archive_data)
             await tx.litellm_teamtable.delete(where={"team_id": team_id})
 
@@ -331,7 +317,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record: Final = await self._crud_actions.update(
+        record: Final = await self.table.update(
             where={"team_id": team_id},
             data={"members": {"push": user_id}},
         )
@@ -356,7 +342,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record: Final = await self._crud_actions.update(
+        record: Final = await self.table.update(
             where={"team_id": team_id},
             data={"admins": {"push": user_id}},
         )
@@ -381,7 +367,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record: Final = await self._crud_actions.update(
+        record: Final = await self.table.update(
             where={"team_id": team_id},
             data={"models": {"push": models}},
         )

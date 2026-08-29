@@ -46,13 +46,13 @@ export function DrawerHeader({
 
   return (
     <div
+      className="z-chrome"
       style={{
         padding: DRAWER_HEADER_PADDING,
         borderBottom: `1px solid ${COLOR_BORDER}`,
         backgroundColor: COLOR_BACKGROUND,
         position: "sticky",
         top: 0,
-        zIndex: 10,
       }}
     >
       {/* Row 0: Model + Provider with Logo */}
@@ -189,13 +189,13 @@ function NavigationSection({
   onClose: () => void;
 }) {
   const keyboardShortcutStyle = {
-    border: "1px solid #d9d9d9",
+    border: "1px solid var(--color-border)",
     borderRadius: 4,
     padding: "0 4px",
     fontSize: 12,
     fontFamily: "monospace",
     marginLeft: 4,
-    background: "#fafafa",
+    background: "var(--color-muted)",
   };
   const splitStyle = { width: 1, height: 20, background: COLOR_BORDER };
 

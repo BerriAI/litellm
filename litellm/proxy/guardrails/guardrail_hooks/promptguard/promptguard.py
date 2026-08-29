@@ -183,6 +183,7 @@ class PromptGuardGuardrail(CustomGuardrail):
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
                 message=(f"Blocked by PromptGuard: {threat_type} (confidence={confidence}, event_id={event_id})"),
+                blocked_content=True,
             )
 
         if decision == "redact":

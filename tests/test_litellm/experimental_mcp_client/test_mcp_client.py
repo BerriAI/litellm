@@ -1,11 +1,15 @@
 import asyncio
+import base64
 import os
 import sys
+from importlib import metadata
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anyio
 import httpx
 import pytest
+from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
 from mcp import McpError
 from mcp.shared.message import SessionMessage
 from mcp.types import (
@@ -20,18 +24,24 @@ from mcp.types import (
 )
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, "../../../")
 
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
+    MCP_STREAMABLE_HTTP_REQUIREMENT,
     MCPClient,
     _as_read_timeout,
     _first_non_cancelled_cause,
+    missing_streamable_http_client_error,
+    strip_auth_scheme,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     classify_list_exception,
     list_fault_http_status,
 )
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    _format_byok_openapi_auth_header,
+)
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 
 
@@ -69,11 +79,10 @@ class TestMCPClient:
         # Test missing stdio_config
         client = MCPClient(transport_type=MCPTransport.stdio)
 
+        async def _noop(session):
+            return None
+
         with pytest.raises(ValueError, match="stdio_config is required for stdio transport"):
-
-            async def _noop(session):
-                return None
-
             await client.run_with_session(_noop)
 
     @pytest.mark.asyncio
@@ -887,3 +896,388 @@ async def test_read_timeout_logs_an_actionable_line_that_quiet_on_error_cannot_d
     assert timeout_lines, f"expected an actionable timeout warning, got {warnings}"
     assert "http://upstream.local/mcp" in timeout_lines[0], "the line must name the server that stopped answering"
     assert "0.5s" in timeout_lines[0], "the line must name the budget that elapsed"
+
+
+class TestAuthSchemeNormalization:
+    """MCP egress must emit exactly one authorization scheme.
+
+    Callers supply both a bare credential and a complete header value (the latter whenever it is
+    passed through from ``x-mcp-auth`` / ``Authorization``), and the second shape used to be given
+    a second scheme, which upstream servers reject as a malformed token.
+    """
+
+    @pytest.mark.parametrize(
+        "auth_type, auth_value",
+        [
+            (MCPAuth.bearer_token, "bare-token"),
+            (MCPAuth.bearer_token, "Bearer bare-token"),
+            (MCPAuth.bearer_token, "bearer bare-token"),
+            (MCPAuth.bearer_token, "  BEARER   bare-token"),
+            (MCPAuth.oauth2, "bare-token"),
+            (MCPAuth.oauth2, "Bearer bare-token"),
+            (MCPAuth.oauth2_token_exchange, "bare-token"),
+            (MCPAuth.oauth2_token_exchange, "Bearer bare-token"),
+        ],
+    )
+    def test_bearer_family_emits_exactly_one_scheme(self, auth_type, auth_value):
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=auth_type, auth_value=auth_value)
+
+        assert client._get_auth_headers()["Authorization"] == "Bearer bare-token"
+
+    @pytest.mark.parametrize("auth_value", ["bare-token", "token bare-token", "TOKEN bare-token"])
+    def test_token_scheme_emits_exactly_one_scheme(self, auth_value):
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=MCPAuth.token, auth_value=auth_value)
+
+        assert client._get_auth_headers()["Authorization"] == "token bare-token"
+
+    @pytest.mark.parametrize(
+        "auth_type, auth_value",
+        [
+            (MCPAuth.bearer_token, "Bearertoken"),
+            (MCPAuth.oauth2, "Bearer.eyJzdWIiOiJhYmMifQ.sig"),
+            (MCPAuth.token, "tokenish"),
+        ],
+    )
+    def test_a_credential_merely_starting_with_the_scheme_text_is_left_intact(self, auth_type, auth_value):
+        """RFC 7235 requires whitespace between scheme and credential, so a token whose first
+        characters happen to spell the scheme is a credential, not a schemed value."""
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=auth_type, auth_value=auth_value)
+
+        scheme = "token" if auth_type == MCPAuth.token else "Bearer"
+        assert client._get_auth_headers()["Authorization"] == f"{scheme} {auth_value}"
+
+    @pytest.mark.parametrize(
+        "auth_type, auth_value, expected",
+        [
+            (MCPAuth.bearer_token, "Bearer ", "Bearer Bearer"),
+            (MCPAuth.bearer_token, "Bearer    ", "Bearer Bearer"),
+        ],
+    )
+    def test_a_scheme_with_no_credential_behind_it_still_produces_a_header(self, auth_type, auth_value, expected):
+        """Treating this as a schemed value would leave nothing to send, and a request with no
+        Authorization at all is harder to diagnose upstream than a visibly wrong one."""
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=auth_type, auth_value=auth_value)
+
+        assert client._get_auth_headers()["Authorization"] == expected
+
+    def test_basic_with_a_scheme_and_no_credential_still_produces_a_header(self):
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=MCPAuth.basic, auth_value="Basic ")
+
+        assert "Authorization" in client._get_auth_headers()
+
+    def test_basic_accepts_an_already_encoded_schemed_value_without_re_encoding_it(self):
+        """Stripping the scheme at header-build time cannot fix this shape: ``to_basic_auth`` has by
+        then encoded the whole ``Basic ...`` string, leaving no prefix to find."""
+        encoded = base64.b64encode(b"user:pass").decode()
+
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            auth_type=MCPAuth.basic,
+            auth_value=f"Basic {encoded}",
+        )
+
+        header = client._get_auth_headers()["Authorization"]
+        assert header == f"Basic {encoded}"
+        assert base64.b64decode(header.split(" ", 1)[1]) == b"user:pass"
+
+    @pytest.mark.parametrize("auth_value", ["user:pass", "Basic user:pass", "basic user:pass"])
+    def test_basic_always_emits_encoded_credentials(self, auth_value):
+        """A schemed value whose remainder is raw rather than encoded is still a username/password
+        pair, so it is encoded rather than forwarded as an invalid RFC 7617 header."""
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=MCPAuth.basic, auth_value=auth_value)
+
+        header = client._get_auth_headers()["Authorization"]
+        assert base64.b64decode(header.split(" ", 1)[1]) == b"user:pass"
+
+    def test_authorization_auth_type_is_passed_through_verbatim(self):
+        """``MCPAuth.authorization`` means the caller owns the whole header value."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            auth_type=MCPAuth.authorization,
+            auth_value="Bearer Bearer deliberately-doubled",
+        )
+
+        assert client._get_auth_headers()["Authorization"] == "Bearer Bearer deliberately-doubled"
+
+    def test_api_key_credential_is_not_treated_as_a_schemed_value(self):
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            auth_type=MCPAuth.api_key,
+            auth_value="Bearer looks-schemed",
+        )
+
+        assert client._get_auth_headers()["X-API-Key"] == "Bearer looks-schemed"
+
+
+@pytest.mark.parametrize(
+    "auth_value, scheme, expected",
+    [
+        ("Bearer abc", "Bearer", "abc"),
+        ("bearer abc", "Bearer", "abc"),
+        ("  Bearer   abc  ", "Bearer", "abc  "),
+        ("abc", "Bearer", "abc"),
+        ("Bearerabc", "Bearer", "Bearerabc"),
+        ("Basic abc", "Bearer", "Basic abc"),
+        ("token abc", "token", "abc"),
+        ("Basic abc", "Basic", "abc"),
+        ("Bearer ", "Bearer", "Bearer "),
+        ("Bearer   ", "Bearer", "Bearer   "),
+    ],
+)
+def test_strip_auth_scheme(auth_value, scheme, expected):
+    assert strip_auth_scheme(auth_value, scheme) == expected
+
+
+@pytest.mark.parametrize(
+    "auth_type, auth_value, expected",
+    [
+        (MCPAuth.bearer_token, "Bearer jwt", "Bearer jwt"),
+        (MCPAuth.bearer_token, "jwt", "Bearer jwt"),
+        (MCPAuth.api_key, "ApiKey secret", "ApiKey secret"),
+        (MCPAuth.api_key, "secret", "ApiKey secret"),
+        (MCPAuth.basic, "Basic dXNlcjpwYXNz", "Basic dXNlcjpwYXNz"),
+    ],
+)
+def test_openapi_byok_auth_header_emits_exactly_one_scheme(auth_type, auth_value, expected):
+    """A non-BYOK server short-circuits ``_resolve_byok_mcp_auth_header``, so this formatter also
+    receives the deprecated global ``x-mcp-auth``, which is already a complete header value."""
+    server = MCPServer(
+        server_id="s1",
+        name="openapi-server",
+        url="http://example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        spec_path="/tmp/spec.json",
+    )
+
+    assert server.is_byok is False
+    assert _format_byok_openapi_auth_header(server, auth_value) == expected
+
+
+def test_missing_streamable_http_client_error_names_requirement_and_remedy():
+    message = str(missing_streamable_http_client_error())
+
+    assert MCP_STREAMABLE_HTTP_REQUIREMENT in message
+    assert "pip install 'litellm[mcp]'" in message
+    assert metadata.version("mcp") in message
+
+
+@pytest.mark.asyncio
+async def test_http_transport_without_streamable_http_client_raises_actionable_import_error():
+    client = MCPClient(
+        server_url="https://mcp-server.example.com",
+        transport_type=MCPTransport.http,
+    )
+
+    with patch.object(  # test-quality-ok: simulates mcp<1.24.0 whose module lacks this import-time symbol
+        mcp_client_module, "streamable_http_client", None
+    ):
+        with pytest.raises(ImportError, match=r"pip install 'litellm\[mcp\]'"):
+            await client.list_tools(raise_on_error=True)
+
+
+def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
+    try:
+        import tomllib
+    except ImportError:
+        tomllib = pytest.importorskip("tomli")
+    from packaging.requirements import Requirement
+
+    pyproject_path = Path(__file__).parents[3] / "pyproject.toml"
+    with pyproject_path.open("rb") as f:
+        extras = tomllib.load(f)["project"]["optional-dependencies"]
+
+    mcp_extra = extras["mcp"]
+    assert len(mcp_extra) == 1
+
+    proxy_mcp_requirements = [req for req in extras["proxy"] if Requirement(req).name == "mcp"]
+    assert mcp_extra == proxy_mcp_requirements
+
+    specifier = Requirement(mcp_extra[0]).specifier
+    assert not specifier.contains("1.23.0")
+    assert specifier.contains("1.28.1")
+
+
+@pytest.mark.parametrize(
+    "auth_type, default_header",
+    [
+        (MCPAuth.oauth2, "Authorization"),
+        (MCPAuth.bearer_token, "Authorization"),
+        (MCPAuth.api_key, "X-API-Key"),
+    ],
+)
+def test_v1_auth_headers_default_to_the_auth_type_slot(auth_type: MCPAuth, default_header: str) -> None:
+    client = MCPClient(server_url="http://up.example.com/mcp", auth_type=auth_type)
+    client.update_auth_value("tok")
+    assert default_header in client._get_auth_headers()
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth2, MCPAuth.bearer_token, MCPAuth.api_key])
+def test_v1_auth_headers_honor_the_configured_slot(auth_type: MCPAuth) -> None:
+    """The v1 stack mints its own client_credentials token (oauth2_token_cache) and writes it here,
+    so leaving this table hardcoded makes the knob a silent no-op for every server that resolves
+    through v1 rather than the v2 resolver."""
+    client = MCPClient(
+        server_url="http://up.example.com/mcp",
+        auth_type=auth_type,
+        auth_header_name="esb-oauth",
+    )
+    client.update_auth_value("tok")
+    headers = client._get_auth_headers()
+    assert "esb-oauth" in headers
+    assert "Authorization" not in headers
+    assert "X-API-Key" not in headers
+
+
+def test_v1_static_headers_still_win_their_own_slot():
+    # extra_headers (which carries static_headers) is applied last on the v1 path, so a static
+    # Authorization survives untouched while the resolved credential sits on its own header.
+    client = MCPClient(
+        server_url="http://up.example.com/mcp",
+        auth_type=MCPAuth.oauth2,
+        auth_header_name="esb-oauth",
+        extra_headers={"Authorization": "Bearer static-upstream-mcp-token"},
+    )
+    client.update_auth_value("minted")
+    headers = client._get_auth_headers()
+    assert headers["esb-oauth"] == "Bearer minted"
+    assert headers["Authorization"] == "Bearer static-upstream-mcp-token"
+
+
+@pytest.mark.asyncio
+async def test_a_custom_credential_header_is_stripped_when_a_redirect_crosses_origin():
+    """httpx drops Authorization across origins but keeps every other header, so a credential the
+    operator moved to its own slot would be replayed to whatever host the upstream redirects to.
+    Verified against real httpx redirect handling, not a hand-built request.
+    """
+    seen: "list[tuple[str, str]]" = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.host, request.headers.get("esb-oauth", "<stripped>")))
+        if request.url.host == "upstream.example.com":
+            return httpx.Response(302, headers={"Location": "https://attacker.example.com/collect"})
+        return httpx.Response(200)
+
+    client = MCPClient(
+        server_url="https://upstream.example.com/mcp",
+        auth_type=MCPAuth.oauth2,
+        auth_header_name="esb-oauth",
+    )
+    client.update_auth_value("minted-token")
+    factory = client._create_httpx_client_factory()
+    async with factory(headers=client._get_auth_headers(), timeout=None) as http_client:
+        http_client._transport = httpx.MockTransport(handler)
+        await http_client.get("https://upstream.example.com/mcp")
+
+    assert seen[0] == ("upstream.example.com", "Bearer minted-token")
+    assert seen[1] == ("attacker.example.com", "<stripped>")
+
+
+@pytest.mark.asyncio
+async def test_authorization_is_left_to_httpx_and_needs_no_guard():
+    # The default slot is already protected by httpx, so the client must not install a guard for it
+    # and must not interfere with the ordinary Authorization path.
+    url = "https://upstream.example.com/mcp"
+    from litellm.types.mcp import credential_redirect_hook
+
+    def guard_for(client: MCPClient):
+        return credential_redirect_hook(client.server_url, client._credential_slot)
+
+    assert guard_for(MCPClient(server_url=url, auth_type=MCPAuth.oauth2)) is None
+    assert guard_for(MCPClient(server_url=url, resolved_auth=StaticHeaderAuth("Bearer x"))) is None
+    # a v2 resolver slot is discovered from the auth object, without the caller naming it again
+    custom = MCPClient(server_url=url, resolved_auth=StaticHeaderAuth("Bearer x", header_name="esb-oauth"))
+    assert guard_for(custom) is not None
+    # and the same answer arrives via the v1 configured slot
+    assert guard_for(MCPClient(server_url=url, auth_header_name="ESB-OAuth")) is not None
+
+
+def test_an_injected_header_cannot_shadow_the_configured_credential_slot():
+    """The v2 path drops a colliding injected header so the resolved credential wins its slot. The
+    v1 path applies extra_headers last, so without this it silently sends the injected value and the
+    upstream rejects a credential the gateway thought it had sent.
+    """
+    client = MCPClient(
+        server_url="https://upstream.example.com/mcp",
+        auth_type=MCPAuth.oauth2,
+        auth_header_name="esb-oauth",
+        extra_headers={"esb-oauth": "Bearer injected", "X-Trace": "keep"},
+    )
+    client.update_auth_value("minted-token")
+    headers = client._get_auth_headers()
+    assert headers["esb-oauth"] == "Bearer minted-token"
+    assert headers["X-Trace"] == "keep"
+
+
+def test_without_a_configured_slot_the_existing_precedence_is_unchanged():
+    # extra_headers winning over authentication_token is long-standing v1 behavior; the fix above
+    # must apply only to the slot the operator explicitly named.
+    client = MCPClient(
+        server_url="https://upstream.example.com/mcp",
+        auth_type=MCPAuth.oauth2,
+        extra_headers={"Authorization": "Bearer injected"},
+    )
+    client.update_auth_value("minted-token")
+    assert client._get_auth_headers()["Authorization"] == "Bearer injected"
+
+
+_REDIRECT_CASES = [
+    ("https://upstream.example.com/mcp", "https://upstream.example.com/other"),      # same origin
+    ("https://upstream.example.com/mcp", "https://upstream.example.com:443/other"),  # explicit default port
+    ("https://upstream.example.com/mcp", "https://attacker.example.com/collect"),    # different host
+    ("https://upstream.example.com/mcp", "http://upstream.example.com/collect"),     # scheme downgrade
+    ("https://upstream.example.com/mcp", "https://upstream.example.com:8443/other"), # different port
+    ("https://upstream.example.com/mcp", "https://sub.upstream.example.com/x"),      # different host
+    ("http://upstream.example.com/mcp", "https://upstream.example.com/other"),       # http -> https upgrade
+    ("http://upstream.example.com/mcp", "http://upstream.example.com/other"),        # same origin, plain http
+]
+
+
+@pytest.mark.parametrize("start,target", _REDIRECT_CASES)
+@pytest.mark.asyncio
+async def test_the_guard_agrees_with_httpx_about_authorization(start: str, target: str) -> None:
+    """Our custom slot must be dropped on exactly the redirects where httpx drops Authorization.
+
+    The rule is mirrored rather than imported, so this drives real httpx and compares the two
+    outcomes. A future httpx that changes its redirect rule reds here instead of silently leaving
+    the custom slot forwarded where Authorization is not (or stripped where it is not needed).
+    """
+    seen: "list[tuple[str, str, str]]" = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (
+                str(request.url),
+                request.headers.get("authorization", "<stripped>"),
+                request.headers.get("esb-oauth", "<stripped>"),
+            )
+        )
+        if str(request.url) == start:
+            return httpx.Response(302, headers={"Location": target})
+        return httpx.Response(200)
+
+    client = MCPClient(server_url=start, auth_type=MCPAuth.oauth2, auth_header_name="esb-oauth")
+    factory = client._create_httpx_client_factory()
+    async with factory(headers={"Authorization": "Bearer AUTH", "esb-oauth": "Bearer ESB"}, timeout=None) as http:
+        http._transport = httpx.MockTransport(handler)
+        await http.get(start)
+
+    _url, authorization, esb = seen[-1]
+    assert (authorization == "<stripped>") == (esb == "<stripped>"), (
+        f"httpx and the guard disagree for {target}: authorization={authorization!r} esb-oauth={esb!r}"
+    )
+
+
+def test_a_differently_cased_injected_header_cannot_shadow_the_slot() -> None:
+    # HTTP header names are case-insensitive and v2 drops the collision case-insensitively, so an
+    # exact-key check here would leave both spellings in the dict and let the injected value win.
+    client = MCPClient(
+        server_url="https://upstream.example.com/mcp",
+        auth_type=MCPAuth.oauth2,
+        auth_header_name="esb-oauth",
+        extra_headers={"ESB-OAuth": "Bearer injected", "X-Trace": "keep"},
+    )
+    client.update_auth_value("minted-token")
+    headers = client._get_auth_headers()
+    assert [v for k, v in headers.items() if k.lower() == "esb-oauth"] == ["Bearer minted-token"]
+    assert headers["X-Trace"] == "keep"

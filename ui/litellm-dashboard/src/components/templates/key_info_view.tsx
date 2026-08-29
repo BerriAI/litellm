@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EntityLink } from "@/components/shared/EntityLink";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { KeyInfoHeader } from "./KeyInfoHeader";
+import KeySavingsTab from "./KeySavingsTab";
 import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
@@ -99,6 +100,9 @@ export default function KeyInfoView({
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
+  const [keyDataUpdateHeldUntilModalClose, setKeyDataUpdateHeldUntilModalClose] = useState<Partial<KeyResponse> | null>(
+    null,
+  );
   const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
@@ -351,6 +355,7 @@ export default function KeyInfoView({
   };
 
   const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
+    const regeneratedAt = new Date();
     // Update local state immediately with ALL the new data
     setCurrentKeyData((prevData) => {
       if (!prevData) return undefined;
@@ -358,20 +363,26 @@ export default function KeyInfoView({
         ...prevData,
         ...updatedKeyData, // This should include the new token (key-id)
         // Update the created_at to show when it was regenerated
-        created_at: new Date().toLocaleString(),
+        created_at: regeneratedAt.toLocaleString(),
       };
       return newData;
     });
 
     // Track regeneration timestamp
-    setLastRegeneratedAt(new Date());
+    setLastRegeneratedAt(regeneratedAt);
     setIsRecentlyRegenerated(true);
 
-    if (onKeyDataUpdate) {
-      onKeyDataUpdate({
-        ...updatedKeyData,
-        created_at: new Date().toLocaleString(),
-      });
+    setKeyDataUpdateHeldUntilModalClose({
+      ...updatedKeyData,
+      created_at: regeneratedAt.toLocaleString(),
+    });
+  };
+
+  const handleRegenerateModalClose = () => {
+    setIsRegenerateModalOpen(false);
+    if (keyDataUpdateHeldUntilModalClose) {
+      setKeyDataUpdateHeldUntilModalClose(null);
+      onKeyDataUpdate?.(keyDataUpdateHeldUntilModalClose);
     }
   };
 
@@ -505,7 +516,7 @@ export default function KeyInfoView({
       <RegenerateKeyModal
         selectedToken={currentKeyData}
         visible={isRegenerateModalOpen}
-        onClose={() => setIsRegenerateModalOpen(false)}
+        onClose={handleRegenerateModalClose}
         onKeyUpdate={handleRegenerateKeyUpdate}
       />
 
@@ -603,6 +614,9 @@ export default function KeyInfoView({
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
+          <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
+            Savings
+          </TabsTrigger>
           <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
             Settings
           </TabsTrigger>
@@ -695,7 +709,7 @@ export default function KeyInfoView({
                           <Badge variant="secondary" className="min-w-0 break-words">
                             {policy}
                           </Badge>
-                          {loadingPolicies && <p className="text-xs text-muted-foreground/70">Loading guardrails...</p>}
+                          {loadingPolicies && <p className="text-xs text-muted-foreground">Loading guardrails...</p>}
                         </div>
                         {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
                           <div className="ml-4 pl-3 border-l-2 border-border">
@@ -736,6 +750,17 @@ export default function KeyInfoView({
                 variant="card"
               />
             </div>
+          </TabsContent>
+
+          {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted
+              would fire that request on every key page open for people who never look at it. */}
+          <TabsContent value="savings">
+            <KeySavingsTab
+              accessToken={accessToken}
+              keyToken={currentKeyData.token}
+              userId={userID}
+              userRole={userRole}
+            />
           </TabsContent>
 
           {/* Settings Panel */}
@@ -883,7 +908,7 @@ export default function KeyInfoView({
                         {Object.entries(currentKeyData.budget_fallbacks).map(([model, fallbacks]) => (
                           <div key={model} className="text-xs text-muted-foreground">
                             <span className="font-medium">{model}</span>
-                            <span className="mx-1 text-muted-foreground/70">-&gt;</span>
+                            <span className="mx-1 text-muted-foreground">-&gt;</span>
                             {fallbacks.join(", ")}
                           </div>
                         ))}

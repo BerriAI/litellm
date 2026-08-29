@@ -2,8 +2,9 @@
 Types for auto-router management endpoints
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
@@ -27,10 +28,47 @@ class RequestComplexityRouterConfig(ComplexityRouterConfig):
     )
 
 
-class AutoRouterRoutingTestRequest(BaseModel):
-    """A single prompt to classify against a complexity-router config that need not be saved yet."""
+class ComplexityRouterConfigValidationRequest(BaseModel):
+    """A complexity-router config to validate without saving, so a form can surface the
+    backend's own verdict inline instead of a raw 400 at write time."""
 
-    prompt: str = Field(description="The prompt to route, as an end user would send it")
+    complexity_router_config: Mapping[str, object]
+    team_id: str | None = Field(
+        default=None,
+        description="Team the router is being created for. Required for a team admin, who may only validate their own team's routers",
+    )
+
+
+class ComplexityRouterConfigValidationResponse(BaseModel):
+    valid: bool
+    error: str | None = None
+
+
+class AutoRouterRoutingTestRequest(BaseModel):
+    """A single request to classify against a complexity-router config that need not be saved yet.
+
+    Carries the same fields the serving path carries, so a dry run classifies what a real turn
+    would classify. `messages`, `system` and `tools` are forwarded to the routing hook untranslated,
+    which is why they are typed loosely: the hook reads whatever dialect the surface produced, and
+    validating them against one surface's schema would reject the others.
+    """
+
+    prompt: str | None = Field(
+        default=None,
+        description="A single ask to route, as an end user would send it. Mutually exclusive with messages",
+    )
+    messages: Sequence[Mapping[str, object]] | None = Field(
+        default=None,
+        description="The full message list to route, exactly as the serving path would receive it. Mutually exclusive with prompt",
+    )
+    system: str | Sequence[Mapping[str, object]] | None = Field(
+        default=None,
+        description="The top-level system prompt an Anthropic /v1/messages body carries beside its messages",
+    )
+    tools: Sequence[Mapping[str, object]] | None = Field(
+        default=None,
+        description="The tool definitions the request advertises, which decide whether the plan-mode floor applies",
+    )
     complexity_router_config: RequestComplexityRouterConfig = Field(
         description="The complexity router config to route against, in the shape /model/new accepts",
     )
@@ -47,12 +85,59 @@ class AutoRouterRoutingTestRequest(BaseModel):
         description="Team the router is being created for. Required for a team admin, who may only test their own team's routers",
     )
 
-    @field_validator("prompt")
+    @field_validator("messages")
     @classmethod
-    def _require_non_blank_prompt(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("prompt must not be blank")
+    def _reject_messages_no_surface_accepts(
+        cls, value: Sequence[Mapping[str, object]] | None
+    ) -> Sequence[Mapping[str, object]] | None:
+        """Reject what every supported surface rejects, and nothing beyond it.
+
+        A real request carrying a message with no string role, or with content that is neither text
+        nor a block list, is a 400 on the serving path, so answering it here with a routed tier
+        would promise a decision the request never gets. Only the two keys the dialects agree on
+        are constrained: anything else in a message stays untranslated and unread.
+        """
+        if value is None:
+            return value
+        for index, message in enumerate(value):
+            if not isinstance(role := message.get("role"), str) or not role.strip():
+                raise ValueError(f"messages[{index}] needs a non-empty string role")
+            if (content := message.get("content")) is not None and not isinstance(content, str | list):
+                raise ValueError(f"messages[{index}] content must be a string, a list of blocks, or null")
         return value
+
+    @model_validator(mode="after")
+    def _resolve_request_carrier(self) -> "AutoRouterRoutingTestRequest":
+        if self.prompt is not None and not self.prompt.strip():
+            raise ValueError("prompt must not be blank")
+        if self.messages is not None and not self.messages:
+            raise ValueError("messages must not be empty")
+        if (self.prompt is None) == (self.messages is None):
+            raise ValueError("provide exactly one of prompt or messages")
+        if self.messages is not None:
+            return self
+        return self.model_copy(
+            update={  # mutable-ok: model_copy types update as a plain dict
+                "messages": [  # mutable-ok: the routing hook's signature takes a list of message dicts
+                    {"role": "user", "content": self.prompt}  # mutable-ok: a message is dict-shaped
+                ]
+            }
+        )
+
+    def wire_body(self) -> Mapping[str, object]:
+        """The request kwargs a serving-path request would carry for this body.
+
+        Every value is handed out by identity rather than copied, so the messages the routing hook
+        classifies and the messages its raw-body plan-mode scan reads are one value, as they are on
+        the serving path.
+        """
+        return MappingProxyType(
+            {  # mutable-ok: MappingProxyType needs a dict to wrap
+                key: value
+                for key, value in (("messages", self.messages), ("system", self.system), ("tools", self.tools))
+                if value is not None
+            }
+        )
 
 
 class AutoRouterRoutingTestResponse(BaseModel):
@@ -60,7 +145,7 @@ class AutoRouterRoutingTestResponse(BaseModel):
 
     routed_model: str = Field(description="The model group the router picked")
     routed_model_configured: bool = Field(
-        description="Whether routed_model is a model group this proxy actually serves",
+        description="Whether routed_model is a model group available to the caller, scoped to team_id when given. Never confirms models the caller could not use",
     )
     routing_decision: StandardLoggingRoutingDecision = Field(
         description="The decision record this request would have written to its log row",
@@ -142,9 +227,18 @@ class AutoRouterBenchmarksResponse(BaseModel):
 
     start_date: str = Field(description="Window start day, YYYY-MM-DD UTC, inclusive")
     end_date: str = Field(description="Window end day, YYYY-MM-DD UTC, inclusive")
-    routers_in_scope: int
+    routers_in_scope: int = Field(
+        description="How many groups this response carries. Every auto-router configured on the "
+        "proxy counts, whether or not it served anything in the window. To count only the routers "
+        "that did serve traffic, filter `groups` to the entries whose `sessions` is above zero"
+    )
     totals: AutoRouterBenchmarkTotals
-    groups: tuple[AutoRouterBenchmarkGroup, ...]
+    groups: tuple[AutoRouterBenchmarkGroup, ...] = Field(
+        description="One entry per auto-router, listed from the model registry rather than from "
+        "the rollup, so a router appears as soon as it is configured and reads zero until it "
+        "serves traffic. Semantic auto-routers are absent: they record no routing decision, so no "
+        "session can ever be attributed to them"
+    )
 
 
 ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]
@@ -152,6 +246,10 @@ ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]
 ShadowEvalDirection: TypeAlias = Literal["forward", "reverse"]
 
 DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
+
+# Sample-count ceiling written on every new job: a zero-cost error loop (a shadow arm that
+# fails before billing) never consumes spend budget, so it must terminate on count instead.
+SHADOW_EVAL_TURN_VALVE: Final[int] = 10_000
 
 
 class StartShadowEvalRequest(BaseModel):
@@ -163,7 +261,7 @@ class StartShadowEvalRequest(BaseModel):
         description=(
             "The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these "
             "keys' traffic; requests made with any other key are not sampled. Each key carries its own "
-            "max_turns budget, so one key exhausting its budget leaves the others sampling. At most 100 "
+            "max_budget spend budget, so one key exhausting its budget leaves the others sampling. At most 100 "
             "keys per job, which also bounds every read the job's endpoints make."
         ),
     )
@@ -203,16 +301,26 @@ class StartShadowEvalRequest(BaseModel):
         le=30,
         description="How many days the job samples traffic before completing on its own",
     )
-    max_turns: int = Field(
-        default=200,
-        ge=1,
-        le=2000,
+    max_budget: float = Field(
+        default=10.0,
+        ge=0.01,
+        le=10_000,
         description=(
-            "Per-key sample budget: the job judges at most this many turns of EACH scoped key's traffic, "
-            "so a job over N keys judges at most N times max_turns turns. This is also the spend bound; "
-            "expected judge cost is roughly that turn ceiling times one judge call"
+            "Per-key USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with "
+            "the same figures the spend pipeline bills. EACH scoped key samples until its recorded eval "
+            "spend reaches this, so a job over N keys spends at most about N times max_budget; in-flight "
+            "samples can overshoot the cap by one sampling cache window"
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_the_retired_turn_budget(cls, values: object) -> object:
+        """Pydantic ignores unknown fields, so a caller still sending max_turns would
+        silently run on the default dollar budget instead of the bound they asked for."""
+        if isinstance(values, Mapping) and "max_turns" in values:
+            raise ValueError("max_turns was replaced by max_budget, the per-key USD cap on the eval's own spend")
+        return values
 
     @field_validator("shadow_percentage")
     @classmethod
@@ -254,6 +362,27 @@ class ShadowEvalSlice(BaseModel):
     )
     tie_rate_pct: float
     avg_judge_confidence: float
+    real_spend: float = Field(
+        default=0.0,
+        description=(
+            "USD the real arm billed on this slice's judged turns, completion plus its own routing "
+            "classifier when it routed, excluding turns litellm's response cache served for free"
+        ),
+    )
+    shadow_spend: float = Field(
+        default=0.0,
+        description=(
+            "USD the shadow arm billed on the same turns, completion plus its own routing classifier, "
+            "excluding the judge and the same cache-served turns, so the two spends compare like for like"
+        ),
+    )
+    cache_hit_turns: int = Field(
+        default=0,
+        description=(
+            "Judged turns litellm's response cache served, excluded from both spends: an adopted router "
+            "would be served by the same cache, so those turns cost the same either way"
+        ),
+    )
 
 
 class ShadowEvalResult(BaseModel):
@@ -274,13 +403,56 @@ class ShadowEvalResult(BaseModel):
     )
     overall_shadow_win_rate_pct: float
     overall_tie_rate_pct: float
+    sampled_real_spend: float = Field(
+        default=0.0,
+        description="USD the real arm billed across all judged turns, cache-served turns excluded",
+    )
+    sampled_shadow_spend: float = Field(
+        default=0.0,
+        description="USD the shadow arm billed across the same turns, judge excluded, like for like",
+    )
+    not_sampled_count: int | None = Field(
+        default=None,
+        description=(
+            "Eligible requests the sampling dice skipped, summed over legs: the judged rows stand for "
+            "judged + this many requests. None for jobs from before the funnel existed"
+        ),
+    )
+    unjudgeable_count: int | None = Field(
+        default=None,
+        description="Sampled requests whose shape could not be judged (tool-final turn, empty text)",
+    )
+    shed_count: int | None = Field(
+        default=None,
+        description="Sampled requests dropped by the per-pod concurrency cap, so quiet periods are overweighted",
+    )
+    withheld_count: int | None = Field(
+        default=None,
+        description=(
+            "Sampled requests the pipeline declined to spend on: no database to record into, an over-budget "
+            "key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job "
+            "crosses max_budget lands here rather than vanishing from coverage)"
+        ),
+    )
 
 
 class ShadowEvalJobKeyResponse(BaseModel):
     """One key a job shadows, with its own budget and stop state."""
 
     api_key_id: str = Field(description="The hashed virtual key whose traffic this entry scopes")
-    max_turns: int = Field(description="This key's own sample budget, independent of its siblings'")
+    max_turns: int = Field(
+        description=(
+            "This key's sample-count ceiling: the whole budget for jobs created before max_budget "
+            "existed, and the error-loop safety valve otherwise"
+        )
+    )
+    max_budget: float | None = Field(
+        default=None,
+        description=(
+            "This key's own USD budget for the eval's shadow and judge spend, independent of its "
+            "siblings'; None on jobs created before spend budgets existed, which max_turns alone bounds"
+        ),
+    )
     stopped_at: datetime | None = Field(
         default=None,
         description=(
@@ -297,10 +469,19 @@ class ShadowEvalJobKeyResponse(BaseModel):
             "once the key is stamped, so in-flight attempts landing after a stop never reclassify it"
         ),
     )
+    spend: float | None = Field(
+        default=None,
+        description=(
+            "This key's recorded shadow plus judge spend in USD, the same figure the sampler budgets "
+            "against max_budget; populated on list and detail responses and frozen at stopped_at "
+            "exactly like attempt_count"
+        ),
+    )
 
     @property
     def budget_spent(self) -> bool:
-        return self.attempt_count is not None and self.attempt_count >= self.max_turns
+        over_spend: Final = self.max_budget is not None and self.spend is not None and self.spend >= self.max_budget
+        return over_spend or (self.attempt_count is not None and self.attempt_count >= self.max_turns)
 
     key_alias: str | None = Field(
         default=None,

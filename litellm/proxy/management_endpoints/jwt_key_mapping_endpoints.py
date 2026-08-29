@@ -174,6 +174,9 @@ async def update_jwt_key_mapping(
 
         updated_mapping: Final = await _mapping_table(prisma_client).update(where={"id": data.id}, data=update_data)
 
+        if updated_mapping is None:
+            raise HTTPException(status_code=404, detail="Mapping not found")
+
         # Invalidate new cache key if claim fields changed
         cache_key = f"jwt_key_mapping:{updated_mapping.jwt_claim_name}:{updated_mapping.jwt_claim_value}"
         await user_api_key_cache.async_delete_cache(cache_key)

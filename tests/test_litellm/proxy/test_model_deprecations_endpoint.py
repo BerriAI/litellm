@@ -1,11 +1,8 @@
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.proxy import proxy_server

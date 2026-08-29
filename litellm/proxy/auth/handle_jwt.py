@@ -8,12 +8,16 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import hashlib
 import os
 import re
-from typing import Any, Final, Literal, NoReturn, cast
+import time
+from collections.abc import Awaitable, Callable
+from typing import Any, Final, Literal, NoReturn, TypeVar, cast
 
+import httpx
 import jwt
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -25,6 +29,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
+    DEFAULT_JWKS_STALE_TTL,
     RBAC_ROLES,
     JWKKeyValue,
     JWTAuthBuilderResult,
@@ -74,6 +79,32 @@ class NoMatchingJWTPublicKeyError(Exception):
     """Raised when a JWKS endpoint returns no key matching the requested ``kid``."""
 
 
+class JWKSUnreachableError(Exception):
+    """Raised when an IdP's JWKS / OIDC discovery endpoint is unreachable and no cached copy is left to fall back on."""
+
+
+JWKS_FETCH_ATTEMPTS: Final = 3
+JWKS_FETCH_RETRY_BACKOFF_SECONDS: Final = 0.25
+JWKS_UNREACHABLE_BACKOFF_SECONDS: Final = 30
+STALE_CACHE_KEY_PREFIX: Final = "litellm_stale_"
+STALE_WRITTEN_AT_CACHE_KEY_PREFIX: Final = "litellm_stale_written_at_"
+UNREACHABLE_CACHE_KEY_PREFIX: Final = "litellm_jwks_unreachable_"
+
+_CachedValueT = TypeVar("_CachedValueT", bound=JWKKeyValue | str)
+
+
+def jwks_unavailable_exception(error: JWKSUnreachableError) -> ProxyException:
+    return ProxyException(
+        message=(
+            "Service Unavailable, the identity provider's JWKS endpoint is temporarily "
+            f"unreachable, so the JWT signature could not be verified. Please retry shortly. Error: {error}"
+        ),
+        type=ProxyErrorTypes.auth_provider_unavailable,
+        param="None",
+        code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
 class JWTHandler:
     """
     - treat the sub id passed in as the user id
@@ -121,6 +152,8 @@ class JWTHandler:
     ) -> None:
         self.http_handler = HTTPHandler()
         self.leeway = 0
+        # Per-cache-key locks so a TTL lapse triggers one refresh instead of one per in-flight request.
+        self._refresh_locks: dict[str, asyncio.Lock] = {}  # mutable-ok: lock registry, keyed by JWKS url
 
     def update_environment(
         self,
@@ -611,13 +644,151 @@ class JWTHandler:
         if ".well-known/openid-configuration" not in url:
             return url
 
-        cache_key: Final = f"litellm_oidc_discovery_{url}"
-        cached_jwks_uri: Final = await self.user_api_key_cache.async_get_cache(cache_key)
-        if cached_jwks_uri is not None:
-            return cached_jwks_uri
+        return await self._cached_with_stale_fallback(
+            cache_key=f"litellm_oidc_discovery_{url}",
+            ttl=self._get_public_key_cache_ttl(),
+            refresh=lambda: self._fetch_jwks_uri_from_discovery(url),
+            log_context="an OIDC discovery lookup",
+        )
 
+    async def _get_with_transient_retries(self, url: str) -> httpx.Response:
+        """GET ``url``, retrying transport failures so one IdP blip does not fail the request."""
+        for attempt in range(1, JWKS_FETCH_ATTEMPTS):
+            try:
+                return await self.http_handler.get(url)
+            except httpx.TransportError as e:
+                verbose_proxy_logger.warning(
+                    "JWT Auth: %s fetching %s (attempt %s/%s), retrying: %s",
+                    type(e).__name__,
+                    url,
+                    attempt,
+                    JWKS_FETCH_ATTEMPTS,
+                    e,
+                )
+                await asyncio.sleep(JWKS_FETCH_RETRY_BACKOFF_SECONDS * attempt)
+
+        try:
+            return await self.http_handler.get(url)
+        except httpx.TransportError as e:
+            raise JWKSUnreachableError(f"{type(e).__name__} fetching {url} after {JWKS_FETCH_ATTEMPTS} attempts") from e
+
+    async def _get_cached_value(self, cache_key: str) -> _CachedValueT | None:
+        cached: Final = await self.user_api_key_cache.async_get_cache(cache_key)
+        return cast("_CachedValueT | None", cached)  # cast-ok: cache reads are untyped
+
+    async def _get_cached_timestamp(self, cache_key: str) -> float | None:
+        cached: Final = await self.user_api_key_cache.async_get_cache(cache_key)
+        # A JSON round-trip through Redis hands a whole-number epoch back as an int.
+        return float(cached) if isinstance(cached, (int, float)) else None
+
+    async def _put_cached_value(self, cache_key: str, value: JWKKeyValue | str | float, ttl: float) -> None:
+        await self.user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
+
+    async def _cached_with_stale_fallback(
+        self,
+        cache_key: str,
+        ttl: float,
+        refresh: Callable[[], Awaitable[_CachedValueT]],
+        log_context: str,
+    ) -> _CachedValueT:
+        """Read ``cache_key``, refreshing it through a single-flight lock on a miss."""
+        cached: Final[_CachedValueT | None] = await self._get_cached_value(cache_key)
+        if cached is not None:
+            return cached
+
+        lock: Final = self._refresh_locks.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            cached_after_lock: Final[_CachedValueT | None] = await self._get_cached_value(cache_key)
+            if cached_after_lock is not None:
+                return cached_after_lock
+            return await self._refresh_or_serve_stale(
+                cache_key=cache_key, ttl=ttl, refresh=refresh, log_context=log_context
+            )
+
+    async def _refresh_or_serve_stale(
+        self,
+        cache_key: str,
+        ttl: float,
+        refresh: Callable[[], Awaitable[_CachedValueT]],
+        log_context: str,
+    ) -> _CachedValueT:
+        """Refresh ``cache_key`` from the IdP, falling back to the last-known-good copy when it is unreachable.
+
+        Signing keys rotate rarely, so a last-known-good key beats failing authentication during an IdP blip.
+        How long a key the IdP has since removed stays trusted is bounded by ``public_key_ttl`` +
+        ``public_key_stale_ttl`` measured from when the copy was taken, and that bound is enforced here on every
+        read rather than baked into the cache entry's own expiry. An operator who lowers ``public_key_stale_ttl``,
+        or sets it to 0 to fail closed, is usually doing it mid-incident, and a copy written under the old longer
+        setting would otherwise stay servable until it aged out on its own. A copy whose write time cannot be
+        established is not servable, so the bound cannot be dodged by losing the timestamp.
+        """
+        stale_ttl: Final = self._get_public_key_stale_ttl()
+        outcome: Final = await self._refresh_or_record_outage(
+            cache_key=cache_key, ttl=ttl, stale_ttl=stale_ttl, refresh=refresh
+        )
+        if not isinstance(outcome, JWKSUnreachableError):
+            return outcome
+        if stale_ttl <= 0:
+            raise outcome
+
+        stale: Final[_CachedValueT | None] = await self._get_cached_value(f"{STALE_CACHE_KEY_PREFIX}{cache_key}")
+        age: Final = await self._stale_copy_age(cache_key)
+        lifetime: Final = ttl + stale_ttl
+        if stale is None or age is None or age > lifetime:
+            raise outcome
+        verbose_proxy_logger.warning(
+            "JWT Auth: identity provider unreachable, authenticating %s against a stale JWKS copy of %s "
+            "(last refreshed %.0fs ago, stops being trusted in %.0fs). Refresh failed: %s",
+            log_context,
+            cache_key,
+            age,
+            max(lifetime - age, 0),
+            outcome,
+        )
+        return stale
+
+    async def _stale_copy_age(self, cache_key: str) -> float | None:
+        written_at: Final = await self._get_cached_timestamp(f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}")
+        return None if written_at is None else time.time() - written_at
+
+    async def _refresh_or_record_outage(
+        self,
+        cache_key: str,
+        ttl: float,
+        stale_ttl: float,
+        refresh: Callable[[], Awaitable[_CachedValueT]],
+    ) -> _CachedValueT | JWKSUnreachableError:
+        """Refresh ``cache_key``, returning the outage as a value rather than raising it.
+
+        A failed refresh is remembered for ``JWKS_UNREACHABLE_BACKOFF_SECONDS`` so a sustained outage costs one
+        fetch per window instead of one per request serialised behind the refresh lock.
+        """
+        unreachable_cache_key: Final = f"{UNREACHABLE_CACHE_KEY_PREFIX}{cache_key}"
+        recent_failure: Final[str | None] = await self._get_cached_value(unreachable_cache_key)
+        if recent_failure is not None:
+            return JWKSUnreachableError(recent_failure)
+
+        try:
+            refreshed: Final = await refresh()
+        except JWKSUnreachableError as e:
+            await self._put_cached_value(
+                cache_key=unreachable_cache_key, value=str(e), ttl=JWKS_UNREACHABLE_BACKOFF_SECONDS
+            )
+            return e
+
+        await self._put_cached_value(cache_key=cache_key, value=refreshed, ttl=ttl)
+        if stale_ttl > 0:
+            await self._put_cached_value(
+                cache_key=f"{STALE_CACHE_KEY_PREFIX}{cache_key}", value=refreshed, ttl=ttl + stale_ttl
+            )
+            await self._put_cached_value(
+                cache_key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}", value=time.time(), ttl=ttl + stale_ttl
+            )
+        return refreshed
+
+    async def _fetch_jwks_uri_from_discovery(self, url: str) -> str:
         verbose_proxy_logger.debug("JWT Auth: Fetching OIDC discovery document from %s", url)
-        response: Final = await self.http_handler.get(url)
+        response: Final = await self._get_with_transient_retries(url)
         if response.status_code != 200:
             raise Exception(
                 f"JWT Auth: OIDC discovery endpoint {url} returned status {response.status_code}: {response.text}"
@@ -632,11 +803,6 @@ class JWTHandler:
             raise Exception(f"JWT Auth: OIDC discovery document at {url} does not contain a 'jwks_uri' field.")
 
         verbose_proxy_logger.debug("JWT Auth: Resolved OIDC discovery %s -> jwks_uri=%s", url, jwks_uri)
-        await self.user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=jwks_uri,
-            ttl=self._get_public_key_cache_ttl(),
-        )
         return jwks_uri
 
     def _get_public_key_cache_ttl(self) -> float:
@@ -645,33 +811,36 @@ class JWTHandler:
             return 600
         return litellm_jwtauth.public_key_ttl
 
+    def _get_public_key_stale_ttl(self) -> float:
+        litellm_jwtauth: Final = getattr(self, "litellm_jwtauth", None)
+        if litellm_jwtauth is None:
+            return DEFAULT_JWKS_STALE_TTL
+        return litellm_jwtauth.public_key_stale_ttl
+
+    async def _fetch_jwks_keys(self, resolved_jwks_url: str) -> JWKKeyValue:
+        response: Final = await self._get_with_transient_retries(resolved_jwks_url)
+        if response.status_code != 200:
+            raise Exception(
+                f"JWT Auth: JWKS endpoint {resolved_jwks_url} returned status {response.status_code}: {response.text}"
+            )
+
+        try:
+            response_json: Final = response.json()
+        except Exception as e:
+            verbose_proxy_logger.error("Error parsing response: %s. Original Response: %s", e, response.text)
+            raise Exception(f"Error parsing response: {e}. Check server logs for original response.")
+
+        keys: Final = response_json["keys"] if "keys" in response_json else response_json
+        return cast(JWKKeyValue, keys)  # cast-ok: JWTKeyItem declares only `kid`, validating would drop key material
+
     async def _get_public_key_from_jwks_url(self, jwks_url: str, kid: str | None) -> dict:
         resolved_jwks_url: Final = await self._resolve_jwks_url(jwks_url)
-        cache_key: Final = f"litellm_jwt_auth_keys_{resolved_jwks_url}"
-
-        cached_keys: Final = await self.user_api_key_cache.async_get_cache(cache_key)
-
-        if cached_keys is None:
-            response: Final = await self.http_handler.get(resolved_jwks_url)
-
-            try:
-                response_json: Final = response.json()
-            except Exception as e:
-                verbose_proxy_logger.error("Error parsing response: %s. Original Response: %s", e, response.text)
-                raise Exception(f"Error parsing response: {e}. Check server logs for original response.")
-
-            if "keys" in response_json:
-                keys: JWKKeyValue = response_json["keys"]
-            else:
-                keys = response_json
-
-            await self.user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=keys,
-                ttl=self._get_public_key_cache_ttl(),
-            )
-        else:
-            keys = cached_keys
+        keys: Final = await self._cached_with_stale_fallback(
+            cache_key=f"litellm_jwt_auth_keys_{resolved_jwks_url}",
+            ttl=self._get_public_key_cache_ttl(),
+            refresh=lambda: self._fetch_jwks_keys(resolved_jwks_url),
+            log_context=f"kid={kid}",
+        )
 
         public_key: Final = self.parse_keys(keys=keys, kid=kid)
         if public_key is not None:
@@ -692,6 +861,9 @@ class JWTHandler:
                 return await self._get_public_key_from_jwks_url(jwks_url=key_url, kid=kid)
             except NoMatchingJWTPublicKeyError as e:
                 verbose_proxy_logger.debug("JWT Auth: No matching public key found at %s: %s", key_url, e)
+            except JWKSUnreachableError as e:
+                verbose_proxy_logger.error("JWT Auth: JWKS endpoint %s unreachable: %s", key_url, e)
+                raise jwks_unavailable_exception(e) from e
 
         raise NoMatchingJWTPublicKeyError(f"No matching public key found. keys={keys_url_list}, kid={kid}")
 
@@ -969,10 +1141,14 @@ class JWTHandler:
         )
 
     async def _auth_jwt_with_issuer(self, token: str, issuer_config: JWTIssuerConfig, kid: str | None) -> dict:
-        public_key: Final = await self._get_public_key_from_jwks_url(
-            jwks_url=self._get_jwks_url_for_issuer(issuer_config=issuer_config),
-            kid=kid,
-        )
+        try:
+            public_key: Final = await self._get_public_key_from_jwks_url(
+                jwks_url=self._get_jwks_url_for_issuer(issuer_config=issuer_config),
+                kid=kid,
+            )
+        except JWKSUnreachableError as e:
+            raise jwks_unavailable_exception(e) from e
+
         try:
             payload: Final = self._decode_jwt_with_public_key(
                 token=token,

@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import BaseModel
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -66,12 +65,16 @@ class ContainerResponseBody(TypedDict, total=False):
     error: ReadOnly[ContainerErrorDetail]
 
 
+_ContainerResponseModel = ContainerFileListResponse | ContainerFileObject | DeleteContainerFileResponse
+
 # Response type mapping
-RESPONSE_TYPES: Final[Mapping[str, type[BaseModel]]] = {
+RESPONSE_TYPES: Final[Mapping[str, type[_ContainerResponseModel]]] = {
     "ContainerFileListResponse": ContainerFileListResponse,
     "ContainerFileObject": ContainerFileObject,
     "DeleteContainerFileResponse": DeleteContainerFileResponse,
 }
+
+ContainerEndpointResponse = _ContainerResponseModel | bytes | ContainerResponseBody
 
 
 def _load_endpoints_config() -> EndpointsConfig:
@@ -90,7 +93,7 @@ def _get_endpoint_config(endpoint_name: str) -> EndpointConfig | None:
     return None
 
 
-def _response_model(response_type_name: str) -> type[BaseModel] | None:
+def _response_model(response_type_name: str) -> type[_ContainerResponseModel] | None:
     """The pydantic model a container endpoint's ``response_type`` names."""
     return RESPONSE_TYPES.get(response_type_name)
 
@@ -134,6 +137,51 @@ def _build_query_params(
     """Build query parameters from kwargs."""
     supplied: Final = ((param_name, kwargs.get(param_name)) for param_name in query_param_names)
     return {name: value if isinstance(value, str) else str(value) for name, value in supplied if value is not None}
+
+
+def _error_message_from_response(response: httpx.Response) -> str:
+    try:
+        body: Final = response.json()
+    except ValueError:
+        return response.text
+
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        message: Final = body["error"].get("message")
+        if isinstance(message, str):
+            return message
+
+    return response.text
+
+
+def _transform_response(
+    response: httpx.Response,
+    returns_binary: bool,
+    response_type_name: str,
+) -> ContainerEndpointResponse:
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    if httpx.codes.is_error(response.status_code):
+        raise BaseLLMException(
+            status_code=response.status_code,
+            message=_error_message_from_response(response),
+            headers=dict(response.headers),
+        )
+
+    if returns_binary:
+        return response.content
+
+    response_json: Final[ContainerResponseBody] = response.json()
+    if "error" in response_json:
+        raise BaseLLMException(
+            status_code=response.status_code,
+            message=response_json["error"].get("message", str(response_json)),
+            headers=dict(response.headers),
+        )
+
+    response_type: Final = _response_model(response_type_name)
+    if response_type:
+        return response_type.model_validate(response_json)
+    return response_json
 
 
 def _prepare_multipart_file_upload(
@@ -342,27 +390,11 @@ class GenericContainerHandler:
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            # For binary responses, return raw content
-            if returns_binary:
-                return response.content
-
-            # Check for error response
-            response_json: Final[ContainerResponseBody] = response.json()
-            if "error" in response_json:
-                from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
-                error_msg: Final = response_json["error"].get("message", str(response_json))
-                raise BaseLLMException(
-                    status_code=response.status_code,
-                    message=error_msg,
-                    headers=dict(response.headers),
-                )
-
-            # Parse response
-            response_type: Final = _response_model(endpoint_config["response_type"])
-            if response_type:
-                return response_type(**response_json)
-            return response_json
+            return _transform_response(
+                response=response,
+                returns_binary=returns_binary,
+                response_type_name=endpoint_config["response_type"],
+            )
 
         except Exception as e:
             raise e
@@ -438,27 +470,11 @@ class GenericContainerHandler:
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            # For binary responses, return raw content
-            if returns_binary:
-                return response.content
-
-            # Check for error response
-            response_json: Final[ContainerResponseBody] = response.json()
-            if "error" in response_json:
-                from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
-                error_msg: Final = response_json["error"].get("message", str(response_json))
-                raise BaseLLMException(
-                    status_code=response.status_code,
-                    message=error_msg,
-                    headers=dict(response.headers),
-                )
-
-            # Parse response
-            response_type: Final = _response_model(endpoint_config["response_type"])
-            if response_type:
-                return response_type(**response_json)
-            return response_json
+            return _transform_response(
+                response=response,
+                returns_binary=returns_binary,
+                response_type_name=endpoint_config["response_type"],
+            )
 
         except Exception as e:
             raise e

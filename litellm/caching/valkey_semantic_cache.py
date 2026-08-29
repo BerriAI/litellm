@@ -31,6 +31,7 @@ from litellm._logging import print_verbose
 from litellm._uuid import uuid
 from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
 
+from ._embedding_router import resolve_embedding_timeout
 from .redis_semantic_cache import RedisSemanticCache
 
 
@@ -63,6 +64,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         sync_client: Redis | None = None,
         async_client: AsyncRedis | None = None,
         embedding_max_input_tokens: int | None = None,
+        embedding_timeout: float | None = None,
         **kwargs: object,
     ):
         if similarity_threshold is None:
@@ -81,15 +83,18 @@ class ValkeySemanticCache(RedisSemanticCache):
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
         self.embedding_max_input_tokens = embedding_max_input_tokens
+        self.embedding_timeout = resolve_embedding_timeout(embedding_timeout)
         self.index_name = index_name or self.DEFAULT_VALKEY_INDEX_NAME
         self.key_prefix = f"{self.index_name}:"
         self._index_dim: int | None = None
 
-        resolved_url = None
-        if sync_client is None or async_client is None:
-            resolved_url = redis_url or self._build_valkey_url(host, port, password, ssl)
-        self.sync_client = sync_client if sync_client is not None else Redis.from_url(resolved_url)
-        self.async_client = async_client if async_client is not None else AsyncRedis.from_url(resolved_url)
+        if sync_client is not None and async_client is not None:
+            self.sync_client = sync_client
+            self.async_client = async_client
+        else:
+            resolved_url: Final = redis_url or self._build_valkey_url(host, port, password, ssl)
+            self.sync_client = sync_client if sync_client is not None else Redis.from_url(resolved_url)
+            self.async_client = async_client if async_client is not None else AsyncRedis.from_url(resolved_url)
 
         print_verbose(f"Valkey semantic-cache initializing index - {self.index_name}")
 
@@ -212,7 +217,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         """Run the KNN query on the async client, stopping the untyped search surface here."""
         return await self.async_client.ft(self.index_name).search(
             self._knn_query(key),
-            query_params={"vec": self._embedding_to_bytes(embedding)},
+            query_params={"vec": self._embedding_to_bytes(embedding)},  # pyright: ignore[reportArgumentType]  # redis stubs omit bytes; KNN vectors are raw bytes at runtime
         )
 
     @classmethod
@@ -282,7 +287,7 @@ class ValkeySemanticCache(RedisSemanticCache):
 
             search_result: Final = self.sync_client.ft(self.index_name).search(
                 self._knn_query(key),
-                query_params={"vec": self._embedding_to_bytes(embedding)},
+                query_params={"vec": self._embedding_to_bytes(embedding)},  # pyright: ignore[reportArgumentType]  # redis stubs omit bytes; KNN vectors are raw bytes at runtime
             )
             return self._resolve_hit(self._first_hit(search_result), key, **kwargs)
         except Exception as e:

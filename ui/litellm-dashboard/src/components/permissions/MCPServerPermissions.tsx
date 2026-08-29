@@ -173,9 +173,9 @@ export function MCPServerPermissions({
                         {toolsForServer.length === 1 ? "tool" : "tools"}
                       </span>
                       {isExpanded ? (
-                        <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground/70 ml-0.5" />
+                        <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                       ) : (
-                        <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground/70 ml-0.5" />
+                        <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                       )}
                     </div>
                   )}
@@ -212,7 +212,9 @@ export function MCPServerPermissions({
                   <div
                     onClick={() => toolCount > 0 && toggleToolsetExpansion(toolsetId)}
                     className={`flex items-center gap-3 py-2 px-3 rounded-lg border border-purple-200 transition-all ${
-                      toolCount > 0 ? "cursor-pointer hover:bg-purple-50 hover:border-purple-300" : "bg-card"
+                      toolCount > 0
+                        ? "cursor-pointer hover:bg-purple-50 hover:border-purple-300 dark:hover:bg-purple-950 dark:hover:border-purple-700"
+                        : "bg-card"
                     }`}
                   >
                     <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -220,7 +222,7 @@ export function MCPServerPermissions({
                       <span className="text-sm font-medium text-foreground truncate">
                         {detail?.toolset_name ?? toolsetId}
                       </span>
-                      <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded-sm uppercase tracking-wide shrink-0">
+                      <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded-sm uppercase tracking-wide shrink-0 dark:text-purple-300 dark:bg-purple-950 dark:border-purple-800">
                         Toolset
                       </span>
                     </div>
@@ -229,9 +231,9 @@ export function MCPServerPermissions({
                         <span className="text-xs font-medium text-muted-foreground">{toolCount}</span>
                         <span className="text-xs text-muted-foreground">{toolCount === 1 ? "tool" : "tools"}</span>
                         {isExpanded ? (
-                          <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground/70 ml-0.5" />
+                          <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                         ) : (
-                          <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground/70 ml-0.5" />
+                          <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                         )}
                       </div>
                     )}
@@ -243,7 +245,7 @@ export function MCPServerPermissions({
                         {detail.tools.map((tool, toolIndex) => (
                           <span
                             key={toolIndex}
-                            className="inline-flex items-center px-2.5 py-1 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 text-xs font-medium"
+                            className="inline-flex items-center px-2.5 py-1 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 text-xs font-medium dark:bg-purple-950 dark:border-purple-800 dark:text-purple-300"
                           >
                             <span className="text-purple-400 mr-1 text-[10px]">{tool.server_id.slice(0, 6)}…</span>
                             {tool.tool_name}
@@ -258,7 +260,7 @@ export function MCPServerPermissions({
         </div>
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
-          <ServerIcon className="h-4 w-4 text-muted-foreground/70" />
+          <ServerIcon className="h-4 w-4 text-muted-foreground" />
           <p className="text-muted-foreground text-sm">No MCP servers, access groups, or toolsets configured</p>
         </div>
       )}
