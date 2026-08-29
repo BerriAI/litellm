@@ -15,7 +15,7 @@ Endpoints here:
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 from typing_extensions import ReadOnly, TypedDict
@@ -548,7 +548,7 @@ async def get_all_access_groups_from_db(
 )
 async def create_model_group(
     data: NewModelGroupRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Create a new access group containing multiple model names.
@@ -693,7 +693,7 @@ async def create_model_group(
     response_model=ListAccessGroupsResponse,
 )
 async def list_access_groups(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     List all access groups.
@@ -743,7 +743,7 @@ async def list_access_groups(
 )
 async def get_access_group_info(
     access_group: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Get information about a specific access group.
@@ -808,7 +808,7 @@ async def get_access_group_info(
 async def update_access_group(
     access_group: str,
     data: UpdateModelGroupRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Update an access group's model names.
@@ -961,8 +961,8 @@ async def update_access_group(
 )
 async def delete_access_group(
     access_group: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    auth_cache: UserApiKeyCache = Depends(_auth_cache),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    auth_cache: Annotated[UserApiKeyCache, Depends(_auth_cache)],
 ):
     """
     Delete an access group.
@@ -1071,7 +1071,6 @@ async def delete_access_group(
 )
 async def get_access_group_budget(
     access_group: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> AccessGroupBudgetResponse:
     """
     Get the shared budget of an access group, and the spend drawn against it.
@@ -1108,8 +1107,8 @@ async def get_access_group_budget(
 async def set_access_group_budget(
     access_group: str,
     data: AccessGroupBudgetRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    auth_cache: UserApiKeyCache = Depends(_auth_cache),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    auth_cache: Annotated[UserApiKeyCache, Depends(_auth_cache)],
 ) -> AccessGroupBudgetResponse:
     """
     Set or replace the shared budget of an access group. Idempotent.
@@ -1185,8 +1184,7 @@ async def set_access_group_budget(
 )
 async def delete_access_group_budget(
     access_group: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    auth_cache: UserApiKeyCache = Depends(_auth_cache),
+    auth_cache: Annotated[UserApiKeyCache, Depends(_auth_cache)],
 ) -> DeleteAccessGroupBudgetResponse:
     """
     Clear the shared budget of an access group, leaving the group itself in place.
