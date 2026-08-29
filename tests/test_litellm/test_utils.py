@@ -6,6 +6,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 from jsonschema import validate
 
 
@@ -5689,3 +5690,31 @@ class TestDefaultReasoningEffortHydration:
 
         model_info = dict(_get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
         assert model_info.get("default_reasoning_effort") is None
+
+
+class TestHuggingFaceConfigFetch:
+    """The Hugging Face config.json fetch runs on background logging threads during cost
+    calculation, so an unbounded request can hang a whole test job; the timeout is the fix."""
+
+    @pytest.fixture
+    def hf_config_route(self):
+        with respx.mock(assert_all_called=True) as respx_mock:
+            yield respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(
+                json={"max_position_embeddings": 512}
+            )
+
+    def test_get_max_tokens_reads_hf_config_with_a_bounded_timeout(self, hf_config_route):
+        from litellm.constants import HF_CONFIG_FETCH_TIMEOUT_SECONDS
+        from litellm.utils import get_max_tokens
+
+        assert get_max_tokens("huggingface/some-org/some-model") == 512
+        request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
+        assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
+
+    def test_get_max_position_embeddings_reads_hf_config_with_a_bounded_timeout(self, hf_config_route):
+        from litellm.constants import HF_CONFIG_FETCH_TIMEOUT_SECONDS
+        from litellm.utils import _get_max_position_embeddings
+
+        assert _get_max_position_embeddings("some-org/some-model") == 512
+        request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
+        assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
