@@ -187,7 +187,7 @@ def test_transform_response_invalid_base64_raises():
     config: Final = MistralTextToSpeechConfig()
     raw_response: Final = httpx.Response(
         status_code=200,
-        json={"audio_data": "!!!not-base64!!!"},
+        json={"audio_data": "QUJD!QUJD"},
         request=httpx.Request("POST", SPEECH_URL),
     )
     with pytest.raises(MistralTextToSpeechException, match="base64"):

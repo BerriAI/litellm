@@ -172,7 +172,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
                 headers=raw_response.headers,
             )
         try:
-            audio_bytes: Final = base64.b64decode(audio_b64)
+            audio_bytes: Final = base64.b64decode(audio_b64, validate=True)
         except ValueError:
             raise MistralTextToSpeechException(
                 status_code=500,
