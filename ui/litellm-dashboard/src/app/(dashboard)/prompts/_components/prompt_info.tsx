@@ -221,6 +221,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
               promptVariables={extractTemplateVariables(promptTemplate?.content)}
               accessToken={accessToken}
               version={currentVersion}
+              environment={selectedEnv ?? promptData.environment}
             />
             <Button onClick={() => onEdit?.(rawApiResponse)} className="flex items-center">
               <Pencil />
