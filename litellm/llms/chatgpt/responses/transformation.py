@@ -15,6 +15,7 @@ from litellm.responses.sse_output_recovery import (
 from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -105,6 +106,84 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         }
 
         return {k: v for k, v in request.items() if k in allowed_keys}
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> "ResponsesAPIStreamingResponse":
+        """
+        chatgpt.com's Codex backend always ships `response.output: []` on the
+        terminal `response.completed` event -- the actual message content only
+        ever appears in earlier `response.output_item.done` /
+        `response.output_text.done` events. `transform_response_api_response`
+        (below) already accounts for this when it gets the full SSE body in
+        one shot, but this provider *always* forces `stream=True` upstream
+        (see `transform_responses_api_request`), so `response_api_handler`
+        always takes the streaming branch and this method -- not
+        `transform_response_api_response` -- is what actually runs for every
+        chatgpt call. Without this override,
+        `SyncResponsesAPIStreamingIterator.completed_response` ends up
+        holding the empty-output completed event verbatim, and
+        `transform_response()` in the Responses-to-Chat-Completions bridge
+        (`completion_extras/litellm_responses_transformation/
+        transformation.py`) raises "Unknown items in responses API response:
+        []" -- reproducing upstream BerriAI/litellm#25429 and #27175.
+
+        Accumulate the same `OUTPUT_ITEM_DONE`/`OUTPUT_TEXT_DONE` chunks this
+        provider's own non-streaming path already recovers from
+        (`_extract_completed_response_from_sse`/
+        `_build_completed_response_from_chunk`), keyed on
+        `logging_obj.model_call_details` so state is scoped to this one
+        request rather than the shared, long-lived provider-config instance
+        (which every request reuses -- attribute state on `self` would leak
+        across concurrent calls). Merge them into `response.completed`'s
+        `output` field before the base class turns the chunk into a typed
+        event, so a genuinely empty `output` never reaches the bridge.
+        """
+        event_type: Final = parsed_chunk.get("type")
+
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            item_accumulator: Final = logging_obj.model_call_details.setdefault(
+                "_chatgpt_streamed_output_items", {}
+            )
+            record_output_item_chunk(parsed_chunk=parsed_chunk, output_items=item_accumulator)
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            item_accumulator = logging_obj.model_call_details.setdefault(
+                "_chatgpt_streamed_output_items", {}
+            )
+            text_accumulator: Final = logging_obj.model_call_details.setdefault(
+                "_chatgpt_text_only_output_items", {}
+            )
+            record_output_text_chunk(
+                parsed_chunk=parsed_chunk,
+                output_items=item_accumulator,
+                text_only_items=text_accumulator,
+            )
+        elif event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            response_payload: Final = parsed_chunk.get("response")
+            if isinstance(response_payload, dict) and not response_payload.get("output"):
+                item_accumulator = logging_obj.model_call_details.get(
+                    "_chatgpt_streamed_output_items"
+                ) or {}
+                text_accumulator = logging_obj.model_call_details.get(
+                    "_chatgpt_text_only_output_items"
+                ) or {}
+                merged_items: dict[int, dict] = {**text_accumulator}
+                merged_items.update(item_accumulator)
+                if merged_items:
+                    parsed_chunk = dict(parsed_chunk)
+                    parsed_chunk["response"] = {
+                        **response_payload,
+                        "output": [item for _, item in sorted(merged_items.items())],
+                    }
+
+        return super().transform_streaming_response(
+            model=model,
+            parsed_chunk=parsed_chunk,
+            logging_obj=logging_obj,
+        )
 
     def transform_response_api_response(
         self,
