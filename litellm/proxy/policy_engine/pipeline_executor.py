@@ -6,7 +6,10 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
 import time
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal
+
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -24,8 +27,10 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
     PipelineStep,
     PipelineStepResult,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import (
         BaseTranslation,
     )
@@ -34,6 +39,90 @@ try:
     from fastapi.exceptions import HTTPException
 except ImportError:
     HTTPException = None
+
+
+class UndeliverableStreamRewrite(Exception):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(
+            f"Guardrail '{guardrail_name}' rewrote the streamed response, which streaming pipelines cannot deliver"
+        )
+        self.guardrail_name: Final = guardrail_name
+
+
+def _tool_call_shape(tool_call: object) -> tuple[object, object]:
+    plain: Final = tool_call.model_dump() if isinstance(tool_call, BaseModel) else tool_call
+    function: Final = plain.get("function") if isinstance(plain, Mapping) else None
+    if not isinstance(function, Mapping):
+        return (None, None)
+    return (function.get("name"), function.get("arguments"))
+
+
+def _rewrote_texts(sent: Sequence[str] | None, returned: Sequence[str] | None) -> bool:
+    return sent is not None and returned is not None and list(returned) != list(sent)
+
+
+def _rewrote_tool_calls(sent: Sequence[object] | None, returned: Sequence[object] | None) -> bool:
+    if sent is None or returned is None:
+        return False
+    return [_tool_call_shape(tool_call) for tool_call in returned] != [
+        _tool_call_shape(tool_call) for tool_call in sent
+    ]
+
+
+class _StreamRewriteObserver(CustomGuardrail):
+    """Stand-in handed to the endpoint translation in place of a streaming pipeline step's
+    guardrail. Translations cannot rewrite every buffered chunk consistently, so the gate
+    withholds the stream whenever the guardrail returned different output than it was given,
+    which for guardrails like Bedrock's ANONYMIZED action is only known at runtime."""
+
+    def __init__(self, inner: CustomGuardrail) -> None:
+        super().__init__(guardrail_name=inner.guardrail_name)
+        self.inner: Final = inner
+        self.rewrote = False
+
+    def structured_messages_cover_full_request(self) -> bool:
+        return self.inner.structured_messages_cover_full_request()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        outputs: Final = await self.inner.apply_guardrail(
+            inputs=inputs, request_data=request_data, input_type=input_type, logging_obj=logging_obj
+        )
+        self.rewrote = (
+            self.rewrote
+            or _rewrote_texts(inputs.get("texts"), outputs.get("texts"))
+            or _rewrote_tool_calls(inputs.get("tool_calls"), outputs.get("tool_calls"))
+        )
+        return outputs
+
+
+def _prepare_hook_input(
+    step: PipelineStep,
+    callback: CustomLogger,
+    data: dict,  # mutable-ok: same request-payload shape the hooks mutate
+    raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+) -> tuple[dict, bool]:  # mutable-ok: returns that same request-payload dict
+    """Inject the step's guardrail name into metadata so should_run_guardrail() allows it,
+    and pick the payload the step scans: a scan_raw_request step evaluates the pristine
+    pre-pipeline snapshot instead of `data` (which earlier pass_data steps in this same
+    pipeline may have already rewritten), same reason the normal sequential/parallel
+    guardrail loops do this."""
+    if "metadata" not in data:
+        data["metadata"] = {}
+    data["metadata"]["guardrails"] = [step.guardrail]
+
+    scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+    hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
+        independent_snapshot(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
+    )
+    if hook_input is not data:
+        hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
+    return hook_input, scans_raw_request
 
 
 class PipelineExecutor:
@@ -195,23 +284,7 @@ class PipelineExecutor:
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
         try:
-            # Inject guardrail name into metadata so should_run_guardrail() allows it
-            if "metadata" not in data:
-                data["metadata"] = {}
-            data["metadata"]["guardrails"] = [step.guardrail]
-
-            # A scan_raw_request step evaluates the pristine pre-pipeline
-            # snapshot instead of `data` (which earlier pass_data steps in
-            # this same pipeline may have already rewritten), same reason
-            # the normal sequential/parallel guardrail loops do this.
-            scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
-            hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
-                independent_snapshot(raw_request_snapshot)
-                if scans_raw_request and raw_request_snapshot is not None
-                else data
-            )
-            if hook_input is not data:
-                hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
+            hook_input, scans_raw_request = _prepare_hook_input(step, callback, data, raw_request_snapshot)
 
             # Use unified_guardrail path if callback implements apply_guardrail
             target: CustomLogger = callback
@@ -239,13 +312,16 @@ class PipelineExecutor:
                         f"Guardrail '{step.guardrail}' does not support streaming pipeline execution",
                         None,
                     )
+                observer: Final = _StreamRewriteObserver(callback)
                 await endpoint_translation.process_output_streaming_response(
                     responses_so_far=streaming_chunks,
-                    guardrail_to_apply=callback,
+                    guardrail_to_apply=observer,
                     litellm_logging_obj=data.get("litellm_logging_obj"),
                     user_api_key_dict=user_api_key_dict,
                     request_data=hook_input,
                 )
+                if observer.rewrote:
+                    raise UndeliverableStreamRewrite(step.guardrail)
                 response = None
             elif mode == "post_call":
                 response = await target.async_post_call_success_hook(
@@ -269,6 +345,8 @@ class PipelineExecutor:
                 return ("pass", {"response": response}, None, None)
             return ("pass", response if isinstance(response, dict) else None, None, None)
 
+        except UndeliverableStreamRewrite:
+            raise
         except Exception as e:
             if CustomGuardrail._is_guardrail_intervention(e):
                 error_msg: Final = _extract_error_message(e)
