@@ -1494,6 +1494,28 @@ async def test_pre_call_hook_rejects_streaming_only_when_content_filter_step_mas
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_rejects_streaming_when_content_filter_category_masks(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    guardrail = ContentFilterGuardrail(
+        guardrail_name="gr-post",
+        event_hook=GuardrailEventHooks.post_call,
+        categories=[{"category": "bias_gender", "enabled": True, "action": "MASK"}],
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    data = _post_call_pipeline_data(stream=True)
+    user_api_key_dict = make_user_api_key_auth(request_route="/v1/chat/completions")
+
+    with pytest.raises(HTTPException) as info:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict, data=data, call_type="completion", guardrails_only=True
+        )
+
+    assert info.value.status_code == 400
+    assert info.value.detail["error"]["guardrails"] == ("gr-post",)
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook_rejects_streaming_when_route_has_no_guardrail_translation(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
