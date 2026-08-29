@@ -8,11 +8,21 @@ was ignored with no warning. These tests are provider-free: they capture the
 kwargs handed to the search function via a fake `original_generic_function`.
 """
 
+import importlib
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+from litellm.llms.base_llm.search.transformation import (
+    BaseSearchConfig,
+    SearchResponse,
+)
+from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.router_utils.search_api_router import SearchAPIRouter
+
+search_module = importlib.import_module("litellm.search.main")
 
 
 class _FakeRouter:
@@ -23,9 +33,7 @@ class _FakeRouter:
 
 
 def _make_router(litellm_params: dict[str, Any], name: str = "agentcore-search") -> _FakeRouter:
-    return _FakeRouter(
-        [{"search_tool_name": name, "litellm_params": {**litellm_params}}]
-    )
+    return _FakeRouter([{"search_tool_name": name, "litellm_params": {**litellm_params}}])
 
 
 @pytest.mark.asyncio
@@ -96,9 +104,7 @@ async def test_credentials_are_not_double_passed():
     captured: dict[str, Any] = {}
 
     async def fake_search(*, search_provider, api_key, api_base, **kwargs: Any):
-        captured.update(
-            {"search_provider": search_provider, "api_key": api_key, "api_base": api_base, **kwargs}
-        )
+        captured.update({"search_provider": search_provider, "api_key": api_key, "api_base": api_base, **kwargs})
         return {"object": "search", "results": []}
 
     router = _make_router(
@@ -139,3 +145,90 @@ async def test_missing_search_provider_still_raises():
             original_generic_function=fake_search,
             query="anything",
         )
+
+
+def test_agentcore_auth_params_are_excluded_from_logging(monkeypatch: pytest.MonkeyPatch):
+    config = AgentCoreSearchConfig()
+    monkeypatch.setattr(
+        search_module.ProviderConfigManager,
+        "get_provider_search_config",
+        lambda provider: config,
+    )
+    monkeypatch.setattr(config, "validate_environment", lambda **kwargs: {})
+    monkeypatch.setattr(
+        config,
+        "get_complete_url",
+        lambda **kwargs: "https://gateway.example/mcp",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_search(**kwargs: Any):
+        captured.update(kwargs)
+        return SearchResponse(results=[])
+
+    monkeypatch.setattr(search_module.base_llm_http_handler, "search", fake_search)
+    logging_obj = MagicMock()
+
+    search_module.search.__wrapped__(
+        query="test",
+        search_provider="agentcore",
+        litellm_logging_obj=logging_obj,
+        tool_name="target___WebSearch",
+        aws_access_key_id="access",
+        aws_secret_access_key="secret",
+        aws_session_token="token",
+        aws_region_name="us-east-1",
+    )
+
+    assert captured["optional_params"] == {"tool_name": "target___WebSearch"}
+    assert captured["auth_params"] == {
+        "aws_access_key_id": "access",
+        "aws_secret_access_key": "secret",
+        "aws_session_token": "token",
+        "aws_region_name": "us-east-1",
+    }
+    logged = logging_obj.update_from_kwargs.call_args.kwargs
+    assert logged["kwargs"] == {"tool_name": "target___WebSearch"}
+    assert logged["optional_params"] == {"tool_name": "target___WebSearch"}
+
+
+def test_search_handler_only_exposes_auth_params_to_signing():
+    class CapturingConfig(BaseSearchConfig):
+        def __init__(self):
+            self.transformed_params: dict[str, object] | None = None
+            self.signing_params: dict[str, object] | None = None
+
+        def validate_environment(self, **kwargs):
+            return {}
+
+        def transform_search_request(self, query, optional_params, **kwargs):
+            self.transformed_params = optional_params
+            return {}
+
+        def get_complete_url(self, **kwargs):
+            return "https://gateway.example/mcp"
+
+        def sign_request(self, *, optional_params, **kwargs):
+            self.signing_params = optional_params
+            raise RuntimeError("stop before network")
+
+    config = CapturingConfig()
+    with pytest.raises(RuntimeError, match="stop before network"):
+        BaseLLMHTTPHandler().search(
+            query="test",
+            optional_params={"tool_name": "target___WebSearch"},
+            auth_params={"aws_secret_access_key": "secret"},
+            timeout=1,
+            logging_obj=MagicMock(),
+            api_key=None,
+            api_base="https://gateway.example/mcp",
+            custom_llm_provider="agentcore",
+            provider_config=config,
+        )
+
+    assert config.transformed_params == {"tool_name": "target___WebSearch"}
+    assert config.signing_params == {
+        "tool_name": "target___WebSearch",
+        "aws_secret_access_key": "secret",
+    }

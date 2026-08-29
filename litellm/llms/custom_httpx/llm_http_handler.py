@@ -1777,6 +1777,7 @@ class BaseLLMHTTPHandler:
         asearch: bool = False,
         headers: dict[str, object] | None = None,
         provider_config: BaseSearchConfig | None = None,
+        auth_params: dict[str, object] | None = None,
     ) -> SearchResponse | Coroutine[object, object, SearchResponse]:
         """
         Sync Search handler.
@@ -1796,6 +1797,7 @@ class BaseLLMHTTPHandler:
                 client=client,
                 headers=headers,
                 provider_config=provider_config,
+                auth_params=auth_params,
             )
 
         # Validate environment and get headers
@@ -1821,7 +1823,7 @@ class BaseLLMHTTPHandler:
 
         signed_headers, signed_json_body = provider_config.sign_request(
             headers=headers,
-            optional_params=optional_params,
+            optional_params={**optional_params, **(auth_params or {})},
             request_data=data,
             api_base=complete_url,
             api_key=api_key,
@@ -1882,6 +1884,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         headers: dict[str, object] | None = None,
         provider_config: BaseSearchConfig | None = None,
+        auth_params: dict[str, object] | None = None,
     ) -> SearchResponse:
         """
         Async Search handler.
@@ -1915,7 +1918,7 @@ class BaseLLMHTTPHandler:
 
         signed_headers, signed_json_body = provider_config.sign_request(
             headers=headers,
-            optional_params=optional_params,
+            optional_params={**optional_params, **(auth_params or {})},
             request_data=data,
             api_base=complete_url,
             api_key=api_key,
