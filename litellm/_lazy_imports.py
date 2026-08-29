@@ -18,13 +18,10 @@ until they're actually needed.
 import importlib
 import sys
 from collections.abc import Callable, Mapping
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, Final, cast
 
-if TYPE_CHECKING:
-    import httpx
-    import tiktoken
-
-    from .caching.llm_caching_handler import LLMClientCache as LLMClientCacheType
+from typing_extensions import ReadOnly, TypedDict
 
 # Import all the data structures that define what can be lazy-loaded
 # These are just lists of names and maps of where to find them
@@ -59,6 +56,10 @@ from ._lazy_imports_registry import (
     UTILS_NAMES,
 )
 
+if TYPE_CHECKING:
+    import httpx
+    from tiktoken import Encoding
+
 
 def get_litellm_globals() -> dict[str, object]:
     """
@@ -89,10 +90,10 @@ def _get_module_level_client_timeout(litellm_globals: Mapping[str, Any]) -> "flo
 # They're separate from the main lazy import system because they have specific use cases
 
 # Lazy loader for default encoding - avoids importing heavy tiktoken library at startup
-_default_encoding: "tiktoken.Encoding | None" = None
+_default_encoding: "Encoding | None" = None
 
 
-def _get_default_encoding() -> "tiktoken.Encoding":
+def _get_default_encoding() -> "Encoding":
     """
     Lazily load and cache the default OpenAI encoding.
 
@@ -111,10 +112,10 @@ def _get_default_encoding() -> "tiktoken.Encoding":
 
 
 # Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time
-_get_modified_max_tokens_func: Callable[..., int | None] | None = None
+_get_modified_max_tokens_func: "Callable[..., int | None] | None" = None
 
 
-def _get_modified_max_tokens() -> Callable[..., int | None]:
+def _get_modified_max_tokens() -> "Callable[..., int | None]":
     """
     Lazily load and cache the get_modified_max_tokens function.
 
@@ -135,10 +136,10 @@ def _get_modified_max_tokens() -> Callable[..., int | None]:
 
 
 # Lazy loader for token_counter to avoid importing token_counter module at module import time
-_token_counter_new_func: Callable[..., int] | None = None
+_token_counter_new_func: "Callable[..., int] | None" = None
 
 
-def _get_token_counter_new() -> Callable[..., int]:
+def _get_token_counter_new() -> "Callable[..., int]":
     """
     Lazily load and cache the token_counter function (aliased as token_counter_new).
 
@@ -217,6 +218,17 @@ def _get_lazy_import_registry() -> dict[str, Callable[[str], object]]:
     return _LAZY_IMPORT_REGISTRY
 
 
+class _AttributeView(TypedDict):
+    """Holds one module attribute so the lazily fetched value is read back as ``object``."""
+
+    value: ReadOnly[object]
+
+
+def _module_attribute(module: ModuleType, attr_name: str) -> object:
+    attribute: Final[_AttributeView] = {"value": getattr(module, attr_name)}
+    return attribute["value"]
+
+
 def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], category: str) -> object:
     """
     Generic function that handles lazy importing for most attributes.
@@ -266,7 +278,7 @@ def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], cate
 
     # Step 6: Get the actual attribute from the module
     # Example: getattr(utils_module, "ModelResponse") returns the ModelResponse class
-    value: Final[object] = getattr(module, attr_name)
+    value: Final = _module_attribute(module, attr_name)
 
     # Step 7: Cache it so we don't have to import again next time
     _globals[name] = value
@@ -366,7 +378,7 @@ def _lazy_import_utils_module(name: str) -> object:
         module = importlib.import_module(module_path)
 
     # Get the actual attribute from the module
-    value: Final[object] = getattr(module, attr_name)
+    value: Final = _module_attribute(module, attr_name)
 
     # Cache it so we don't have to import again next time
     _globals[name] = value
@@ -397,8 +409,7 @@ def _lazy_import_llm_client_cache(name: str) -> object:
         return _globals[name]
 
     # Import the class
-    module: Final = importlib.import_module("litellm.caching.llm_caching_handler")
-    LLMClientCache: Final[type[LLMClientCacheType]] = getattr(module, "LLMClientCache")
+    from litellm.caching.llm_caching_handler import LLMClientCache
 
     # If they want the class itself, return it
     if name == "LLMClientCache":

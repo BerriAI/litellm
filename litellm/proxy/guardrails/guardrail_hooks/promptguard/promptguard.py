@@ -7,10 +7,9 @@ before and after LLM calls.
 """
 
 import os
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -38,14 +37,20 @@ _DEFAULT_API_BASE: Final = "https://api.promptguard.co"
 _GUARD_ENDPOINT: Final = "/api/v1/guard"
 
 
-class PromptGuardResult(TypedDict, total=False):
-    """The fields this guardrail reads off a PromptGuard Guard API response."""
+class PromptGuardGuardAPIResponse(TypedDict, total=False):
+    """Body returned by the PromptGuard ``/api/v1/guard`` endpoint."""
 
     decision: ReadOnly[str]
     threat_type: ReadOnly[str]
     event_id: ReadOnly[str]
     confidence: ReadOnly[float]
     redacted_messages: ReadOnly[list[AllMessageValues]]
+
+
+class PromptGuardHTTPView(TypedDict):
+    """Typed read of the untyped JSON body returned by the httpx client."""
+
+    guard_response: ReadOnly[PromptGuardGuardAPIResponse]
 
 
 class PromptGuardMissingCredentials(Exception):
@@ -110,7 +115,7 @@ class PromptGuardGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: Mapping[str, object],
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -158,7 +163,8 @@ class PromptGuardGuardrail(CustomGuardrail):
                 timeout=10.0,
             )
             response.raise_for_status()
-            result: Final[PromptGuardResult] = response.json()
+            view: Final[PromptGuardHTTPView] = {"guard_response": response.json()}
+            result: Final = view["guard_response"]
         except Exception as exc:
             verbose_proxy_logger.error("PromptGuard API error: %s", str(exc))
             if self.block_on_error:
@@ -201,7 +207,7 @@ class PromptGuardGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def _extract_texts_from_messages(messages: list) -> list[str]:
+    def _extract_texts_from_messages(messages: list[AllMessageValues]) -> list[str]:
         """Extract text content from user-role messages only.
 
         Only user messages are extracted to avoid injecting system or

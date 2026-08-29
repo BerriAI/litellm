@@ -7,84 +7,66 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 import asyncio
 import contextlib
 import json
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import Final, Protocol
 
-from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.types.realtime import RealtimeResponseTransformInput
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
 
-if TYPE_CHECKING:
-    from litellm.types.realtime import RealtimeResponseTransformInput
-
 _CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
+_CLIENT_MESSAGE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
-class _ClientWebSocket(Protocol):
-    """The client-facing websocket surface used by the Bedrock realtime bridge."""
+def _json_dict(value: JsonValue) -> dict[str, JsonValue]:
+    return value if isinstance(value, dict) else {}
 
-    async def send_text(self, data: str) -> None: ...
+
+def _json_str(value: JsonValue) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+class RealtimeClientWebSocket(Protocol):
+    """The client-facing websocket surface the realtime bridge talks to."""
 
     async def receive_text(self) -> str: ...
 
-    async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
+    async def send_text(self, data: str) -> None: ...
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
 
 
-class _BedrockInputStream(Protocol):
-    """The write half of a Bedrock bidirectional stream."""
-
-    async def send(self, chunk: object) -> None: ...
+class BedrockInputStream(Protocol):
+    async def send(self, event: object) -> None: ...
 
     async def close(self) -> None: ...
 
 
-class _BedrockPayloadPart(Protocol):
-    """A single Bedrock bidirectional output payload."""
-
-    bytes_: bytes | None
-
-
-class _BedrockOutputChunk(Protocol):
-    """A chunk read off the read half of a Bedrock bidirectional stream."""
-
-    value: _BedrockPayloadPart | None
+class BedrockPayloadPart(Protocol):
+    @property
+    def bytes_(self) -> bytes | None: ...
 
 
-class _BedrockOutputStream(Protocol):
-    """The read half of a Bedrock bidirectional stream."""
-
-    async def receive(self) -> _BedrockOutputChunk | None: ...
-
-
-class _BedrockBidirectionalStream(Protocol):
-    """The bidirectional stream returned by ``invoke_model_with_bidirectional_stream``."""
-
-    input_stream: _BedrockInputStream
-
-    async def await_output(self) -> tuple[object, _BedrockOutputStream]: ...
+class BedrockOutputChunk(Protocol):
+    @property
+    def value(self) -> BedrockPayloadPart | None: ...
 
 
-class _ClientSessionPayload(TypedDict, total=False):
-    """The ``session`` body of a client ``session.update`` frame."""
-
-    modalities: ReadOnly[object]
+class BedrockOutputStream(Protocol):
+    async def receive(self) -> BedrockOutputChunk | None: ...
 
 
-class _ClientRealtimeFrame(TypedDict, total=False):
-    """The fields read off a client realtime frame."""
+class BedrockBidirectionalStream(Protocol):
+    @property
+    def input_stream(self) -> BedrockInputStream: ...
 
-    type: ReadOnly[str]
-    session: ReadOnly[_ClientSessionPayload]
-
-
-def _decode_client_frame(payload: str) -> _ClientRealtimeFrame:
-    """Decode a client realtime frame into the fields this bridge reads."""
-    return json.loads(payload)
+    async def await_output(self) -> tuple[object, BedrockOutputStream]: ...
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -96,7 +78,7 @@ class BedrockRealtime(BaseAWSLLM):
     async def async_realtime(
         self,
         model: str,
-        websocket: _ClientWebSocket,
+        websocket: RealtimeClientWebSocket,
         logging_obj: LiteLLMLogging,
         api_base: str | None = None,
         api_key: str | None = None,
@@ -147,7 +129,7 @@ class BedrockRealtime(BaseAWSLLM):
         elif aws_bedrock_runtime_endpoint is not None:
             endpoint_uri = aws_bedrock_runtime_endpoint
         else:
-            endpoint_uri = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+            endpoint_uri = f"https://bedrock-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
 
         verbose_proxy_logger.debug("Bedrock Realtime: Connecting to %s with model %s", endpoint_uri, model)
 
@@ -184,7 +166,7 @@ class BedrockRealtime(BaseAWSLLM):
         )
         bedrock_client: Final = BedrockRuntimeClient(config=config)
 
-        async def open_bidirectional_stream() -> _BedrockBidirectionalStream:
+        async def open_bidirectional_stream() -> BedrockBidirectionalStream:
             return await bedrock_client.invoke_model_with_bidirectional_stream(
                 InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
             )
@@ -251,11 +233,11 @@ class BedrockRealtime(BaseAWSLLM):
 
     async def _forward_client_to_bedrock(
         self,
-        client_ws: _ClientWebSocket,
-        bedrock_stream: _BedrockBidirectionalStream,
+        client_ws: RealtimeClientWebSocket,
+        bedrock_stream: BedrockBidirectionalStream,
         transformation_config: BedrockRealtimeConfig,
         model: str,
-        session_state: "RealtimeResponseTransformInput",
+        session_state: RealtimeResponseTransformInput,
         logging_obj: LiteLLMLogging | None = None,
     ):
         """Forward messages from client WebSocket to Bedrock stream."""
@@ -293,11 +275,11 @@ class BedrockRealtime(BaseAWSLLM):
                     client_message_type: str | None = None
                     requested_modalities: list[str] | None = None
                     with contextlib.suppress(Exception):
-                        parsed_client_message = _decode_client_frame(message)
-                        client_message_type = parsed_client_message.get("type")
+                        parsed_client_message = _json_dict(_CLIENT_MESSAGE_ADAPTER.validate_json(message))
+                        client_message_type = _json_str(parsed_client_message.get("type"))
                         if client_message_type == "session.update":
                             requested_modalities = _CLIENT_MODALITIES_ADAPTER.validate_python(
-                                parsed_client_message.get("session", {}).get("modalities")
+                                _json_dict(parsed_client_message.get("session")).get("modalities")
                             )
                     if client_message_type == "session.update":
                         await client_ws.send_text(
@@ -316,12 +298,12 @@ class BedrockRealtime(BaseAWSLLM):
 
     async def _forward_bedrock_to_client(
         self,
-        bedrock_stream: _BedrockBidirectionalStream,
-        client_ws: _ClientWebSocket,
+        bedrock_stream: BedrockBidirectionalStream,
+        client_ws: RealtimeClientWebSocket,
         transformation_config: BedrockRealtimeConfig,
         model: str,
         logging_obj: LiteLLMLogging,
-        session_state: "RealtimeResponseTransformInput",
+        session_state: RealtimeResponseTransformInput,
     ):
         """Forward messages from Bedrock stream to client WebSocket."""
         try:
@@ -334,13 +316,12 @@ class BedrockRealtime(BaseAWSLLM):
                     verbose_proxy_logger.debug("Bedrock Realtime: Bedrock stream ended")
                     break
 
-                if result.value and result.value.bytes_:
-                    bedrock_response = result.value.bytes_.decode("utf-8")
+                payload_bytes = result.value.bytes_ if result.value else None
+                if payload_bytes:
+                    bedrock_response = payload_bytes.decode("utf-8")
                     verbose_proxy_logger.debug("Bedrock Realtime: Received from Bedrock: %s", bedrock_response[:200])
 
                     # Transform Bedrock format to OpenAI format
-                    from litellm.types.realtime import RealtimeResponseTransformInput
-
                     realtime_response_transform_input: RealtimeResponseTransformInput = {
                         "current_output_item_id": session_state.get("current_output_item_id"),
                         "current_response_id": session_state.get("current_response_id"),

@@ -4,11 +4,10 @@ Helper functions to query prometheus API
 
 import json
 import time
-from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Final
 
-from httpx import Response
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm import get_secret
@@ -22,46 +21,32 @@ PROMETHEUS_URL: Final[str | None] = get_secret("PROMETHEUS_URL")
 PROMETHEUS_SELECTED_INSTANCE: Final[str | None] = get_secret("PROMETHEUS_SELECTED_INSTANCE")
 async_http_handler: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
-
-class _PrometheusSeries(TypedDict):
-    """One time series in a Prometheus query result, with its labels and its ``[timestamp, value]`` samples."""
-
-    metric: ReadOnly[Mapping[str, str]]
-    values: ReadOnly[Sequence[Sequence[float | str]]]
+_RAW_JSON_PAYLOAD: Final = TypeAdapter(object)
 
 
-class _PrometheusResultData(TypedDict):
-    """The ``data`` envelope of a Prometheus query response."""
+class PrometheusRangeSample(BaseModel):
+    """One ``matrix`` series of the Prometheus HTTP query API."""
 
-    result: ReadOnly[Sequence[_PrometheusSeries]]
-
-
-class _PrometheusQueryResponse(TypedDict):
-    """The JSON body returned by the Prometheus ``/api/v1/query`` and ``/api/v1/query_range`` endpoints."""
-
-    data: ReadOnly[_PrometheusResultData]
+    metric: dict[str, object]
+    values: list[tuple[float, str]]
 
 
-class _DailySpend(TypedDict):
-    """One day of spend, in the shape ``get_daily_spend_from_prometheus`` returns."""
+class PrometheusQueryData(BaseModel):
+    result: list[PrometheusRangeSample]
 
+
+class PrometheusQueryResponse(BaseModel):
+    data: PrometheusQueryData
+
+
+class PrometheusDailySpend(TypedDict):
     date: ReadOnly[str]
     spend: ReadOnly[float]
 
 
-def _query_body(response: Response) -> _PrometheusQueryResponse:
-    """Read the untyped JSON body of a Prometheus query response."""
-    return response.json()
-
-
-def _query_series(response: Response) -> Sequence[_PrometheusSeries]:
-    """Read the time series list out of the untyped JSON body of a Prometheus query response."""
-    return response.json()["data"]["result"]
-
-
 async def get_metric_from_prometheus(
     metric_name: str,
-) -> Sequence[_PrometheusSeries]:
+) -> list[PrometheusRangeSample]:
     # Get the start of the current day in Unix timestamp
     if PROMETHEUS_URL is None:
         raise ValueError("PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env")
@@ -71,9 +56,9 @@ async def get_metric_from_prometheus(
     response: Final = await async_http_handler.get(
         f"{PROMETHEUS_URL}/api/v1/query", params={"query": query, "time": now}
     )  # End of the day
-    _json_response: Final = _query_body(response)
+    _json_response: Final = _RAW_JSON_PAYLOAD.validate_python(response.json())
     verbose_logger.debug("json response from prometheus /query api %s", _json_response)
-    results: Final = _query_series(response)
+    results: Final = PrometheusQueryResponse.model_validate(_json_response).data.result
     return results
 
 
@@ -95,17 +80,17 @@ async def get_fallback_metric_from_prometheus() -> str:
             verbose_logger.debug("response json %s", response_json)
             for result in response_json:
                 verbose_logger.debug("result= %s", result)
-                metric = result["metric"]
-                metric_values = result["values"]
+                metric_labels = result.metric
+                metric_values = result.values
                 most_recent_value = metric_values[0]
 
                 if PROMETHEUS_SELECTED_INSTANCE is not None:
-                    if metric.get("instance") != PROMETHEUS_SELECTED_INSTANCE:
+                    if metric_labels.get("instance") != PROMETHEUS_SELECTED_INSTANCE:
                         continue
 
                 value = int(float(most_recent_value[1]))  # Convert value to integer
-                primary_model = metric.get("primary_model", "Unknown")
-                fallback_model = metric.get("fallback_model", "Unknown")
+                primary_model = metric_labels.get("primary_model", "Unknown")
+                fallback_model = metric_labels.get("fallback_model", "Unknown")
                 response_message += f"`{value} successful fallback requests` with primary model=`{primary_model}` -> fallback model=`{fallback_model}`"
                 response_message += "\n"
         verbose_logger.debug("response message %s", response_message)
@@ -136,7 +121,7 @@ def _quote_promql_string_literal(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-async def get_daily_spend_from_prometheus(api_key: str | None) -> Sequence[_DailySpend]:
+async def get_daily_spend_from_prometheus(api_key: str | None) -> list[PrometheusDailySpend]:
     """
     Expected Response Format:
     [
@@ -173,17 +158,16 @@ async def get_daily_spend_from_prometheus(api_key: str | None) -> Sequence[_Dail
     }
 
     response: Final = await async_http_handler.get(url, params=params)
-    _json_response: Final = _query_body(response)
+    _json_response: Final = _RAW_JSON_PAYLOAD.validate_python(response.json())
     verbose_logger.debug("json response from prometheus /query api %s", _json_response)
-    results: Final = _query_series(response)
-    formatted_results: Final = []
-
-    for result in results:
-        metric_data = result["values"]
-        for timestamp, value in metric_data:
-            # Convert timestamp to ISO 8601 string with UTC offset
-            date = datetime.fromtimestamp(float(timestamp)).isoformat() + "+00:00"
-            spend = float(value)
-            formatted_results.append({"date": date, "spend": spend})
+    results: Final = PrometheusQueryResponse.model_validate(_json_response).data.result
+    formatted_results: Final[list[PrometheusDailySpend]] = [
+        {
+            "date": datetime.fromtimestamp(float(timestamp)).isoformat() + "+00:00",
+            "spend": float(value),
+        }
+        for result in results
+        for timestamp, value in result.values
+    ]
 
     return formatted_results

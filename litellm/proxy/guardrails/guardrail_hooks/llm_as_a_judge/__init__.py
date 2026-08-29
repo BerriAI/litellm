@@ -1,11 +1,11 @@
 """LLM-as-a-Judge guardrail: uses an LLM to score responses against weighted criteria."""
 
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeVar
 
 from fastapi import HTTPException
-from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from litellm import Router
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.guardrails import Guardrail, LitellmParams
+    from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import StandardLoggingEvalInformation
 
 JUDGE_SYSTEM_PROMPT = """You are a quality judge. Evaluate the assistant's response against the criteria provided.
@@ -41,88 +42,53 @@ _default_router_provider: Final = default_router_provider
 _parse_judge_verdict: Final = parse_json_verdict
 _extract_text_from_content: Final = extract_text_from_content
 
+_ParamT = TypeVar("_ParamT")
 
-class _JudgeMessage(TypedDict):
-    """Chat message, as far as the judge prompt builder reads it."""
+
+class _LitellmParamView(TypedDict, Generic[_ParamT]):
+    """Typed read of a single entry in an untyped ``litellm_params`` mapping."""
+
+    value: ReadOnly[_ParamT]
+
+
+class JudgeCriterion(TypedDict):
+    """A single weighted criterion the judge scores the response against."""
+
+    name: ReadOnly[NotRequired[str]]
+    description: ReadOnly[NotRequired[str]]
+    weight: ReadOnly[NotRequired[float]]
+
+
+class JudgeMessage(TypedDict):
+    """The parts of a conversation message the judge prompt renders."""
 
     role: ReadOnly[NotRequired[str]]
     content: ReadOnly[NotRequired[object]]
-
-
-class _GuardrailOptions(TypedDict, total=False):
-    """Base :class:`CustomGuardrail` options forwarded untouched."""
-
-    mask_request_content: ReadOnly[bool]
-    mask_response_content: ReadOnly[bool]
-    violation_message_template: ReadOnly[str | None]
-    end_session_after_n_fails: ReadOnly[int | None]
-    on_violation: ReadOnly[str | None]
-    realtime_violation_message: ReadOnly[str | None]
-    on_sensitive_data: ReadOnly[str | None]
-    sensitive_data_route_to_model: ReadOnly[str | None]
-    sticky_session_routing: ReadOnly[bool]
-    run_in_parallel: ReadOnly[bool]
-    only_scan_new_messages: ReadOnly[bool]
-
-
-class _RequestMessagesView(TypedDict):
-    messages: ReadOnly[Sequence[_JudgeMessage]]
-
-
-class _RequestMetadataView(TypedDict):
-    metadata: ReadOnly[MutableMapping[str, object]]
-
-
-class _OverallScoreView(TypedDict):
-    overall_score: ReadOnly[str | float]
-
-
-class _JudgeModelView(TypedDict):
-    judge_model: ReadOnly[str]
-
-
-class _CriteriaView(TypedDict):
-    criteria: ReadOnly[Sequence[Mapping[str, str | float]]]
-
-
-class _OnFailureView(TypedDict):
-    on_failure: ReadOnly[Literal["block", "log"]]
-
-
-class _ThresholdView(TypedDict):
-    overall_threshold: ReadOnly[str | float]
-
-
-class _ModeView(TypedDict):
-    mode: ReadOnly[object]
-
-
-class _DefaultOnView(TypedDict):
-    default_on: ReadOnly[object]
 
 
 def _get_litellm_param(
     litellm_params: "LitellmParams",
     guardrail: "Guardrail",
     key: str,
-    default: str | float | bool | None = None,
-) -> Any:
-    val: Final[object] = getattr(litellm_params, key, None)
+    default: _ParamT,
+) -> _ParamT:
+    val: Final[_ParamT | None] = getattr(litellm_params, key, None)
     if val is not None:
         return val
     raw: Final = guardrail.get("litellm_params")
     if isinstance(raw, dict) and key in raw:
-        return raw[key]
+        entry: Final[_LitellmParamView[_ParamT]] = {"value": raw[key]}
+        return entry["value"]
     if raw is not None and not isinstance(raw, dict):
-        attr: Final[object] = getattr(raw, key, None)
+        attr: Final[_ParamT | None] = getattr(raw, key, None)
         if attr is not None:
             return attr
     return default
 
 
 def _build_judge_prompt(
-    criteria: Sequence[Mapping[str, object]],
-    messages: Sequence[_JudgeMessage],
+    criteria: Sequence[JudgeCriterion],
+    messages: Sequence[JudgeMessage],
     response_text: str,
 ) -> str:
     criteria_block: Final = "\n".join(
@@ -147,13 +113,13 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         self,
         guardrail_name: str,
         judge_model: str,
-        criteria: Sequence[Mapping[str, object]],
+        criteria: Sequence[JudgeCriterion],
         overall_threshold: float = 80.0,
         on_failure: Literal["block", "log"] = "block",
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None,
         default_on: bool = False,
         router_provider: "Callable[[], Router | None] | None" = None,
-        **kwargs: Unpack[_GuardrailOptions],
+        **kwargs: Any,
     ) -> None:
         _event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None
         if event_hook is not None:
@@ -181,10 +147,10 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
 
     async def _run_judge(
         self,
-        messages: Sequence[_JudgeMessage],
+        messages: Sequence[JudgeMessage],
         response_text: str,
     ) -> dict[str, object]:
-        judge_messages: Final = [
+        judge_messages: Final[list[AllMessageValues]] = [
             {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
             {
                 "role": "user",
@@ -219,13 +185,13 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
 
         start_time: Final = datetime.now()
         status: GuardrailStatus = "success"
-        judge_result: dict[str, Any] = {}
+        judge_result: dict[str, object] = {}
 
         try:
-            request_messages: Final[_RequestMessagesView] = {"messages": request_data.get("messages") or []}
+            messages: Final[Sequence[JudgeMessage]] = request_data.get("messages") or []
 
             try:
-                judge_result = await self._run_judge(request_messages["messages"], response_text)
+                judge_result = await self._run_judge(messages, response_text)
             except Exception as judge_err:
                 verbose_logger.warning(
                     "llm_as_a_judge guardrail: judge call failed, failing open. Error: %s", judge_err
@@ -234,8 +200,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 return inputs
 
             try:
-                raw_score: Final[_OverallScoreView] = {"overall_score": judge_result.get("overall_score", 100)}
-                overall_score: Final = max(0.0, min(100.0, float(raw_score["overall_score"])))
+                overall_score: Final = max(0.0, min(100.0, float(judge_result.get("overall_score", 100))))
             except (TypeError, ValueError):
                 verbose_logger.warning("llm_as_a_judge: invalid overall_score from judge, failing open")
                 return inputs
@@ -250,8 +215,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 "threshold": self.overall_threshold,
                 "verdicts": judge_result.get("verdicts", []),
             }
-            request_metadata: Final[_RequestMetadataView] = {"metadata": request_data.setdefault("metadata", {})}
-            _metadata: Final = request_metadata["metadata"]
+            _metadata: Final = request_data.setdefault("metadata", {})
             existing: Final = _metadata.get("eval_information")
             if isinstance(existing, list):
                 existing.append(eval_info)
@@ -300,45 +264,37 @@ def initialize_guardrail(
     if not guardrail_name:
         raise ValueError("llm_as_a_judge guardrail requires a guardrail_name")
 
-    judge_model: Final[_JudgeModelView] = {"judge_model": _get_litellm_param(litellm_params, guardrail, "judge_model")}
-    if not judge_model["judge_model"]:
+    judge_model: Final[str] = _get_litellm_param(litellm_params, guardrail, "judge_model", "")
+    if not judge_model:
         raise ValueError("llm_as_a_judge guardrail requires judge_model in litellm_params")
 
-    criteria: Final[_CriteriaView] = {"criteria": _get_litellm_param(litellm_params, guardrail, "criteria") or []}
-    if not criteria["criteria"]:
+    criteria: Final[Sequence[JudgeCriterion]] = _get_litellm_param(litellm_params, guardrail, "criteria", ()) or ()
+    if not criteria:
         raise ValueError("llm_as_a_judge guardrail requires at least one criterion")
 
-    weight_total: Final = sum(float(c.get("weight", 0)) for c in criteria["criteria"])
+    weight_total: Final = sum(float(c.get("weight", 0)) for c in criteria)
     if abs(weight_total - 100) > 0.5:
         raise ValueError(f"llm_as_a_judge criterion weights must sum to 100 (got {weight_total})")
 
-    on_failure: Final[_OnFailureView] = {
-        "on_failure": _get_litellm_param(litellm_params, guardrail, "on_failure", "block")
-    }
-    if on_failure["on_failure"] not in _VALID_ON_FAILURE:
-        raise ValueError(f"llm_as_a_judge on_failure must be 'block' or 'log', got '{on_failure['on_failure']}'")
+    on_failure: Final[Literal["block", "log"]] = _get_litellm_param(litellm_params, guardrail, "on_failure", "block")
+    if on_failure not in _VALID_ON_FAILURE:
+        raise ValueError(f"llm_as_a_judge on_failure must be 'block' or 'log', got '{on_failure}'")
 
-    threshold: Final[_ThresholdView] = {
-        "overall_threshold": _get_litellm_param(litellm_params, guardrail, "overall_threshold", 80.0)
-    }
-    overall_threshold: Final = float(threshold["overall_threshold"])
+    overall_threshold: Final = float(_get_litellm_param(litellm_params, guardrail, "overall_threshold", 80.0))
 
-    mode: Final[_ModeView] = {"mode": _get_litellm_param(litellm_params, guardrail, "mode")}
+    mode: Final[str | None] = _get_litellm_param(litellm_params, guardrail, "mode", None)
     event_hook: GuardrailEventHooks | None = None
-    if isinstance(mode["mode"], str) and mode["mode"] in {e.value for e in GuardrailEventHooks}:
-        event_hook = GuardrailEventHooks(mode["mode"])
+    if isinstance(mode, str) and mode in {e.value for e in GuardrailEventHooks}:
+        event_hook = GuardrailEventHooks(mode)
 
-    default_on: Final[_DefaultOnView] = {
-        "default_on": _get_litellm_param(litellm_params, guardrail, "default_on", False)
-    }
     instance: Final = LLMAsAJudgeGuardrail(
         guardrail_name=guardrail_name,
-        judge_model=judge_model["judge_model"],
-        criteria=criteria["criteria"],
+        judge_model=judge_model,
+        criteria=criteria,
         overall_threshold=overall_threshold,
-        on_failure=on_failure["on_failure"],
+        on_failure=on_failure,
         event_hook=event_hook,
-        default_on=bool(default_on["default_on"]),
+        default_on=bool(_get_litellm_param(litellm_params, guardrail, "default_on", False)),
     )
     litellm.logging_callback_manager.add_litellm_callback(instance)
     return instance

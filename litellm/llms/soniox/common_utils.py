@@ -2,7 +2,8 @@
 Shared utilities for the Soniox provider (https://soniox.com).
 """
 
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final, TypeAlias
 
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SubtitleToken,
@@ -10,6 +11,8 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     render_subtitle_tokens_as_vtt,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+SonioxToken: TypeAlias = Mapping[str, object]
 
 # Soniox API base URL.
 SONIOX_API_BASE: Final[str] = "https://api.soniox.com"
@@ -68,7 +71,15 @@ def get_soniox_api_base(api_base: str | None = None) -> str:
     return base.rstrip("/")
 
 
-def render_soniox_tokens(tokens: list[dict[str, Any]]) -> str:
+def _token_text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _token_milliseconds(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+def render_soniox_tokens(tokens: Sequence[SonioxToken]) -> str:
     """
     Render a list of Soniox tokens to a readable transcript string.
 
@@ -85,11 +96,11 @@ def render_soniox_tokens(tokens: list[dict[str, Any]]) -> str:
         return ""
 
     text_parts: Final[list[str]] = []
-    current_speaker: Any | None = None
-    current_language: Any | None = None
+    current_speaker: object = None
+    current_language: object = None
 
     for token in tokens:
-        text = token.get("text", "")
+        text = _token_text(token.get("text", ""))
         speaker = token.get("speaker")
         language = token.get("language")
         is_translation = token.get("translation_status") == "translation"
@@ -107,23 +118,27 @@ def render_soniox_tokens(tokens: list[dict[str, Any]]) -> str:
             current_language = language
             prefix = "[Translation] " if is_translation else ""
             text_parts.append(f"\n{prefix}[{current_language}] ")
-            text = text.lstrip() if isinstance(text, str) else text
+            text = text.lstrip()
 
         text_parts.append(text)
 
     return "".join(text_parts)
 
 
-def _soniox_token_to_subtitle_token(token: dict[str, Any]) -> SubtitleToken:
+def _token_speaker(value: object) -> str | int | None:
+    return value if isinstance(value, str | int) else None
+
+
+def _soniox_token_to_subtitle_token(token: SonioxToken) -> SubtitleToken:
     return SubtitleToken(
-        text=token.get("text", ""),
-        start_ms=token.get("start_ms"),
-        end_ms=token.get("end_ms"),
-        speaker=token.get("speaker"),
+        text=_token_text(token.get("text", "")),
+        start_ms=_token_milliseconds(token.get("start_ms")),
+        end_ms=_token_milliseconds(token.get("end_ms")),
+        speaker=_token_speaker(token.get("speaker")),
     )
 
 
-def render_soniox_tokens_as_srt(tokens: list[dict[str, Any]]) -> str:
+def render_soniox_tokens_as_srt(tokens: Sequence[SonioxToken]) -> str:
     """
     Render Soniox tokens as SRT (SubRip) subtitle format.
 
@@ -132,7 +147,7 @@ def render_soniox_tokens_as_srt(tokens: list[dict[str, Any]]) -> str:
     return render_subtitle_tokens_as_srt(tuple(_soniox_token_to_subtitle_token(token) for token in tokens))
 
 
-def render_soniox_tokens_as_vtt(tokens: list[dict[str, Any]]) -> str:
+def render_soniox_tokens_as_vtt(tokens: Sequence[SonioxToken]) -> str:
     """
     Render Soniox tokens as WebVTT subtitle format.
 

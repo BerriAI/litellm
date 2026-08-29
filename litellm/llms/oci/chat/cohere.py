@@ -8,12 +8,11 @@ response parsing, and streaming chunk parsing for models served with
 
 import datetime
 import json
-from collections.abc import Sequence
-from typing import Any, Final, TypedDict
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, Final
 
 import httpx
-from pydantic import ValidationError
-from typing_extensions import ReadOnly
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.llms.oci.chat.generic import (
     _normalize_oci_finish_reason,
@@ -37,7 +36,7 @@ from litellm.types.llms.oci import (
     CohereToolMessage,
     CohereToolResult,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.utils import (
     Choices,
     Delta,
@@ -48,31 +47,58 @@ from litellm.types.utils import (
 )
 
 
-class _OpenAIToolCallFunction(TypedDict, total=False):
-    """The ``function`` block of an OpenAI-format assistant tool call."""
-
-    name: ReadOnly[str | None]
-    arguments: ReadOnly[str | dict[str, object]]
+def _json_dict(value: JsonValue) -> dict[str, JsonValue]:
+    return value if isinstance(value, dict) else {}
 
 
-class _OpenAIToolCall(TypedDict, total=False):
-    """An entry of an OpenAI-format assistant message's ``tool_calls``."""
-
-    id: ReadOnly[str | None]
-    function: ReadOnly[_OpenAIToolCallFunction]
+def _json_list(value: JsonValue) -> list[JsonValue]:
+    return value if isinstance(value, list) else []
 
 
-def _extract_text_content(content: Any) -> str:
-    """Return the plain-text representation of a message content value."""
+def _json_str(value: JsonValue) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _content_block_text(block: Mapping[str, object]) -> str:
+    if not isinstance(block, dict) or block.get("type") != "text":
+        return ""
+    text: Final = block.get("text", "")
+    return text if isinstance(text, str) else ""
+
+
+def _content_text(content: str | Iterable[Mapping[str, object]] | None) -> str:
     if content is None:
         return ""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(
-            item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"
-        )
+        return "".join(_content_block_text(block) for block in content)
     return str(content)
+
+
+def _extract_text_content(content: Any) -> str:
+    """Return the plain-text representation of a message content value."""
+    return _content_text(content)
+
+
+_TOOL_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _parsed_tool_arguments(raw_arguments: str | dict[str, object]) -> dict[str, object]:
+    if not isinstance(raw_arguments, str):
+        return raw_arguments
+    try:
+        return _TOOL_ARGUMENTS_ADAPTER.validate_json(raw_arguments)
+    except ValidationError:
+        return {}
+
+
+def _to_cohere_tool_call(tool_call: ChatCompletionAssistantToolCall) -> CohereToolCall:
+    function_fields: Final = tool_call.get("function", {})
+    return CohereToolCall(
+        name=str(function_fields.get("name", "")),
+        parameters=_parsed_tool_arguments(function_fields.get("arguments", "{}")),
+    )
 
 
 def adapt_messages_to_cohere_standard(
@@ -94,21 +120,12 @@ def adapt_messages_to_cohere_standard(
     """
     # First pass: build tool_call_id → CohereToolCall so tool-result messages can
     # reference the originating call by name and parameters.
-    tool_call_lookup: Final[dict[str | None, CohereToolCall]] = {}
-    for msg in messages:
-        if msg.get("role") == "assistant":
-            tool_calls_raw: Sequence[_OpenAIToolCall] = msg.get("tool_calls") or []
-            for tc in tool_calls_raw:
-                tc_id = tc.get("id", "")
-                raw_args = tc.get("function", {}).get("arguments", "{}")
-                try:
-                    params: dict[str, object] = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                except json.JSONDecodeError:
-                    params = {}
-                tool_call_lookup[tc_id] = CohereToolCall(
-                    name=str(tc.get("function", {}).get("name", "")),
-                    parameters=params,
-                )
+    tool_call_lookup: Final = {
+        tool_call.get("id", ""): _to_cohere_tool_call(tool_call)
+        for msg in messages
+        if msg.get("role") == "assistant" and "tool_calls" in msg
+        for tool_call in msg["tool_calls"] or []
+    }
 
     last_user_index: Final = next(
         (i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user"),
@@ -123,24 +140,11 @@ def adapt_messages_to_cohere_standard(
         role = msg.get("role")
         content = _extract_text_content(msg.get("content"))
 
-        tool_calls: list[CohereToolCall] | None = None
-        if role == "assistant" and msg.get("tool_calls"):
-            tool_calls = []
-            for tc in msg["tool_calls"]:  # pyright: ignore[reportOptionalIterable]  # truthiness check above rules out None
-                raw_arguments = tc.get("function", {}).get("arguments", {})
-                if isinstance(raw_arguments, str):
-                    try:
-                        arguments: dict[str, object] = json.loads(raw_arguments)
-                    except json.JSONDecodeError:
-                        arguments = {}
-                else:
-                    arguments = raw_arguments
-                tool_calls.append(
-                    CohereToolCall(
-                        name=str(tc.get("function", {}).get("name", "")),
-                        parameters=arguments,
-                    )
-                )
+        tool_calls = (
+            [_to_cohere_tool_call(tool_call) for tool_call in msg["tool_calls"]]
+            if role == "assistant" and "tool_calls" in msg and msg["tool_calls"]
+            else None
+        )
 
         if role == "user":
             chat_history.append(CohereMessage(role="USER", message=content))
@@ -166,22 +170,41 @@ def adapt_messages_to_cohere_standard(
     return chat_history
 
 
-class _OpenAIToolDefinitionFunction(TypedDict, total=False):
-    """The ``function`` block of an OpenAI-format tool definition."""
-
-    name: ReadOnly[str]
-    description: ReadOnly[str]
-    parameters: ReadOnly[dict[str, object]]
+def _resolved_oci_parameter_schema(raw_parameters: dict[str, JsonValue]) -> JsonValue:
+    return sanitize_oci_schema(resolve_oci_schema_anyof(resolve_oci_schema_refs(raw_parameters)))
 
 
-class _OpenAIToolDefinition(TypedDict, total=False):
-    """An entry of an OpenAI-format ``tools`` array."""
+def _cohere_parameter_definition(param_schema: dict[str, JsonValue], is_required: bool) -> CohereParameterDefinition:
+    json_type: Final = _json_str(param_schema.get("type")) or "string"
+    return CohereParameterDefinition(
+        description=enrich_cohere_param_description(_json_str(param_schema.get("description")), param_schema),
+        type=OCI_JSON_TO_PYTHON_TYPES.get(json_type, json_type),
+        isRequired=is_required,
+    )
 
-    function: ReadOnly[_OpenAIToolDefinitionFunction]
+
+def _cohere_parameter_definitions(resolved_schema: JsonValue) -> dict[str, CohereParameterDefinition]:
+    schema_fields: Final = _json_dict(resolved_schema)
+    required: Final = _json_list(schema_fields.get("required"))
+    return {
+        param_name: _cohere_parameter_definition(_json_dict(param_schema), param_name in required)
+        for param_name, param_schema in _json_dict(schema_fields.get("properties")).items()
+    }
+
+
+def _to_cohere_tool(tool: Mapping[str, JsonValue]) -> CohereTool:
+    function_def: Final = _json_dict(tool.get("function"))
+    return CohereTool(
+        name=_json_str(function_def.get("name")),
+        description=_json_str(function_def.get("description")),
+        parameterDefinitions=_cohere_parameter_definitions(
+            _resolved_oci_parameter_schema(_json_dict(function_def.get("parameters")))
+        ),
+    )
 
 
 def adapt_tool_definitions_to_cohere_standard(
-    tools: Sequence[_OpenAIToolDefinition],
+    tools: Sequence[Mapping[str, JsonValue]],
 ) -> list[CohereTool]:
     """Adapt OpenAI-format tool definitions to the OCI Cohere format.
 
@@ -190,45 +213,18 @@ def adapt_tool_definitions_to_cohere_standard(
     - Embeds unsupported constraints (enum, format, range, pattern) into the
       parameter description so the model can still see them.
     """
-    cohere_tools: Final = []
-    for tool in tools:
-        function_def = tool.get("function", {})
-        raw_params = function_def.get("parameters", {})
-
-        resolved = sanitize_oci_schema(resolve_oci_schema_anyof(resolve_oci_schema_refs(raw_params)))
-        properties = resolved.get("properties", {})
-        required = resolved.get("required", [])
-
-        parameter_definitions = {}
-        for param_name, param_schema in properties.items():
-            json_type = param_schema.get("type", "string")
-            python_type = OCI_JSON_TO_PYTHON_TYPES.get(json_type, json_type)
-            parameter_definitions[param_name] = CohereParameterDefinition(
-                description=enrich_cohere_param_description(param_schema.get("description", ""), param_schema),
-                type=python_type,
-                isRequired=param_name in required,
-            )
-
-        cohere_tools.append(
-            CohereTool(
-                name=function_def.get("name", ""),
-                description=function_def.get("description", ""),
-                parameterDefinitions=parameter_definitions,
-            )
-        )
-
-    return cohere_tools
+    return [_to_cohere_tool(tool) for tool in tools]
 
 
 def handle_cohere_response(
-    json_response: dict,
+    json_response: Mapping[str, JsonValue],
     model: str,
     model_response: ModelResponse,
     raw_response: httpx.Response,
 ) -> ModelResponse:
     """Parse a non-streaming Cohere OCI response into a LiteLLM ModelResponse."""
     try:
-        cohere_response: Final = CohereChatResult(**json_response)
+        cohere_response: Final = CohereChatResult.model_validate(json_response)
     except (TypeError, ValidationError) as e:
         raise OCIError(
             message=f"Response cannot be casted to CohereChatResult: {e}",
@@ -288,7 +284,7 @@ def handle_cohere_response(
 
 
 def handle_cohere_stream_chunk(
-    dict_chunk: dict,
+    dict_chunk: Mapping[str, JsonValue],
     prior_tool_calls_emitted: bool = False,
     prior_text_emitted: bool = False,
 ) -> ModelResponseStream:
@@ -309,7 +305,7 @@ def handle_cohere_stream_chunk(
     the text is passed through so the response content isn't silently lost.
     """
     try:
-        typed_chunk: Final = CohereStreamChunk(**dict_chunk)
+        typed_chunk: Final = CohereStreamChunk.model_validate(dict_chunk)
     except (TypeError, ValidationError) as e:
         raise OCIError(
             status_code=500,
