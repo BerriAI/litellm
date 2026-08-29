@@ -312,12 +312,25 @@ mod tests {
         );
     }
 
+    use litellm_core::auth::KeyCache;
+    use std::time::Duration;
+
     fn state() -> AppState {
         AppState {
             router: Arc::new(ModelRouter::default()),
             master_key: Some(Arc::from("master-key")),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
+            key_cache: Arc::new(KeyCache::new(Duration::from_secs(600), 10_000)),
+            redis: None,
+            postgres: None,
+            spend_worker: None,
+            http_client: Arc::new(reqwest::Client::new()),
+            circuit_breakers: Arc::new(crate::auth::circuit_breaker::CircuitBreakerRegistry::new(
+                crate::auth::circuit_breaker::CircuitBreakerConfig::default(),
+            )),
+            metrics: Arc::new(crate::metrics::GatewayMetrics::new()),
+            config: crate::state::GatewayConfig::from_env(),
         }
     }
 

@@ -1,0 +1,5 @@
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: test-key

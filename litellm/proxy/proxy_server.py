@@ -10431,6 +10431,13 @@ async def chat_completion(
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data: Final = await _read_request_body(request=request)
+
+    from litellm.rust_bridge.pipeline import process_request as rust_process_request
+
+    rust_response = rust_process_request("/v1/chat/completions", data)
+    if rust_response is not None:
+        return rust_response
+
     if user_api_key_dict is not None:
         if not isinstance(data.get("metadata"), dict):
             # Covers both missing and JSON-string metadata (multipart /

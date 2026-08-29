@@ -1,0 +1,33 @@
+[package]
+name = "litellm-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1.0"
+
+[dependencies.litellm-core]
+path = "../crates/core"
+
+[[bin]]
+name = "fuzz_chat_completions_parse"
+path = "fuzz_targets/fuzz_chat_completions_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_cost_calculator"
+path = "fuzz_targets/fuzz_cost_calculator.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_input_validation"
+path = "fuzz_targets/fuzz_input_validation.rs"
+test = false
+doc = false
