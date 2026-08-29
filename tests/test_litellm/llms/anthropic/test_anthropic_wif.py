@@ -25,6 +25,7 @@ from litellm.llms.base_llm.auth.identity_source import (
 )
 from litellm.llms.base_llm.auth.jwt_signing import build_jwks, rfc7638_thumbprint
 from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.base_llm.auth.types import (
     AssertionSourceError,
     ExchangeError,
@@ -928,6 +929,23 @@ class TestKeycloakIdentitySourceDispatch:
 
         assert first is not None and second is not None
         assert first.assertion_ref != second.assertion_ref
+
+
+
+@pytest.mark.parametrize(
+    "sparse_params",
+    [TestInternalIssuerIdentitySourceDispatch.LITELLM_PARAMS, TestKeycloakIdentitySourceDispatch.LITELLM_PARAMS],
+    ids=["internal_issuer", "keycloak"],
+)
+def test_dense_router_params_dump_resolves_like_the_sparse_config(sparse_params: Mapping[str, object]):
+    dense_params = dict(GenericLiteLLMParams(**sparse_params))
+    assert any(value is None for value in dense_params.values())
+
+    dense = resolve_anthropic_wif_params(dense_params)
+    sparse = resolve_anthropic_wif_params(sparse_params)
+
+    assert dense is not None and sparse is not None
+    assert dense.assertion_ref == sparse.assertion_ref
 
 
 class TestIdentitySourceValidationFailsClosed:

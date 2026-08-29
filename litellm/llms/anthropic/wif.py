@@ -141,7 +141,9 @@ def _resolve_identity_source(
     if source_kind is None:
         legacy_ref: Final = _resolve_assertion_ref(litellm_params)
         return (legacy_ref, None) if legacy_ref is not None else None
-    params: Final = litellm_params if litellm_params is not None else _EMPTY_PARAMS
+    params: Final[Mapping[str, object]] = MappingProxyType(
+        {key: value for key, value in (litellm_params or _EMPTY_PARAMS).items() if value is not None}
+    )
     match source_kind:
         case AnthropicIdentitySourceKind.internal_issuer.value:
             _reject_foreign_variant_fields(params, foreign_field_map=_KEYCLOAK_FIELD_MAP, chosen_kind=source_kind)
