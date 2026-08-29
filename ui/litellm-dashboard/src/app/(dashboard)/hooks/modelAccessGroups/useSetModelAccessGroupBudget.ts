@@ -3,8 +3,6 @@ import { fetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 import { modelAccessGroupKeys } from "./useModelAccessGroups";
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
 export type SetModelAccessGroupBudgetParams = components["schemas"]["AccessGroupBudgetRequest"];
 type SetModelAccessGroupBudgetResponse = components["schemas"]["AccessGroupBudgetResponse"];
 
@@ -12,8 +10,6 @@ export interface SetModelAccessGroupBudgetVariables {
   accessGroup: string;
   params: SetModelAccessGroupBudgetParams;
 }
-
-// ── Fetch function ───────────────────────────────────────────────────────────
 
 const setModelAccessGroupBudget = async ({
   accessGroup,
@@ -25,8 +21,6 @@ const setModelAccessGroupBudget = async ({
   });
   return data;
 };
-
-// ── Hook ─────────────────────────────────────────────────────────────────────
 
 /** Set or replace a model access group's shared budget. The write is idempotent. */
 export const useSetModelAccessGroupBudget = () => {
