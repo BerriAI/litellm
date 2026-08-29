@@ -447,3 +447,104 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert completed_event_b.response.output == []
+
+    def test_transform_streaming_response_cleans_up_accumulator_state_on_completion(
+        self,
+    ):
+        """`_chatgpt_streamed_output_items`/`_chatgpt_text_only_output_items`
+        must be popped off `model_call_details` once the completed event is
+        handled -- otherwise a logging callback that reads
+        `kwargs`/`model_call_details` directly (rather than only the
+        redacted typed response) could export the raw recovered response
+        text even when `litellm.turn_off_message_logging` is set, since
+        `redact_message_input_output_from_logging` only scrubs a fixed set
+        of recognized fields and has no knowledge of these two custom keys.
+        """
+        config = ChatGPTResponsesAPIConfig()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+
+        streamed_item = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Sensitive content"}],
+        }
+        config.transform_streaming_response(
+            model="chatgpt/gpt-5.4",
+            parsed_chunk={
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": streamed_item,
+            },
+            logging_obj=logging_obj,
+        )
+        assert "_chatgpt_streamed_output_items" in logging_obj.model_call_details
+
+        config.transform_streaming_response(
+            model="chatgpt/gpt-5.4",
+            parsed_chunk={
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-5.4",
+                    "output": [],
+                },
+            },
+            logging_obj=logging_obj,
+        )
+
+        assert "_chatgpt_streamed_output_items" not in logging_obj.model_call_details
+        assert "_chatgpt_text_only_output_items" not in logging_obj.model_call_details
+
+    @pytest.mark.parametrize(
+        "terminal_event_type",
+        ["response.failed", "response.incomplete"],
+    )
+    def test_transform_streaming_response_cleans_up_accumulator_state_on_failure(
+        self, terminal_event_type
+    ):
+        """Same cleanup must happen on failed/incomplete terminal events, not
+        just on a successful completion -- a response that errors out
+        mid-stream must not leave recovered content sitting un-redacted in
+        `model_call_details` either."""
+        config = ChatGPTResponsesAPIConfig()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+
+        streamed_item = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Partial before failure"}],
+        }
+        config.transform_streaming_response(
+            model="chatgpt/gpt-5.4",
+            parsed_chunk={
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": streamed_item,
+            },
+            logging_obj=logging_obj,
+        )
+        assert "_chatgpt_streamed_output_items" in logging_obj.model_call_details
+
+        config.transform_streaming_response(
+            model="chatgpt/gpt-5.4",
+            parsed_chunk={
+                "type": terminal_event_type,
+                "response": {
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "failed",
+                    "model": "gpt-5.4",
+                    "output": [],
+                },
+            },
+            logging_obj=logging_obj,
+        )
+
+        assert "_chatgpt_streamed_output_items" not in logging_obj.model_call_details
+        assert "_chatgpt_text_only_output_items" not in logging_obj.model_call_details

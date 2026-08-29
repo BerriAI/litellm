@@ -145,6 +145,16 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         across concurrent calls). Merge them into `response.completed`'s
         `output` field before the base class turns the chunk into a typed
         event, so a genuinely empty `output` never reaches the bridge.
+
+        The two accumulator keys are popped off `model_call_details` on every
+        terminal event (completed, failed, or incomplete) once they're no
+        longer needed. `redact_message_input_output_from_logging` (triggered
+        by `litellm.turn_off_message_logging`) only knows to scrub a fixed
+        set of recognized fields -- it has no idea these two custom keys
+        exist, so leaving them in `model_call_details` would let a logging
+        callback that reads `kwargs`/`model_call_details` directly (rather
+        than only the redacted typed response) export the raw recovered
+        response text even when message logging is explicitly disabled.
         """
         event_type: Final = parsed_chunk.get("type")
 
@@ -167,21 +177,29 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 output_items=item_accumulator,
                 text_only_items=text_accumulator,
             )
-        elif event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        elif event_type in (
+            ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            ResponsesAPIStreamEvents.RESPONSE_FAILED,
+            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
+            item_accumulator = (
+                logging_obj.model_call_details.pop(
+                    "_chatgpt_streamed_output_items", None
+                )
+                or {}
+            )
+            text_accumulator = (
+                logging_obj.model_call_details.pop(
+                    "_chatgpt_text_only_output_items", None
+                )
+                or {}
+            )
             response_payload: Final = parsed_chunk.get("response")
-            if isinstance(response_payload, dict) and not response_payload.get(
-                "output"
+            if (
+                event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+                and isinstance(response_payload, dict)
+                and not response_payload.get("output")
             ):
-                item_accumulator = (
-                    logging_obj.model_call_details.get("_chatgpt_streamed_output_items")
-                    or {}
-                )
-                text_accumulator = (
-                    logging_obj.model_call_details.get(
-                        "_chatgpt_text_only_output_items"
-                    )
-                    or {}
-                )
                 merged_items: dict[int, dict] = {**text_accumulator}
                 merged_items.update(item_accumulator)
                 if merged_items:
@@ -333,7 +351,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         raw_headers: Final = dict(raw_response.headers)
         processed_headers: Final = process_response_headers(raw_headers)
         if not hasattr(completed_response, "_hidden_params"):
-            setattr(completed_response, "_hidden_params", {})
+            completed_response._hidden_params = {}
         completed_response._hidden_params["additional_headers"] = processed_headers
         completed_response._hidden_params["headers"] = raw_headers
 
