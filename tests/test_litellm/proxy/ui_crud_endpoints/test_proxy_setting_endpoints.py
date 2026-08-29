@@ -580,16 +580,15 @@ class TestProxySettingEndpoints:
         # Verify settings were updated
         settings = data["settings"]
         assert settings["google_client_id"] == new_sso_settings["google_client_id"]
-        assert (
-            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
-        )
+        # Secrets are masked in the response; the plaintext is never echoed back.
+        assert settings["google_client_secret"] != new_sso_settings["google_client_secret"]
+        assert settings["google_client_secret"].startswith("new_")
+        assert "****" in settings["google_client_secret"]
         assert (
             settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
         )
-        assert (
-            settings["microsoft_client_secret"]
-            == new_sso_settings["microsoft_client_secret"]
-        )
+        assert settings["microsoft_client_secret"] != new_sso_settings["microsoft_client_secret"]
+        assert "****" in settings["microsoft_client_secret"]
         assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
         assert settings["user_email"] == new_sso_settings["user_email"]
 

@@ -1,8 +1,10 @@
 """Regression tests for #38177: a partial SSO settings update must not overwrite
-a stored client secret with the masked placeholder the UI sends back, while
-still allowing an intentional clear and a genuinely new secret."""
+a stored client secret with the masked placeholder the UI sends back (or lose
+it when the field is omitted), while still allowing an intentional clear, a
+genuinely new secret, and never echoing the plaintext secret in the response."""
 
 import json
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -81,6 +83,8 @@ def test_database_stored_secret_is_preserved(mock_auth, monkeypatch):
     stored = _stored_secret(mock_prisma)
     assert stored["generic_client_secret"] == REAL_SECRET
     assert stored["proxy_base_url"] == "https://new.example.com"
+    # The restored plaintext must not leak back to the caller.
+    assert resp.json()["settings"]["generic_client_secret"] == _masked(REAL_SECRET)
 
 
 def test_environment_sourced_secret_is_preserved(mock_auth, monkeypatch):
@@ -140,3 +144,55 @@ def test_new_secret_is_saved(mock_auth, monkeypatch):
 
     stored = _stored_secret(mock_prisma)
     assert stored["generic_client_secret"] == "brand_new_secret_9999"
+
+
+def test_omitted_secret_is_preserved(mock_auth, monkeypatch):
+    """A partial payload that leaves the secret out entirely must keep it."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.delenv("GENERIC_CLIENT_SECRET", raising=False)
+    mock_prisma = _mock_prisma(
+        monkeypatch,
+        {"generic_client_id": "cid", "generic_client_secret": REAL_SECRET},
+    )
+
+    resp = client.patch("/update/sso_settings", json={"generic_client_id": "cid", "proxy_base_url": "https://x"})
+    assert resp.status_code == 200
+
+    assert _stored_secret(mock_prisma)["generic_client_secret"] == REAL_SECRET
+
+
+def test_explicit_null_clears_intentionally(mock_auth, monkeypatch):
+    """The dashboard's "Clear SSO Settings" sends null; that must clear, not restore."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.delenv("GENERIC_CLIENT_SECRET", raising=False)
+    mock_prisma = _mock_prisma(
+        monkeypatch,
+        {"generic_client_id": "cid", "generic_client_secret": REAL_SECRET},
+    )
+
+    resp = client.patch("/update/sso_settings", json={"generic_client_id": "cid", "generic_client_secret": None})
+    assert resp.status_code == 200
+
+    assert _stored_secret(mock_prisma)["generic_client_secret"] is None
+    assert "GENERIC_CLIENT_SECRET" not in os.environ
+
+
+def test_new_secret_containing_asterisk_is_saved(mock_auth, monkeypatch):
+    """Only the exact mask of the stored secret counts as "unchanged"."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.delenv("GENERIC_CLIENT_SECRET", raising=False)
+    mock_prisma = _mock_prisma(
+        monkeypatch,
+        {"generic_client_id": "cid", "generic_client_secret": REAL_SECRET},
+    )
+
+    resp = client.patch(
+        "/update/sso_settings", json={"generic_client_id": "cid", "generic_client_secret": "new*secret*with*stars"}
+    )
+    assert resp.status_code == 200
+
+    assert _stored_secret(mock_prisma)["generic_client_secret"] == "new*secret*with*stars"
+    assert resp.json()["settings"]["generic_client_secret"] != "new*secret*with*stars"
