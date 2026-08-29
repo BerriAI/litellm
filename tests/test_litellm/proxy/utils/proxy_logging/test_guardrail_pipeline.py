@@ -10,7 +10,7 @@ Covers ``_should_use_guardrail_load_balancing``, ``_execute_guardrail_hook``,
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -920,6 +920,49 @@ async def test_post_call_success_hook_runs_post_call_pipeline_and_reraises_block
 
 
 @pytest.mark.asyncio
+async def test_post_call_pipeline_pass_propagates_metadata_writes_to_request_data(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """A post_call pipeline step's writes to the metadata bucket
+    (standard_logging_guardrail_information for spend logs / Langfuse / Datadog
+    and applied_guardrails for the x-litellm-applied-guardrails header) must
+    reach the outer request data. The working-copy the executor gives the hook
+    is otherwise discarded, so deferred async logging and the response header
+    look as if the guardrail never ran."""
+
+    class RecordingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            from litellm.proxy.common_utils.callback_utils import (
+                add_guardrail_to_applied_guardrails_header,
+            )
+
+            metadata = data.setdefault("metadata", {})
+            metadata.setdefault("standard_logging_guardrail_information", []).append(
+                {"guardrail_name": "gr-post"}
+            )
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name="gr-post")
+            return None
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [RecordingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data()
+
+    await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    metadata = data["metadata"]
+    assert metadata["applied_guardrails"] == ["gr-post"]
+    assert metadata["standard_logging_guardrail_information"] == [{"guardrail_name": "gr-post"}]
+    assert "guardrails" not in metadata
+    assert "response" not in data
+
+
+@pytest.mark.asyncio
 async def test_post_call_pipeline_pass_runs_once_and_leaves_request_data_untouched(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
@@ -1139,18 +1182,32 @@ def test_handle_pipeline_result_modify_response_carries_original_response():
     assert info.value.original_response is response
 
 
-def test_handle_pipeline_result_allow_discards_modifications_on_post_call():
-    data = {"a": 1, "metadata": {"guardrails": ["other"]}}
+def test_handle_pipeline_result_allow_propagates_metadata_on_post_call():
+    """The post_call path must keep the request payload intact (already sent
+    upstream) but still adopt metadata mutations from the pipeline's working
+    copy: standard_logging_guardrail_information and applied_guardrails are
+    written there and must reach deferred async logging plus the
+    x-litellm-applied-guardrails header."""
+    replacement_response: Final = object()
+    data = {"a": 1, "metadata": {"guardrails": ["other"]}, "litellm_metadata": {"foo": "bar"}}
     result = MagicMock()
     result.terminal_action = "allow"
-    result.modified_data = {"metadata": {"guardrails": ["gr-post"]}, "response": object()}
+    result.modified_data = {
+        "metadata": {"guardrails": ["gr-post"], "applied_guardrails": ["gr-post"]},
+        "litellm_metadata": {"foo": "bar", "extra": 1},
+        "response": replacement_response,
+    }
 
     out = ProxyLogging._handle_pipeline_result(
         result=result, data=data, policy_name="p", original_response=litellm.ModelResponse()
     )
 
     assert out is data
-    assert data == {"a": 1, "metadata": {"guardrails": ["other"]}}
+    assert data == {
+        "a": 1,
+        "metadata": {"guardrails": ["gr-post"], "applied_guardrails": ["gr-post"]},
+        "litellm_metadata": {"foo": "bar", "extra": 1},
+    }
 
 
 @pytest.mark.asyncio

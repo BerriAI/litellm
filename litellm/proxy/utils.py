@@ -1670,8 +1670,13 @@ class ProxyLogging:
         response carried in ``modified_data`` is adopted by the caller.
         """
         if result.terminal_action == "allow":
-            if result.modified_data is not None and original_response is None:
-                data.update(result.modified_data)
+            if result.modified_data is not None:
+                if original_response is None:
+                    data.update(result.modified_data)
+                else:
+                    for key in ("metadata", "litellm_metadata"):
+                        if key in result.modified_data:
+                            data[key] = result.modified_data[key]
             return data
 
         if result.terminal_action == "block":

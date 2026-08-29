@@ -177,12 +177,14 @@ class PipelineExecutor:
             verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
-        try:
-            # Inject guardrail name into metadata so should_run_guardrail() allows it
-            if "metadata" not in data:
-                data["metadata"] = {}
-            data["metadata"]["guardrails"] = [step.guardrail]
+        if "metadata" not in data:
+            data["metadata"] = {}
+        metadata_dict: Final = data["metadata"]
+        original_guardrails_present: Final = "guardrails" in metadata_dict
+        original_guardrails: Final = metadata_dict.get("guardrails")
+        metadata_dict["guardrails"] = [step.guardrail]
 
+        try:
             # A scan_raw_request step evaluates the pristine pre-pipeline
             # snapshot instead of `data` (which earlier pass_data steps in
             # this same pipeline may have already rewritten), same reason
@@ -245,6 +247,11 @@ class PipelineExecutor:
             else:
                 verbose_proxy_logger.error("Pipeline: unexpected error from guardrail '%s': %s", step.guardrail, e)
                 return ("error", None, str(e), e)
+        finally:
+            if original_guardrails_present:
+                metadata_dict["guardrails"] = original_guardrails
+            else:
+                metadata_dict.pop("guardrails", None)
 
     @staticmethod
     def find_guardrail_callback(guardrail_name: str) -> CustomGuardrail | None:
