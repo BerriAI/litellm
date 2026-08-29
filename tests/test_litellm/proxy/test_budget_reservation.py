@@ -3050,7 +3050,7 @@ async def test_model_access_group_counter_blocks_a_request_over_the_group_budget
     prisma_client = _ModelAccessGroupBudgetPrisma(premium=1.0)
     valid_token = UserAPIKeyAuth(api_key="hashed", token="tok", matched_model_access_groups=["premium"])
 
-    with patch(
+    with patch(  # test-quality-ok: reserve_budget_for_request takes no estimator, so pinning the estimate needs this attribute
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
         return_value=0.5,
     ):
@@ -3081,7 +3081,7 @@ async def _cache_model_access_group_budget(key_cache, group, spend, max_budget=N
 
 async def _reserve_for_model_access_groups(key_cache, groups, estimate):
     """Reserve against the given groups, whose rows are already cached, so nothing hits the DB."""
-    with patch(
+    with patch(  # test-quality-ok: reserve_budget_for_request takes no estimator, so pinning the estimate needs this attribute
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
         return_value=estimate,
     ):
