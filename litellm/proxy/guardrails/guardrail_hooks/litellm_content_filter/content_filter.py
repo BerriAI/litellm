@@ -1947,6 +1947,15 @@ class ContentFilterGuardrail(CustomGuardrail):
                 exception_str=exception_str,
             )
 
+    def rewrites_streamed_output(self) -> bool:
+        return (
+            super().rewrites_streamed_output()
+            or any(entry["action"] == ContentFilterAction.MASK for entry in self.compiled_patterns)
+            or any(action == ContentFilterAction.MASK for action, _ in self.blocked_words.values())
+            or any(action == ContentFilterAction.MASK for _, _, action in self.category_keywords.values())
+            or any(action == ContentFilterAction.MASK for _, _, action in self.always_block_category_keywords.values())
+        )
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
