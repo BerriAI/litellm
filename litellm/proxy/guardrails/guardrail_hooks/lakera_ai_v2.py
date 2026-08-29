@@ -301,12 +301,12 @@ class LakeraAIGuardrail(CustomGuardrail):
         explicit sync below a hot reload that changes mode would pass validation but
         keep dispatching on the stale event_hook.
         """
-        new_event_hook: Final = getattr(litellm_params, "mode", None) or self.event_hook
-        prospective_payload: Final = getattr(litellm_params, "payload", None)
-        prospective_breakdown: Final = getattr(litellm_params, "breakdown", None)
+        new_event_hook: Final = litellm_params.mode or self.event_hook
+        prospective_payload: Final = litellm_params.payload
+        prospective_breakdown: Final = litellm_params.breakdown
         self._validate_advisory_config(
-            on_flagged=getattr(litellm_params, "on_flagged", None) or self.on_flagged,
-            advisory_system_message=getattr(litellm_params, "advisory_system_message", None),
+            on_flagged=litellm_params.on_flagged or self.on_flagged,
+            advisory_system_message=litellm_params.advisory_system_message,
             payload=self.payload if prospective_payload is None else prospective_payload,
             breakdown=self.breakdown if prospective_breakdown is None else prospective_breakdown,
         )

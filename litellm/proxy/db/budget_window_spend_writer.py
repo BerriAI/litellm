@@ -275,13 +275,15 @@ async def commit_window_spend_updates(
         len(ordered),
         len(existing_primary_keys),
     )
-    async with prisma_client.db.tx(timeout=_UPSERT_TRANSACTION_TIMEOUT) as db_transaction:
-        async with db_transaction.batch_() as batcher:
-            for transaction, seed_base in zip(ordered, seed_bases):
-                batcher.execute_raw(
-                    _UPSERT_WINDOW_SPEND_SQL,
-                    *_upsert_params(transaction=transaction, seed_base=seed_base, now=now),
-                )
+    async with (
+        prisma_client.db.tx(timeout=_UPSERT_TRANSACTION_TIMEOUT) as db_transaction,
+        db_transaction.batch_() as batcher,
+    ):
+        for transaction, seed_base in zip(ordered, seed_bases):
+            batcher.execute_raw(
+                _UPSERT_WINDOW_SPEND_SQL,
+                *_upsert_params(transaction=transaction, seed_base=seed_base, now=now),
+            )
 
 
 async def roll_window_spend_row(
