@@ -413,14 +413,15 @@ class GuardrailRegistry:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
 
-def _apply_configured_bool_override(instance: CustomGuardrail, litellm_params: LitellmParams, param_name: str) -> None:
-    """Override ``instance.<param_name>`` only when ``litellm_params`` explicitly
-    sets it, preserving whatever default the guardrail's own constructor chose
+def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: LitellmParams) -> None:
+    """Override the parallel/raw-scan flags only when ``litellm_params`` explicitly
+    sets them, preserving whatever default the guardrail's own constructor chose
     otherwise (its constructor default may be True, so blindly copying an
     absent/None config value would silently clobber it back to False)."""
-    configured: Final = getattr(litellm_params, param_name, None)
-    if configured is not None:
-        setattr(instance, param_name, bool(configured))
+    if litellm_params.run_in_parallel is not None:
+        instance.run_in_parallel = bool(litellm_params.run_in_parallel)
+    if litellm_params.scan_raw_request is not None:
+        instance.scan_raw_request = bool(litellm_params.scan_raw_request)
 
 
 class InMemoryGuardrailHandler:
@@ -544,8 +545,7 @@ class InMemoryGuardrailHandler:
                     "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
                     "scanning, so no request content would ever be scanned. Remove one of the two."
                 )
-            for override_param in ("run_in_parallel", "scan_raw_request"):
-                _apply_configured_bool_override(custom_guardrail_callback, litellm_params, override_param)
+            _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
         parsed_guardrail: Final = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
@@ -803,7 +803,6 @@ class InMemoryGuardrailHandler:
         previous_guardrail: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
         previous_source: Final = self._sources.get(guardrail_id, source)
 
-        # Remove from memory if exists (also removes from callbacks)
         if guardrail_id in self.IN_MEMORY_GUARDRAILS:
             self.delete_in_memory_guardrail(guardrail_id)
 

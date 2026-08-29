@@ -1009,11 +1009,10 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
     }
-    for metadata_key in ("metadata", "litellm_metadata"):
-        cleaned_metadata = updated.get(metadata_key) or {}
-        for stripped_key in stripped_keys:
-            assert stripped_key not in cleaned_metadata
-        assert cleaned_metadata.get("safe_user_metadata") == "kept"
+    assert "litellm_metadata" not in updated
+    for stripped_key in stripped_keys:
+        assert stripped_key not in updated["metadata"]
+    assert updated["metadata"]["safe_user_metadata"] == "kept"
 
     requester_metadata = updated["metadata"]["requester_metadata"]
     for stripped_key in stripped_keys:
@@ -1576,10 +1575,7 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
         header.lower()
         for header in updated["proxy_server_request"]["body"]["metadata"]["headers"]
     }
-    assert "litellm-disable-message-redaction" in {
-        header.lower()
-        for header in (updated.get("litellm_metadata") or {}).get("headers", {})
-    }
+    assert "litellm_metadata" not in updated
 
 
 @pytest.mark.asyncio
@@ -6658,9 +6654,9 @@ async def test_add_litellm_data_to_request_strips_caller_supplied_callback_crede
     assert "gcs_bucket_name" not in updated
     assert updated["dd_api_key"] == "team-dd-key"
     assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "team-dd-key"}
-    for metadata_key in ("metadata", "litellm_metadata"):
-        assert "dd_site" not in updated[metadata_key]
-        assert "dd_agent_host" not in updated[metadata_key]
+    assert "litellm_metadata" not in updated
+    assert "dd_site" not in updated["metadata"]
+    assert "dd_agent_host" not in updated["metadata"]
     assert "dd_site" not in updated["litellm_params"]["metadata"]
     assert updated["metadata"]["safe_user_metadata"] == "kept"
 
@@ -7510,10 +7506,10 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
         version="test-version",
     )
 
-    for bucket in ("metadata", "litellm_metadata"):
-        assert "attempted_fallbacks" not in updated[bucket]
-        assert "original_model_group" not in updated[bucket]
-        assert updated[bucket]["client_key"] == "client_value"
+    assert "litellm_metadata" not in updated
+    assert "attempted_fallbacks" not in updated["metadata"]
+    assert "original_model_group" not in updated["metadata"]
+    assert updated["metadata"]["client_key"] == "client_value"
 
 
 @pytest.mark.asyncio
@@ -7535,10 +7531,10 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_js
         version="test-version",
     )
 
-    assert isinstance(updated["litellm_metadata"], dict)
-    assert "attempted_fallbacks" not in updated["litellm_metadata"]
-    assert "original_model_group" not in updated["litellm_metadata"]
-    assert updated["litellm_metadata"]["client_key"] == "client_value"
+    assert "litellm_metadata" not in updated
+    assert "attempted_fallbacks" not in updated["metadata"]
+    assert "original_model_group" not in updated["metadata"]
+    assert updated["metadata"]["client_key"] == "client_value"
 
 
 @pytest.mark.asyncio
@@ -7562,9 +7558,10 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_despite
         version="test-version",
     )
 
-    assert updated["litellm_metadata"]["model_info"] == {"input_cost_per_token": 0.0}
-    assert "attempted_fallbacks" not in updated["litellm_metadata"]
-    assert "original_model_group" not in updated["litellm_metadata"]
+    assert "litellm_metadata" not in updated
+    assert updated["metadata"]["model_info"] == {"input_cost_per_token": 0.0}
+    assert "attempted_fallbacks" not in updated["metadata"]
+    assert "original_model_group" not in updated["metadata"]
 
 
 @pytest.mark.asyncio
@@ -7601,7 +7598,8 @@ async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_
     litellm_metadata made the router hand downstream a scrubbed copy, so the proxy's
     post_call write-backs (guardrail telemetry, applied guardrails) landed in a dict the
     spend row never read. After the boundary strip plus the in-place scrub, the object the
-    router forwards is the proxy's own request_data bucket."""
+    router forwards is the proxy's own request_data bucket; on chat routes that bucket is
+    ``metadata``, since the boundary folds client ``litellm_metadata`` into it."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     data = {
@@ -7617,7 +7615,9 @@ async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_
         general_settings={},
         version="test-version",
     )
-    proxy_bucket = request_data["litellm_metadata"]
+    proxy_bucket = request_data["metadata"]
+    assert "attempted_fallbacks" not in proxy_bucket
+    assert "original_model_group" not in proxy_bucket
     router = litellm.Router(
         model_list=[
             {
@@ -7630,7 +7630,7 @@ async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_
     original_acompletion = router._acompletion
 
     async def _spy(*args, **spy_kwargs):
-        forwarded_buckets.append(spy_kwargs["litellm_metadata"])
+        forwarded_buckets.append(spy_kwargs["metadata"])
         return await original_acompletion(*args, **spy_kwargs)
 
     router._acompletion = _spy
@@ -7639,7 +7639,45 @@ async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_
 
     assert forwarded_buckets == [proxy_bucket]
     assert forwarded_buckets[0] is proxy_bucket
-    assert "attempted_fallbacks" not in proxy_bucket
-    assert "original_model_group" not in proxy_bucket
+    assert proxy_bucket["attempted_fallbacks"] == 0
+    assert proxy_bucket.get("original_model_group") != "spoofed-group"
     proxy_bucket["standard_logging_guardrail_information"] = [{"guardrail_name": "postcall-guard"}]
     assert forwarded_buckets[0]["standard_logging_guardrail_information"] == [{"guardrail_name": "postcall-guard"}]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_folds_litellm_metadata_into_metadata_on_chat_routes():
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"tags": ["from-metadata"]},
+        "litellm_metadata": {"trace_id": "abc", "tags": ["from-litellm-metadata"]},
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "litellm_metadata" not in updated
+    assert updated["metadata"]["trace_id"] == "abc"
+    assert updated["metadata"]["tags"] == ["from-metadata", "from-litellm-metadata"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_keeps_litellm_metadata_on_litellm_metadata_routes():
+    data = {"model": "claude-sonnet-5", "litellm_metadata": {"trace_id": "abc"}}
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock("/v1/messages", {"Content-Type": "application/json"}),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["litellm_metadata"]["trace_id"] == "abc"

@@ -285,8 +285,8 @@ async def test_add_litellm_data_to_request_skips_strip_with_key_opt_in():
 async def test_add_litellm_data_to_request_strips_json_string_litellm_metadata():
     """``litellm_metadata`` may arrive as a JSON-encoded string (multipart/
     form-data or ``extra_body``). The strip has to run after the proxy parses
-    it into a dict; otherwise the ``isinstance(dict)`` guard skips the field
-    and ``model_info`` survives the strip via the string path.
+    it into a dict but before the chat-route fold into ``metadata``; otherwise
+    ``model_info`` survives via the string path and lands in the folded bucket.
     """
     import json
 
@@ -305,9 +305,8 @@ async def test_add_litellm_data_to_request_strips_json_string_litellm_metadata()
         version="test-version",
     )
 
-    parsed_metadata = updated.get("litellm_metadata")
-    assert isinstance(parsed_metadata, dict)
-    assert "model_info" not in parsed_metadata
+    assert "litellm_metadata" not in updated
+    assert "model_info" not in updated["metadata"]
 
 
 @pytest.mark.asyncio
