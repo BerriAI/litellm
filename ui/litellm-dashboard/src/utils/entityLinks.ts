@@ -22,7 +22,6 @@ export function orgDetailHref(orgId: string): string {
   return `${migratedHref("organizations")}?org=${encodeURIComponent(orgId)}`;
 }
 
-/** Models page filtered to one model group; undefined for grant sentinels that name no deployment. */
 export function modelGroupHref(modelGroup: string): string | undefined {
   if (MODEL_GRANT_SENTINELS.has(modelGroup)) return undefined;
   return `${migratedHref("models-and-endpoints")}?model_group=${encodeURIComponent(modelGroup)}`;

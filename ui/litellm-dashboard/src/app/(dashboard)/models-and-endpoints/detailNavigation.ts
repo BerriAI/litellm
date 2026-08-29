@@ -47,7 +47,6 @@ export interface ModelGroupFilterRouting {
   setModelGroup: (modelGroup: string | null) => void;
 }
 
-/** `?model_group=` backs the All Models group filter so other pages can deep-link to one group. */
 export function useModelGroupFilterRouting(): ModelGroupFilterRouting {
   const [modelGroup, setParam] = useQueryState("model_group", parseAsString);
 
