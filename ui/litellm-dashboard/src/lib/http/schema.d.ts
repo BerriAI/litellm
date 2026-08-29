@@ -33828,6 +33828,13 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Mode
+             * @description Which requests get classified in a multi-turn agent session. 'every_request' (the default) classifies every inference request, so a tool continuation can land on a different tier than the ask that started it. 'user_turn' classifies only the requests that carry a new human ask and holds that target for the tool loop the ask sets off, which keeps one tool loop on one model, preserves its provider prompt cache, and skips the classifier call on continuation turns. A continuation is a request whose newest turn is tool output or an assistant continuation rather than human text. Needs a resolvable session_id to key the held target on, and falls back to classifying every request without one; suppressed when plugins are configured, for the same reason session_affinity is. Inert when session_affinity is on, which holds one target for the whole session and so never reclassifies at all.
+             * @default every_request
+             * @enum {string}
+             */
+            classification_mode: "every_request" | "user_turn";
+            /**
              * Classification Prompt
              * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
              */
@@ -35099,7 +35106,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_pin" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */

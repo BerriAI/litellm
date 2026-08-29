@@ -186,6 +186,12 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("housekeeping")).not.toBeInTheDocument();
   });
 
+  it("says a tool-loop turn reused the target held from the last user turn", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "user_turn_pin", score: undefined }} />);
+    expect(screen.getByText("Held from the last user turn, classifier skipped")).toBeInTheDocument();
+    expect(screen.queryByText("user_turn_pin")).not.toBeInTheDocument();
+  });
+
   it("shows the escalation keyword", () => {
     render(
       <RoutingDecisionCard decision={{ ...heuristic, escalated: true, escalation_keyword: "LITELLM ESCALATE" }} />,

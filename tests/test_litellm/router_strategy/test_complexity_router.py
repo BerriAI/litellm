@@ -4420,6 +4420,201 @@ class TestSessionAffinity:
         assert request_kwargs_2["metadata"]["adaptive_router_chosen_model"] == "cheap"
 
 
+class TestUserTurnClassificationMode:
+    """classification_mode 'user_turn': classify the requests carrying a human ask and hold that
+    target across the tool loop the ask sets off, instead of classifying every continuation."""
+
+    HUMAN_ASK = {"role": "user", "content": "Let's think step by step and reason through this refactor."}
+    FOLLOW_UP_ASK = {"role": "user", "content": "Hello!"}
+    ASSISTANT_TOOL_CALL = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "bash", "arguments": "{}"}}],
+    }
+    TOOL_RESULT = {"role": "tool", "tool_call_id": "call_1", "content": "exit 0"}
+    MESSAGES_SURFACE_TOOL_RESULT = {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "exit 0"}],
+    }
+
+    @staticmethod
+    def _router(mock_router_instance, **overrides) -> ComplexityRouter:
+        mock_router_instance.cache = DualCache()
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "gpt-4o",
+                    "COMPLEX": "claude-sonnet-4-20250514",
+                    "REASONING": "o1-preview",
+                },
+                **overrides,
+            },
+        )
+
+    @staticmethod
+    def _request_kwargs(session_id: str | None = "loop-session") -> Dict:
+        return {"metadata": {"session_id": session_id}} if session_id is not None else {}
+
+    @pytest.mark.parametrize(
+        "continuation",
+        [TOOL_RESULT, MESSAGES_SURFACE_TOOL_RESULT, ASSISTANT_TOOL_CALL],
+        ids=["chat_completions_tool_role", "messages_surface_tool_result", "assistant_continuation"],
+    )
+    @pytest.mark.asyncio
+    async def test_continuation_holds_the_target_without_classifying(self, mock_router_instance, continuation):
+        router = self._router(mock_router_instance, classification_mode="user_turn")
+        request_kwargs = self._request_kwargs()
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[self.HUMAN_ASK]
+        )
+        assert first.model == "o1-preview"
+        with patch.object(router, "aclassify", wraps=router.aclassify) as spy:
+            second = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=request_kwargs,
+                messages=[self.HUMAN_ASK, self.ASSISTANT_TOOL_CALL, continuation],
+            )
+        spy.assert_not_called()
+        assert second.model == "o1-preview"
+        assert second.routing_decision["cause"] == "user_turn_pin"
+
+    @pytest.mark.asyncio
+    async def test_next_human_turn_reclassifies_over_the_held_target(self, mock_router_instance):
+        """The held target is the tool loop's, not the session's: when the human speaks again the
+        request is classified on its own merits, which is what separates this from session_affinity."""
+        router = self._router(mock_router_instance, classification_mode="user_turn")
+        request_kwargs = self._request_kwargs()
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[self.HUMAN_ASK]
+        )
+        held = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[self.HUMAN_ASK, self.ASSISTANT_TOOL_CALL, self.TOOL_RESULT],
+        )
+        reclassified = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[self.HUMAN_ASK, self.ASSISTANT_TOOL_CALL, self.TOOL_RESULT, self.FOLLOW_UP_ASK],
+        )
+        assert held.model == "o1-preview"
+        assert reclassified.model == "gpt-4o-mini"
+        assert reclassified.routing_decision["cause"] in ("heuristic_scorer", "reasoning_override")
+
+    @pytest.mark.asyncio
+    async def test_next_loop_holds_the_target_the_new_ask_classified_to(self, mock_router_instance):
+        """The pin the second loop holds is the second ask's own, not the first loop's leftover."""
+        router = self._router(mock_router_instance, classification_mode="user_turn")
+        request_kwargs = self._request_kwargs()
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[self.HUMAN_ASK]
+        )
+        history = [self.HUMAN_ASK, self.ASSISTANT_TOOL_CALL, self.TOOL_RESULT, self.FOLLOW_UP_ASK]
+        await router.async_pre_routing_hook(model="test-model", request_kwargs=request_kwargs, messages=history)
+        second_loop = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[*history, self.ASSISTANT_TOOL_CALL, self.TOOL_RESULT],
+        )
+        assert second_loop.model == "gpt-4o-mini"
+        assert second_loop.routing_decision["cause"] == "user_turn_pin"
+
+    @pytest.mark.asyncio
+    async def test_every_request_mode_classifies_the_continuation(self, mock_router_instance):
+        """The behavior 'user_turn' is measured against: the default classifies continuations too,
+        so a classifier that answers differently mid-loop moves the model mid-loop."""
+        from litellm.router_strategy.complexity_router.complexity_router import ClassificationOutcome
+
+        router = self._router(mock_router_instance)
+        outcomes = [
+            ClassificationOutcome(tier=ComplexityTier.REASONING, score=None, signals=(), cause="llm_classifier"),
+            ClassificationOutcome(tier=ComplexityTier.SIMPLE, score=None, signals=(), cause="llm_classifier"),
+        ]
+        request_kwargs = self._request_kwargs()
+        with patch.object(router, "aclassify", new=AsyncMock(side_effect=outcomes)) as spy:
+            first = await router.async_pre_routing_hook(
+                model="test-model", request_kwargs=request_kwargs, messages=[self.HUMAN_ASK]
+            )
+            second = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=request_kwargs,
+                messages=[self.HUMAN_ASK, self.ASSISTANT_TOOL_CALL, self.TOOL_RESULT],
+            )
+        assert spy.call_count == 2
+        assert (first.model, second.model) == ("o1-preview", "gpt-4o-mini")
+
+    @pytest.mark.asyncio
+    async def test_no_session_id_falls_back_to_classifying_every_request(self, mock_router_instance):
+        """There is nothing to key the held target on, so the mode is inert rather than guessing."""
+        router = self._router(mock_router_instance, classification_mode="user_turn")
+        with patch.object(router, "aclassify", wraps=router.aclassify) as spy:
+            continuation = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=self._request_kwargs(None),
+                messages=[self.HUMAN_ASK, self.ASSISTANT_TOOL_CALL, self.TOOL_RESULT],
+            )
+        spy.assert_called_once()
+        assert continuation.model == "o1-preview"
+        assert continuation.routing_decision["cause"] in ("heuristic_scorer", "reasoning_override")
+
+    @pytest.mark.asyncio
+    async def test_plugins_suppress_the_held_target(self, mock_router_instance):
+        """Same reason session_affinity is suppressed: a held target was never re-checked against a
+        policy plugin whose decision can change between turns."""
+        router = self._router(mock_router_instance, classification_mode="user_turn", plugins=[_DummyPlugin()])
+        request_kwargs = self._request_kwargs()
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[self.HUMAN_ASK]
+        )
+        with patch.object(router, "aclassify", wraps=router.aclassify) as spy:
+            continuation = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=request_kwargs,
+                messages=[self.HUMAN_ASK, self.ASSISTANT_TOOL_CALL, self.TOOL_RESULT],
+            )
+        spy.assert_called_once()
+        assert continuation.routing_decision["cause"] in ("heuristic_scorer", "reasoning_override")
+
+    @pytest.mark.asyncio
+    async def test_session_affinity_still_holds_across_human_turns(self, mock_router_instance):
+        """session_affinity is the stronger promise, so it decides both turns and keeps its own
+        cause even with the mode set."""
+        router = self._router(mock_router_instance, classification_mode="user_turn", session_affinity=True)
+        request_kwargs = self._request_kwargs()
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[self.HUMAN_ASK]
+        )
+        follow_up = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[self.HUMAN_ASK, self.ASSISTANT_TOOL_CALL, self.TOOL_RESULT, self.FOLLOW_UP_ASK],
+        )
+        assert follow_up.model == "o1-preview"
+        assert follow_up.routing_decision["cause"] == "session_affinity_pin"
+
+    @pytest.mark.asyncio
+    async def test_held_target_carries_the_deployment_affinity_marker(self, mock_router_instance):
+        """A loop frozen onto one model group but load-balanced across its deployments would still
+        go cache-cold, which is the whole point of holding the target."""
+        router = self._router(
+            mock_router_instance, classification_mode="user_turn", session_affinity_ttl_seconds=321
+        )
+        request_kwargs = self._request_kwargs()
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[self.HUMAN_ASK]
+        )
+        held = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[self.HUMAN_ASK, self.ASSISTANT_TOOL_CALL, self.TOOL_RESULT],
+        )
+        assert first.session_affinity_ttl_seconds == 321
+        assert held.session_affinity_ttl_seconds == 321
+
+
 class _DummyPlugin:
     async def run(self, context):
         return context

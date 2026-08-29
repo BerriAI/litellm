@@ -2842,6 +2842,11 @@ RoutingDecisionCause = Literal[
     "housekeeping",
     "session_affinity_pin",
     "session_affinity_escalation",
+    # classification_mode 'user_turn': this request continued a tool loop rather than carrying a
+    # new human ask, so it reused the target chosen on the turn the human last spoke and the
+    # classifier was never called. Distinct from "session_affinity_pin", which holds one target for
+    # a whole session: this pin is replaced the next time a human speaks.
+    "user_turn_pin",
     "default_fallback",
     "keyword",
     "quality_tier",

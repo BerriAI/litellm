@@ -386,6 +386,29 @@ def _iter_human_asks_newest_first(
     )
 
 
+def _turn_carries_human_ask(
+    messages: Sequence[Mapping[str, object]] | None,
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
+) -> bool:
+    """Whether this request's newest turn is a human speaking, rather than a tool loop continuing.
+
+    Only the newest turn, because the human ask that started a twenty-turn tool loop is still the
+    newest *user* turn on every one of those requests: reading anything but the last message reads
+    every continuation as a fresh ask. Tool output arrives as a `tool` role on chat completions and
+    as non-text `tool_result` blocks on a user turn on the Messages surface, and the latter flattens
+    to empty human text, so both read as a continuation here.
+
+    An unreadable request is treated as a human turn: that classifies it, which is the mode's own
+    fallback rather than holding a target on no evidence.
+    """
+    newest: Final = messages[-1] if messages else None
+    if newest is None:
+        return True
+    if newest.get("role") != "user":
+        return False
+    return bool(_human_text(newest.get("content"), marker_pairs))
+
+
 def _conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None) -> bool:
     """Whether this request continues a conversation that was already underway.
 
@@ -2247,7 +2270,10 @@ class ComplexityRouter(CustomLogger):
 
     @property
     def _uses_tier_pin(self) -> bool:
-        return bool(self.config.session_affinity and not self.config.plugins)
+        return bool(
+            (self.config.session_affinity or self.config.classification_mode == "user_turn")
+            and not self.config.plugins
+        )
 
     @property
     def _uses_deployment_pin(self) -> bool:
@@ -2305,7 +2331,13 @@ class ComplexityRouter(CustomLogger):
         session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
-        if cache_key is not None:
+        # session_affinity holds its pin on every turn; user_turn holds it only while the loop the
+        # human set off is still running, and lets the next human turn reclassify over it.
+        holds_pin_this_turn: Final = self.config.session_affinity or not _turn_carries_human_ask(
+            resolved_messages, self._reminder_markers
+        )
+
+        if cache_key is not None and holds_pin_this_turn:
             pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value)
             if pinned_pin is not None:
@@ -2354,10 +2386,13 @@ class ComplexityRouter(CustomLogger):
                         kwargs_metadata: Final = request_kwargs.setdefault("metadata", {})
                         if isinstance(kwargs_metadata, dict):
                             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = routed_model
+                    held_pin_cause: Final[RoutingDecisionCause] = (
+                        "session_affinity_pin" if self.config.session_affinity else "user_turn_pin"
+                    )
                     cause: RoutingDecisionCause = (
                         "plan_mode"
                         if plan_floored
-                        else ("session_affinity_escalation" if escalated else "session_affinity_pin")
+                        else ("session_affinity_escalation" if escalated else held_pin_cause)
                     )
                     verbose_router_logger.info(
                         "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model

@@ -839,6 +839,23 @@ class ComplexityRouterConfig(BaseModel):
         description="Minimum cosine similarity for a semantic keyword match",
     )
 
+    classification_mode: Literal["every_request", "user_turn"] = Field(
+        default="every_request",
+        description=(
+            "Which requests get classified in a multi-turn agent session. 'every_request' (the "
+            "default) classifies every inference request, so a tool continuation can land on a "
+            "different tier than the ask that started it. 'user_turn' classifies only the requests "
+            "that carry a new human ask and holds that target for the tool loop the ask sets off, "
+            "which keeps one tool loop on one model, preserves its provider prompt cache, and skips "
+            "the classifier call on continuation turns. A continuation is a request whose newest "
+            "turn is tool output or an assistant continuation rather than human text. Needs a "
+            "resolvable session_id to key the held target on, and falls back to classifying every "
+            "request without one; suppressed when plugins are configured, for the same reason "
+            "session_affinity is. Inert when session_affinity is on, which holds one target for the "
+            "whole session and so never reclassifies at all."
+        ),
+    )
+
     # Session affinity: pin the first turn's routed model for the rest of the session
     session_affinity: bool = Field(
         default=False,
