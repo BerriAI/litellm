@@ -226,6 +226,7 @@ class AgentResponse(BaseModel):
     static_headers: dict[str, str] | None = None
     extra_headers: list[str] | None = None
     keys: list[AgentKeySummary] | None = None
+    search_score: float | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     created_by: str | None = None

@@ -4,6 +4,7 @@ from httpx._models import Headers, Response
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_tool_reference_parts_from_tool_messages,
     hoist_images_from_tool_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -254,7 +255,8 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(messages))
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
         return {
             "model": model,
             "messages": azure_messages,

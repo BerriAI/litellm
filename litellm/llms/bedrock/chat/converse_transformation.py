@@ -1546,6 +1546,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues] | None = None,
         headers: dict | None = None,
         drop_params: bool = False,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> CommonRequestObject:
         ## VALIDATE REQUEST
         """
@@ -1608,6 +1609,16 @@ class AmazonConverseConfig(BaseConfig):
                 if point.get("location") == "tool_config":
                     cache_point = self._build_cache_point_block(point.get("control"), model)
                     bedrock_tools.append(ToolBlock(cachePoint=cache_point))
+                    # Spend attribution credits the gateway only for breakpoints it placed, and
+                    # this is the one place a tool_config point becomes one. The hook that reads
+                    # the configuration cannot record it: whether a cachePoint lands depends on
+                    # this provider and on the request carrying tools, neither of which it sees.
+                    if litellm_params is not None:
+                        from litellm.integrations.anthropic_cache_control_hook import (
+                            AnthropicCacheControlHook,
+                        )
+
+                        AnthropicCacheControlHook.record_gateway_injection(litellm_params, 1)
                     break
 
         bedrock_tool_config: ToolConfigBlock | None = None
@@ -1670,6 +1681,7 @@ class AmazonConverseConfig(BaseConfig):
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
+            litellm_params=litellm_params,
         )
 
         bedrock_messages: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -1729,6 +1741,7 @@ class AmazonConverseConfig(BaseConfig):
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
+            litellm_params=litellm_params,
         )
 
         ## TRANSFORMATION ##

@@ -1002,6 +1002,17 @@ def test_an_exception_without_a_status_is_still_a_connection_error(quiet_excepti
         )
 
 
+def test_an_unmapped_exception_with_no_model_or_provider_is_a_connection_error(quiet_exception_mapping):
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        exception_type(
+            model=None,
+            original_exception=ValueError("boom"),
+            custom_llm_provider=None,
+        )
+
+    assert "boom" in raised.value.message
+
+
 CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."
 CONTENT_POLICY_MESSAGE = (
     '{"error": {"type": "invalid_request_error", "code": "content_policy_violation"}}'
@@ -1152,3 +1163,52 @@ def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
 
     assert excinfo.value.status_code == 400
     assert "prompt is too long: 1055489 tokens > 1050000 maximum" in excinfo.value.message
+
+
+def test_branchless_provider_transport_error_maps_to_api_connection_error():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(status_code=500, message="[Errno 111] Connection refused")
+    original_exception.status_code_is_synthesized = True
+
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(
+            model="test-agent",
+            original_exception=original_exception,
+            custom_llm_provider="a2a",
+        )
+
+
+def test_branchless_provider_upstream_500_still_maps_to_internal_server_error():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(status_code=500, message="upstream exploded")
+
+    with pytest.raises(litellm.InternalServerError):
+        exception_type(
+            model="test-agent",
+            original_exception=original_exception,
+            custom_llm_provider="a2a",
+        )
+
+
+def test_handle_error_marks_only_a_status_code_it_never_received():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    handler = BaseLLMHTTPHandler()
+
+    with pytest.raises(litellm.llms.base_llm.chat.transformation.BaseLLMException) as transport:
+        raise handler._handle_error(e=httpx.ConnectError("Connection refused"), provider_config=None)
+    assert transport.value.status_code == 500
+    assert transport.value.status_code_is_synthesized is True
+
+    request = httpx.Request(method="POST", url="https://example.invalid")
+    upstream = httpx.HTTPStatusError(
+        "server error",
+        request=request,
+        response=httpx.Response(status_code=500, request=request, text="upstream exploded"),
+    )
+    with pytest.raises(litellm.llms.base_llm.chat.transformation.BaseLLMException) as received:
+        raise handler._handle_error(e=upstream, provider_config=None)
+    assert received.value.status_code == 500
+    assert received.value.status_code_is_synthesized is False

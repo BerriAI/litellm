@@ -888,7 +888,10 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_management_logger: CustomLogger | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
+        request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
     ) -> tuple[str, list[AllMessageValues], dict]:
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
         custom_logger: Final = prompt_management_logger or self.get_custom_logger_for_prompt_management(
             model=model,
             non_default_params=non_default_params,
@@ -898,6 +901,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         if custom_logger:
+            breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
             (
                 model,
                 messages,
@@ -913,6 +917,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_label=prompt_label,
                 prompt_version=prompt_version,
             )
+            if request_kwargs is not None:
+                AnthropicCacheControlHook.record_gateway_injection(
+                    request_kwargs,
+                    AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - breakpoints_before,
+                )
         self.messages = messages
         return model, messages, non_default_params
 
@@ -928,7 +937,10 @@ class Logging(LiteLLMLoggingBaseClass):
         tools: list[dict] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
+        request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
     ) -> tuple[str, list[AllMessageValues], dict]:
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
         custom_logger: Final = prompt_management_logger or self.get_custom_logger_for_prompt_management(
             model=model,
             tools=tools,
@@ -939,6 +951,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         if custom_logger:
+            breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
             (
                 model,
                 messages,
@@ -956,6 +969,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_label=prompt_label,
                 prompt_version=prompt_version,
             )
+            if request_kwargs is not None:
+                AnthropicCacheControlHook.record_gateway_injection(
+                    request_kwargs,
+                    AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - breakpoints_before,
+                )
         self.messages = messages
         return model, messages, non_default_params
 
@@ -6040,7 +6058,7 @@ def get_standard_logging_object_payload(
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
             request_tags=request_tags,
-            end_user=end_user_id or "",
+            end_user=end_user_id,
             api_base=StandardLoggingPayloadSetup.strip_trailing_slash(litellm_params.get("api_base", "")) or "",
             model_group=_model_group,
             model_id=_model_id,
