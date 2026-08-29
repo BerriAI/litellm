@@ -16,7 +16,10 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -132,15 +135,23 @@ class TestOutputConfigStructuredOutput:
     }
 
     def test_output_config_format_json_schema_converted(self):
-        """output_config.format.json_schema is converted to OpenAI text.format."""
+        """output_config.format.json_schema is converted to OpenAI text.format, defaulting strict to False."""
         req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         fmt = kwargs["text"]["format"]
         assert fmt["type"] == "json_schema"
         assert fmt["schema"] == self._SCHEMA
-        assert fmt["strict"] is True
+        assert fmt["strict"] is False
         assert fmt["name"] == "structured_output"
+
+    def test_output_config_format_explicit_strict_true_is_preserved(self):
+        """Nested output_config.format with explicit strict=True is preserved."""
+        req = _make_request(
+            output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": True}}
+        )
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is True
 
     def test_output_config_without_format_does_not_set_text(self):
         """output_config with only non-format keys doesn't produce text.format."""
@@ -149,21 +160,65 @@ class TestOutputConfigStructuredOutput:
         assert "text" not in kwargs
 
     def test_output_format_still_works(self):
-        """The original output_format field still takes precedence when present."""
+        """The original output_format field still takes precedence when present, defaulting strict to False."""
         req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         assert kwargs["text"]["format"]["type"] == "json_schema"
+        assert kwargs["text"]["format"]["strict"] is False
+
+    def test_output_format_explicit_strict_false_is_preserved(self):
+        """output_format with an explicit strict=False is preserved as False."""
+        req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA, "strict": False})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is False
+
+    def test_output_format_explicit_strict_true_is_preserved(self):
+        """output_format with an explicit strict=True is preserved as True."""
+        req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA, "strict": True})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is True
 
     def test_output_format_takes_precedence_over_output_config(self):
-        """output_format takes precedence over output_config.format."""
+        """output_format takes precedence over output_config.format, for both schema and strict."""
         other_schema = {"type": "object", "properties": {"id": {"type": "integer"}}}
         req = _make_request(
-            output_format={"type": "json_schema", "schema": self._SCHEMA},
-            output_config={"format": {"type": "json_schema", "schema": other_schema}},
+            output_format={"type": "json_schema", "schema": self._SCHEMA, "strict": False},
+            output_config={"format": {"type": "json_schema", "schema": other_schema, "strict": True}},
         )
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["text"]["format"]["schema"] == self._SCHEMA
+        assert kwargs["text"]["format"]["strict"] is False
+
+    def test_optional_property_stays_out_of_required_list(self):
+        """A property absent from required must stay absent from required in the translated schema."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "nickname": {"type": "string"},
+            },
+            "required": ["name"],
+            "additionalProperties": False,
+        }
+        req = _make_request(output_format={"type": "json_schema", "schema": schema})
+        kwargs = _ADAPTER.translate_request(req)
+        fmt_schema = kwargs["text"]["format"]["schema"]
+        assert fmt_schema["required"] == ["name"]
+        assert "nickname" not in fmt_schema["required"]
+        assert fmt_schema["additionalProperties"] is False
+
+    def test_translate_request_does_not_mutate_input_schema(self):
+        """translate_request must not mutate the caller's output_format or schema dicts."""
+        schema = {"type": "object", "properties": {"x": {"type": "number"}}, "required": ["x"]}
+        output_format = {"type": "json_schema", "schema": schema, "strict": False}
+        req = _make_request(output_format=output_format)
+        snapshot = json.loads(json.dumps(output_format))
+
+        _ADAPTER.translate_request(req)
+
+        assert output_format == snapshot
+        assert req["output_format"] == snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -1553,6 +1608,217 @@ class TestToolResultImages:
         outputs = [item for item in items if item.get("type") == "function_call_output"]
         assert outputs[0]["output"] == "screenshot saved"
         assert self._input_images(items) == []
+
+
+class TestToolResultDocuments:
+    """Documents inside tool_result blocks must survive translation (LIT-6135):
+    the function_call_output output becomes a list of parts carrying the joined
+    text as input_text and each document as an input_file. Without documents the
+    output stays the plain string it always was."""
+
+    PDF_B64 = "JVBERi0xLjQKJSBQT05H"
+    PDF_DATA_URI = "data:application/pdf;base64,JVBERi0xLjQKJSBQT05H"
+    PDF_URL = "https://example.com/report.pdf"
+    PNG_B64 = "iVBORw0KGgoAAAANSUhEUg=="
+
+    def _messages(self, tool_result_content):
+        return [
+            {"role": "user", "content": "read the pdf"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_01", "name": "read", "input": {}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}
+                ],
+            },
+        ]
+
+    def _translate(self, tool_result_content):
+        return _ADAPTER.translate_messages_to_responses_input(self._messages(tool_result_content))
+
+    @staticmethod
+    def _tool_output(items):
+        return next(item for item in items if item.get("type") == "function_call_output")["output"]
+
+    def _base64_document(self, **extra):
+        return {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": self.PDF_B64},
+            **extra,
+        }
+
+    def test_text_and_base64_document_produce_part_list(self):
+        output = self._tool_output(
+            self._translate([{"type": "text", "text": "PDF file read: mystery.pdf"}, self._base64_document()])
+        )
+        assert output == [
+            {"type": "input_text", "text": "PDF file read: mystery.pdf"},
+            {"type": "input_file", "filename": "document.pdf", "file_data": self.PDF_DATA_URI},
+        ]
+
+    def test_document_only_produces_single_file_part(self):
+        output = self._tool_output(self._translate([self._base64_document()]))
+        assert output == [{"type": "input_file", "filename": "document.pdf", "file_data": self.PDF_DATA_URI}]
+
+    def test_document_title_becomes_filename(self):
+        output = self._tool_output(self._translate([self._base64_document(title="quarterly-report.pdf")]))
+        assert output == [
+            {"type": "input_file", "filename": "quarterly-report.pdf", "file_data": self.PDF_DATA_URI}
+        ]
+
+    def test_url_document_becomes_file_url_part(self):
+        output = self._tool_output(
+            self._translate([{"type": "document", "source": {"type": "url", "url": self.PDF_URL}}])
+        )
+        assert output == [{"type": "input_file", "file_url": self.PDF_URL}]
+
+    def test_document_with_empty_data_falls_back_to_string_output(self):
+        output = self._tool_output(
+            self._translate(
+                [
+                    {"type": "text", "text": "PDF file read"},
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": ""}},
+                ]
+            )
+        )
+        assert output == "PDF file read"
+
+    def test_document_without_source_dict_keeps_string_output(self):
+        output = self._tool_output(
+            self._translate([{"type": "text", "text": "stub"}, {"type": "document", "source": self.PDF_URL}])
+        )
+        assert output == "stub"
+
+    def test_text_only_tool_result_keeps_plain_string_output(self):
+        output = self._tool_output(self._translate([{"type": "text", "text": "plain result"}]))
+        assert output == "plain result"
+
+    def test_file_id_source_document_keeps_string_output(self):
+        output = self._tool_output(
+            self._translate(
+                [
+                    {"type": "text", "text": "stub"},
+                    {"type": "document", "source": {"type": "file", "file_id": "file_abc123"}},
+                ]
+            )
+        )
+        assert output == "stub"
+
+    def test_url_source_without_url_keeps_string_output(self):
+        output = self._tool_output(
+            self._translate([{"type": "text", "text": "stub"}, {"type": "document", "source": {"type": "url"}}])
+        )
+        assert output == "stub"
+
+    def test_text_image_and_document_mix(self):
+        items = self._translate(
+            [
+                {"type": "text", "text": "captured"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.PNG_B64}},
+                self._base64_document(),
+            ]
+        )
+
+        output = self._tool_output(items)
+        assert output == [
+            {"type": "input_text", "text": f"captured\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"},
+            {"type": "input_file", "filename": "document.pdf", "file_data": self.PDF_DATA_URI},
+        ]
+
+        image_message = next(
+            item
+            for item in items
+            if item.get("type") == "message"
+            and any(part.get("type") == "input_image" for part in item.get("content", []))
+        )
+        assert image_message["content"] == [
+            {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+            {"type": "input_image", "image_url": f"data:image/png;base64,{self.PNG_B64}"},
+        ]
+
+
+class TestUserContentDocuments:
+    """Documents in plain user content must survive translation (LIT-6144): each
+    document block becomes an input_file part of the user message, in block order,
+    exactly like image blocks become input_image parts. Untranslatable documents
+    are dropped without disturbing the surrounding parts."""
+
+    PDF_B64 = "JVBERi0xLjQKJSBQT05H"
+    PDF_DATA_URI = "data:application/pdf;base64,JVBERi0xLjQKJSBQT05H"
+    PDF_URL = "https://example.com/report.pdf"
+    EXPLICIT = {"mode": "explicit"}
+
+    def _translate(self, user_content):
+        return _ADAPTER.translate_messages_to_responses_input([{"role": "user", "content": user_content}])
+
+    @staticmethod
+    def _user_content(items):
+        return next(item for item in items if item.get("type") == "message" and item.get("role") == "user")["content"]
+
+    def _base64_document(self, **extra):
+        return {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": self.PDF_B64},
+            **extra,
+        }
+
+    def test_document_then_text_keeps_block_order(self):
+        content = self._user_content(
+            self._translate([self._base64_document(), {"type": "text", "text": "what does the pdf say?"}])
+        )
+        assert content == [
+            {"type": "input_file", "filename": "document.pdf", "file_data": self.PDF_DATA_URI},
+            {"type": "input_text", "text": "what does the pdf say?"},
+        ]
+
+    def test_document_title_becomes_filename(self):
+        content = self._user_content(self._translate([self._base64_document(title="quarterly-report.pdf")]))
+        assert content == [
+            {"type": "input_file", "filename": "quarterly-report.pdf", "file_data": self.PDF_DATA_URI}
+        ]
+
+    def test_url_document_becomes_file_url_part(self):
+        content = self._user_content(
+            self._translate([{"type": "document", "source": {"type": "url", "url": self.PDF_URL}}])
+        )
+        assert content == [{"type": "input_file", "file_url": self.PDF_URL}]
+
+    def test_document_only_content_still_produces_user_message(self):
+        content = self._user_content(self._translate([self._base64_document()]))
+        assert content == [{"type": "input_file", "filename": "document.pdf", "file_data": self.PDF_DATA_URI}]
+
+    def test_empty_base64_data_drops_only_the_document_part(self):
+        content = self._user_content(
+            self._translate(
+                [
+                    {"type": "text", "text": "still here"},
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": ""}},
+                ]
+            )
+        )
+        assert content == [{"type": "input_text", "text": "still here"}]
+
+    def test_non_dict_source_drops_only_the_document_part(self):
+        content = self._user_content(
+            self._translate([{"type": "text", "text": "still here"}, {"type": "document", "source": self.PDF_URL}])
+        )
+        assert content == [{"type": "input_text", "text": "still here"}]
+
+    def test_document_breakpoint_rides_on_the_file_part(self):
+        content = self._user_content(
+            self._translate([self._base64_document(prompt_cache_breakpoint=self.EXPLICIT)])
+        )
+        assert content == [
+            {
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": self.PDF_DATA_URI,
+                "prompt_cache_breakpoint": self.EXPLICIT,
+            }
+        ]
 
 
 def _contains_key(value, key) -> bool:

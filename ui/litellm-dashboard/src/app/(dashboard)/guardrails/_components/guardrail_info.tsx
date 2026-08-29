@@ -33,6 +33,7 @@ import {
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
 import {
+  formatGuardrailMode,
   getGuardrailLogoAndName,
   guardrail_provider_map,
   skipSystemMessageToChoice,
@@ -521,7 +522,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
             variant="ghost"
             size="icon-xs"
             onClick={() => copyToClipboard(guardrailData.guardrail_id, "guardrail-id")}
-            className={`left-2 z-10 transition-all duration-200 ${
+            className={`left-2 z-raised transition-all duration-200 ${
               copiedStates["guardrail-id"]
                 ? "text-success bg-success/10 border-success/20"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -559,7 +560,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card className="block p-6">
                 <p>Mode</p>
                 <div className="mt-2">
-                  <h3 className="text-lg font-medium">{guardrailData.litellm_params?.mode || "-"}</h3>
+                  <h3 className="text-lg font-medium">
+                    {formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}
+                  </h3>
                   <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
                     {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
                   </Badge>
@@ -856,7 +859,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </div>
                     <div>
                       <p className="font-medium">Mode</p>
-                      <div>{guardrailData.litellm_params?.mode || "-"}</div>
+                      <div>{formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}</div>
                     </div>
                     <div>
                       <p className="font-medium">Default On</p>

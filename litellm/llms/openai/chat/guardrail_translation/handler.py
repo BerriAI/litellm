@@ -47,6 +47,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -75,7 +76,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> Any:
         """
         Process input messages by applying guardrails to text content.
@@ -324,7 +325,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         response: "ModelResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
     ) -> Any:
@@ -435,7 +436,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
@@ -485,7 +486,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: Any | None,
         request_data: dict | None,
     ) -> list["ModelResponseStream"]:
@@ -621,7 +622,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: Any | None,
         request_data: dict | None,
         sink: StreamTransformSink,

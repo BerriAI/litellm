@@ -1139,8 +1139,12 @@ class TestCheckBatchCost:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "request_counts",
-        [MagicMock(completed=7, failed=0, total=7), None],
-        ids=["lagging_output_id", "unknown_counts"],
+        [
+            MagicMock(completed=7, failed=0, total=7),
+            None,
+            MagicMock(completed=0, failed=0, total=0),
+        ],
+        ids=["lagging_output_id", "unknown_counts", "synthesized_zero_counts"],
     )
     async def test_completed_with_lagging_output_file_left_for_next_cycle(
         self,
