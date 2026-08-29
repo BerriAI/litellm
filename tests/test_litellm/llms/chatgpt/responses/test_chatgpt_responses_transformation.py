@@ -133,6 +133,93 @@ class TestChatGPTResponsesAPITransformation:
         assert request["tools"] == tools
         assert request["tool_choice"] == "required"
 
+    def test_sign_request_repairs_string_input_after_extra_body_merge(self):
+        """sign_request must be the last line of defense against extra_body.
+
+        The HTTP handlers merge ``extra_body`` into the request AFTER
+        ``transform_responses_api_request`` and call ``sign_request`` last, so a
+        string ``input`` arriving via ``extra_body`` bypasses the transform-level
+        normalization. Mirror the handler order here: transform -> extra_body
+        merge -> sign_request.
+        """
+        config = ChatGPTResponsesAPIConfig()
+        tools = [{"type": "function", "name": "echo", "parameters": {}}]
+        extra_body = {
+            "input": "hello from extra_body",
+            "tools": tools,
+            "tool_choice": "required",
+        }
+
+        data = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input="original input",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        # Same merge the sync/async Responses HTTP handlers perform (data.update(extra_body))
+        data.update(extra_body)
+        assert data["input"] == "hello from extra_body"  # transform normalization was overridden
+
+        headers = {"Authorization": "Bearer token", "session_id": "session-123"}
+        returned_headers, signed_body = config.sign_request(
+            headers=headers,
+            optional_params={},
+            request_data=data,
+            api_base="https://chatgpt.example.com/responses",
+        )
+
+        assert data["input"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "hello from extra_body"},
+                ],
+            }
+        ]
+        # tools / tool_choice survive the repair untouched
+        assert data["tools"] == tools
+        assert data["tool_choice"] == "required"
+        # no request signing for ChatGPT: headers pass through, body stays JSON-serialized by the handler
+        assert returned_headers == headers
+        assert signed_body is None
+
+    def test_sign_request_keeps_list_input_unchanged(self):
+        config = ChatGPTResponsesAPIConfig()
+        list_input = [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "already normalized"}],
+            }
+        ]
+        data = {"input": list_input, "model": "gpt-5.3-codex"}
+
+        returned_headers, signed_body = config.sign_request(
+            headers={"content-type": "application/json"},
+            optional_params={},
+            request_data=data,
+            api_base="https://chatgpt.example.com/responses",
+        )
+
+        assert data["input"] is list_input  # same object, not rebuilt
+        assert returned_headers == {"content-type": "application/json"}
+        assert signed_body is None
+
+    def test_sign_request_noop_without_input(self):
+        config = ChatGPTResponsesAPIConfig()
+        data = {"model": "gpt-5.3-codex", "stream": True}
+
+        returned_headers, signed_body = config.sign_request(
+            headers={},
+            optional_params={},
+            request_data=data,
+            api_base="https://chatgpt.example.com/responses",
+        )
+
+        assert data == {"model": "gpt-5.3-codex", "stream": True}
+        assert returned_headers == {}
+        assert signed_body is None
+
     @pytest.mark.parametrize(
         "model_name",
         [

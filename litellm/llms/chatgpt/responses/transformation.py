@@ -127,6 +127,34 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return {k: v for k, v in request.items() if k in allowed_keys}
 
+    def sign_request(
+        self,
+        headers: dict,  # mutable-ok: signature is pinned by BaseResponsesAPIConfig.sign_request
+        optional_params: dict,  # mutable-ok: ditto
+        request_data: dict,  # mutable-ok: ditto
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:  # mutable-ok: signature is pinned by BaseResponsesAPIConfig.sign_request
+        """Re-normalize ``input`` after the handler's ``extra_body`` merge.
+
+        The HTTP handlers merge ``extra_body`` into the transformed request *after*
+        ``transform_responses_api_request`` and call this hook last, right before the
+        body is sent — so ``extra_body`` can reintroduce the plain-string ``input``
+        shorthand that the transform already normalized away. Re-run the normalizer
+        here as the final defense. No signing is needed: the ChatGPT backend takes a
+        bearer token, so this only repairs the body and returns it unsigned (the
+        handlers send ``request_data`` itself as JSON when signed body bytes are
+        ``None``).
+        """
+        current_input: Final = request_data.get("input")
+        if isinstance(current_input, str):
+            normalized: Final = self._normalized_responses_input(request_input=current_input)
+            request_data["input"] = normalized  # rebind-ok: handler sends this same dict as the outbound JSON body
+        return headers, None
+
     def transform_response_api_response(
         self,
         model: str,
