@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -15,6 +15,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -59,6 +60,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
     coerce_keepalive_interval,
     resolve_ttft_keepalive_interval,
+    split_complete_sse_frames,
     wrap_sse_stream_with_keepalive_pings,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
@@ -1264,6 +1266,87 @@ def _override_openai_response_model(
             str(e),
             exc_info=True,
         )
+
+
+_ANTHROPIC_SSE_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _restamp_anthropic_message_start_data_line(line: bytes, requested_model: str) -> bytes:
+    """Replace the model in one Anthropic message_start data line."""
+    body: Final = line.rstrip(b"\r\n")
+    line_ending: Final = line[len(body) :]
+    if not body.startswith(b"data:"):
+        return line
+    try:
+        payload: Final = _ANTHROPIC_SSE_OBJECT_ADAPTER.validate_json(body[len(b"data:") :].strip())
+    except ValidationError:
+        return line
+    if payload.get("type") != "message_start":
+        return line
+    try:
+        message: Final = _ANTHROPIC_SSE_OBJECT_ADAPTER.validate_python(payload.get("message"))
+    except ValidationError:
+        return line
+    if "model" not in message:
+        return line
+    restamped_payload: Final = {**payload, "message": {**message, "model": requested_model}}
+    return b"data: " + json.dumps(restamped_payload, separators=(",", ":")).encode() + line_ending
+
+
+def _restamp_anthropic_message_start_frames(frames: bytes, requested_model: str) -> bytes:
+    """Restore the client-requested model in complete Anthropic SSE frames."""
+    return b"".join(
+        _restamp_anthropic_message_start_data_line(line, requested_model) for line in frames.splitlines(keepends=True)
+    )
+
+
+class _AnthropicMessageStartModelRewriter:
+    """Reassemble transport chunks before rewriting Anthropic SSE frames."""
+
+    __slots__ = ("_pending", "_requested_model")
+
+    def __init__(self, requested_model: str) -> None:
+        self._requested_model: Final = requested_model
+        self._pending = b""
+
+    def feed(self, chunk: bytes) -> bytes:
+        """Buffer a transport chunk and return rewritten complete frames."""
+        complete_frames, self._pending = split_complete_sse_frames(self._pending + chunk)
+        return _restamp_anthropic_message_start_frames(complete_frames, self._requested_model)
+
+    def flush(self) -> bytes:
+        """Return the final unterminated tail without dropping provider bytes."""
+        tail: Final = self._pending
+        self._pending = b""
+        return tail
+
+
+async def _restamp_anthropic_streaming_response_model(
+    response: AsyncIterator[object],
+    requested_model: str,
+) -> AsyncGenerator[object, None]:
+    """Restamp message_start while preserving arbitrary transport chunk boundaries."""
+    rewriter: Final = _AnthropicMessageStartModelRewriter(requested_model)
+    async for chunk in response:
+        if isinstance(chunk, (bytes, bytearray)):
+            if rewritten_frames := rewriter.feed(bytes(chunk)):
+                yield rewritten_frames
+            continue
+        if buffered_tail := rewriter.flush():
+            yield buffered_tail
+        yield chunk
+    final_tail: Final = rewriter.flush()
+    if final_tail:
+        yield final_tail
+
+
+def _anthropic_client_requested_model(request_data: Mapping[str, object]) -> str | None:
+    """Return the public model name only for native Anthropic Messages streams."""
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    requested_model: Final = request_data.get("_litellm_client_requested_model")
+    if getattr(logging_obj, "call_type", None) != "anthropic_messages" or not isinstance(requested_model, str):
+        return None
+    return requested_model
 
 
 class CostBreakdownHeaderValues(NamedTuple):
@@ -3408,11 +3491,17 @@ class ProxyBaseLLMRequestProcessing:
         stream_completed = False
         client_disconnected = False
         delivered_chunk = False
+        anthropic_requested_model: Final = _anthropic_client_requested_model(request_data)
+        stream_response: Final = (
+            _restamp_anthropic_streaming_response_model(response, anthropic_requested_model)
+            if anthropic_requested_model is not None
+            else response
+        )
         try:
             str_so_far = ""
             async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
-                response=response,
+                response=stream_response,
                 request_data=request_data,
             ):
                 # ``.format(chunk)`` was previously evaluated for every chunk

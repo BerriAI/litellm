@@ -1,12 +1,11 @@
 import asyncio
 import json
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
-
 
 import litellm
 
@@ -335,6 +334,55 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
     payload = json.loads(first[len("data: ") :].strip())
     assert payload["model"] == client_model_alias
     assert not payload["model"].startswith("hosted_vllm/")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_streaming_message_start_uses_client_requested_model_across_chunks(
+    monkeypatch,
+):
+    """Keep the public model alias when an Anthropic message_start spans transport chunks."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    async def upstream_stream():
+        yield b'event: message_start\ndata: {"type":"message_start","message":{"model":"backend'
+        yield b'-model","id":"msg_1"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n'
+
+    async def passthrough_iterator_hook(
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator,
+        request_data: dict,
+    ):
+        async for chunk in response:
+            yield chunk
+
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        passthrough_iterator_hook,
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.call_type = "anthropic_messages"
+    output = [
+        chunk
+        async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=upstream_stream(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            request_data={
+                "model": "backend-model",
+                "_litellm_client_requested_model": "my-alias",
+                "litellm_logging_obj": logging_obj,
+            },
+            proxy_logging_obj=proxy_server.proxy_logging_obj,
+        )
+    ]
+
+    streamed = b"".join(chunk if isinstance(chunk, bytes) else chunk.encode() for chunk in output)
+    message_start = json.loads(streamed.split(b"data: ", 1)[1].split(b"\n\n", 1)[0])
+    assert message_start["message"]["model"] == "my-alias"
+    assert b'event: message_stop\ndata: {"type":"message_stop"}\n\n' in streamed
 
 
 @pytest.mark.asyncio
