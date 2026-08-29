@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+
 class CapturedRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 

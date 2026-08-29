@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 
-from tests.test_litellm._fixture_recorder import generate_case_inputs
+from tests.route_parity.fixture_recorder import generate_case_inputs
 from tests.test_litellm.ocr.generate_fixtures import (
     discover_targets,
     parse_generator_args,

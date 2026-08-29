@@ -4,7 +4,7 @@ from typing import Generic, Literal, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from tests.test_litellm._recorded_http import RecordedResponse
+from tests.route_parity.recorded_http import RecordedResponse
 
 JsonObject = dict[str, JsonValue]
 

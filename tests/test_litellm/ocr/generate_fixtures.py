@@ -13,15 +13,15 @@ from hypothesis.strategies import DrawFn, SearchStrategy
 
 import litellm
 from litellm.rust_bridge.ocr import use_litellm_rust
-from tests.test_litellm._fixture_generator import (
+from tests.route_parity.fixture_generator import (
     FixtureTarget,
     generate_target_fixtures,
     parse_generator_args,
 )
-from tests.test_litellm._fixture_generator import (
+from tests.route_parity.fixture_generator import (
     require_targets as require_fixture_targets,
 )
-from tests.test_litellm._fixture_recorder import (
+from tests.route_parity.fixture_recorder import (
     ProviderSpec,
     fixture_directory,
 )
@@ -291,7 +291,7 @@ def main() -> None:
     root: Final = fixture_directory(
         args.fixture_dir,
         os.environ.get(FIXTURE_DIR_ENV),
-        Path(__file__).with_name(".fixtures"),
+        Path(__file__).with_name("fixtures"),
     )
     use_litellm_rust(False, ocr=None, aocr=None)
     for target in targets:

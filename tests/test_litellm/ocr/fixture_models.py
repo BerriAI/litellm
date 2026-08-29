@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from pydantic import Field, field_validator, model_validator
 from typing_extensions import Self
 
-from tests.test_litellm._fixture_models import (
+from tests.route_parity.fixture_models import (
     FixtureModel,
     JsonObject,
     JsonSchemaDefinition,

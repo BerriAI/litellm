@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from tests.test_litellm.parity.models import CapturedRequest, Execution
+from tests.route_parity.models import CapturedRequest, Execution
 
 
 def validate_harness(python: Execution, accelerated: Execution, python_user_agent: str) -> None:
