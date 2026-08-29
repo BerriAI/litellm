@@ -27,6 +27,30 @@
   }
 }
 
+/* The only z-index values in the dashboard. Portalled popups (src/components/ui) own the top of the
+   scale; everything else must sit below them. Enforced by the local/no-ad-hoc-z-index ESLint rule. */
+@utility z-raised {
+  z-index: 1;
+}
+@utility z-chrome {
+  z-index: 10;
+}
+@utility z-sticky {
+  z-index: 20;
+}
+@utility z-sticky-pinned {
+  z-index: 25;
+}
+@utility z-floating {
+  z-index: 30;
+}
+@utility z-overlay {
+  z-index: 40;
+}
+@utility z-popup {
+  z-index: 50;
+}
+
 /* Verbatim end-edge subset of the shadcn scroll-fade utility (shadcn@4.17.0 dist/tailwind.css),
    vendored so the CLI package is not a build dependency. Re-copy from upstream to update. */
 @property --scroll-fade-e {
@@ -92,9 +116,13 @@
   --accent: oklch(0.967 0.003 264.542);
   --accent-foreground: oklch(0.21 0.034 264.665);
   --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(1 0 0);
   --success: oklch(0.527 0.154 150.069);
+  --success-foreground: oklch(1 0 0);
   --warning: oklch(0.555 0.163 48.998);
+  --warning-foreground: oklch(1 0 0);
   --info: oklch(0.546 0.245 262.881);
+  --info-foreground: oklch(1 0 0);
   --border: oklch(0.928 0.006 264.531);
   --input: oklch(0.928 0.006 264.531);
   --ring: oklch(0.707 0.022 261.325);
@@ -112,6 +140,7 @@
   --sidebar-border: oklch(0.928 0.006 264.531);
   --sidebar-ring: oklch(0.707 0.022 261.325);
   --neutral-border: #dcddeb;
+  --logo-surface: oklch(1 0 0);
 }
 
 .dark {
@@ -130,11 +159,15 @@
   --accent: oklch(0.309 0 0);
   --accent-foreground: oklch(0.964 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.209 0 0);
   --success: oklch(0.792 0.209 151.711);
+  --success-foreground: oklch(0.209 0 0);
   --warning: oklch(0.828 0.189 84.429);
+  --warning-foreground: oklch(0.209 0 0);
   --info: oklch(0.707 0.165 254.624);
+  --info-foreground: oklch(0.209 0 0);
   --border: oklch(0.309 0 0);
-  --input: oklch(0.309 0 0);
+  --input: oklch(0.56 0 0);
   --ring: oklch(0.569 0 0);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
@@ -172,9 +205,13 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -191,6 +228,7 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-logo-surface: var(--logo-surface);
 }
 
 @layer base {
@@ -230,6 +268,13 @@
     letter-spacing: inherit;
   }
 
+  /* Same plugin's white fill, on the hand-rolled controls outside components/ui that the audit
+     above did not cover. Tracks --background so light mode keeps the white it already painted.
+     Delete along with the plugin. */
+  :is(input, textarea, select):not([type="checkbox"], [type="radio"], [data-slot="combobox-chip-input"]) {
+    background-color: var(--color-background);
+  }
+
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
@@ -237,7 +282,7 @@
 
   input::placeholder,
   textarea::placeholder {
-    color: color-mix(in oklab, var(--color-muted-foreground) 70%, transparent);
+    color: var(--color-muted-foreground);
   }
 
   body {

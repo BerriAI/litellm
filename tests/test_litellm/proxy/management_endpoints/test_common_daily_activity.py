@@ -1,6 +1,4 @@
-import os
-import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -9,7 +7,6 @@ import pytest
 
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
@@ -158,6 +155,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
     }
@@ -488,6 +486,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.compression_saved_tokens = 0
     mock_record_1.compression_savings_spend = 0.0
     mock_record_1.prompt_caching_savings_spend = 0.0
+    mock_record_1.gateway_injected_caching_savings_spend = 0.0
     mock_record_1.autorouter_savings_spend = 0.0
     mock_record_1.api_requests = 10
     mock_record_1.successful_requests = 9
@@ -511,6 +510,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.compression_saved_tokens = 0
     mock_record_2.compression_savings_spend = 0.0
     mock_record_2.prompt_caching_savings_spend = 0.0
+    mock_record_2.gateway_injected_caching_savings_spend = 0.0
     mock_record_2.autorouter_savings_spend = 0.0
     mock_record_2.api_requests = 5
     mock_record_2.successful_requests = 5
@@ -574,6 +574,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
     }
@@ -660,6 +661,7 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         compression_saved_tokens=0,
         compression_savings_spend=0.0,
         prompt_caching_savings_spend=0.0,
+        gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
         api_requests=1,
         successful_requests=1,
@@ -928,6 +930,33 @@ class TestBuildAggregatedSqlQuery:
         assert "date >= $1" in sql
         assert "date <= $2" in sql
 
+    @pytest.mark.parametrize("build", [_build_aggregated_sql_query, _build_entity_rollup_sql_query])
+    def test_include_current_utc_day_extends_live_end_bound(self, build):
+        """
+        An offset larger than 24h keeps the caller's local date behind UTC at any
+        wall-clock hour, so the live-end extension is deterministic: a range ending
+        on the caller's local today must reach today's UTC bucket (LIT-5818, guards
+        the #36051 behavior on the aggregated path).
+        """
+        offset_minutes: Final = 1500
+        caller_local_today: Final = (datetime.now(timezone.utc) - timedelta(minutes=offset_minutes)).date().isoformat()
+        utc_today: Final = datetime.now(timezone.utc).date().isoformat()
+
+        _sql, params = build(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-01",
+            end_date=caller_local_today,
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=offset_minutes,
+            include_current_utc_day=True,
+        )
+
+        assert params[0] == "2026-05-01"
+        assert params[1] == utc_today
+
     def test_optional_filters_appear_in_params_in_order(self):
         sql, params = _build_aggregated_sql_query(
             table_name="litellm_dailyuserspend",
@@ -1065,6 +1094,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "compression_saved_tokens": None,
             "compression_savings_spend": None,
             "prompt_caching_savings_spend": None,
+            "gateway_injected_caching_savings_spend": None,
             "autorouter_savings_spend": None,
             "api_requests": None,
             "successful_requests": None,
@@ -1109,6 +1139,7 @@ def _no_spend_record():
         compression_saved_tokens=None,
         compression_savings_spend=None,
         prompt_caching_savings_spend=None,
+        gateway_injected_caching_savings_spend=None,
         autorouter_savings_spend=None,
         api_requests=None,
         successful_requests=None,
@@ -1218,6 +1249,7 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         compression_saved_tokens=0,
         compression_savings_spend=0,
         prompt_caching_savings_spend=0,
+        gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
         total_tokens=0,
         api_requests=0,
@@ -1283,6 +1315,7 @@ def _grouping_row(
         compression_saved_tokens=0,
         compression_savings_spend=0.0,
         prompt_caching_savings_spend=0.0,
+        gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
         api_requests=0,
         successful_requests=0,
@@ -1442,6 +1475,7 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         compression_saved_tokens=0,
         compression_savings_spend=0,
         prompt_caching_savings_spend=0,
+        gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
         total_tokens=0,
         api_requests=0,
@@ -1845,6 +1879,7 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
         "prompt_tokens": 0,

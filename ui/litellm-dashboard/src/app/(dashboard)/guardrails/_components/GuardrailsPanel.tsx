@@ -18,7 +18,7 @@ import GuardrailTestPlayground from "./GuardrailTestPlayground";
 import { toast } from "@/lib/toast";
 import { Guardrail } from "@/components/guardrails/types";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
+import { formatGuardrailMode, getGuardrailLogoAndName } from "./guardrail_info_helpers";
 import { CustomCodeModal } from "./custom_code";
 import GuardrailGarden from "./guardrail_garden";
 import { TeamGuardrailsTab } from "./TeamGuardrailsTab";
@@ -211,7 +211,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                   { label: "Name", value: guardrailToDelete?.guardrail_name },
                   { label: "ID", value: guardrailToDelete?.guardrail_id, code: true },
                   { label: "Provider", value: providerDisplayName },
-                  { label: "Mode", value: guardrailToDelete?.litellm_params.mode },
+                  { label: "Mode", value: formatGuardrailMode(guardrailToDelete?.litellm_params.mode) },
                   {
                     label: "Default On",
                     value: guardrailToDelete?.litellm_params.default_on ? "Yes" : "No",

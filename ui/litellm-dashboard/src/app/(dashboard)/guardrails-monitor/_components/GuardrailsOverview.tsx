@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef, OnChangeFn, SortingState } from "@tanstack/react-table";
-import { Download, Settings, Shield, TrendingUp, TriangleAlert } from "lucide-react";
+import { Download, HeartPulse, Settings, TrendingUp, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { getGuardrailsUsageOverview } from "@/components/networking";
 import { type PerformanceRow } from "@/components/GuardrailsMonitor/mockData";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
@@ -16,6 +17,7 @@ interface GuardrailsOverviewProps {
   startDate: string;
   endDate: string;
   onSelectGuardrail: (id: string) => void;
+  dateRangeControl?: React.ReactNode;
 }
 
 type SortKey = "failRate" | "requestsEvaluated" | "avgLatency" | "falsePositiveRate" | "falseNegativeRate";
@@ -23,7 +25,8 @@ type SortKey = "failRate" | "requestsEvaluated" | "avgLatency" | "falsePositiveR
 const providerColors: Record<string, string> = {
   Bedrock: "bg-warning/15 text-warning border-warning/20",
   "Google Cloud": "bg-info/15 text-info border-info/20",
-  LiteLLM: "bg-indigo-100 text-indigo-700 border-indigo-200",
+  LiteLLM:
+    "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800",
   Custom: "bg-muted text-muted-foreground border-border",
 };
 
@@ -42,6 +45,7 @@ export function GuardrailsOverview({
   startDate,
   endDate,
   onSelectGuardrail,
+  dateRangeControl,
 }: GuardrailsOverviewProps) {
   const [sortBy, setSortBy] = useState<SortKey>("failRate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -150,7 +154,7 @@ export function GuardrailsOverview({
         <span
           className={
             row.original.avgLatency == null
-              ? "text-muted-foreground/70"
+              ? "text-muted-foreground"
               : row.original.avgLatency > 150
                 ? "text-destructive"
                 : row.original.avgLatency > 50
@@ -196,23 +200,22 @@ export function GuardrailsOverview({
 
   return (
     <div>
-      <div className="flex items-start justify-between mb-5">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Shield className="size-5 text-indigo-500" />
-            <h1 className="text-xl font-semibold text-foreground">Guardrails Monitor</h1>
-          </div>
-          <p className="text-sm text-muted-foreground">Monitor guardrail performance across all requests</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" title="Coming soon">
-            <Download className="size-4" />
-            Export Data
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={<HeartPulse />}
+        title="Guardrails Monitor"
+        subtitle="Monitor guardrail performance across all requests"
+        utilities={
+          <>
+            {dateRangeControl}
+            <Button variant="outline" title="Coming soon">
+              <Download className="size-4" />
+              Export Data
+            </Button>
+          </>
+        }
+      />
 
-      <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
+      <div className="mt-6 mb-6 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
         <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
         <MetricCard
           label="Blocked Requests"

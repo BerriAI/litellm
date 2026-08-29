@@ -1,9 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.management_helpers.access_group_team_sync import (
     invalidate_access_group_caches,

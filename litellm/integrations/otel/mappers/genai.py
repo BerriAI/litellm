@@ -42,6 +42,7 @@ class GenAIMapper:
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
+        GenAI.OUTPUT_TYPE: lambda d: d.output_type.value if d.output_type else None,
         GenAI.REQUEST_MODEL: lambda d: d.request_model or None,
         GenAI.REQUEST_TEMPERATURE: lambda d: d.request_params.temperature,
         GenAI.REQUEST_TOP_P: lambda d: d.request_params.top_p,
@@ -65,6 +66,7 @@ class GenAIMapper:
         Server.ADDRESS: lambda d: d.server.address if d.server else None,
         Server.PORT: lambda d: d.server.port if d.server else None,
         LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
+        LiteLLM.CALL_TYPE: lambda d: d.call_type,
         # The provider/underlying model is only known once routing has picked a
         # deployment, so it can't ride identity Baggage (seeded at auth, before
         # routing) onto the boundary-born LLM span — stamp it directly here.
@@ -134,6 +136,9 @@ class GenAIMapper:
         LiteLLM.GUARDRAIL_ID: lambda d: d.guardrail_id,
         LiteLLM.GUARDRAIL_POLICY_TEMPLATE: lambda d: d.policy_template,
         LiteLLM.GUARDRAIL_DETECTION_METHOD: lambda d: d.detection_method,
+        LiteLLM.GUARDRAIL_USAGE: lambda d: d.usage_json,
+        LiteLLM.GUARDRAIL_COST: lambda d: d.cost,
+        LiteLLM.GUARDRAIL_COST_IN_SPEND: lambda d: d.cost_in_spend,
     }
 
     _SERVICE_ATTRS: dict[str, Callable[[ServiceSpanData], AttrValue | None]] = {

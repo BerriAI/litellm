@@ -15,11 +15,12 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import NotRequired, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_langfuse_environment_value,
     validate_no_callback_env_reference,
 )
 from litellm.types.integrations.compression_interception import (
@@ -515,15 +516,28 @@ class LiteLLMRoutes(enum.Enum):
     # allowed_routes=["mcp_routes"], which should cover both halves.
     mcp_routes = mcp_inference_routes + mcp_management_routes
 
-    agent_routes = [
-        "/v1/agents",
-        "/v1/agents/{agent_id}",
+    # A2A agent invocation / discovery routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.
+    agent_inference_routes = (
         "/agents",
         "/a2a/{agent_id}",
         "/a2a/{agent_id}/message/send",
         "/a2a/{agent_id}/message/stream",
         "/a2a/{agent_id}/.well-known/agent-card.json",
-    ]
+    )
+
+    # Agent registry CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
+    # The handlers in agent_endpoints/endpoints.py enforce proxy-admin on writes and
+    # scope reads by role, so these also appear in self_managed_routes.
+    agent_management_routes = (
+        "/v1/agents",
+        "/v1/agents/{agent_id}",
+        "/v1/agents/make_public",
+        "/v1/agents/{agent_id}/make_public",
+    )
+
+    # Backwards-compat union — virtual keys may be configured with
+    # allowed_routes=["agent_routes"], which should cover both halves.
+    agent_routes = agent_inference_routes + agent_management_routes
 
     google_routes = [
         "/v1beta/models/{model_name:path}:countTokens",
@@ -552,6 +566,7 @@ class LiteLLMRoutes(enum.Enum):
     model_info_routes = [
         "/model/info",
         "/v1/model/info",
+        "/model_group/info",
     ]
 
     llm_api_routes = (
@@ -563,7 +578,7 @@ class LiteLLMRoutes(enum.Enum):
         + apply_guardrail_routes
         + mcp_inference_routes
         + litellm_native_routes
-        + agent_routes
+        + list(agent_inference_routes)
         + model_info_routes
     )
     info_routes = [
@@ -664,6 +679,7 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + key_management_routes
         + mcp_management_routes
+        + list(agent_management_routes)
     )
 
     spend_tracking_routes = [
@@ -714,6 +730,7 @@ class LiteLLMRoutes(enum.Enum):
             "/litellm/.well-known/litellm-ui-config",
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
+            "/public/v1/model_hub",
             "/public/model_hub/info",
             "/public/agent_hub",
             "/public/mcp_hub",
@@ -801,6 +818,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_add",
         "/team/member_delete",
         "/team/member_update",
+        "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
@@ -832,6 +850,13 @@ class LiteLLMRoutes(enum.Enum):
         # Team guardrail submissions - endpoint scopes results to caller's teams (non-admin)
         "/guardrails/submissions",
         "/guardrails/submissions/{guardrail_id}",
+        # Auto-router dry runs - both gate like the /model/new write they rehearse:
+        # proxy admin, or team admin naming their own team via team_id
+        "/auto_router/test_routing",
+        "/auto_router/validate_complexity_router_config",
+        # Agent registry - reads are role-scoped and writes are proxy-admin-gated
+        # inside agent_endpoints/endpoints.py
+        *agent_management_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -915,6 +940,8 @@ class LiteLLMRoutes(enum.Enum):
             # Model cost map maintenance views (read-only status / source).
             "/schedule/model_cost_map_reload/status",
             "/model/cost_map/source",
+            # A pure read; POST only so the prompt does not ride in a URL.
+            "/auto_router/classifier/default_prompt",
         ]
         # Spend tracking reads (/spend/logs, /spend/logs/ui, /spend/keys,
         # /spend/users, /spend/tags, /spend/calculate, /cost/estimate). Admin
@@ -1265,6 +1292,16 @@ class RegenerateKeyRequest(GenerateKeyRequest):
 
 class ResetSpendRequest(LiteLLMPydanticObjectBase):
     reset_to: float
+
+    @field_validator("reset_to", mode="before")
+    @classmethod
+    def reject_bool_reset_to(cls, v):
+        # bool is a subclass of int, so pydantic silently coerces True/False into
+        # 1.0/0.0 for a `float` field: a caller who accidentally sends a boolean
+        # would otherwise get an unintended spend reset instead of a 422.
+        if isinstance(v, bool):
+            raise ValueError("reset_to must be a number, not a boolean")  # noqa: TRY004  # pydantic needs ValueError
+        return v
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
@@ -1995,6 +2032,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
             callback_vars[key] = str(value)
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
+            if key == "langfuse_environment":
+                validate_langfuse_environment_value(callback_vars[key])
         return values
 
 
@@ -2475,6 +2514,29 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "are skipped for on-demand GET /health as well as the background health loop."
         ),
     )
+    background_health_check_model_groups: tuple[str, ...] | None = Field(
+        None,
+        description=(
+            "Opt-in allowlist of model group names for background health checks and "
+            "health-check routing. When set, the background loop probes only deployments "
+            "whose model_name is listed, and enable_health_check_routing filters unhealthy "
+            "deployments only within the listed groups; every other group, including newly "
+            "added deployments, is skipped and keeps its configured routing strategy. "
+            "When unset, all deployments participate (opt out per deployment via "
+            "model_info.disable_background_health_check)."
+        ),
+    )
+    model_list_healthy_only: bool | None = Field(
+        None,
+        description=(
+            "When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing "
+            "deployments are all unhealthy, for every caller, without needing `healthy_only=true` "
+            "per request. Requires `background_health_checks: true`, and keeps deployment health "
+            "state cached without turning on `enable_health_check_routing`, so routing is "
+            "unaffected. With no health state nothing is hidden. Hiding is presentation-only, a "
+            "hidden model can still be called."
+        ),
+    )
     alerting: list | None = Field(
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
@@ -2531,6 +2593,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
     )
+    enforce_fallback_model_access: bool | None = Field(
+        None,
+        description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.",
+    )
     scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
         None,
         description=(
@@ -2546,6 +2612,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     maximum_autorouter_session_retention_period: str | None = Field(
         None,
         description="Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.",
+    )
+    maximum_health_check_retention_period: str | None = Field(
+        None,
+        description=(
+            "Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this "
+            "are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. "
+            "Set this well above health_check_interval because /health and the UI read the latest row per model."
+        ),
     )
     use_spend_logs_partitioning: bool | None = Field(
         None,
@@ -2776,10 +2850,14 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     user_email: str | None = None
     user_spend: float | None = None
     user_max_budget: float | None = None
+    # Values stay `object` rather than BudgetConfig: this is the raw JSON column,
+    # and validating it here would make one malformed row fail auth outright.
+    # resolve_model_budget validates the single entry a request actually needs.
+    user_model_max_budget: Mapping[str, object] | None = None
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path
-    # (_reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session
+    # (reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session
     # bearer or bridge envelope. Not a DB column and never populated from caller-controlled key
     # metadata or JWT claims, so it cannot be forged to gain the team-inherited MCP grant union
     # or to escape the caller-Authorization egress scrub. exclude=True keeps it out of serialization.
@@ -2953,6 +3031,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     sso_user_id: str | None = None
     teams: list[str] = []  # Just team IDs, not full team objects
     object_permission: LiteLLM_ObjectPermissionTable | None = None
+    model_max_budget: Mapping[str, object] | None = None
+    model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3500,8 +3580,12 @@ class SpendLogsMetadata(TypedDict):
     litellm_overhead_time_ms: float | None  # LiteLLM overhead time in milliseconds
     attempted_retries: int | None  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: int | None  # Max retries configured for this request
+    attempted_fallbacks: ReadOnly[int | None]  # Number of fallbacks attempted (0 = primary model group served)
+    original_model_group: ReadOnly[str | None]  # Model group requested before any fallbacks
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
+    autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
+    litellm_gateway_injected_cache: ReadOnly[str | None]
 
 
 class SpendLogsPayload(TypedDict):
@@ -3717,6 +3801,8 @@ class ProxyErrorTypes(str, enum.Enum):
     Project does not have access to the model
     """
 
+    model_cost_map_missing = "model_cost_map_missing"
+
     expired_key = "expired_key"
     """
     Key has expired
@@ -3725,6 +3811,11 @@ class ProxyErrorTypes(str, enum.Enum):
     auth_error = "auth_error"
     """
     General authentication error
+    """
+
+    auth_provider_unavailable = "auth_provider_unavailable"
+    """
+    The identity provider needed to authenticate the request (e.g. its JWKS endpoint) is unreachable
     """
 
     internal_server_error = "internal_server_error"
@@ -3817,6 +3908,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
 DB_CONNECTION_ERROR_TYPES: Final = (
     httpx.ConnectError,
+    httpx.ConnectTimeout,
     httpx.ReadError,
     httpx.ReadTimeout,
 )
@@ -4495,6 +4587,9 @@ class JWTIssuerConfig(BaseModel):
         return self
 
 
+DEFAULT_JWKS_STALE_TTL: Final = 3600
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4510,6 +4605,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - user_allowed_email_subdomain: If specified, only emails from specified subdomain will be allowed to access proxy.
     - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
+    - public_key_stale_ttl: Default - 3600s. Extra time past `public_key_ttl` that the last-known-good JWKS response
+        stays usable while the identity provider is unreachable. Set to 0 to fail closed instead.
     - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
     - enforce_rbac: If true, enforce RBAC for all routes.
     - custom_validate: A custom function to validates the JWT token.
@@ -4560,6 +4657,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
     public_key_ttl: float = 600
+    public_key_stale_ttl: float = Field(
+        default=DEFAULT_JWKS_STALE_TTL,
+        ge=0,
+        description=(
+            "Seconds beyond `public_key_ttl` that the last-known-good JWKS response stays usable while the identity "
+            "provider is unreachable. Bounds how long a signing key the provider has since removed can still be "
+            "trusted. Set to 0 to fail closed and reject requests as soon as the cached keys expire."
+        ),
+    )
     public_allowed_routes: list[str] = ["public_routes"]
     enforce_rbac: bool = False
     roles_jwt_field: str | None = None  # v2 on role mappings
@@ -4760,6 +4866,7 @@ class BaseDailySpendTransaction(TypedDict):
     # cost-savings metrics (dollars, priced per request before aggregation)
     compression_savings_spend: float
     prompt_caching_savings_spend: float
+    gateway_injected_caching_savings_spend: float  # writable-ok: the rollup queue accumulates into this key in place, as it does for every sibling spend field
     # Not required: rows queued by a pod running the previous release, or replayed from
     # the Redis buffer across an upgrade, carry no such key. Every reader coalesces a
     # missing value to zero, so requiring it here would describe a shape the aggregation

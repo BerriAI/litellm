@@ -1,6 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -72,7 +73,20 @@ def _get_token_detail_value(details: object, key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _get_web_search_requests(server_tool_use: Any) -> int | None:
+_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-)\d+")
+
+
+def _requested_image_param(optional_params: Mapping[str, object] | None, key: str) -> str | None:
+    value: Final = None if optional_params is None else optional_params.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _requested_image_size(optional_params: Mapping[str, object] | None) -> str | None:
+    value: Final = _requested_image_param(optional_params, "size")
+    return value if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
+
+
+def get_web_search_requests(server_tool_use: Any) -> int | None:
     """
     Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
     that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
@@ -90,6 +104,16 @@ def _get_web_search_requests(server_tool_use: Any) -> int | None:
     if isinstance(server_tool_use, dict):
         return server_tool_use.get("web_search_requests")
     return getattr(server_tool_use, "web_search_requests", None)
+
+
+def get_web_search_requests_from_usage(usage: Usage) -> int | None:
+    """Read ``web_search_requests`` from a ``Usage``'s ``server_tool_use``.
+
+    ``Usage`` deletes unset optional fields from ``__dict__`` (see
+    ``SafeAttributeModel``), so direct attribute access can raise
+    ``AttributeError``; ``getattr`` with a default is required here.
+    """
+    return get_web_search_requests(getattr(usage, "server_tool_use", None))
 
 
 def _is_above_128k(tokens: float) -> bool:
@@ -889,11 +913,22 @@ def generic_cost_per_token(
     total_details: Final = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
     has_double_counting: Final = (cache_hit > 0 or cache_creation > 0) and total_details > usage.prompt_tokens
 
-    if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
-        text_tokens = usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens
+    if has_double_counting:
+        # cached and per-modality counts are both subsets of prompt_tokens and may overlap, so a
+        # modality can only bill what the cache did not already cover or the overlap is billed twice
+        uncached_budget: Final = max(usage.prompt_tokens - cache_hit - cache_creation, 0)
+        billable_audio: Final = min(audio_tokens, uncached_budget)
+        billable_image: Final = min(image_tokens, uncached_budget - billable_audio)
+        billable_video: Final = min(video_tokens, uncached_budget - billable_audio - billable_image)
+        prompt_tokens_details["audio_tokens"] = billable_audio
+        prompt_tokens_details["image_tokens"] = billable_image
+        prompt_tokens_details["video_tokens"] = billable_video
+        prompt_tokens_details["text_tokens"] = uncached_budget - billable_audio - billable_image - billable_video
+    elif text_tokens == 0 and prompt_tokens_details["image_count"] == 0:
         # Clamp to zero: inconsistent streaming usage
-        text_tokens = max(text_tokens, 0)
-        prompt_tokens_details["text_tokens"] = text_tokens
+        prompt_tokens_details["text_tokens"] = max(
+            usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
+        )
 
     (
         prompt_base_cost,
@@ -1063,15 +1098,17 @@ def get_token_type_cost_breakdown(
         reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
 
     # Reasoning is billed at the selected tier's reasoning rate for tiered models,
-    # else at the explicit per-reasoning-token rate when the model defines one,
-    # otherwise at the standard output-token rate - this mirrors how the total
-    # completion cost is computed, so the breakdown can never diverge from it.
+    # else at the service-tier-aware per-reasoning-token rate - this mirrors how the
+    # total completion cost is computed, so the breakdown can never diverge from it.
     tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
-    flat_reasoning_rate: Final = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
     reasoning_rate: Final = (
         tiered_reasoning_rate
         if tiered_reasoning_rate is not None
-        else (flat_reasoning_rate if flat_reasoning_rate is not None else completion_base_cost)
+        else _resolve_reasoning_token_cost(
+            model_info=model_info,
+            service_tier=service_tier,
+            completion_base_cost=completion_base_cost,
+        )
     )
     reasoning_cost = float(reasoning_tokens) * reasoning_rate
 
@@ -1288,12 +1325,13 @@ class CostCalculatorUtils:
             cost_calculator as vertex_ai_image_cost_calculator,
         )
 
-        if size is None:
-            size = completion_response.size or "1024-x-1024"
-        if quality is None:
-            quality = completion_response.quality or "standard"
-        if n is None:
-            n = len(completion_response.data) if completion_response.data else 0
+        resolved_size: Final = (
+            size or completion_response.size or _requested_image_size(optional_params) or "1024-x-1024"
+        )
+        resolved_quality: Final = (
+            quality or completion_response.quality or _requested_image_param(optional_params, "quality") or "standard"
+        )
+        resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
 
         if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
             if isinstance(completion_response, ImageResponse):
@@ -1305,7 +1343,7 @@ class CostCalculatorUtils:
             if isinstance(completion_response, ImageResponse):
                 return bedrock_image_cost_calculator(
                     model=model,
-                    size=size,
+                    size=resolved_size,
                     image_response=completion_response,
                     optional_params=optional_params,
                 )
@@ -1371,6 +1409,7 @@ class CostCalculatorUtils:
             return fal_ai_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                optional_params=optional_params,
             )
         elif custom_llm_provider == litellm.LlmProviders.RUNWAYML.value:
             from litellm.llms.runwayml.cost_calculator import (
@@ -1400,19 +1439,19 @@ class CostCalculatorUtils:
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(
                 model=model,
-                quality=quality,
+                quality=resolved_quality,
                 custom_llm_provider=custom_llm_provider,
-                n=n,
-                size=size,
+                n=resolved_n,
+                size=resolved_size,
                 optional_params=optional_params,
             )
         else:
             return default_image_cost_calculator(
                 model=model,
-                quality=quality,
+                quality=resolved_quality,
                 custom_llm_provider=custom_llm_provider,
-                n=n,
-                size=size,
+                n=resolved_n,
+                size=resolved_size,
                 optional_params=optional_params,
             )
         return 0.0

@@ -144,8 +144,14 @@ class TestReasoningItemWithoutSummaryText:
             ("content_block_delta", 1),
             ("content_block_stop", 1),
         ]
-        assert chunks[1]["content_block"] == {"type": "thinking", "thinking": ""}
+        assert chunks[1]["content_block"] == {"type": "thinking", "thinking": "", "signature": ""}
         assert "".join(c["delta"]["thinking"] for c in chunks[2:4]) == "Weighing options"
+
+    def test_the_reasoning_item_id_is_never_streamed_as_a_signature(self):
+        """A stand-in signature would be replayed as a real one, so none is ever sent."""
+        chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["Weighing options"]))
+
+        assert not [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
 
 
 class TestToolUseBlockClosedExactlyOnce:

@@ -16,7 +16,7 @@ const EscalationKeywords: React.FC<EscalationKeywordsProps> = ({ keywords, onCha
       <div className="flex items-center gap-2 mb-1">
         <h4 className="m-0 text-xl font-semibold text-foreground">Escalation Keywords</h4>
         <SimpleTooltip content="Case-sensitive phrases a user can include in their message to force a bump to the next-higher complexity tier when they aren't happy with results. They can force a stronger model, but not choose which one.">
-          <Info className="size-4 text-muted-foreground/70" />
+          <Info className="size-4 text-muted-foreground" />
         </SimpleTooltip>
       </div>
       <span className="mb-2 block text-xs text-muted-foreground">

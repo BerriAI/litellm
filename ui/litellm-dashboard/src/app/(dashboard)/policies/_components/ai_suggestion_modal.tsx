@@ -393,7 +393,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
       return (
         <div className="text-center py-12 text-muted-foreground">
           <svg
-            className="w-12 h-12 mx-auto mb-3 text-muted-foreground/70"
+            className="w-12 h-12 mx-auto mb-3 text-muted-foreground"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -421,7 +421,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
             <div
               key={suggestion.template_id}
               className={`rounded-xl border-2 transition-all ${
-                isSelected ? "border-info bg-blue-50/60 shadow-xs" : "border-border hover:border-ring hover:shadow-xs"
+                isSelected ? "border-info bg-info/10 shadow-xs" : "border-border hover:border-ring hover:shadow-xs"
               }`}
             >
               <div className="p-4 cursor-pointer" onClick={() => toggleTemplate(suggestion.template_id)}>
@@ -441,7 +441,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                               ? "bg-muted text-muted-foreground border-border"
                               : template.complexity === "Medium"
                                 ? "bg-info/10 text-info border-info/15"
-                                : "bg-purple-50 text-purple-500 border-purple-100"
+                                : "bg-purple-50 text-purple-500 border-purple-100 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-900"
                           }`}
                         >
                           {template.complexity}
@@ -478,7 +478,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                           </span>
                         ))}
                       {template.guardrails && template.guardrails.length > 4 && (
-                        <span className="text-[10px] text-muted-foreground/70">
+                        <span className="text-[10px] text-muted-foreground">
                           +{template.guardrails.length - 4} more
                         </span>
                       )}
@@ -528,7 +528,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                 setTestResults(null);
                 setTestOverallAction(null);
               }}
-              className="text-muted-foreground/70 hover:text-muted-foreground"
+              className="text-muted-foreground hover:text-foreground"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -853,7 +853,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                 {attackExamples.map((example, index) => (
                   <div key={index} className="relative group">
                     <textarea
-                      className="w-full rounded-lg border border-border px-3.5 py-2.5 pr-9 text-sm text-foreground placeholder-muted-foreground/70 focus:border-info focus:ring-1 focus:ring-ring overflow-hidden"
+                      className="w-full rounded-lg border border-border px-3.5 py-2.5 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus:border-info focus:ring-1 focus:ring-ring overflow-hidden"
                       rows={1}
                       style={{ minHeight: "40px", resize: "none" }}
                       placeholder={
@@ -879,7 +879,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                     {attackExamples.length > 1 && (
                       <button
                         onClick={() => handleRemoveExample(index)}
-                        className="absolute top-2.5 right-2.5 text-muted-foreground/70 hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
+                        className="absolute top-2.5 right-2.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -902,7 +902,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                 Description of what you want to block
               </label>
               <textarea
-                className="w-full rounded-lg border border-border px-3.5 py-2.5 text-sm text-foreground placeholder-muted-foreground/70 focus:border-info focus:ring-1 focus:ring-ring overflow-hidden"
+                className="w-full rounded-lg border border-border px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-info focus:ring-1 focus:ring-ring overflow-hidden"
                 rows={1}
                 style={{ minHeight: "60px", resize: "none" }}
                 placeholder="e.g. Block PII leakage and prompt injection in our customer support chatbot"

@@ -180,6 +180,22 @@ def well_known_root_suffix() -> str:
     return "" if root == "/" else root
 
 
+def get_route_relative_request_path(scope: Scope) -> str:
+    """The request path the MCP route shapes are written against: the raw ASGI path with the
+    deployment's ``root_path`` removed.
+
+    ``scope["path"]`` and ``_original_path`` are both raw request-line paths, so on a sub-path
+    deployment they still carry the ``SERVER_ROOT_PATH`` prefix (``/litellm/{server}/mcp``) while
+    every route shape compared against them is root-relative. Mirrors the segment-boundary strip in
+    :func:`litellm.proxy.auth.auth_utils.get_request_route`, which the rest of the MCP auth path
+    already routes through, so ``/litellmfoo`` is not truncated under ``root_path=/litellm``."""
+    raw_path = str(scope.get("_original_path") or scope.get("path", "") or "")
+    root_path = str(scope.get("app_root_path") or scope.get("root_path") or "").rstrip("/")
+    if root_path and (raw_path == root_path or raw_path.startswith(f"{root_path}/")):
+        return raw_path[len(root_path) :]
+    return raw_path
+
+
 def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str:
     """The per-server protected-resource metadata URL matching the spelling the request
     arrived on, so a strict RFC 9728 client resolves the same route the proxy registered.
@@ -188,7 +204,7 @@ def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str
     the route decorators insert it (see :func:`well_known_root_suffix`)."""
     request: Final = Request(scope)
     base_url: Final = get_request_base_url(request)
-    _path: Final = scope.get("_original_path") or scope.get("path", "") or ""
+    _path: Final = get_route_relative_request_path(scope)
 
     if _path.startswith(f"/{server_name}/mcp"):
         return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/{server_name}/mcp"

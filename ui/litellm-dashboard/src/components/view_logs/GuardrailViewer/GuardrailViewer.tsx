@@ -6,6 +6,7 @@ import BedrockGuardrailDetails, {
 } from "@/components/view_logs/GuardrailViewer/BedrockGuardrailDetails";
 import ContentFilterDetails from "./ContentFilterDetails";
 import CompliancePanel from "./CompliancePanel";
+import { getSpendString } from "@/utils/dataUtils";
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -55,6 +56,9 @@ interface GuardrailInformation {
   patterns_checked?: number;
   alert_recipients?: string[];
   risk_score?: number;
+  guardrail_usage?: Record<string, number>;
+  guardrail_cost?: number;
+  guardrail_cost_in_spend?: boolean;
 }
 
 interface GuardrailViewerProps {
@@ -430,7 +434,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                     {item.status}
                   </span>
                 )}
-                <span className="text-xs text-muted-foreground/70 font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
+                <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
               </div>
             </div>
           </div>
@@ -442,6 +446,13 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
 
 // ── Evaluation Card ─────────────────────────────────────────────────────────
 
+// Shared spend formatter so this chip renders the same dollar string as the
+// Cost Breakdown panel above it (and never falls into JS e-notation below 1e-6).
+const formatGuardrailCost = (cost: number): string => {
+  if (cost === 0) return "$0.00";
+  return getSpendString(cost, 8);
+};
+
 const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
   const [expanded, setExpanded] = useState(false);
   const success = isEntrySuccess(entry);
@@ -450,6 +461,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
   const durationStr = formatDurationMs(entry.duration);
   const modeStr = formatMode(entry.guardrail_mode);
   const riskScore = getRiskScore(entry);
+  const textRecords = entry.guardrail_usage?.["text_records"];
 
   const guardrailProvider = entry.guardrail_provider ?? "presidio";
   const guardrailResponse = entry.guardrail_response;
@@ -529,6 +541,31 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
                   Risk {riskScore}/10
                 </TooltipTrigger>
                 <TooltipContent>{`Risk score: ${riskScore}/10`}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+
+          {textRecords != null && (
+            <span className="px-2 py-0.5 bg-muted text-muted-foreground border border-border rounded-sm text-[11px] font-medium shrink-0">
+              {textRecords.toLocaleString()} text record{textRecords === 1 ? "" : "s"}
+            </span>
+          )}
+
+          {entry.guardrail_cost != null && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className="px-2 py-0.5 bg-muted text-muted-foreground border border-border rounded-sm text-[11px] font-semibold shrink-0" />
+                  }
+                >
+                  {formatGuardrailCost(entry.guardrail_cost)}
+                </TooltipTrigger>
+                <TooltipContent>
+                  {entry.guardrail_cost_in_spend === false
+                    ? "Estimated guardrail cost (reported only; not counted against spend or budgets)"
+                    : "Guardrail cost"}
+                </TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -670,7 +707,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
               <span className="text-sm text-muted-foreground">
                 {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
               </span>
-              <span className="text-muted-foreground/70">|</span>
+              <span className="text-muted-foreground">|</span>
               <span
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
                   allPassed

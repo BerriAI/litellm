@@ -735,7 +735,7 @@ export default function ComplianceUI({
 
                 <div className="flex flex-col items-center pt-6 shrink-0">
                   <div className="w-px h-4 bg-border" />
-                  <span className="text-[10px] font-medium text-muted-foreground/70 my-1">or</span>
+                  <span className="text-[10px] font-medium text-muted-foreground my-1">or</span>
                   <div className="w-px h-4 bg-border" />
                 </div>
               </>
@@ -751,13 +751,13 @@ export default function ComplianceUI({
                   onClick={() => setShowGuardrailDropdown(!showGuardrailDropdown)}
                   className="w-full flex items-center justify-between border border-border rounded-lg px-3 py-2 text-sm text-left hover:border-ring transition-colors"
                 >
-                  <span className={selectedGuardrails.length > 0 ? "text-foreground" : "text-muted-foreground/70"}>
+                  <span className={selectedGuardrails.length > 0 ? "text-foreground" : "text-muted-foreground"}>
                     {selectedGuardrails.length > 0 ? `${selectedGuardrails.length} selected` : "None selected"}
                   </span>
-                  <ChevronDown className="w-4 h-4 text-muted-foreground/70" />
+                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
                 </button>
                 {showGuardrailDropdown && (
-                  <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-card border border-border rounded-lg shadow-lg py-1 max-h-52 overflow-y-auto">
+                  <div className="absolute z-floating top-full left-0 right-0 mt-1 bg-card border border-border rounded-lg shadow-lg py-1 max-h-52 overflow-y-auto">
                     {guardrailOptions.length === 0 ? (
                       <div className="px-3 py-2 text-xs text-muted-foreground">
                         No guardrails available. Create guardrails in the Guardrails page.
@@ -773,11 +773,11 @@ export default function ComplianceUI({
                           <div
                             className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${selectedGuardrails.includes(g.id) ? "bg-info border-info" : "border-border"}`}
                           >
-                            {selectedGuardrails.includes(g.id) && <Check className="w-3 h-3 text-white" />}
+                            {selectedGuardrails.includes(g.id) && <Check className="w-3 h-3 text-info-foreground" />}
                           </div>
                           <div className="min-w-0">
                             <div className="text-foreground">{g.name}</div>
-                            {g.type && <div className="text-[10px] text-muted-foreground/70">{g.type}</div>}
+                            {g.type && <div className="text-[10px] text-muted-foreground">{g.type}</div>}
                           </div>
                         </button>
                       ))
@@ -792,13 +792,13 @@ export default function ComplianceUI({
                     return (
                       <span
                         key={id}
-                        className="inline-flex items-center gap-1 text-[11px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-sm font-medium"
+                        className="inline-flex items-center gap-1 text-[11px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-sm font-medium dark:bg-indigo-950 dark:text-indigo-300"
                       >
                         {g?.name}
                         <button
                           type="button"
                           onClick={() => toggleGuardrail(id)}
-                          className="hover:text-indigo-900"
+                          className="hover:text-indigo-900 dark:hover:text-indigo-100"
                           aria-label="Remove"
                         >
                           <X className="w-2.5 h-2.5" />
@@ -815,7 +815,7 @@ export default function ComplianceUI({
                 <button
                   type="button"
                   onClick={() => batchAbortControllerRef.current?.abort()}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap bg-destructive text-white hover:bg-destructive/80"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap bg-destructive text-destructive-foreground hover:bg-destructive/80"
                 >
                   <Square className="w-3.5 h-3.5" /> Stop
                 </button>
@@ -824,7 +824,7 @@ export default function ComplianceUI({
                   type="button"
                   onClick={runTests}
                   disabled={selectedPromptIds.size === 0 || disabledPersonalKeyCreation}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || disabledPersonalKeyCreation ? "bg-muted text-muted-foreground/70 cursor-not-allowed" : "bg-info text-white hover:bg-info/80"}`}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || disabledPersonalKeyCreation ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-info text-info-foreground hover:bg-info/80"}`}
                 >
                   <Play className="w-3.5 h-3.5" /> Simulate ({selectedPromptIds.size})
                 </button>
@@ -858,19 +858,19 @@ export default function ComplianceUI({
               <div className="px-4 pt-4 pb-2">
                 <div className="flex items-center justify-between mb-2.5">
                   <h3 className="text-sm font-semibold text-foreground">Test Prompts</h3>
-                  <span className="text-[11px] text-muted-foreground/70 tabular-nums">
+                  <span className="text-[11px] text-muted-foreground tabular-nums">
                     {selectedPromptIds.size}/{totalPromptCount}
                   </span>
                 </div>
 
                 <div className="relative mb-2.5">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/70" />
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                   <input
                     type="text"
                     value={searchPrompt}
                     onChange={(e) => setSearchPrompt(e.target.value)}
                     placeholder="Search prompts..."
-                    className="w-full border border-border rounded-lg pl-8 pr-3 py-1.5 text-xs placeholder:text-muted-foreground/70 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-info"
+                    className="w-full border border-border rounded-lg pl-8 pr-3 py-1.5 text-xs placeholder:text-muted-foreground focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-info"
                   />
                 </div>
 
@@ -883,7 +883,7 @@ export default function ComplianceUI({
                     >
                       Select All
                     </button>
-                    <span className="text-muted-foreground/70 text-[10px]">·</span>
+                    <span className="text-muted-foreground text-[10px]">·</span>
                     <button
                       type="button"
                       onClick={deselectAll}
@@ -918,13 +918,13 @@ export default function ComplianceUI({
               </div>
 
               {showAddPrompt && (
-                <div className="mx-4 mb-2 border border-info/20 bg-blue-50/30 rounded-lg p-3">
+                <div className="mx-4 mb-2 border border-info/20 bg-info/5 rounded-lg p-3">
                   <textarea
                     value={newPromptText}
                     onChange={(e) => setNewPromptText(e.target.value)}
                     placeholder="Enter your test prompt..."
                     rows={2}
-                    className="w-full border border-border rounded-sm px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-info resize-none bg-card"
+                    className="w-full border border-border rounded-sm px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-info resize-none bg-card"
                   />
                   <div className="flex items-center justify-between mt-2">
                     <div className="flex items-center gap-2">
@@ -958,7 +958,7 @@ export default function ComplianceUI({
                         type="button"
                         onClick={addCustomPrompt}
                         disabled={!newPromptText.trim()}
-                        className={`text-[11px] font-medium px-2.5 py-1 rounded-sm ${newPromptText.trim() ? "bg-info text-white" : "bg-muted text-muted-foreground/70"}`}
+                        className={`text-[11px] font-medium px-2.5 py-1 rounded-sm ${newPromptText.trim() ? "bg-info text-info-foreground" : "bg-muted text-muted-foreground"}`}
                       >
                         Add
                       </button>
@@ -968,7 +968,7 @@ export default function ComplianceUI({
               )}
 
               {showCsvUpload && (
-                <div className="mx-4 mb-2 border border-info/20 bg-blue-50/30 rounded-lg p-3">
+                <div className="mx-4 mb-2 border border-info/20 bg-info/5 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[11px] font-semibold text-foreground">Upload CSV Dataset</span>
                     <button
@@ -985,7 +985,7 @@ export default function ComplianceUI({
                       <span className="font-semibold text-muted-foreground">Required columns:</span>{" "}
                       <code className="bg-muted px-1 rounded-sm text-[10px]">prompt</code>,{" "}
                       <code className="bg-muted px-1 rounded-sm text-[10px]">expected_result</code>{" "}
-                      <span className="text-muted-foreground/70">(fail or pass)</span>
+                      <span className="text-muted-foreground">(fail or pass)</span>
                     </p>
                     <p className="text-[10px] text-muted-foreground leading-relaxed mt-0.5">
                       <span className="font-semibold text-muted-foreground">Optional columns:</span>{" "}
@@ -1049,14 +1049,14 @@ export default function ComplianceUI({
                         className="w-full flex items-center gap-2 px-3 py-2.5 text-left bg-muted hover:bg-accent transition-colors rounded-lg border border-border"
                       >
                         {isExpanded ? (
-                          <ChevronDown className="w-4 h-4 text-muted-foreground/70 shrink-0" />
+                          <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
                         ) : (
-                          <ChevronRight className="w-4 h-4 text-muted-foreground/70 shrink-0" />
+                          <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
                         )}
                         <CategoryIcon iconKey={fw.icon} className="w-4 h-4 text-muted-foreground shrink-0" />
                         <div className="flex-1 min-w-0">
                           <span className="text-xs font-semibold text-foreground">{fw.name}</span>
-                          <span className="text-[10px] text-muted-foreground/70 ml-1.5">{fwPromptCount} prompts</span>
+                          <span className="text-[10px] text-muted-foreground ml-1.5">{fwPromptCount} prompts</span>
                         </div>
                         {fwSelectedCount > 0 && (
                           <span className="text-[10px] font-medium bg-info/15 text-info px-1.5 py-0.5 rounded-full">
@@ -1092,9 +1092,9 @@ export default function ComplianceUI({
                                   className="w-full flex items-center gap-1.5 px-2.5 py-2 text-left hover:bg-accent transition-colors"
                                 >
                                   {isCatExpanded ? (
-                                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground/70 shrink-0" />
+                                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                                   ) : (
-                                    <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/70 shrink-0" />
+                                    <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                                   )}
                                   <span className="text-sm shrink-0">
                                     <CategoryIcon
@@ -1105,7 +1105,7 @@ export default function ComplianceUI({
                                   <span className="text-[11px] font-medium text-foreground flex-1 min-w-0 truncate">
                                     {category.name}
                                   </span>
-                                  <span className="text-[10px] text-muted-foreground/70 shrink-0">
+                                  <span className="text-[10px] text-muted-foreground shrink-0">
                                     {category.prompts.length}
                                   </span>
                                   {selectedInCat > 0 && (
@@ -1118,7 +1118,7 @@ export default function ComplianceUI({
                                 {isCatExpanded && (
                                   <div>
                                     <div className="px-2.5 py-1 flex items-center justify-between">
-                                      <p className="text-[10px] text-muted-foreground/70 leading-relaxed flex-1 mr-2 line-clamp-2">
+                                      <p className="text-[10px] text-muted-foreground leading-relaxed flex-1 mr-2 line-clamp-2">
                                         {category.description}
                                       </p>
                                       <button
@@ -1156,7 +1156,7 @@ export default function ComplianceUI({
                                               e.stopPropagation();
                                               deleteCustomPrompt(prompt.id);
                                             }}
-                                            className="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground/70 hover:text-destructive transition-all shrink-0"
+                                            className="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-destructive transition-all shrink-0"
                                             aria-label="Delete"
                                           >
                                             <Trash2 className="w-3 h-3" />
@@ -1226,7 +1226,7 @@ export default function ComplianceUI({
                         return (
                           <span
                             key={id}
-                            className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-sm font-medium"
+                            className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-sm font-medium dark:bg-indigo-950 dark:text-indigo-300"
                           >
                             {g?.name}
                           </span>
@@ -1234,7 +1234,7 @@ export default function ComplianceUI({
                       })}
                     </div>
                   ) : (
-                    <p className="text-[11px] text-muted-foreground/70">
+                    <p className="text-[11px] text-muted-foreground">
                       No policies or guardrails selected — select above to test against specific rules.
                     </p>
                   )}
@@ -1245,7 +1245,7 @@ export default function ComplianceUI({
                     <div className="flex items-center justify-center h-full min-h-[120px]">
                       <div className="text-center">
                         <div className="w-10 h-10 bg-muted rounded-xl flex items-center justify-center mx-auto mb-3">
-                          <MessageSquare className="w-5 h-5 text-muted-foreground/70" />
+                          <MessageSquare className="w-5 h-5 text-muted-foreground" />
                         </div>
                         <p className="text-xs text-muted-foreground">Type a prompt below to quickly test it.</p>
                       </div>
@@ -1254,10 +1254,10 @@ export default function ComplianceUI({
                   {quickTestMessages.map((msg) => (
                     <div key={msg.id} className={`flex ${msg.type === "user" ? "justify-end" : "justify-start"}`}>
                       <div
-                        className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.type === "user" ? "bg-info text-white" : msg.result === "blocked" ? "bg-destructive/10 border border-destructive/15" : "bg-success/10 border border-success/15"}`}
+                        className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.type === "user" ? "bg-info text-info-foreground" : msg.result === "blocked" ? "bg-destructive/10 border border-destructive/15" : "bg-success/10 border border-success/15"}`}
                       >
                         <p
-                          className={`text-xs leading-relaxed ${msg.type === "user" ? "text-white" : msg.result === "blocked" ? "text-destructive" : "text-success"}`}
+                          className={`text-xs leading-relaxed ${msg.type === "user" ? "text-info-foreground" : msg.result === "blocked" ? "text-destructive" : "text-success"}`}
                         >
                           {msg.type === "system" && (
                             <span className="inline-flex items-center gap-1 font-semibold mr-1">
@@ -1284,7 +1284,7 @@ export default function ComplianceUI({
                   {isQuickTesting && (
                     <div className="flex justify-start">
                       <div className="bg-muted rounded-lg px-3 py-2">
-                        <Loader2 className="w-3.5 h-3.5 text-muted-foreground/70 animate-spin" />
+                        <Loader2 className="w-3.5 h-3.5 text-muted-foreground animate-spin" />
                       </div>
                     </div>
                   )}
@@ -1300,23 +1300,23 @@ export default function ComplianceUI({
                       onKeyDown={handleQuickTestKeyDown}
                       placeholder="Enter text to test..."
                       rows={3}
-                      className="w-full px-3 pt-3 pb-1 text-sm text-foreground placeholder:text-muted-foreground/70 focus:outline-hidden resize-none"
+                      className="w-full px-3 pt-3 pb-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden resize-none"
                     />
                     <div className="flex items-center justify-between px-3 pb-2">
-                      <span className="text-[10px] text-muted-foreground/70">
+                      <span className="text-[10px] text-muted-foreground">
                         Press <kbd className="px-1 py-0.5 bg-muted rounded-sm text-[10px] font-mono">Enter</kbd> to
                         submit ·{" "}
                         <kbd className="px-1 py-0.5 bg-muted rounded-sm text-[10px] font-mono">Shift+Enter</kbd> for new
                         line
                       </span>
-                      <span className="text-[10px] text-muted-foreground/70 tabular-nums">{quickTestInput.length}</span>
+                      <span className="text-[10px] text-muted-foreground tabular-nums">{quickTestInput.length}</span>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={runQuickTest}
                     disabled={!quickTestInput.trim() || isQuickTesting || disabledPersonalKeyCreation}
-                    className={`w-full mt-2 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${!quickTestInput.trim() || isQuickTesting || disabledPersonalKeyCreation ? "bg-muted text-muted-foreground/70 cursor-not-allowed" : "bg-info text-white hover:bg-info/80"}`}
+                    className={`w-full mt-2 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${!quickTestInput.trim() || isQuickTesting || disabledPersonalKeyCreation ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-info text-info-foreground hover:bg-info/80"}`}
                   >
                     {isQuickTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}{" "}
                     {testButtonLabel}
@@ -1400,7 +1400,7 @@ export default function ComplianceUI({
                     <div className="flex items-center justify-center h-full min-h-[120px]">
                       <div className="text-center">
                         <div className="w-12 h-12 bg-muted rounded-xl flex items-center justify-center mx-auto mb-3">
-                          <FlaskConical className="w-6 h-6 text-muted-foreground/70" />
+                          <FlaskConical className="w-6 h-6 text-muted-foreground" />
                         </div>
                         <p className="text-xs text-muted-foreground max-w-[240px]">
                           Select prompts and click Simulate to run batch compliance tests.
@@ -1452,13 +1452,13 @@ export default function ComplianceUI({
                         return (
                           <div
                             key={result.promptId}
-                            className={`border rounded-lg overflow-hidden ${result.status !== "complete" ? "border-border bg-gray-50/50" : result.isMatch ? "border-success/15" : "border-destructive/15"}`}
+                            className={`border rounded-lg overflow-hidden ${result.status !== "complete" ? "border-border bg-muted/50" : result.isMatch ? "border-success/15" : "border-destructive/15"}`}
                           >
                             <div className="p-2.5">
                               <div className="flex items-start gap-2">
                                 <div className="shrink-0 mt-0.5">
                                   {result.status !== "complete" ? (
-                                    <Loader2 className="w-3.5 h-3.5 text-muted-foreground/70 animate-spin" />
+                                    <Loader2 className="w-3.5 h-3.5 text-muted-foreground animate-spin" />
                                   ) : result.isMatch ? (
                                     <CheckCircle2 className="w-3.5 h-3.5 text-success" />
                                   ) : (
@@ -1468,7 +1468,7 @@ export default function ComplianceUI({
                                 <div className="flex-1 min-w-0">
                                   <p className="text-[11px] text-foreground leading-relaxed mb-1.5">{result.prompt}</p>
                                   <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="text-[9px] text-muted-foreground/70 inline-flex items-center gap-0.5">
+                                    <span className="text-[9px] text-muted-foreground inline-flex items-center gap-0.5">
                                       <CategoryIcon iconKey={result.categoryIcon} className="w-3 h-3" />
                                       {result.category}
                                     </span>
@@ -1497,7 +1497,7 @@ export default function ComplianceUI({
                                         return next;
                                       });
                                     }}
-                                    className="shrink-0 p-0.5 text-muted-foreground/70 hover:text-muted-foreground"
+                                    className="shrink-0 p-0.5 text-muted-foreground hover:text-foreground"
                                     aria-label={isExpanded ? "Collapse" : "Expand"}
                                   >
                                     {isExpanded ? (
@@ -1512,14 +1512,14 @@ export default function ComplianceUI({
                                 <div className="mt-2 pt-2 border-t border-border text-[11px] space-y-1">
                                   {result.triggeredBy && (
                                     <div>
-                                      <span className="text-muted-foreground/70">Triggered by:</span>{" "}
+                                      <span className="text-muted-foreground">Triggered by:</span>{" "}
                                       <span className="font-medium text-foreground bg-muted px-1.5 py-0.5 rounded-sm">
                                         {result.triggeredBy}
                                       </span>
                                     </div>
                                   )}
                                   <div>
-                                    <span className="text-muted-foreground/70">Verdict:</span>{" "}
+                                    <span className="text-muted-foreground">Verdict:</span>{" "}
                                     <span className={result.isMatch ? "text-success" : "text-destructive"}>
                                       {result.isMatch
                                         ? "Correctly handled"
@@ -1530,7 +1530,7 @@ export default function ComplianceUI({
                                   </div>
                                   {result.returnedText != null && result.returnedText !== "" && (
                                     <div className="mt-1.5">
-                                      <span className="text-muted-foreground/70 block mb-0.5">LLM response:</span>
+                                      <span className="text-muted-foreground block mb-0.5">LLM response:</span>
                                       <div className="text-foreground bg-muted rounded-sm px-2 py-1.5 border border-border max-h-32 overflow-y-auto whitespace-pre-wrap wrap-break-word">
                                         {result.returnedText}
                                       </div>

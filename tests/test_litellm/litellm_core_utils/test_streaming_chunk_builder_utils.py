@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
@@ -716,6 +711,66 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.server_tool_use.web_search_requests == 2
 
 
+def test_calculate_usage_carries_google_maps_grounding_requests():
+    """
+    The Maps grounding counter set on a streamed usage chunk must survive the stream rebuild even
+    when a later chunk carries its own prompt_tokens_details, or Maps grounding on streaming
+    requests silently bills $0.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Here"),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=0,
+            prompt_tokens=15,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(google_maps_grounding_requests=1),
+        ),
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=None),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=27,
+            prompt_tokens=0,
+            total_tokens=27,
+            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=0),
+        ),
+    )
+
+    chunks = [chunk1, chunk2]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(chunks=chunks, model="gemini-2.5-flash", completion_output="")
+
+    assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
+
+
 def test_sort_chunks_handles_dict_hidden_params_created_at():
     chunks = [
         {
@@ -992,6 +1047,32 @@ def test_cost_field_in_usage_chunks():
     assert usage.cost == 0.00025
     assert usage.prompt_tokens == 10
     assert usage.completion_tokens == 5
+
+
+def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
+    """Regression for https://github.com/BerriAI/litellm/issues/32051
+
+    The Responses-API bridge yields ModelResponseStream chunks with choices
+    followed by a trailing event object that has no ``choices`` key. Building
+    those chunks used to raise ``KeyError('choices')`` (surfaced as a 500
+    APIError); it must now skip the choices-less chunk and assemble content.
+    """
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+
+    content_chunks = [
+        ModelResponseStream(
+            model="gpt-4o",
+            choices=[StreamingChoices(index=0, delta=Delta(content=part))],
+        )
+        for part in ("Hello", " world")
+    ]
+    trailing_chunk = BaseLiteLLMOpenAIResponseObject()
+    assert "choices" not in trailing_chunk
+
+    response = stream_chunk_builder(chunks=content_chunks + [trailing_chunk])
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
 
 
 def test_anthropic_speed_and_geo_survive_stream_assembly():

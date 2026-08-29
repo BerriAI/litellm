@@ -1,11 +1,8 @@
-import os
-import sys
 from typing import Final, Optional
 from unittest.mock import Mock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,

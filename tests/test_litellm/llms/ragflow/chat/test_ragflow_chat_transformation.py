@@ -6,13 +6,11 @@ for RAGFlow's OpenAI-compatible API with custom path structures.
 """
 
 import os
-import sys
 from unittest.mock import Mock, patch
 
 import pytest
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.ragflow.chat.transformation import RAGFlowConfig

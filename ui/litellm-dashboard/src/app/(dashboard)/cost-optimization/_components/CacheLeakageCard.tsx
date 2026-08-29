@@ -40,7 +40,7 @@ const compareRows = (a: CacheLeakageRow, b: CacheLeakageRow, sort: SortState): n
 const InfoTooltip = ({ info }: { info: string }) => (
   <Tooltip>
     <TooltipTrigger render={<span className="inline-flex" aria-label={info} />}>
-      <Info className="h-3 w-3 text-muted-foreground/70" />
+      <Info className="h-3 w-3 text-muted-foreground" />
     </TooltipTrigger>
     <TooltipContent className="max-w-xs">{info}</TooltipContent>
   </Tooltip>
@@ -72,7 +72,7 @@ const SortableHead = ({
           className="inline-flex items-center gap-1 font-medium hover:text-foreground"
         >
           {label}
-          <Arrow className={`h-3 w-3 ${active ? "text-foreground" : "text-muted-foreground/70"}`} />
+          <Arrow className={`h-3 w-3 ${active ? "text-foreground" : "text-muted-foreground"}`} />
         </button>
         <InfoTooltip info={info} />
       </span>
@@ -123,6 +123,11 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
           </Tabs>
         </CardHeader>
         <CardContent>
+          {rows.length > 0 && isFetchingMore && (
+            <p className="mb-2 text-sm text-muted-foreground">
+              Data is still loading; rows and totals will update as the rest of the range arrives.
+            </p>
+          )}
           {rows.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
               {loading || isFetchingMore ? "Loading..." : `No ${emptyNoun} usage in this range.`}

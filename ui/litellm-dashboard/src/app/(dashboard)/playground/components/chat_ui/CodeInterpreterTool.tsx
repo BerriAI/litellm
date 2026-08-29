@@ -46,14 +46,14 @@ const CodeInterpreterTool: React.FC<CodeInterpreterToolProps> = ({
   };
 
   return (
-    <div className="border border-border rounded-lg p-3 bg-linear-to-r from-blue-50 to-purple-50">
+    <div className="border border-border rounded-lg p-3 bg-linear-to-r from-blue-50 to-purple-50 dark:from-blue-950 dark:to-purple-950">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Code className="size-4 text-info" />
           <span className="font-medium text-foreground">Code Interpreter</span>
           <Tooltip>
             <TooltipTrigger aria-label="About Code Interpreter">
-              <Info className="size-3 text-muted-foreground/70" />
+              <Info className="size-3 text-muted-foreground" />
             </TooltipTrigger>
             <TooltipContent>
               Run Python code to generate files, charts, and analyze data. Container is created automatically.

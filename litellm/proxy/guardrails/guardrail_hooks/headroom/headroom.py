@@ -339,6 +339,7 @@ def _build_responses_followup_items(
 
 class HeadroomGuardrail(CustomGuardrail):
     records_own_guardrail_information: ClassVar[bool] = True
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({HEADROOM_RETRIEVE_TOOL_NAME})
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -428,7 +429,7 @@ class HeadroomGuardrail(CustomGuardrail):
             payload["model"] = model
 
         try:
-            raw_response: HttpxResponse | None = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
+            raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
                 headers=self._request_headers(),
@@ -449,16 +450,6 @@ class HeadroomGuardrail(CustomGuardrail):
                     messages,
                     "Headroom compression service unreachable",
                     {"detail": str(e)},
-                ),
-                False,
-                {},
-            )
-        if raw_response is None:
-            return (
-                self._handle_compress_failure(
-                    messages,
-                    "Headroom compression service returned no response",
-                    {},
                 ),
                 False,
                 {},
@@ -575,7 +566,7 @@ class HeadroomGuardrail(CustomGuardrail):
             params["query"] = query
 
         try:
-            raw_response: HttpxResponse | None = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]
+            raw_response: HttpxResponse = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]
                 url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
                 params=params,
                 headers=self._request_headers(),
@@ -584,7 +575,7 @@ class HeadroomGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Headroom: retrieve failed for hash=%s: %s", hash_value, e)
             return f"[Headroom: retrieval failed for hash={hash_value}]"
 
-        if raw_response is None or raw_response.status_code == 404:
+        if raw_response.status_code == 404:
             return f"[Headroom: hash={hash_value} not found or expired]"
 
         if raw_response.status_code != 200:

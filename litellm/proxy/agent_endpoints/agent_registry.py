@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, NamedTuple, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -13,8 +13,12 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.base_repository import SupportsModelDump
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import AgentsRepository, ObjectPermissionRepository
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class AgentObjectPermissionRecord(Protocol):
@@ -43,11 +47,20 @@ class AgentRecordDump(TypedDict):
 
 
 class AgentRecord(Protocol):
-    agent_id: str
-    agent_name: str
-    object_permission_id: str | None
-    object_permission: AgentObjectPermissionRecord | None
-    spend: float
+    @property
+    def agent_id(self) -> str: ...
+
+    @property
+    def agent_name(self) -> str: ...
+
+    @property
+    def object_permission_id(self) -> str | None: ...
+
+    @property
+    def object_permission(self) -> AgentObjectPermissionRecord | None: ...
+
+    @property
+    def spend(self) -> float: ...
 
     def model_dump(self) -> AgentRecordDump: ...
 
@@ -58,67 +71,48 @@ class AgentTableClient(Protocol):
     async def create(
         self,
         data: Mapping[str, object],
-        include: Mapping[str, bool] | None = None,
+        include: Mapping[str, object] | None = None,
     ) -> AgentRecord: ...
 
     async def find_unique(
         self,
         where: Mapping[str, object],
-        include: Mapping[str, bool] | None = None,
+        include: Mapping[str, object] | None = None,
     ) -> AgentRecord | None: ...
 
     async def find_many(
         self,
         where: Mapping[str, object] | None = None,
         order: Mapping[str, str] | None = None,
-        include: Mapping[str, bool] | None = None,
+        include: Mapping[str, object] | None = None,
     ) -> Sequence[AgentRecord]: ...
 
     async def update(
         self,
-        where: Mapping[str, object],
         data: Mapping[str, object],
-        include: Mapping[str, bool] | None = None,
-    ) -> AgentRecord: ...
+        where: Mapping[str, object],
+        include: Mapping[str, object] | None = None,
+    ) -> AgentRecord | None: ...
 
-    async def delete(self, where: Mapping[str, object]) -> AgentRecord: ...
-
-
-class _AgentsRepositoryView(Protocol):
-    @property
-    def table(self) -> AgentTableClient: ...
-
-
-def _agents_table_of(repository: _AgentsRepositoryView) -> AgentTableClient:
-    return repository.table
+    async def delete(
+        self,
+        where: Mapping[str, object],
+        include: Mapping[str, object] | None = None,
+    ) -> AgentRecord | None: ...
 
 
 def agents_table(prisma_client: PrismaClient) -> AgentTableClient:
-    return _agents_table_of(AgentsRepository(prisma_client))
+    table: Final[AgentTableClient] = AgentsRepository(prisma_client).table  # pyright: ignore[reportAssignmentType]  # prisma rows type model_dump() as dict[str, Any]
+    return table
 
 
-class ObjectPermissionGrantRecord(Protocol):
-    object_permission_id: str
-    agents: list[str] | None
-
-
-class ObjectPermissionTableClient(Protocol):
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[ObjectPermissionGrantRecord]: ...
-
-    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
-
-
-class _ObjectPermissionRepositoryView(Protocol):
-    @property
-    def table(self) -> ObjectPermissionTableClient: ...
-
-
-def _object_permission_table_of(repository: _ObjectPermissionRepositoryView) -> ObjectPermissionTableClient:
-    return repository.table
-
-
-def object_permission_table(prisma_client: PrismaClient) -> ObjectPermissionTableClient:
-    return _object_permission_table_of(ObjectPermissionRepository(prisma_client))
+def object_permission_table(
+    prisma_client: PrismaClient,
+) -> "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]":
+    table: Final[TableActions[prisma_models.LiteLLM_ObjectPermissionTable]] = ObjectPermissionRepository(
+        prisma_client
+    ).table
+    return table
 
 
 class GrantMigrationResult(NamedTuple):
@@ -239,7 +233,9 @@ class AgentRegistry:
         self.load_agents_from_config(agent_config if agent_config is not None else self.config_agents)
         return self.agent_list
 
-    async def migrate_legacy_grant_ids(self, table: ObjectPermissionTableClient) -> GrantMigrationResult:
+    async def migrate_legacy_grant_ids(
+        self, table: "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]"
+    ) -> GrantMigrationResult:
         """
         Rewrite object_permission.agents rows holding a legacy full-entry hash to the
         stable name-derived id.
@@ -379,6 +375,8 @@ class AgentRegistry:
         """
         try:
             deleted_agent: Final = await agents_table(prisma_client).delete(where={"agent_id": agent_id})
+            if deleted_agent is None:
+                raise ValueError(f"Agent not found, passed agent_id={agent_id}")
             return dict(deleted_agent)
         except Exception as e:
             raise Exception(f"Error deleting agent from DB: {e}")
@@ -453,6 +451,8 @@ class AgentRegistry:
                 },
                 include={"object_permission": True},
             )
+            if patched_agent is None:
+                raise ValueError(f"Agent not found, passed agent_id={agent_id}")
             patched_agent_dict: Final = patched_agent.model_dump()
             if patched_agent.object_permission is not None:
                 try:
@@ -542,6 +542,8 @@ class AgentRegistry:
                 include={"object_permission": True},
             )
 
+            if updated_agent is None:
+                raise ValueError(f"Agent not found, passed agent_id={agent_id}")
             updated_agent_dict: Final = updated_agent.model_dump()
             if updated_agent.object_permission is not None:
                 try:

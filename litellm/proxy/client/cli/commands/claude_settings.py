@@ -15,7 +15,7 @@ from typing import Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from .private_json import write_private_json
+from litellm.litellm_core_utils.private_json import write_private_json
 
 ENV_KEY: Final = "env"
 API_KEY_HELPER_KEY: Final = "apiKeyHelper"

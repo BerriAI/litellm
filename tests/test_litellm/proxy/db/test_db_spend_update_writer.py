@@ -1,13 +1,8 @@
 import asyncio
 import copy
 import json
-import os
 import re
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
 from collections.abc import Callable
@@ -197,7 +192,7 @@ def test_enqueue_tool_registry_upsert_reads_every_choice():
 
     db_writer._enqueue_tool_registry_upsert(kwargs={}, completion_response=response)
 
-    enqueued = [call.args[0]["tool_name"] for call in db_writer.tool_discovery_queue.add_update.call_args_list]
+    enqueued = [c.args[0]["tool_name"] for c in db_writer.tool_discovery_queue.add_update.call_args_list]
     assert enqueued == ["tool_alpha", "tool_beta"]
 
 
@@ -2336,6 +2331,7 @@ async def test_daily_transaction_carries_compression_saved_tokens():
 
     metadata = {
         "usage_object": {"cache_read_input_tokens": 40, "cache_creation_input_tokens": 15},
+        "litellm_gateway_injected_cache": "dep-of-the-compression-row",
         "compression_savings": {
             "tokens_before": 12000,
             "tokens_after": 5000,
@@ -2359,6 +2355,7 @@ async def test_daily_transaction_carries_compression_saved_tokens():
         "model": "claude-sonnet-5",
         "custom_llm_provider": "anthropic",
         "model_group": "claude-sonnet-5",
+        "model_id": "dep-of-the-compression-row",
         "call_type": "anthropic_messages",
         "prompt_tokens": 5000,
         "completion_tokens": 10,
@@ -2717,3 +2714,133 @@ async def test_commit_spend_updates_retries_deadlock_on_every_entity_path(monkey
 
     assert mock_prisma_client.db.tx.call_count == 2
     proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, expects_flush",
+    [("aresponses", True), ("responses", True), ("acompletion", False)],
+)
+async def test_insert_spend_log_asks_for_an_immediate_flush_on_responses_calls(
+    call_type: str, expects_flush: bool
+):
+    """
+    A `previous_response_id` chained straight off the previous turn reads the DB, so a
+    Responses row cannot sit in this worker's queue until the monitor's next poll.
+    """
+    from litellm.proxy.utils import PrismaClient
+
+    db_writer = DBSpendUpdateWriter()
+    prisma = _tool_usage_prisma()
+    PrismaClient.spend_log_flush_requested.clear()
+
+    await db_writer._insert_spend_log_to_db(
+        payload={"request_id": "req-1", "call_type": call_type},
+        prisma_client=prisma,
+    )
+
+    assert prisma.spend_log_transactions == [{"request_id": "req-1", "call_type": call_type}]
+    assert PrismaClient.spend_log_flush_requested.is_set() is expects_flush
+    PrismaClient.spend_log_flush_requested.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "injected_deployment, attributed",
+    [
+        pytest.param("dep-of-this-row", True, id="this-deployment-injected"),
+        pytest.param("dep-of-a-sibling-leg", False, id="a-sibling-deployment-injected"),
+        pytest.param("", True, id="injected-before-a-deployment-was-chosen"),
+    ],
+)
+async def test_caching_savings_are_attributed_to_the_deployment_that_was_injected(
+    injected_deployment, attributed
+):
+    """Retries, same-group failover and cross-model-group fallbacks all reuse one metadata
+    bucket and one litellm_call_id, so a marker written by the leg that injected is
+    visible to every sibling and nothing request-scoped can tell them apart.
+
+    Naming the deployment it injected for is what keeps the credit on that leg: a row
+    billed for a different deployment reads it as no injection, so no seam has to strip
+    it and a deployment that injected nothing is never credited for the one that did.
+
+    An injection that ran before any deployment was chosen, which is what the proxy does
+    for prompt templates, is written into the payload every leg goes on to send, so it
+    marks the request for all of them and each leg keeps the credit.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-fallback-leg",
+        "user": "test-user",
+        "startTime": "2026-07-17T00:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "model_id": "dep-of-this-row",
+        "call_type": "anthropic_messages",
+        "prompt_tokens": 5000,
+        "completion_tokens": 10,
+        "spend": 0.05,
+        "metadata": json.dumps(
+            {
+                "usage_object": {"cache_read_input_tokens": 4242, "cache_creation_input_tokens": 1111},
+                "litellm_gateway_injected_cache": injected_deployment,
+            }
+        ),
+    }
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["prompt_caching_savings_spend"] != 0.0
+    assert (transaction["gateway_injected_caching_savings_spend"] != 0.0) is attributed
+
+
+@pytest.mark.asyncio
+async def test_daily_transaction_attributes_caching_savings_only_with_an_injection_marker():
+    """Cached usage with no litellm_gateway_injected_cache marker is still a real saving.
+
+    Client-sent cache_control and implicit provider caching leave no marker, so the row
+    keeps the total the customer actually got while the gateway-attributed column stays
+    empty, which is what separates what caching saved from what litellm can claim.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-ungated-caching",
+        "user": "test-user",
+        "startTime": "2026-07-17T00:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "call_type": "anthropic_messages",
+        "prompt_tokens": 5000,
+        "completion_tokens": 10,
+        "spend": 0.05,
+        "metadata": json.dumps(
+            {"usage_object": {"cache_read_input_tokens": 4242, "cache_creation_input_tokens": 1111}}
+        ),
+    }
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["cache_read_input_tokens"] == 4242
+    assert transaction["cache_creation_input_tokens"] == 1111
+    assert transaction["prompt_caching_savings_spend"] != 0.0
+    assert transaction["gateway_injected_caching_savings_spend"] == 0.0

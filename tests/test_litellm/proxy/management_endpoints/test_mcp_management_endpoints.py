@@ -17,7 +17,6 @@ from litellm.proxy.management_endpoints import (
     mcp_management_endpoints as mgmt_endpoints,
 )
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -1574,6 +1573,7 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.aws_region_name = None
         existing_server.aws_service_name = None
         existing_server.upstream_resource = None
+        existing_server.upstream_token_header = None
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = existing_server
@@ -1609,6 +1609,7 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.aws_region_name = None
         existing_server.aws_service_name = None
         existing_server.upstream_resource = None
+        existing_server.upstream_token_header = None
         for key, value in server_overrides.items():
             setattr(existing_server, key, value)
 
@@ -1639,6 +1640,23 @@ class TestTemporaryMCPSessionEndpoints:
 
         assert updated.credentials["client_id"] == "client-123"
         assert updated.credentials["client_secret"] == "secret-xyz"
+
+    def test_upstream_token_header_is_inherited_like_other_admin_config(self):
+        """It is admin config rather than a credential, so a session server derived from an existing
+        one must carry it. Miss it and the derived server silently sends its token to Authorization
+        while the original sends it to the gateway's header."""
+        updated = self._inherit_with({}, upstream_token_header="esb-oauth")
+
+        assert updated.credentials["upstream_token_header"] == "esb-oauth"
+
+    def test_a_supplied_upstream_token_header_does_not_read_as_a_credential(self):
+        """It is in the admin-config key set, so submitting only it must still inherit the declared
+        app rather than reading as "the caller supplied real credentials"."""
+        updated = self._inherit_with({"upstream_token_header": "esb-oauth"})
+
+        assert updated.credentials["client_id"] == "client-123"
+        assert updated.credentials["client_secret"] == "secret-xyz"
+        assert updated.credentials["upstream_token_header"] == "esb-oauth"
 
     def test_supplied_credential_still_wins_over_inheritance(self):
         """A caller that supplies a real credential keeps it; inheritance must not overwrite it."""
@@ -2257,6 +2275,7 @@ class TestTemporaryMCPSessionEndpoints:
             aws_region_name=None,
             aws_service_name=None,
             upstream_resource=None,
+            upstream_token_header=None,
         )
         built_server = generate_mock_mcp_server_config_record(server_id="temp-server")
         mock_manager = MagicMock()
@@ -2325,7 +2344,7 @@ class TestTemporaryMCPSessionEndpoints:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
             MagicMock(),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='User does not have permission to create temporary mcp') as exc_info:
                 await add_session_mcp_server(
                     payload=payload,
                     user_api_key_dict=non_admin,
@@ -6482,7 +6501,6 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
     authorization_url would recreate the exact 400 ("authorization url is not set") the catalog
     exists to prevent for spec-only servers, which never run OAuth endpoint discovery."""
     import json
-    import os
 
     registry_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
@@ -6560,7 +6578,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 reload_mock,
             ),
         ):
@@ -6592,7 +6610,7 @@ class TestConnectedAppViewAnnotation:
                 mock_manager,
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 AsyncMock(return_value=UserAPIKeyAuth(user_id="test_user_id")),
             ),
         ):
@@ -6635,7 +6653,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 AsyncMock(return_value=admitted_auth),
             ),
         ):
@@ -6663,7 +6681,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 AsyncMock(side_effect=HTTPException(status_code=401, detail="expired")),
             ),
         ):
@@ -6691,7 +6709,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 reload_mock,
             ),
         ):
@@ -6725,7 +6743,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 reload_mock,
             ),
         ):
@@ -6756,7 +6774,7 @@ class TestConnectedAppViewAnnotation:
                 AsyncMock(return_value=[caller_auth]),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
                 reload_mock,
             ),
         ):

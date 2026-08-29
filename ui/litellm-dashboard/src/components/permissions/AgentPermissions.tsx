@@ -96,7 +96,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
         </div>
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
-          <UserGroupIcon className="h-4 w-4 text-muted-foreground/70" />
+          <UserGroupIcon className="h-4 w-4 text-muted-foreground" />
           <p className="text-muted-foreground text-sm">No agents or access groups configured</p>
         </div>
       )}
