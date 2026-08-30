@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import httpx
 
 if TYPE_CHECKING:
+    import tiktoken
     from aiohttp import ClientSession
 
 import openai
@@ -264,7 +265,7 @@ class OpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: object,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -1345,7 +1346,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data: dict,
         model_response: ModelResponse,
         timeout: float,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
@@ -1408,7 +1409,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         prompt: str,
         timeout: float,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
         model_response: ImageResponse | None = None,

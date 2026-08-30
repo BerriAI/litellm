@@ -137,10 +137,6 @@ export const CUSTOM_TIER_RESTRICTIONS = {
     ],
     reason: "The heuristic scorer never runs under an edited tier set, so its inputs have no effect",
   },
-  classifierPrompt: {
-    omit: [],
-    reason: "A replacement prompt drops the tier bullets and the injection guard. Your definitions are the rubric",
-  },
   classificationRubric: {
     omit: [],
     reason: "The preset calibration examples are written against the built-in tiers, which your tier set replaces",

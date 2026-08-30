@@ -26,12 +26,20 @@ def init_guardrails_v2(
     guardrail_list: Final[list[Guardrail]] = []
 
     for guardrail in all_guardrails:
-        initialized_guardrail = IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-            guardrail=cast(Guardrail, guardrail),
-            config_file_path=config_file_path,
-            llm_router=llm_router,
-            source="config",
-        )
+        try:
+            initialized_guardrail = IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                guardrail=cast(Guardrail, guardrail),
+                config_file_path=config_file_path,
+                llm_router=llm_router,
+                source="config",
+            )
+        except (ValueError, TypeError) as init_error:
+            verbose_proxy_logger.error(
+                "Skipping guardrail '%s': invalid configuration, proxy is starting WITHOUT this guardrail: %s",
+                guardrail.get("guardrail_name"),
+                init_error,
+            )
+            continue
         if initialized_guardrail:
             guardrail_list.append(initialized_guardrail)
 

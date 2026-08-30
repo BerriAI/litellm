@@ -1351,15 +1351,16 @@ def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
     provider response briefly lags before the output id populates). Retiring in that
     window loses the spend record forever. Retire only once we can prove there is
     nothing left to recover: the output file has actually arrived, or the provider
-    reports no successful request lines. When counts are unknown, stay eligible so
-    the next poller pass revisits it. (#37713)
+    reported a positive total with zero successful request lines, proving it
+    enumerated the batch and none succeeded. A zero or unknown total means counts
+    are unreported, so stay eligible and let the next poller pass revisit it. (#37713)
     """
     if response.output_file_id is not None:
         return True
     request_counts = response.request_counts
     if request_counts is None:
         return False
-    return request_counts.completed == 0
+    return request_counts.total > 0 and request_counts.completed == 0
 
 
 async def update_batch_in_database(

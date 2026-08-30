@@ -179,6 +179,18 @@
         "comment": {
           "type": "string"
         },
+        "default_reasoning_effort": {
+          "type": "string",
+          "description": "Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
         "deprecation_date": {
           "type": "string",
           "description": "Date the provider deprecates the model, YYYY-MM-DD.",

@@ -1447,10 +1447,8 @@ Model Info:
 
         from datetime import datetime
 
-        # Get the current timestamp
         current_time: Final = datetime.now().strftime("%H:%M:%S")
         _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
-        # Use .name if it's an enum, otherwise use as is
         alert_type_name: Final = getattr(alert_type, "name", alert_type)
         alert_type_formatted: Final = f"Alert type: `{alert_type_name}`"
         if alert_type == "daily_reports" or alert_type == "new_model_added":
