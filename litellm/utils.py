@@ -3757,7 +3757,7 @@ def get_optional_params_embeddings(
             and (custom_llm_provider == "azure" or custom_llm_provider in litellm.openai_compatible_providers)
             and "text-embedding-3" not in model
             and "dimensions" in optional_params
-            and "dimensions" not in allowed_openai_params
+            and "dimensions" not in (allowed_openai_params or ())
         ):
             optional_params.pop("dimensions", None)
 
