@@ -2635,6 +2635,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if isinstance(args, dict) and (values := args.get("values")) is not None:
                     _message = litellm.Message(content=json.dumps(values))
                     return _message
+                elif isinstance(args, dict) and len(args) == 1:
+                    # Unwrap single-key envelope dicts. Claude wraps
+                    # json_tool_call responses in a single-key dict whose name
+                    # varies by provider path ("values" for direct Anthropic,
+                    # "parameter" for Vertex AI Anthropic, "properties" for
+                    # Bedrock).  Rather than chasing each key, unwrap any
+                    # single-key dict whose value is itself a dict — the
+                    # wrapped payload is always the inner value.
+                    inner = next(iter(args.values()))
+                    if isinstance(inner, dict):
+                        _message = litellm.Message(content=json.dumps(inner))
+                        return _message
+                    _message = litellm.Message(content=json.dumps(args))
+                    return _message
                 else:
                     # a lot of the times the `values` key is not present in the tool response
                     # relevant issue: https://github.com/BerriAI/litellm/issues/6741
