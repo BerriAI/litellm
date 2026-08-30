@@ -117,7 +117,6 @@ def fake_env_vars(monkeypatch):
     monkeypatch.setenv("AZURE_AI_API_BASE", "http://fake-azure-api-base")
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "fake_azure_openai_api_key")
     monkeypatch.setenv("AZURE_SWEDEN_API_BASE", "http://fake-azure-sweden-api-base")
-    monkeypatch.setenv("REDIS_HOST", "localhost")
 
 
 @pytest.fixture(scope="function")
@@ -1078,7 +1077,7 @@ async def test_get_team_redis(client_no_auth):
         litellm.proxy.proxy_server, "proxy_logging_obj"
     )
 
-    redis_cache = RedisCache()
+    redis_cache = RedisCache(host="localhost")
 
     from fastapi import HTTPException
 
