@@ -382,14 +382,23 @@ async def test_internal_token_counter_anthropic_provider_detection():
 
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
-    # Test with is_direct_request=False (simulating call from Anthropic endpoint)
-    response = await token_counter(
-        request=TokenCountRequest(
-            model="claude-test",
-            messages=[{"role": "user", "content": "hello"}],
-        ),
-        call_endpoint=True,
+    mock_handler = MagicMock()
+    mock_handler.handle_count_tokens_request = AsyncMock(
+        return_value={"input_tokens": 42}
     )
+
+    # Test with is_direct_request=False (simulating call from Anthropic endpoint)
+    with patch(
+        "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
+        mock_handler,
+    ):
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="claude-test",
+                messages=[{"role": "user", "content": "hello"}],
+            ),
+            call_endpoint=True,
+        )
 
     print("Anthropic provider test response:", response)
 
