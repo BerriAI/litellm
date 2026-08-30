@@ -1082,7 +1082,6 @@ async def test_list_organization_returns_empty_for_key_without_user(monkeypatch)
     mock_prisma_client = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    # A team key: authenticated, but with no user behind it.
     team_key = UserAPIKeyAuth(
         api_key="sk-team-key",
         user_id=None,
