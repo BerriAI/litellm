@@ -119,6 +119,9 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
             return
         self._hidden_params["response_cost"] = response_cost
 
+    def set_audio_mime_type(self, audio_mime_type: str) -> None:
+        self._hidden_params["audio_mime_type"] = audio_mime_type
+
 
 class NotGiven:
     """

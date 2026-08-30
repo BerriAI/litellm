@@ -621,8 +621,8 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         )
         base_model: Final = model.removeprefix("vertex_ai/")
         model_info: Final = self._get_model_info(model=model)
-        if model_info["vertex_ai_audio_api"] == "lyria_predict":
-            request_body = {  # mutable-ok: predict dispatch requires a concrete provider request dictionary; rebind-ok: exactly one provider API shape initializes the request
+        request_body: Final[dict[str, object]] = (  # mutable-ok: HTTP dispatch requires a concrete provider payload
+            {  # mutable-ok: predict dispatch requires a concrete provider request dictionary
                 "instances": [  # mutable-ok: predict dispatch requires a concrete instances list
                     {"prompt": input}  # mutable-ok: predict dispatch requires a concrete instance dictionary
                 ],
@@ -630,18 +630,22 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                     "sample_count": 1
                 },
             }
-        else:
-            request_body = {  # mutable-ok: interactions dispatch requires a concrete provider request dictionary; rebind-ok: exactly one provider API shape initializes the request
+            if model_info["vertex_ai_audio_api"] == "lyria_predict"
+            else {  # mutable-ok: interactions dispatch requires a concrete provider request dictionary
                 "model": base_model,
                 "input": input,
+                **(
+                    {  # mutable-ok: interactions dispatch requires a nested response-format dictionary
+                        "response_format": {  # mutable-ok: interactions response format is a concrete provider payload
+                            "type": "audio",
+                            "mime_type": "audio/wav",
+                        }
+                    }
+                    if optional_params.get("response_format") == "wav"
+                    else {}  # mutable-ok: no response override is merged for non-WAV output
+                ),
             }
-            if optional_params.get("response_format") == "wav":
-                request_body[
-                    "response_format"
-                ] = {  # mutable-ok: interactions dispatch requires a nested response-format dictionary
-                    "type": "audio",
-                    "mime_type": "audio/wav",
-                }
+        )
         return TextToSpeechRequestData(dict_body=request_body, headers=headers)
 
     def transform_text_to_speech_response(
@@ -694,7 +698,5 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                 },
             )
         )
-        response._hidden_params = {  # mutable-ok: response metadata is a concrete dictionary
-            "audio_mime_type": mime_type
-        }
+        response.set_audio_mime_type(mime_type)
         return response
