@@ -173,6 +173,7 @@ class RealTimeStreaming:
         # their input_audio_transcription.completed usage drives duration-based cost.
         self._force_transcription_model = force_transcription_model
         self._is_transcription_session: bool = force_transcription_model is not None
+        self._bound_nested_transcription_model: str | None = None
         # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
         self._event_normalizer = event_normalizer
 
@@ -467,7 +468,7 @@ class RealTimeStreaming:
         backend, False if the provider transformation produced no output and
         the message was effectively dropped.
         """
-        message = self._enforce_transcription_session_model(message)
+        message = await self._apply_nested_transcription_model_policy(message)
         if self.provider_config:
             transformed: Final = self.provider_config.transform_realtime_request(
                 message, self.model, self.session_configuration_request
@@ -503,6 +504,85 @@ class RealTimeStreaming:
         await self.backend_ws.send(message)
         return True
 
+    async def _apply_nested_transcription_model_policy(self, message: str) -> str:
+        if self._force_transcription_model is not None:
+            return self._enforce_transcription_session_model(message)
+        if self._is_translation_session:
+            return await self._enforce_translation_nested_transcription_model(message)
+        return message
+
+    def _session_update_message_obj(self, message: str) -> Mapping[str, object] | None:
+        try:
+            message_obj: Final = _decode_json_object(message)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if message_obj.get("type") not in (
+            "session.update",
+            "transcription_session.update",
+        ):
+            return None
+        return message_obj
+
+    def _nested_transcription_models_from_session(
+        self,
+        session: Mapping[str, object],
+    ) -> tuple[str, ...]:
+        audio: Final = session.get("audio")
+        audio_input: Final = audio.get("input") if isinstance(audio, dict) else None
+        nested_transcription: Final = audio_input.get("transcription") if isinstance(audio_input, dict) else None
+        nested_model: Final = self._transcription_model_value(nested_transcription)
+        flat_model: Final = self._transcription_model_value(session.get("input_audio_transcription"))
+        return tuple(dict.fromkeys(model for model in (nested_model, flat_model) if model is not None))
+
+    def _transcription_model_value(self, transcription_config: object) -> str | None:
+        if not isinstance(transcription_config, dict):
+            return None
+        model: Final = transcription_config.get("model")
+        if isinstance(model, str) and model:
+            return model
+        return None
+
+    def _rewrite_session_update_transcription_model(self, message: str, authorized_model: str) -> str:
+        message_obj: Final = self._session_update_message_obj(message)
+        if message_obj is None:
+            return message
+        session: Final = message_obj.get("session")
+        if not isinstance(session, dict):
+            return message
+
+        transcription: Final = session.get("input_audio_transcription")
+        rewrite_flat: Final = isinstance(transcription, dict) and transcription.get("model") != authorized_model
+        if rewrite_flat:
+            session["input_audio_transcription"] = {
+                **transcription,
+                "model": authorized_model,
+            }
+
+        audio: Final = session.get("audio")
+        audio_input: Final = audio.get("input") if isinstance(audio, dict) else None
+        nested_transcription: Final = audio_input.get("transcription") if isinstance(audio_input, dict) else None
+        rewrite_nested: Final = (
+            isinstance(audio, dict)
+            and isinstance(audio_input, dict)
+            and isinstance(nested_transcription, dict)
+            and nested_transcription.get("model") != authorized_model
+        )
+        if rewrite_nested:
+            session["audio"] = {
+                **audio,
+                "input": {
+                    **audio_input,
+                    "transcription": {
+                        **nested_transcription,
+                        "model": authorized_model,
+                    },
+                },
+            }
+
+        if not rewrite_flat and not rewrite_nested:
+            return message
+        return json.dumps(message_obj)
+
     def _enforce_transcription_session_model(self, message: str) -> str:
         """Force client transcription session updates to the authorized model.
 
@@ -520,56 +600,49 @@ class RealTimeStreaming:
         if self._force_transcription_model is None:
             return message
 
-        try:
-            message_obj: Final = _decode_json_object(message)
-        except (json.JSONDecodeError, TypeError):
+        message_obj: Final = self._session_update_message_obj(message)
+        if message_obj is None:
             return message
+        session: Final = message_obj.get("session")
+        if isinstance(session, dict) and session.get("type") == "transcription":
+            self._is_transcription_session = True
+        return self._rewrite_session_update_transcription_model(message, self._force_transcription_model)
 
-        if message_obj.get("type") not in (
-            "session.update",
-            "transcription_session.update",
-        ):
+    async def _enforce_translation_nested_transcription_model(self, message: str) -> str:
+        if self._bound_nested_transcription_model is not None:
+            return self._rewrite_session_update_transcription_model(message, self._bound_nested_transcription_model)
+
+        message_obj: Final = self._session_update_message_obj(message)
+        if message_obj is None:
             return message
-
         session: Final = message_obj.get("session")
         if not isinstance(session, dict):
             return message
-
-        if session.get("type") == "transcription":
-            self._is_transcription_session = True
-
-        authorized_model: Final = self._force_transcription_model
-        changed = False
-
-        transcription: Final = session.get("input_audio_transcription")
-        if isinstance(transcription, dict) and transcription.get("model") != authorized_model:
-            session["input_audio_transcription"] = {
-                **transcription,
-                "model": authorized_model,
-            }
-            changed = True
-
-        audio: Final = session.get("audio")
-        if isinstance(audio, dict):
-            audio_input: Final = audio.get("input")
-            if isinstance(audio_input, dict):
-                nested_transcription: Final = audio_input.get("transcription")
-                if isinstance(nested_transcription, dict) and nested_transcription.get("model") != authorized_model:
-                    session["audio"] = {
-                        **audio,
-                        "input": {
-                            **audio_input,
-                            "transcription": {
-                                **nested_transcription,
-                                "model": authorized_model,
-                            },
-                        },
-                    }
-                    changed = True
-
-        if not changed:
+        nested_models: Final = self._nested_transcription_models_from_session(session)
+        if not nested_models:
             return message
-        return json.dumps(message_obj)
+
+        valid_token: Final = self.user_api_key_dict
+        if valid_token is None:
+            return message
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+        from litellm.proxy.proxy_server import llm_model_list, llm_router
+
+        if not isinstance(valid_token, UserAPIKeyAuth):
+            return message
+
+        for nested_model in nested_models:
+            await can_key_call_resolved_model(
+                model=nested_model,
+                valid_token=valid_token,
+                llm_model_list=llm_model_list,
+                llm_router=llm_router,
+            )
+        bound_model: Final = nested_models[0]
+        self._bound_nested_transcription_model = bound_model
+        return self._rewrite_session_update_transcription_model(message, bound_model)
 
     def _uses_deferred_backend_setup(self) -> bool:
         """True when setup is deferred until the client's first session.update."""

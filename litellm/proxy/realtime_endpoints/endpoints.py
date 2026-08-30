@@ -127,6 +127,27 @@ def _set_transcription_model_on_session(
     }
 
 
+async def _authorize_and_bind_nested_transcription_models(
+    session_data: dict,  # mutable-ok: session payload is rewritten in place for provider serialization
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_model_list: list | None,  # mutable-ok: inherited auth helper accepts the proxy model list
+    llm_router: Any,
+) -> None:
+    nested_models: Final = tuple(_transcription_model_candidates_from_session(session_data))
+    for nested_model in nested_models:
+        await can_key_call_resolved_model(
+            model=nested_model,
+            valid_token=user_api_key_dict,
+            llm_model_list=llm_model_list,
+            llm_router=llm_router,
+        )
+    if nested_models:
+        _set_transcription_model_on_session(
+            session=session_data,
+            model=nested_models[0],
+        )
+
+
 async def _prepare_client_secret_session(
     req: RealtimeClientSecretRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -156,6 +177,13 @@ async def _prepare_client_secret_session(
         )
         if session_data is not None:
             session_data["model"] = model
+            if session_type == "translation":
+                await _authorize_and_bind_nested_transcription_models(
+                    session_data=session_data,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_model_list=llm_model_list,
+                    llm_router=llm_router,
+                )
         return model, session_data, session_type
 
     transcription_model_candidates: Final = _transcription_model_candidates_from_session(session_data or {})

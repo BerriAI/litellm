@@ -5,14 +5,13 @@ import pytest
 from websockets.exceptions import ConnectionClosed
 
 import litellm
-
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -1049,6 +1048,93 @@ async def test_transcription_session_update_enforces_authorized_nested_model():
         "rate": 24000,
     }
     assert streaming._is_transcription_session is True
+
+
+@pytest.mark.asyncio
+async def test_translation_session_update_rejects_disallowed_nested_transcription_model() -> None:
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming = RealTimeStreaming(
+        MagicMock(),
+        backend_ws,
+        MagicMock(),
+        model="gpt-realtime-translate",
+        user_api_key_dict=UserAPIKeyAuth(models=["gpt-realtime-translate"]),
+        translation_session=True,
+    )
+
+    with pytest.raises(Exception, match="Tried to access gpt-live-transcribe"):
+        await streaming._send_to_backend(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "translation",
+                        "audio": {
+                            "input": {
+                                "transcription": {"model": "gpt-live-transcribe"},
+                            }
+                        },
+                    },
+                }
+            )
+        )
+    backend_ws.send.assert_not_awaited()
+    assert streaming._is_transcription_session is False
+
+
+@pytest.mark.asyncio
+async def test_translation_session_update_binds_nested_transcription_model() -> None:
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming = RealTimeStreaming(
+        MagicMock(),
+        backend_ws,
+        MagicMock(),
+        model="gpt-realtime-translate",
+        user_api_key_dict=UserAPIKeyAuth(models=["gpt-realtime-translate", "gpt-realtime-whisper"]),
+        translation_session=True,
+    )
+
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "type": "translation",
+                    "audio": {
+                        "input": {
+                            "transcription": {"model": "gpt-realtime-whisper", "language": "en"},
+                        }
+                    },
+                },
+            }
+        )
+    )
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "type": "translation",
+                    "audio": {
+                        "input": {
+                            "transcription": {"model": "gpt-live-transcribe", "language": "fr"},
+                        }
+                    },
+                },
+            }
+        )
+    )
+
+    first_sent = json.loads(backend_ws.send.await_args_list[0].args[0])
+    second_sent = json.loads(backend_ws.send.await_args_list[1].args[0])
+    assert first_sent["session"]["audio"]["input"]["transcription"]["model"] == "gpt-realtime-whisper"
+    assert second_sent["session"]["audio"]["input"]["transcription"] == {
+        "model": "gpt-realtime-whisper",
+        "language": "fr",
+    }
+    assert streaming._is_transcription_session is False
 
 
 @pytest.mark.asyncio
