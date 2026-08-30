@@ -1120,8 +1120,11 @@ class TestPreRoutingSelectionCarriesToFallbacks:
         assert get_pre_routing_selection({"model": "smart-router", "metadata": {}}) is None
         assert get_pre_routing_selection({"model": "smart-router"}) is None
 
-    def test_missing_kwargs_is_tolerated(self):
+    def test_missing_kwargs_is_a_no_op(self):
+        """A caller with no kwargs must not raise, and must not leak the selection anywhere."""
         record_pre_routing_selection(None, "tier1")
+
+        assert get_pre_routing_selection({}) is None
 
     def test_a_non_dict_bucket_is_ignored(self):
         kwargs = {"model": "smart-router", "metadata": "not-a-dict"}
