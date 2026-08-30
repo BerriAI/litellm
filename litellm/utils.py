@@ -4250,8 +4250,9 @@ def get_optional_params(
         )
 
     elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
-        # handle cohere params
-        optional_params = litellm.CohereChatConfig().map_openai_params(
+        # handle cohere params - pick the same config the request transform will
+        # use, so v2 (the default route) maps its own params rather than v1's
+        optional_params = ProviderConfigManager._get_cohere_config(model=model).map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
