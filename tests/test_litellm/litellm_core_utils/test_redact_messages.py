@@ -490,6 +490,35 @@ class TestPerformRedaction:
         assert redacted["output"][0]["arguments"] == "redacted-by-litellm"
         assert redacted["output"][0]["name"] == "get_weather"
 
+    def test_redacts_responses_api_custom_tool_call_input_dict(self):
+        result = {
+            "output": [
+                {
+                    "type": "custom_tool_call",
+                    "name": "submit_report",
+                    "input": "sensitive freeform payload",
+                    "call_id": "call_1",
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted["output"][0]["input"] == "redacted-by-litellm"
+        assert redacted["output"][0]["name"] == "submit_report"
+
+    def test_redacts_responses_api_custom_tool_call_input_object(self):
+        output_items = [
+            SimpleNamespace(type="custom_tool_call", name="submit_report", input="sensitive freeform payload"),
+            SimpleNamespace(type="function_call", name="get_weather", arguments='{"city": "sensitive-city"}'),
+        ]
+
+        _redact_responses_api_output(output_items)
+
+        assert output_items[0].input == "redacted-by-litellm"
+        assert output_items[0].name == "submit_report"
+        assert output_items[1].arguments == "redacted-by-litellm"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),
