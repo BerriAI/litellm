@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from datetime import datetime
 import contextlib
 import copy
 import json
@@ -21,7 +22,8 @@ import litellm
 from litellm import main as litellm_main
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
-from litellm.types.utils import Usage
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
 
 async def _async_fake_bedrock_image_details(image_url):
@@ -3071,3 +3073,111 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
     assert expected_cost > 0
     assert speech_event.response_cost == pytest.approx(expected_cost)
     assert speech_event.logged_response_cost == pytest.approx(expected_cost)
+
+
+def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-cost",
+        created=1724900000,
+        model=model,
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content, role="assistant"))],
+    )
+
+
+def test_stream_chunk_builder_sets_hidden_response_cost_for_known_model():
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+    ]
+
+    response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    prompt_cost, completion_cost = litellm.cost_per_token(model="gpt-4o", usage_object=response.usage)
+    expected_cost: Final = prompt_cost + completion_cost
+    assert expected_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_stream_chunk_builder_unknown_model_leaves_response_cost_unset():
+    chunks: Final = [
+        _stream_builder_text_chunk("totally-unknown-model-xyz", "Hello "),
+        _stream_builder_text_chunk("totally-unknown-model-xyz", "world.", finish_reason="stop"),
+    ]
+
+    response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert response._hidden_params.get("response_cost") is None
+    assert response.choices[0].message.content == "Hello world."
+
+
+def test_stream_chunk_builder_prices_proxy_alias_via_model_map():
+    chunks: Final = [
+        _stream_builder_text_chunk("claude-opus-5", "Hello "),
+        _stream_builder_text_chunk("claude-opus-5", "world.", finish_reason="stop"),
+    ]
+    for chunk in chunks:
+        chunk._hidden_params = {"custom_llm_provider": "openai"}
+
+    response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert response._hidden_params["custom_llm_provider"] == "openai"
+    prompt_cost, completion_cost = litellm.cost_per_token(model="claude-opus-5", usage_object=response.usage)
+    expected_cost: Final = prompt_cost + completion_cost
+    assert expected_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def _stream_builder_logging_obj() -> LiteLLMLogging:
+    logging_obj: Final = LiteLLMLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o",
+        user=None,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai"},
+    )
+    return logging_obj
+
+
+def test_stream_chunk_builder_reports_streaming_usage_cost_when_enabled(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    usage_cost: Final = getattr(response.usage, "cost", None)
+    assert usage_cost is not None
+    assert usage_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(usage_cost)
+
+
+def test_stream_chunk_builder_defers_cost_to_logging_obj_when_usage_cost_absent(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    assert response._hidden_params.get("response_cost") is None

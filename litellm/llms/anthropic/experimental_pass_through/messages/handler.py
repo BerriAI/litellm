@@ -571,7 +571,34 @@ def anthropic_messages_handler(
         anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig()
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        _shared_kwargs: Final = dict(
+        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
+            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=original_model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                _is_async=is_async,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
+
+        # The in-gateway context_management polyfill runs inside
+        # ``async_anthropic_messages_handler`` so it can ``await`` the
+        # summarization model for ``compact_20260112``. ``context_management``
+        # is passed through as a regular kwarg.
+        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
             model=original_model,
@@ -591,16 +618,6 @@ def anthropic_messages_handler(
             client=client,
             custom_llm_provider=custom_llm_provider,
             **kwargs,
-        )
-        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
-
-        # The in-gateway context_management polyfill runs inside
-        # ``async_anthropic_messages_handler`` so it can ``await`` the
-        # summarization model for ``compact_20260112``. ``context_management``
-        # is passed through as a regular kwarg.
-        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-            **_shared_kwargs,
         )
 
     if custom_llm_provider is None:
