@@ -2605,3 +2605,33 @@ def test_build_summary_messages_keeps_midturn_system_correction_in_place():
     assert summary_messages[0]["content"] == "caller system prompt"
     assert summary_messages[2]["content"] == "use the corrected result"
     assert summary_messages[-1]["content"] == "summarize the conversation"
+
+
+def test_notrequired_not_imported_from_stdlib_typing() -> None:
+    """Regression test for GH #38892.
+
+    ``NotRequired`` was added to the stdlib ``typing`` module in Python 3.11.
+    litellm declares ``requires-python = ">=3.10"``, so importing
+    ``NotRequired`` from ``typing`` (instead of ``typing_extensions``, which
+    backports it) breaks ``import litellm`` on Python 3.10. This statically
+    checks the source so the regression is caught regardless of which Python
+    version actually runs this test.
+    """
+    import ast
+    import inspect
+
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors import (
+        compact,
+    )
+
+    source = inspect.getsource(compact)
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "typing":
+            imported_names = {alias.name for alias in node.names}
+            assert "NotRequired" not in imported_names, (
+                "`NotRequired` must be imported from `typing_extensions`, not "
+                "`typing` (NotRequired is Python 3.11+, litellm supports "
+                ">=3.10). See GH #38892."
+            )
