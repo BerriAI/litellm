@@ -1677,6 +1677,7 @@ export const modelInfoCall = async (
   sortBy?: string,
   sortOrder?: string,
   excludeAutoRouters?: boolean,
+  modelName?: string,
 ) => {
   /**
    * Get all models on proxy
@@ -1689,6 +1690,9 @@ export const modelInfoCall = async (
     params.append("size", size.toString());
     if (search && search.trim()) {
       params.append("search", search.trim());
+    }
+    if (modelName && modelName.trim()) {
+      params.append("model", modelName.trim());
     }
     if (modelId && modelId.trim()) {
       params.append("modelId", modelId.trim());
@@ -4983,6 +4987,15 @@ export const createMCPServer = async (
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const importMCPServers = async (accessToken: string, payload: Record<string, unknown>) => {
+  try {
+    return await apiClient.post(`/v1/mcp/server/import`, { accessToken, body: payload });
+  } catch (error) {
+    console.error("Failed to import MCP servers:", error);
     throw error;
   }
 };
