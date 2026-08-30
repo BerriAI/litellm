@@ -20905,6 +20905,223 @@
           "title": "LiteLLM_MCPServerTable",
           "type": "object"
         },
+        "MCPConnectorEntry": {
+          "properties": {
+            "args": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Args",
+              "type": "array"
+            },
+            "authorization_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization Token"
+            },
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Command"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Env",
+              "type": "object"
+            },
+            "headers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Headers"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Url"
+            }
+          },
+          "title": "MCPConnectorEntry",
+          "type": "object"
+        },
+        "MCPConnectorImportFailure": {
+          "properties": {
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "error"
+          ],
+          "title": "MCPConnectorImportFailure",
+          "type": "object"
+        },
+        "MCPConnectorImportRequest": {
+          "properties": {
+            "mcp_servers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/MCPConnectorEntry"
+                  },
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPConnectorEntry"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "Mcp Servers"
+            }
+          },
+          "required": [
+            "mcp_servers"
+          ],
+          "title": "MCPConnectorImportRequest",
+          "type": "object"
+        },
+        "MCPConnectorImportResponse": {
+          "properties": {
+            "errors": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportFailure"
+              },
+              "title": "Errors",
+              "type": "array"
+            },
+            "imported": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportResult"
+              },
+              "title": "Imported",
+              "type": "array"
+            },
+            "skipped": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportSkipped"
+              },
+              "title": "Skipped",
+              "type": "array"
+            }
+          },
+          "required": [
+            "imported",
+            "skipped",
+            "errors"
+          ],
+          "title": "MCPConnectorImportResponse",
+          "type": "object"
+        },
+        "MCPConnectorImportResult": {
+          "properties": {
+            "alias": {
+              "title": "Alias",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "server_id",
+            "alias"
+          ],
+          "title": "MCPConnectorImportResult",
+          "type": "object"
+        },
+        "MCPConnectorImportSkipped": {
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "reason"
+          ],
+          "title": "MCPConnectorImportSkipped",
+          "type": "object"
+        },
         "MCPCredentials": {
           "properties": {
             "audience": {
@@ -23139,6 +23356,53 @@
             }
           ],
           "summary": "Health Check Servers",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/server/import": {
+        "post": {
+          "description": "Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON",
+          "operationId": "import_mcp_servers_v1_mcp_server_import_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConnectorImportRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPConnectorImportResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Import Mcp Servers",
           "tags": [
             "mcp_management"
           ]
