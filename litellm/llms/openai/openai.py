@@ -1163,9 +1163,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         instead of being serialized into the JSON body.
         """
         request_body: Final = {}  # mutable-ok: the OpenAI SDK takes the request body as a dict
-        request_options: Final = {
+        request_options: Final = {  # mutable-ok: FinalRequestOptions is built from a plain options dict
             "timeout": timeout
-        }  # mutable-ok: FinalRequestOptions is built from a plain options dict
+        }
         for key, value in data.items():
             if key not in ("extra_headers", "extra_body", "extra_query"):
                 request_body[key] = value
@@ -1203,7 +1203,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cast_to=CreateEmbeddingResponse,
                     options=request_options,
                 )
-                return {}, bypass_response
+                return {}, bypass_response  # mutable-ok: empty headers map, never mutated
             raw_response = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
@@ -1236,7 +1236,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cast_to=CreateEmbeddingResponse,
                     options=sync_request_options,
                 )
-                return {}, sync_response
+                return {}, sync_response  # mutable-ok: empty headers map, never mutated
             raw_response = openai_client.embeddings.with_raw_response.create(**data, timeout=timeout)
 
             headers: Final = dict(raw_response.headers)
