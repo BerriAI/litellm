@@ -405,6 +405,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             tool for tool in tools if not (isinstance(tool, dict) and any(key in tool for key in search_tool_keys))
         ]
 
+    @staticmethod
+    def _deduplicate_tools(optional_params: dict) -> None:
+        tools: Final = optional_params.get("tools")
+        if not isinstance(tools, list):
+            return
+
+        deduplicated: Final[list] = []
+        for tool in tools:
+            if tool not in deduplicated:
+                deduplicated.append(tool)
+        optional_params["tools"] = deduplicated
+
     def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
         """
         Map OpenAI service_tier (string) to Gemini serviceTier.
@@ -1072,6 +1084,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         drop_params: bool,
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
+        web_search_options_present: Final = isinstance(non_default_params.get("web_search_options"), dict)
         gemini_sampling_params_warned: bool = False
         for param, value in non_default_params.items():
             if param == "temperature":
@@ -1212,7 +1225,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
-        else:
+
+        self._deduplicate_tools(optional_params)
+        if web_search_options_present or not VertexGeminiConfig._is_gemini_3_or_newer(model):
             self._drop_search_tools_mixed_with_functions(optional_params)
 
         return optional_params
