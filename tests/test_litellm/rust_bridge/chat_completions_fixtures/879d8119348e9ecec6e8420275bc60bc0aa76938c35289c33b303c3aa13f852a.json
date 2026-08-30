@@ -1,0 +1,28 @@
+{
+  "case": {
+    "litellm_input": {
+      "max_tokens": 16,
+      "messages": [
+        {
+          "content": "Reply with exactly: parity works",
+          "role": "user"
+        }
+      ],
+      "model": "anthropic/claude-sonnet-4-6",
+      "stream": false
+    },
+    "provider_response": {
+      "body_b64": "eyJpZCI6Im1zZ19wYXJpdHkiLCJ0eXBlIjoibWVzc2FnZSIsInJvbGUiOiJhc3Npc3RhbnQiLCJtb2RlbCI6ImNsYXVkZS1zb25uZXQtNC02IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoicGFyaXR5IHdvcmtzIn1dLCJzdG9wX3JlYXNvbiI6ImVuZF90dXJuIiwic3RvcF9zZXF1ZW5jZSI6bnVsbCwidXNhZ2UiOnsiaW5wdXRfdG9rZW5zIjoxMiwib3V0cHV0X3Rva2VucyI6M319",
+      "headers": [
+        {
+          "name": "content-type",
+          "value": "application/json"
+        }
+      ],
+      "kind": "http",
+      "status_code": 200
+    }
+  },
+  "recorded_at": "2026-08-30T00:00:00Z",
+  "schema_version": 1
+}

@@ -1,0 +1,32 @@
+{
+  "case": {
+    "litellm_input": {
+      "max_tokens": 16,
+      "messages": [
+        {
+          "content": "Reply with exactly: parity works",
+          "role": "user"
+        }
+      ],
+      "model": "anthropic/claude-sonnet-4-6",
+      "stream": true
+    },
+    "provider_response": {
+      "chunks": [
+        {
+          "data_b64": "ZXZlbnQ6IG1lc3NhZ2Vfc3RhcnQKZGF0YTogeyJ0eXBlIjoibWVzc2FnZV9zdGFydCIsIm1lc3NhZ2UiOnsiaWQiOiJtc2dfcGFyaXR5IiwidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiYXNzaXN0YW50IiwibW9kZWwiOiJjbGF1ZGUtc29ubmV0LTQtNiIsImNvbnRlbnQiOltdLCJzdG9wX3JlYXNvbiI6bnVsbCwic3RvcF9zZXF1ZW5jZSI6bnVsbCwidXNhZ2UiOnsiaW5wdXRfdG9rZW5zIjoxMiwib3V0cHV0X3Rva2VucyI6MX19fQoKZXZlbnQ6IGNvbnRlbnRfYmxvY2tfc3RhcnQKZGF0YTogeyJ0eXBlIjoiY29udGVudF9ibG9ja19zdGFydCIsImluZGV4IjowLCJjb250ZW50X2Jsb2NrIjp7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IiJ9fQoKZXZlbnQ6IGNvbnRlbnRfYmxvY2tfZGVsdGEKZGF0YTogeyJ0eXBlIjoiY29udGVudF9ibG9ja19kZWx0YSIsImluZGV4IjowLCJkZWx0YSI6eyJ0eXBlIjoidGV4dF9kZWx0YSIsInRleHQiOiJwYXJpdHkgd29ya3MifX0KCmV2ZW50OiBjb250ZW50X2Jsb2NrX3N0b3AKZGF0YTogeyJ0eXBlIjoiY29udGVudF9ibG9ja19zdG9wIiwiaW5kZXgiOjB9CgpldmVudDogbWVzc2FnZV9kZWx0YQpkYXRhOiB7InR5cGUiOiJtZXNzYWdlX2RlbHRhIiwiZGVsdGEiOnsic3RvcF9yZWFzb24iOiJlbmRfdHVybiIsInN0b3Bfc2VxdWVuY2UiOm51bGx9LCJ1c2FnZSI6eyJvdXRwdXRfdG9rZW5zIjozfX0KCmV2ZW50OiBtZXNzYWdlX3N0b3AKZGF0YTogeyJ0eXBlIjoibWVzc2FnZV9zdG9wIn0KCg=="
+        }
+      ],
+      "headers": [
+        {
+          "name": "content-type",
+          "value": "text/event-stream"
+        }
+      ],
+      "kind": "http_stream",
+      "status_code": 200
+    }
+  },
+  "recorded_at": "2026-08-30T00:00:00Z",
+  "schema_version": 1
+}
