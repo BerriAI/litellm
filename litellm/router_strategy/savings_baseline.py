@@ -14,7 +14,7 @@ bare string with no provider beside them; an operator who writes ``deepseek-r1``
 Azure would otherwise be priced against whoever else owns that name.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_router_logger
@@ -43,6 +43,11 @@ class Baseline(NamedTuple):
 
     model: str
     deployment_id: str | None = None
+
+
+def conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None) -> bool:
+    """Return whether the request contains evidence of an earlier assistant turn."""
+    return any(message.get("role") == "assistant" for message in messages or ())
 
 
 def canonical_model(model: str, custom_llm_provider: str | None = None) -> str | None:

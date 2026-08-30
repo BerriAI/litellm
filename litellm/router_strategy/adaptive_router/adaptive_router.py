@@ -17,7 +17,7 @@ import asyncio
 import time
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -50,7 +50,14 @@ from litellm.router_strategy.adaptive_router.signals import (
 from litellm.router_strategy.adaptive_router.update_queue import (
     AdaptiveRouterUpdateQueue,
 )
+from litellm.router_strategy.savings_baseline import (
+    conversation_is_continuing,
+    resolve_baseline,
+)
 from litellm.types.utils import StandardLoggingRoutingDecision
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 # Sweep session-state cache when it exceeds this many live entries. Expired
 # entries are dropped in bulk; amortizes to O(1) per insert.
@@ -91,11 +98,13 @@ class AdaptiveRouter:
         config: AdaptiveRouterConfig,
         model_to_prefs: dict[str, AdaptiveRouterPreferences],
         model_to_cost: dict[str, float],
+        litellm_router_instance: Router | None = None,
     ) -> None:
         self.router_name = router_name
         self.config = config
         self.model_to_prefs = model_to_prefs
         self.model_to_cost = model_to_cost
+        self.litellm_router_instance = litellm_router_instance
         self.queue = AdaptiveRouterUpdateQueue()
 
         self._cells: dict[tuple[RequestType, str], BanditCell] = {}
@@ -203,8 +212,21 @@ class AdaptiveRouter:
                 routed_model=chosen_model,
                 cause="bandit",
                 request_type=request_type.value,
+                conversation_continuing=conversation_is_continuing(messages),
+                **self._savings_baseline_fields(),
             ),
         )
+
+    def _savings_baseline_fields(self) -> dict[str, str]:
+        if self.litellm_router_instance is None:
+            return {}
+        baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
+        if baseline is None:
+            return {}
+        fields = {"savings_baseline_model": baseline.model}
+        if baseline.deployment_id is not None:
+            fields["savings_baseline_deployment_id"] = baseline.deployment_id
+        return fields
 
     # ---- Pick model ------------------------------------------------------
 

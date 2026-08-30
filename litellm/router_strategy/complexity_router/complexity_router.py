@@ -1751,6 +1751,7 @@ class ComplexityRouter(CustomLogger):
             ),
             model_to_prefs=model_to_prefs,
             model_to_cost=model_to_cost,
+            litellm_router_instance=self.litellm_router_instance,
         )
         self._adaptive_chosen_model_key = ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY
         return self.adaptive_router

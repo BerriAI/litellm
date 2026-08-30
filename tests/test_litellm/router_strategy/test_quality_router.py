@@ -19,6 +19,7 @@ from litellm.router_strategy.quality_router.config import (
     DEFAULT_COMPLEXITY_TO_QUALITY,
 )
 from litellm.router_strategy.quality_router.quality_router import QualityRouter
+from litellm.router_strategy.savings_baseline import Baseline
 
 
 def _make_model_list(spec: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -822,6 +823,28 @@ class TestKeywordOverride:
 
 
 class TestDecisionMetadata:
+    @pytest.mark.asyncio
+    async def test_decision_includes_savings_baseline_and_conversation_shape(self, quality_router, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.router_strategy.quality_router.quality_router.resolve_baseline",
+            lambda router, models: Baseline("openai/opus-next", "id-opus-next"),
+        )
+        request_kwargs: Dict[str, Any] = {}
+        response = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs=request_kwargs,
+            messages=[
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "continue"},
+            ],
+        )
+
+        assert response is not None
+        assert response.routing_decision["conversation_continuing"] is True
+        assert response.routing_decision["savings_baseline_model"] == "openai/opus-next"
+        assert response.routing_decision["savings_baseline_deployment_id"] == "id-opus-next"
+
     @pytest.mark.asyncio
     async def test_hook_stashes_decision_in_request_kwargs_metadata(
         self, quality_router

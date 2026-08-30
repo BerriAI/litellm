@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
+from litellm.router_strategy.savings_baseline import Baseline
 from litellm.types.router import (
     AdaptiveRouterConfig,
     PreRoutingHookResponse,
@@ -41,6 +42,32 @@ async def test_returns_pre_routing_hook_response_with_chosen_model():
 
     assert isinstance(response, PreRoutingHookResponse)
     assert response.model == "smart"
+
+
+@pytest.mark.asyncio
+async def test_records_savings_baseline_and_conversation_shape(monkeypatch):
+    router = _make_router()
+    router.litellm_router_instance = object()
+    router.pick_model = AsyncMock(return_value="smart")  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "litellm.router_strategy.adaptive_router.adaptive_router.resolve_baseline",
+        lambda router, models: Baseline("openai/smart", "deployment-id"),
+    )
+
+    response = await router.async_pre_routing_hook(
+        model="smart-cheap-router",
+        request_kwargs={},
+        messages=[
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "answer"},
+            {"role": "user", "content": "next"},
+        ],
+    )
+
+    assert response is not None
+    assert response.routing_decision["conversation_continuing"] is True
+    assert response.routing_decision["savings_baseline_model"] == "openai/smart"
+    assert response.routing_decision["savings_baseline_deployment_id"] == "deployment-id"
 
 
 @pytest.mark.asyncio

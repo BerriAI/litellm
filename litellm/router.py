@@ -8637,6 +8637,7 @@ class Router:
             config=config,
             model_to_prefs=model_to_prefs,
             model_to_cost=model_to_cost,
+            litellm_router_instance=self,
         )
         self._register_pre_routing_strategy(
             registry=self.adaptive_routers,
