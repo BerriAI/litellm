@@ -234,6 +234,23 @@ def record_pre_routing_selection(request_kwargs: Mapping[str, Any] | None, selec
             bucket[PRE_ROUTING_SELECTED_MODEL_KEY] = selected_model
 
 
+def clear_pre_routing_selection(request_kwargs: Mapping[str, object] | None) -> None:
+    """
+    Drop any selection the router did not make itself on this hop.
+
+    The buckets carry whatever the caller sent, so an inbound value is the caller
+    choosing a fallback chain rather than the router choosing a tier. A fallback hop
+    also inherits the previous hop's selection, which would key its own failure off
+    the tier that already failed. Clearing at the start of every hop leaves only a
+    value the pre-routing hook wrote while routing that hop.
+    """
+    if request_kwargs is None:
+        return
+    for bucket in (request_kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS):
+        if isinstance(bucket, dict) and PRE_ROUTING_SELECTED_MODEL_KEY in bucket:
+            del bucket[PRE_ROUTING_SELECTED_MODEL_KEY]
+
+
 def get_pre_routing_selection(kwargs: Mapping[str, Any]) -> str | None:
     """The model a pre-routing hook selected for this request, if one did."""
     buckets: Final = (kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS)

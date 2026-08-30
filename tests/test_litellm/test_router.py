@@ -11636,6 +11636,30 @@ class TestPreRoutingTierDrivesFallbacks:
                         "mock_response": "from backup-a",
                     },
                 },
+                {
+                    "model_name": "backup-b",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "from backup-b",
+                    },
+                },
+                {
+                    "model_name": "failing-backup",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "litellm.RateLimitError",
+                    },
+                },
+                {
+                    "model_name": "plain",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "litellm.RateLimitError",
+                    },
+                },
             ],
             fallbacks=fallbacks,
             num_retries=0,
@@ -11668,3 +11692,24 @@ class TestPreRoutingTierDrivesFallbacks:
         )
 
         assert response.choices[0].message.content == "from backup-a"
+
+    @pytest.mark.asyncio
+    async def test_a_caller_cannot_pick_the_chain_by_sending_the_selection(self):
+        """The metadata bucket carries caller-supplied keys, so only the hook may set the tier."""
+        router = self._router([{"tier1": ["backup-a"]}])
+
+        with pytest.raises(litellm.RateLimitError):
+            await router.acompletion(
+                model="plain",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"pre_routing_selected_model": "tier1"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_each_fallback_hop_resolves_its_own_chain(self):
+        """The second hop must key off the group it is running, not the tier that failed."""
+        router = self._router([{"tier1": ["failing-backup"]}, {"failing-backup": ["backup-b"]}])
+
+        response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+        assert response.choices[0].message.content == "from backup-b"

@@ -11,6 +11,7 @@ from litellm.router_utils.fallback_event_handlers import (
     AttemptedFallbackTargets,
     _trigger_cooldown_for_failed_deployment,
     fallback_attempt_key,
+    clear_pre_routing_selection,
     get_fallback_model_group,
     get_pre_routing_selection,
     record_pre_routing_selection,
@@ -1136,3 +1137,50 @@ class TestPreRoutingSelectionCarriesToFallbacks:
         fallbacks = [{"tier1": ["backup-a", "backup-b"]}, {"tier2": ["backup-c"]}]
         assert get_fallback_model_group(fallbacks=fallbacks, model_group="tier1")[0] == ["backup-a", "backup-b"]
         assert get_fallback_model_group(fallbacks=fallbacks, model_group="smart-router")[0] is None
+
+
+class TestPreRoutingSelectionIsPerHop:
+    """#38832 review: the buckets also carry whatever the caller sent, and a fallback hop
+    inherits the previous hop's tier, so a hop must start without a selection."""
+
+    def test_a_caller_supplied_selection_is_dropped(self):
+        kwargs = {"model": "plain", "metadata": {"pre_routing_selected_model": "tier1"}}
+
+        clear_pre_routing_selection(kwargs)
+
+        assert get_pre_routing_selection(kwargs) is None
+        assert "pre_routing_selected_model" not in kwargs["metadata"]
+
+    def test_both_buckets_are_cleared(self):
+        kwargs = {
+            "metadata": {"pre_routing_selected_model": "tier1"},
+            "litellm_metadata": {"pre_routing_selected_model": "tier2"},
+        }
+
+        clear_pre_routing_selection(kwargs)
+
+        assert get_pre_routing_selection(kwargs) is None
+
+    def test_the_rest_of_the_bucket_is_left_alone(self):
+        kwargs = {"metadata": {"pre_routing_selected_model": "tier1", "tags": ["a"]}}
+
+        clear_pre_routing_selection(kwargs)
+
+        assert kwargs["metadata"] == {"tags": ["a"]}
+
+    def test_clearing_is_a_no_op_without_a_usable_bucket(self):
+        kwargs = {"model": "plain", "metadata": "not-a-dict"}
+
+        clear_pre_routing_selection(None)
+        clear_pre_routing_selection(kwargs)
+
+        assert kwargs == {"model": "plain", "metadata": "not-a-dict"}
+
+    def test_a_selection_recorded_after_clearing_is_kept(self):
+        """Clearing runs before routing, so the hook's own write must survive it."""
+        kwargs = {"model": "smart-router", "metadata": {"pre_routing_selected_model": "stale"}}
+
+        clear_pre_routing_selection(kwargs)
+        record_pre_routing_selection(kwargs, "tier1")
+
+        assert get_pre_routing_selection(kwargs) == "tier1"
