@@ -1,7 +1,7 @@
-//! Enforcement: the litellm-rust workspace has exactly three crates.
+//! Enforcement: the litellm-rust workspace has exactly four crates.
 //!
-//! `core` (pure translation), `ai-gateway` (routes + all network I/O), and
-//! `python-bridge` (the PyO3 cdylib). Adding or removing a crate must be a
+//! `core` (provider transformation), `runtime` (reusable call execution),
+//! `ai-gateway` (host adapters), and `python-bridge` (the PyO3 cdylib). Adding or removing a crate must be a
 //! deliberate act: this test fails until the allowlist here is updated, forcing
 //! whoever changes the crate set to justify the new crate per the rule that a
 //! crate is a layer needing independent compilation / its own deps / a separate
@@ -16,10 +16,15 @@ use std::path::{Path, PathBuf};
 
 /// The one true crate set. Update BOTH this and `litellm-rust/AGENTS.md` when the
 /// workspace legitimately gains or loses a crate.
-const EXPECTED_MEMBERS: &[&str] = &["crates/core", "crates/ai-gateway", "crates/python-bridge"];
+const EXPECTED_MEMBERS: &[&str] = &[
+    "crates/core",
+    "crates/runtime",
+    "crates/ai-gateway",
+    "crates/python-bridge",
+];
 
 /// The crate subdirectory names that must exist under `crates/`.
-const EXPECTED_CRATE_DIRS: &[&str] = &["core", "ai-gateway", "python-bridge"];
+const EXPECTED_CRATE_DIRS: &[&str] = &["core", "runtime", "ai-gateway", "python-bridge"];
 
 const MISMATCH: &str = "litellm-rust crate set changed — update this allowlist AND litellm-rust/AGENTS.md, and justify the crate per the rule (crate = layer needing independent compilation / its own deps / a separate artifact).";
 

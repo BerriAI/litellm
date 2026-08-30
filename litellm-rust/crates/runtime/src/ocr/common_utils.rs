@@ -5,25 +5,15 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
-use litellm_core::ocr::transformation::OcrProviderConfig;
 use reqwest::Url;
 use serde_json::{Map, Value};
 
-use litellm_core::providers::azure_ai::ocr::transformation::{
-    AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
+use super::client::http_client;
+use crate::constants::{
+    AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS, DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
+    ERROR_BODY_MAX_CHARS, HTTP_CLIENT_TIMEOUT_SECS, HTTP_CONNECT_TIMEOUT_SECS,
+    MAX_SAFE_FETCH_REDIRECTS,
 };
-use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
-use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
-use litellm_core::providers::vertex_ai::ocr::transformation::{
-    VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
-};
-
-use crate::client::http_client;
-
-const ERROR_BODY_MAX_CHARS: usize = 256;
-const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
-const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
-const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
 
 pub(super) fn truncate_error_body(body: &str) -> String {
     if body.chars().count() <= ERROR_BODY_MAX_CHARS {
@@ -31,27 +21,6 @@ pub(super) fn truncate_error_body(body: &str) -> String {
     }
     let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
     format!("{truncated}... (truncated)")
-}
-
-pub(super) fn ocr_provider_config(
-    provider: &str,
-    model: &str,
-) -> Option<&'static dyn OcrProviderConfig> {
-    match provider {
-        "mistral" => Some(&MISTRAL_OCR_CONFIG),
-        "azure_ai" if is_azure_document_intelligence_model(model) => {
-            Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
-        }
-        "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
-        "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
-        "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),
-        _ => None,
-    }
-}
-
-fn is_azure_document_intelligence_model(model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    model.contains("doc-intelligence") || model.contains("documentintelligence")
 }
 
 pub(super) fn string_headers(
@@ -188,9 +157,14 @@ fn redirect_location(response: &reqwest::Response, url: &Url) -> CoreResult<Url>
         .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR document redirect: {err}")))
 }
 
-async fn safe_get_document_url(url: &str) -> CoreResult<(Url, reqwest::Response)> {
+async fn safe_get_document_url(
+    url: &str,
+    timeout: Option<Duration>,
+) -> CoreResult<(Url, reqwest::Response)> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
+        .timeout(timeout.unwrap_or(Duration::from_secs(HTTP_CLIENT_TIMEOUT_SECS)))
         .build()
         .map_err(|err| CoreError::Network(err.to_string()))?;
     let mut current_url = Url::parse(url)
@@ -255,7 +229,10 @@ async fn read_response_with_limit(
     Ok(bytes)
 }
 
-pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreResult<Value> {
+pub(super) async fn convert_document_url_to_data_uri(
+    document: Value,
+    timeout: Option<Duration>,
+) -> CoreResult<Value> {
     let Some((field, url)) = document_url_field(&document)? else {
         return Ok(document);
     };
@@ -263,7 +240,7 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
         return Ok(document);
     }
 
-    let (final_url, response) = safe_get_document_url(url).await?;
+    let (final_url, response) = safe_get_document_url(url, timeout).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -402,6 +379,48 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn truncate_error_body_is_bounded_and_utf8_safe() {
+        assert_eq!(truncate_error_body("Unauthorized"), "Unauthorized");
+        let truncated = truncate_error_body(&"é".repeat(306));
+        assert!(truncated.ends_with("... (truncated)"));
+        assert_eq!(
+            truncated
+                .strip_suffix("... (truncated)")
+                .expect("truncated marker present")
+                .chars()
+                .count(),
+            256
+        );
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
+
+    #[test]
+    fn string_headers_validate_values_and_match_case_insensitively() {
+        let headers = string_headers(Some(
+            json!({"Authorization": "Bearer sk-test"})
+                .as_object()
+                .expect("object")
+                .clone(),
+        ))
+        .expect("string headers accepted");
+        assert!(has_header(&headers, "authorization"));
+
+        let error = string_headers(Some(
+            json!({"x-retry-count": 3})
+                .as_object()
+                .expect("object")
+                .clone(),
+        ))
+        .expect_err("non-string header rejected");
+        assert_eq!(
+            error,
+            CoreError::InvalidRequest(
+                "OCR extra_headers.x-retry-count must be a string, got number".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn blocks_private_and_metadata_ips() {
         assert!(is_blocked_ip("127.0.0.1".parse().unwrap()));
         assert!(is_blocked_ip("10.0.0.1".parse().unwrap()));
@@ -417,10 +436,13 @@ mod tests {
 
     #[tokio::test]
     async fn convert_document_url_rejects_loopback_fetch() {
-        let error = convert_document_url_to_data_uri(json!({
-            "type": "image_url",
-            "image_url": "http://127.0.0.1/image.png"
-        }))
+        let error = convert_document_url_to_data_uri(
+            json!({
+                "type": "image_url",
+                "image_url": "http://127.0.0.1/image.png"
+            }),
+            None,
+        )
         .await
         .unwrap_err();
 
@@ -438,7 +460,7 @@ mod tests {
             "image_url": "data:image/png;base64,abcd"
         });
 
-        let transformed = convert_document_url_to_data_uri(document.clone())
+        let transformed = convert_document_url_to_data_uri(document.clone(), None)
             .await
             .unwrap();
 

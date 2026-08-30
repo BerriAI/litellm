@@ -6,15 +6,16 @@ dials OpenAI upstream, and splices the two sockets frame-by-frame.
 
 ## Crates
 
-`litellm-rust` is exactly three crates (a crate is a **layer**, not a route):
+`litellm-rust` is exactly four crates (a crate is a **layer**, not a route):
 
 | Crate | Role |
 |-------|------|
-| litellm-core | The LiteLLM SDK in Rust — per-route entrypoints (`messages::messages()`) that resolve the provider, transform, and make the call; plus types, provider transforms, and the router. |
-| litellm-ai-gateway | The Axum server (behind the `server` feature) and WebSocket hosts. Translates HTTP/WS to core entrypoints; no provider handlers. |
-| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — marshals Python objects and calls core entrypoints. |
+| litellm-core | Provider transformations and shared types. OCR is transformation-only. |
+| litellm-runtime | Reusable OCR preparation, lifecycle ordering, HTTP, and polling. |
+| litellm-ai-gateway | Axum and WebSocket host plus OCR host-hook adapters. |
+| litellm-python-bridge | PyO3 adapter calling runtime for OCR and retaining gateway for unrelated legacy paths. |
 
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+Dependency direction (acyclic): ai-gateway/python-bridge -> runtime -> core.
 
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)

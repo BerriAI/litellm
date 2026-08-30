@@ -24,26 +24,28 @@ coverage and production evidence.
 
 | Crate | Role |
 |-------|------|
-| litellm-core | The SDK. Per-route entrypoints (`messages::messages()`), types, provider transforms (modules under `providers/`), provider resolution, auth, the provider HTTP call, and the router. |
-| litellm-ai-gateway | The axum server (behind the `server` feature) and WebSocket hosts. Translates HTTP/WS to core entrypoints; no provider handlers. |
-| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — marshals Python objects and calls core entrypoints. |
+| litellm-core | Provider transformations and shared types. OCR is deterministic transformation only. |
+| litellm-runtime | Reusable OCR resolution, auth, preparation, lifecycle, HTTP, and polling. |
+| litellm-ai-gateway | Axum and WebSocket host plus host-specific OCR logger/guardrail adapters. |
+| litellm-python-bridge | PyO3 cdylib. Calls runtime directly for OCR and retains gateway for unrelated legacy paths. |
 
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+Dependency direction (acyclic): ai-gateway/python-bridge -> runtime -> core.
 
 ## Layout
 
 ```text
 crates/
-  core/           The SDK: route modules + provider transforms.
-    src/messages/   mod.rs (entrypoint), types, transformation, prepare, handler, client
+  core/           Shared types and provider transformations.
+    src/messages/   Legacy whole-call route implementation.
     src/providers/anthropic/messages/transformation.rs
-  ai-gateway/     Axum server + WebSocket hosts; calls core entrypoints.
+  runtime/        Reusable OCR execution.
+  ai-gateway/     Axum server + WebSocket hosts; adapts OCR runtime hooks.
   python-bridge/  PyO3 bridge for Python LiteLLM.
 ```
 
 The folder shape follows the Python provider tree:
 `core/src/providers/<provider>/<route>/transformation.rs`. The bridge exposes one
-function per top-level route, mirroring the core entrypoints.
+function per top-level route, calling the matching core or runtime entrypoint.
 
 ## Checks
 

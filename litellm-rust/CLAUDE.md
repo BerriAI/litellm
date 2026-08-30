@@ -21,12 +21,12 @@ variants of it. The test for a good abstraction is that adding the next provider
 is a few declarative lines, not a new file of duplicated flow. Only diverge from
 the base when behavior is genuinely different, and say so explicitly in the PR.
 
-## Crates (exactly three — see AGENTS.md)
+## Crates (exactly four, see AGENTS.md)
 
-`litellm-core` **is** the LiteLLM SDK in Rust: it makes the LLM call.
-`litellm-ai-gateway` is an HTTP/WebSocket server in front of it, and
-`litellm-python-bridge` exposes it to the Python SDK. A crate is a **layer**, not
-a route — add modules, not crates.
+`litellm-core` owns provider transformations and shared types. `litellm-runtime`
+is the reusable OCR execution layer. `litellm-ai-gateway` is an HTTP/WebSocket
+host, and `litellm-python-bridge` exposes Rust to the Python SDK. The runtime
+boundary is OCR-first; do not migrate other routes wholesale.
 
 ## Core Boundary
 
@@ -61,8 +61,8 @@ Allowed in `core`:
 - The public entrypoint for a top-level LiteLLM call
 - Request/response transforms and stream chunk normalization
 - Provider resolution, auth header construction, and URL building
-- The provider HTTP call itself, through a shared reused client with connect and
-  request timeouts
+- The provider HTTP call itself for existing non-OCR core entrypoints, through a
+  shared reused client with connect and request timeouts
 - Shared data types and validation errors
 - Deterministic token/cost helper logic
 
@@ -79,9 +79,14 @@ Env reads in `core` are limited to credential fallback inside a route's
 no key is passed. Everything else config-shaped is resolved by the host and
 passed in.
 
-Routes still hosted in `ai-gateway` (`ocr`, `audio_transcription`, `realtime`)
-predate this rule and are being moved into `core` route modules; do not add new
-ones there, and prefer moving one when you touch it.
+Audio transcription and realtime still have legacy gateway-owned call paths.
+Do not broaden the OCR runtime boundary to those routes as part of OCR work.
+
+OCR is the exception to the older end-to-end core rule. Core owns supported
+parameter metadata, parameter mapping, request transformation, and decoded
+provider response normalization. Runtime owns provider/model resolution,
+configuration, environment/auth, URL/headers, document materialization, HTTP,
+Azure polling, and lifecycle ordering. Gateway OCR only adapts host hooks.
 
 Python owns rollout state and fallback while Rust is being introduced. Rust
 paths must be off by default until parity tests prove equivalence with Python.

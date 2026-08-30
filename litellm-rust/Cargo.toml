@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/core",
+    "crates/runtime",
     "crates/ai-gateway",
     "crates/python-bridge",
 ]
@@ -14,6 +15,7 @@ repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
+litellm-runtime = { path = "crates/runtime" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
 axum = "0.7"
 pyo3 = "0.29.0"

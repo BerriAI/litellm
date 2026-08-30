@@ -2,9 +2,11 @@
 Mistral OCR transformation implementation.
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.ocr.transformation import (
@@ -19,6 +21,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 MISTRAL_OCR_API_KEY_ENV_VAR: Final = "MISTRAL_API_KEY"
+_OCR_RESPONSE_DATA: Final = TypeAdapter(dict[str, object])
 
 
 class MistralOCRConfig(BaseOCRConfig):
@@ -227,18 +230,26 @@ class MistralOCRConfig(BaseOCRConfig):
         }
         """
         try:
-            response_json: Final = raw_response.json()
+            response_data: Final = _OCR_RESPONSE_DATA.validate_python(raw_response.json())
 
-            verbose_logger.debug("Mistral OCR response keys: %s", response_json.keys())
+            verbose_logger.debug("Mistral OCR response keys: %s", response_data.keys())
 
-            # Return native Mistral format - no transformation
-            return OCRResponse(
-                pages=response_json.get("pages", []),
-                model=response_json.get("model", model),
-                document_annotation=response_json.get("document_annotation"),
-                usage_info=response_json.get("usage_info"),
-                object="ocr",
-            )
+            return self.transform_ocr_response_data(model=model, response_data=response_data)
         except Exception as e:
             verbose_logger.error("Error parsing Mistral OCR response: %s", e)
             raise e
+
+    def transform_ocr_response_data(
+        self,
+        model: str,
+        response_data: Mapping[str, object],
+    ) -> OCRResponse:
+        return OCRResponse.model_validate(
+            {
+                "pages": response_data.get("pages", []),
+                "model": response_data.get("model", model),
+                "document_annotation": response_data.get("document_annotation"),
+                "usage_info": response_data.get("usage_info"),
+                "object": "ocr",
+            }
+        )

@@ -234,3 +234,27 @@ class TestTransformOcrResponseOcr4Fields:
         dumped_page = result.model_dump()["pages"][0]
         for field in ("tables", "hyperlinks", "header", "footer"):
             assert dumped_page[field] == page[field]
+
+    def test_decoded_response_data_uses_the_same_normalization(self, config: MistralOCRConfig) -> None:
+        page = {
+            "index": 0,
+            "markdown": "decoded response",
+            "blocks": [{"type": "text", "content": "decoded response"}],
+        }
+
+        response_data = {
+            "pages": [page],
+            "model": "mistral-ocr-4-0",
+            "usage_info": {"pages_processed": 1},
+        }
+        result = config.transform_ocr_response_data(
+            model="mistral-ocr-4-0",
+            response_data=response_data,
+        )
+        wrapped_result = config.transform_ocr_response(
+            model="mistral-ocr-4-0",
+            raw_response=httpx.Response(200, json=response_data),
+            logging_obj=None,
+        )
+
+        assert result == wrapped_result

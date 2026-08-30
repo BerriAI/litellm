@@ -4,13 +4,9 @@ use std::pin::Pin;
 use litellm_core::CoreResult;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::CoreError;
-use litellm_core::ocr::transformation::OcrAuthStrategy;
+use litellm_runtime::ocr::{PreparedOcrRequest, ProviderOcrRequest};
 use serde_json::{Map, Value, json};
 
-use super::common_utils::{
-    convert_document_url_to_data_uri, has_header, ocr_provider_config, string_headers,
-};
-use super::types::{PreparedOcrRequest, ProviderOcrRequest};
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
@@ -75,43 +71,19 @@ impl OcrLifecycleHooks {
         &self,
         request: PreparedOcrRequest,
     ) -> CoreResult<ProviderOcrRequest> {
-        let config = ocr_provider_config(&request.custom_llm_provider, &request.model)
-            .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.clone()))?;
-        let env_lookup = |key: &str| std::env::var(key).ok();
-        let headers = string_headers(request.extra_headers)?;
-        let auth_strategy = config.auth_strategy();
-        let api_key = (!has_header(&headers, auth_strategy.header_name()))
-            .then(|| config.resolve_api_key(request.api_key.as_deref(), &env_lookup))
-            .transpose()?;
-        let url = config.complete_url(
-            request.api_base.as_deref(),
-            &request.model,
-            &request.optional_params,
-            &env_lookup,
-        )?;
-        let filtered_params = config.map_ocr_params(&request.optional_params);
         let model = request.model.clone();
         let custom_llm_provider = request.custom_llm_provider.clone();
-        let document = if config.requires_data_uri_document() {
-            convert_document_url_to_data_uri(request.document).await?
-        } else {
-            request.document
-        };
-        let body = config
-            .transform_ocr_request(&request.model, document, filtered_params)?
-            .data;
-        let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
+        let mut provider_request = litellm_runtime::ocr::prepare_provider_request(request).await?;
         let body = self
-            .run_during_call_guardrails(&model, &custom_llm_provider, &url, body)
+            .run_during_call_guardrails(
+                &model,
+                &custom_llm_provider,
+                &provider_request.url,
+                provider_request.body,
+            )
             .await?;
-        Ok(ProviderOcrRequest {
-            model,
-            config,
-            url,
-            body,
-            upstream_headers,
-            timeout: request.timeout,
-        })
+        provider_request.body = body;
+        Ok(provider_request)
     }
 
     async fn run_during_call_guardrails(
@@ -247,21 +219,6 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
                 .await;
         })
     }
-}
-
-fn upstream_headers(
-    headers: &[(String, String)],
-    auth_strategy: OcrAuthStrategy,
-    api_key: Option<&str>,
-) -> Vec<(String, String)> {
-    api_key
-        .map(|api_key| match auth_strategy {
-            OcrAuthStrategy::Bearer => ("Authorization".to_string(), format!("Bearer {api_key}")),
-            OcrAuthStrategy::Header(header_name) => (header_name.to_string(), api_key.to_string()),
-        })
-        .into_iter()
-        .chain(headers.iter().cloned())
-        .collect()
 }
 
 fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {

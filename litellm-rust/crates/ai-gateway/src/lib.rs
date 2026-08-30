@@ -3,10 +3,8 @@
 //! Two layers, split by feature so the Python `cdylib` can depend on the I/O
 //! without pulling in the HTTP server:
 //!
-//! - Call-type modules such as [`ocr`]: provider transforms, lifecycle hooks,
-//!   and provider I/O. Always available — no feature required. These predate the
-//!   rule that a route's entrypoint and handler live in `litellm-core` (see
-//!   `litellm_core::messages`) and move there as they are touched.
+//! - Call-type modules such as [`ocr`]: host-specific lifecycle adapters and
+//!   compatibility entrypoints. OCR provider execution lives in `litellm-runtime`.
 //! - [`io`]: compatibility exports and realtime WebSocket splice helpers.
 //! - The server modules ([`auth`], [`routes`], [`state`]) and anything pulling
 //!   `axum` are gated behind the `server` feature, which the `litellm-ai-gateway`

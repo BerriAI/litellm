@@ -15,6 +15,7 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 litellm-core = { workspace = true, features = ["bedrock-auth"] }
+litellm-runtime.workspace = true
 litellm-ai-gateway = { workspace = true, default-features = false }
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true

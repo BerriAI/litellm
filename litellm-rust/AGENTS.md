@@ -1,16 +1,17 @@
 # AGENTS.md
 
-litellm-rust has exactly THREE crates. A crate is a LAYER, not a route. Routes (ocr, realtime, chat) and providers (mistral, openai) are MODULES inside the layers.
+litellm-rust has exactly FOUR crates. A crate is a LAYER, not a route. Routes and providers are modules inside the layers. `litellm-runtime` is an intentional reusable execution layer, introduced OCR-first.
 
 ## Crates
 
 | Crate | Role |
 |-------|------|
-| litellm-core | The LiteLLM SDK in Rust. One public entrypoint per top-level call (`messages::messages()`), owning types, transforms, provider resolution, auth, and the provider HTTP call. Call it, get a typed response. |
-| litellm-ai-gateway | The axum server (behind the `server` feature) plus the WebSocket hosts. Translates HTTP/WS to core entrypoints; owns no provider logic and no handlers. |
-| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — marshals Python objects and calls core entrypoints. |
+| litellm-core | Provider transformations and shared types. OCR core code is deterministic transformation only. Existing non-OCR route entrypoints remain in core. |
+| litellm-runtime | Reusable OCR execution: provider/model and config selection, environment/auth, URL/headers, document materialization, HTTP, polling, and lifecycle ordering. |
+| litellm-ai-gateway | The axum server and WebSocket hosts. Adapts host logger, guardrail, and metadata types to runtime interfaces. |
+| litellm-python-bridge | PyO3 cdylib exposing Rust to the Python SDK. OCR calls runtime directly; unrelated legacy paths may still call gateway or core. |
 
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+Dependency direction (acyclic): ai-gateway/python-bridge -> runtime -> core. Python bridge retains an ai-gateway dependency for unrelated audio and WebSocket code.
 
 ## Where a route lives
 
@@ -26,7 +27,7 @@ core/src/messages/
   client.rs          # the shared reqwest client
 ```
 
-Handlers never live in `ai-gateway`. `ocr`, `audio_transcription`, and `realtime` are still hosted there from before this rule; they move to `core` as they are touched.
+OCR provider handlers live in `runtime`, not `ai-gateway`. This boundary is OCR-first; audio, realtime, Messages, Chat, Responses, and generic lifecycle code do not move with it.
 
 Adding a crate: default to a MODULE. New crate ONLY on a real trigger — separate artifact (binary/cdylib), proc-macro, shared foundation, or publishable standalone. A new provider or route is none of these.
 

@@ -251,6 +251,13 @@ class BaseOCRConfig:
         """
         raise NotImplementedError("transform_ocr_response must be implemented by provider")
 
+    def transform_ocr_response_data(
+        self,
+        model: str,
+        response_data: Mapping[str, object],
+    ) -> OCRResponse:
+        raise NotImplementedError("transform_ocr_response_data must be implemented by provider")
+
     async def async_transform_ocr_response(
         self,
         model: str,

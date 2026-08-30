@@ -1395,6 +1395,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "litellm-core",
+ "litellm-runtime",
  "pyo3",
  "reqwest",
  "serde",
@@ -1432,10 +1433,22 @@ dependencies = [
  "criterion",
  "litellm-ai-gateway",
  "litellm-core",
+ "litellm-runtime",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
  "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-runtime"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "litellm-core",
+ "reqwest",
  "serde_json",
  "tokio",
 ]

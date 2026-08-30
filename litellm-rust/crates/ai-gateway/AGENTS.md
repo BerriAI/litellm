@@ -1,9 +1,11 @@
 # ai-gateway — folder architecture
 
-The Axum server that fronts the Rust gateway. It owns transport + config + auth
-only; deployment selection lives in `core::router`, and the LLM call itself
-(transforms, auth headers, provider HTTP) lives behind a `core` route entrypoint
-such as `litellm_core::messages::messages`. No provider handler lives here.
+The Axum server that fronts the Rust gateway. It owns host transport + config + auth
+only; deployment selection lives in `core::router`. Existing non-OCR calls live
+behind core route entrypoints such as `litellm_core::messages::messages`, while
+OCR executes through `litellm-runtime`. No provider handler lives here.
+
+OCR is executed by `litellm-runtime`. Gateway OCR is a compatibility wrapper that adapts custom logger, guardrail, and `RequestMetadata` types to runtime lifecycle hooks. Runtime must never depend on this crate.
 
 ```
 src/
