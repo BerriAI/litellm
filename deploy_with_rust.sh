@@ -26,6 +26,10 @@ LITELLM_WORKERS=${LITELLM_WORKERS:-"1"}
 RUST_GATEWAY_PORT=${RUST_GATEWAY_PORT:-"4001"}
 RUST_GATEWAY_BINARY=${RUST_GATEWAY_BINARY:-"litellm-rust/target/release/litellm-ai-gateway"}
 
+# Shared state configuration (both Python and Rust use same Redis/Postgres)
+REDIS_URL=${REDIS_URL:-""}
+DATABASE_URL=${DATABASE_URL:-""}
+
 # Integration mode
 ENABLE_RUST_GATEWAY=${ENABLE_RUST_GATEWAY:-"false"}
 LITELLM_RUST_PIPELINE=${LITELLM_RUST_PIPELINE:-"false"}
@@ -58,6 +62,8 @@ export LITELLM_PORT
 export LITELLM_HOST
 export ENABLE_RUST_GATEWAY
 export LITELLM_RUST_PIPELINE
+export REDIS_URL
+export DATABASE_URL
 
 if [ "$ENABLE_RUST_GATEWAY" = "true" ]; then
     export RUST_GATEWAY_PORT
