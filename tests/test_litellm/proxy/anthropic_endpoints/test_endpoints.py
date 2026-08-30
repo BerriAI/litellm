@@ -350,3 +350,116 @@ class TestStripTotalTokensFeatureFlag(unittest.TestCase):
         import litellm
 
         assert litellm.strip_anthropic_total_tokens is False
+
+
+class TestCountTokensAuthErrorMapping:
+    """LIT-6507: /v1/messages/count_tokens must surface Anthropic auth failures
+    as the Anthropic error envelope with the provider's status, matching
+    /v1/messages, instead of masking them behind a 200 local count or a 500."""
+
+    def _count_tokens_body(self):
+        return {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "count these tokens please"}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_provider_refused_credential_returns_401_envelope_not_local_count(self, monkeypatch):
+        """A real 401 from the provider's count-tokens API must reach the
+        client as a 401 authentication_error envelope, never a 200 with a
+        silently substituted local-tokenizer count."""
+        import litellm
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from fastapi import HTTPException
+        from litellm.types.utils import TokenCountResponse
+
+        provider_error = TokenCountResponse(
+            total_tokens=0,
+            request_model="claude-haiku-4-5",
+            model_used="claude-haiku-4-5",
+            tokenizer_type="anthropic_api",
+            error=True,
+            error_message="API key is invalid.",
+            status_code=401,
+        )
+
+        class _RefusedCredentialCounter:
+            def should_use_token_counting_api(self, custom_llm_provider=None):
+                return True
+
+            async def count_tokens(self, **kwargs):
+                return provider_error
+
+        mock_deployment = {
+            "litellm_params": {"model": "anthropic/claude-haiku-4-5"},
+            "model_info": {},
+        }
+        mock_router = MagicMock()
+        mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
+
+        monkeypatch.setattr(litellm, "disable_token_counter", False)
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value=self._count_tokens_body())),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(proxy_server, "llm_router", mock_router),  # test-quality-ok: module global read at call time; no injection seam
+            patch.object(  # test-quality-ok: provider counter resolution is a module function; no injection seam
+                proxy_server,
+                "_get_provider_token_counter",
+                new=lambda deployment, model_to_use: (_RefusedCredentialCounter(), "claude-haiku-4-5", "anthropic"),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(request=MagicMock(), user_api_key_dict=MagicMock())
+
+        assert exc_info.value.status_code == 401
+        detail = exc_info.value.detail
+        assert detail["type"] == "error"
+        assert detail["error"]["type"] == "authentication_error"
+        assert "API key is invalid." in detail["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_status_carrying_exception_maps_to_its_status_not_500(self):
+        """A litellm.AuthenticationError escaping token counting (e.g. a
+        rejected workload-identity-federation token exchange) must map to its
+        status_code with the Anthropic envelope, not the blanket 500."""
+        import litellm
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from fastapi import HTTPException
+
+        auth_error = litellm.AuthenticationError(
+            message="Anthropic workload identity federation failed. The token endpoint returned HTTP 400",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
+        )
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value=self._count_tokens_body())),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=auth_error)),  # test-quality-ok: endpoint imports the module attribute at call time; no injection seam
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(request=MagicMock(), user_api_key_dict=MagicMock())
+
+        assert exc_info.value.status_code == 401
+        detail = exc_info.value.detail
+        assert detail["type"] == "error"
+        assert detail["error"]["type"] == "authentication_error"
+        assert "workload identity federation failed" in detail["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_statusless_exception_stays_500(self):
+        """Exceptions without an HTTP status keep the internal-server-error
+        contract."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from fastapi import HTTPException
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value=self._count_tokens_body())),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=ValueError("boom"))),  # test-quality-ok: endpoint imports the module attribute at call time; no injection seam
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await ep.count_tokens(request=MagicMock(), user_api_key_dict=MagicMock())
+
+        assert exc_info.value.status_code == 500
+        assert "Internal server error" in str(exc_info.value.detail)

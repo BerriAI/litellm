@@ -12165,3 +12165,88 @@ async def test_load_config_router_authorizes_fallback_targets_against_the_callin
     router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     assert router.fallback_access_check is router_fallback_access_check
+
+
+class _StubProviderTokenCounter:
+    """LIT-6507: injected in place of a real provider counter so
+    _try_provider_token_count's error handling is exercised without network."""
+
+    def __init__(self, response):
+        self._response = response
+
+    def should_use_token_counting_api(self, custom_llm_provider=None):
+        return True
+
+    async def count_tokens(
+        self,
+        model_to_use,
+        messages,
+        contents,
+        deployment=None,
+        request_model="",
+        tools=None,
+        system=None,
+    ):
+        return self._response
+
+
+def _provider_token_count_error(status_code, message):
+    from litellm.types.utils import TokenCountResponse
+
+    return TokenCountResponse(
+        total_tokens=0,
+        request_model="claude-auth-test",
+        model_used="claude-haiku-4-5",
+        tokenizer_type="anthropic_api",
+        error=True,
+        error_message=message,
+        status_code=status_code,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_status", [401, 403])
+async def test_try_provider_token_count_raises_proxy_exception_on_provider_auth_error(auth_status, monkeypatch):
+    """LIT-6507: a provider-refused credential (401/403) must surface as a
+    ProxyException with that status, not silently fall back to the local
+    tokenizer and mask the auth failure behind a 200."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import _try_provider_token_count
+
+    counter = _StubProviderTokenCounter(_provider_token_count_error(auth_status, "API key is invalid."))
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    with pytest.raises(ProxyException) as exc_info:
+        await _try_provider_token_count(
+            provider_counter=counter,
+            custom_llm_provider="anthropic",
+            model_to_use="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "count these tokens please"}],
+            contents=None,
+            deployment=None,
+            request_model="claude-auth-test",
+        )
+
+    assert exc_info.value.code == str(auth_status)
+    assert "API key is invalid." in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("non_auth_status", [429, 500])
+async def test_try_provider_token_count_falls_back_to_local_on_non_auth_error(non_auth_status, monkeypatch):
+    """Non-auth provider failures keep the deliberate silent fallback to the
+    local tokenizer (PR #34258): the caller gets None and counts locally."""
+    from litellm.proxy.proxy_server import _try_provider_token_count
+
+    counter = _StubProviderTokenCounter(_provider_token_count_error(non_auth_status, "provider unavailable"))
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    result = await _try_provider_token_count(
+        provider_counter=counter,
+        custom_llm_provider="anthropic",
+        model_to_use="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "count these tokens please"}],
+        contents=None,
+        deployment=None,
+        request_model="claude-auth-test",
+    )
+
+    assert result is None

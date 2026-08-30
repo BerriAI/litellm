@@ -310,6 +310,15 @@ async def count_tokens(
             detail=detail,
         )
     except Exception as e:
+        exception_status: Final = getattr(e, "status_code", None)
+        if isinstance(exception_status, int) and 400 <= exception_status <= 599:
+            raise HTTPException(
+                status_code=exception_status,
+                detail=AnthropicExceptionMapping.transform_to_anthropic_error(
+                    status_code=exception_status,
+                    raw_message=str(getattr(e, "message", None) or e),
+                ),
+            )
         verbose_proxy_logger.exception("litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - %s", e)
         raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
 
