@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -37,6 +38,29 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+
+_STRUCTURED_OUTPUT_FORMAT_TYPES: Final = frozenset({"json_schema", "json_object"})
+
+
+_REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
+_MAPPING_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _as_mapping(value: object) -> "Mapping[str, object] | None":
+    try:
+        return _MAPPING_FIELDS.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _has_structured_output_format(text: object) -> bool:
+    text_mapping: Final = _as_mapping(text)
+    if text_mapping is None:
+        return False
+    format_config: Final = _as_mapping(text_mapping.get("format"))
+    if format_config is None:
+        return False
+    return format_config.get("type") in _STRUCTURED_OUTPUT_FORMAT_TYPES
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -76,23 +100,28 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        request: Final = super().transform_responses_api_request(
-            model,
-            input,
-            response_api_optional_request_params,
-            litellm_params,
-            headers,
+        request: Final = _REQUEST_FIELDS.validate_python(
+            super().transform_responses_api_request(
+                model,
+                input,
+                response_api_optional_request_params,
+                litellm_params,
+                headers,
+            )
         )
         base_instructions: Final = get_chatgpt_default_instructions()
         existing_instructions: Final = request.get("instructions")
-        if existing_instructions:
+        if isinstance(existing_instructions, str) and existing_instructions:
             if base_instructions not in existing_instructions:
                 request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
         else:
             request["instructions"] = base_instructions
         request["store"] = False
         request["stream"] = True
-        include: Final = list(request.get("include") or [])
+        include_value: Final = request.get("include")
+        include: Final[list[object]] = (  # mutable-ok: request["include"] is a JSON array on the wire
+            list(include_value) if isinstance(include_value, list) else []
+        )
         if "reasoning.encrypted_content" not in include:
             include.append("reasoning.encrypted_content")
         request["include"] = include
@@ -109,10 +138,12 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "reasoning",
             "previous_response_id",
             "truncation",
+            *(("text",) if _has_structured_output_format(request.get("text")) else ()),
         }
 
         filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
-        service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
+        requested_tier: Final = request.get("service_tier")
+        service_tier: Final = _CHATGPT_SERVICE_TIERS.get(requested_tier) if isinstance(requested_tier, str) else None
         if service_tier is not None:
             filtered["service_tier"] = service_tier
         return filtered
