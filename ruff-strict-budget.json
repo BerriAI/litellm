@@ -3,10 +3,10 @@
     "limit": 2985
   },
   "ANN002": {
-    "limit": 71
+    "limit": 65
   },
   "ANN003": {
-    "limit": 809
+    "limit": 803
   },
   "ANN201": {
     "limit": 2000
@@ -168,7 +168,7 @@
     "limit": 3
   },
   "RET504": {
-    "limit": 173
+    "limit": 169
   },
   "RUF012": {
     "limit": 239
@@ -198,7 +198,7 @@
     "limit": 56
   },
   "SIM102": {
-    "limit": 310
+    "limit": 309
   },
   "SIM103": {
     "limit": 119

@@ -3,7 +3,7 @@
     "limit": 14074
   },
   "reportArgumentType": {
-    "limit": 2215
+    "limit": 2213
   },
   "reportAssignmentType": {
     "limit": 319
@@ -84,13 +84,13 @@
     "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 1808
+    "limit": 1804
   },
   "reportRedeclaration": {
     "limit": 8
   },
   "reportReturnType": {
-    "limit": 181
+    "limit": 179
   },
   "reportTypedDictNotRequiredAccess": {
     "limit": 24
@@ -114,7 +114,7 @@
     "limit": 29861
   },
   "reportUnnecessaryCast": {
-    "limit": 111
+    "limit": 106
   },
   "reportUnnecessaryComparison": {
     "limit": 687
