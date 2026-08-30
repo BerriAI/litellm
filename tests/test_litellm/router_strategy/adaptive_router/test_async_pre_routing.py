@@ -7,12 +7,11 @@ model on metadata, and return a PreRoutingHookResponse.
 Routing is stateless per-turn — `pick_model` does not take a session id.
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
-from litellm.router_strategy.savings_baseline import Baseline
 from litellm.types.router import (
     AdaptiveRouterConfig,
     PreRoutingHookResponse,
@@ -45,14 +44,20 @@ async def test_returns_pre_routing_hook_response_with_chosen_model():
 
 
 @pytest.mark.asyncio
-async def test_records_savings_baseline_and_conversation_shape(monkeypatch):
+async def test_records_savings_baseline_and_conversation_shape():
     router = _make_router()
-    router.litellm_router_instance = object()
+    router_instance = MagicMock()
+    router_instance.model_name_to_deployment_indices = {"fast": [0], "smart": [1]}
+    router_instance.model_list = [
+        {"litellm_params": {"model": "openai/fast"}, "model_info": {"id": "fast-id"}},
+        {"litellm_params": {"model": "openai/smart"}, "model_info": {"id": "smart-id"}},
+    ]
+    router_instance.get_deployment_model_info.side_effect = lambda deployment_id, model: {
+        "input_cost_per_token": 0.00000015 if deployment_id == "fast-id" else 0.000005,
+        "output_cost_per_token": 0.00000015 if deployment_id == "fast-id" else 0.000005,
+    }
+    router.litellm_router_instance = router_instance
     router.pick_model = AsyncMock(return_value="smart")  # type: ignore[method-assign]
-    monkeypatch.setattr(
-        "litellm.router_strategy.adaptive_router.adaptive_router.resolve_baseline",
-        lambda router, models: Baseline("openai/smart", "deployment-id"),
-    )
 
     response = await router.async_pre_routing_hook(
         model="smart-cheap-router",
@@ -67,7 +72,20 @@ async def test_records_savings_baseline_and_conversation_shape(monkeypatch):
     assert response is not None
     assert response.routing_decision["conversation_continuing"] is True
     assert response.routing_decision["savings_baseline_model"] == "openai/smart"
-    assert response.routing_decision["savings_baseline_deployment_id"] == "deployment-id"
+    assert response.routing_decision["savings_baseline_deployment_id"] == "smart-id"
+
+
+@pytest.mark.asyncio
+async def test_empty_messages_use_conservative_continuing_shape():
+    router = _make_router()
+    router.pick_model = AsyncMock(return_value="smart")  # type: ignore[method-assign]
+
+    response = await router.async_pre_routing_hook(
+        model="smart-cheap-router", request_kwargs={}, messages=None
+    )
+
+    assert response is not None
+    assert response.routing_decision["conversation_continuing"] is True
 
 
 @pytest.mark.asyncio

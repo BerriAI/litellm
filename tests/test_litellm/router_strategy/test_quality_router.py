@@ -19,7 +19,6 @@ from litellm.router_strategy.quality_router.config import (
     DEFAULT_COMPLEXITY_TO_QUALITY,
 )
 from litellm.router_strategy.quality_router.quality_router import QualityRouter
-from litellm.router_strategy.savings_baseline import Baseline
 
 
 def _make_model_list(spec: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -824,10 +823,23 @@ class TestKeywordOverride:
 
 class TestDecisionMetadata:
     @pytest.mark.asyncio
-    async def test_decision_includes_savings_baseline_and_conversation_shape(self, quality_router, monkeypatch):
-        monkeypatch.setattr(
-            "litellm.router_strategy.quality_router.quality_router.resolve_baseline",
-            lambda router, models: Baseline("openai/opus-next", "id-opus-next"),
+    async def test_decision_includes_savings_baseline_and_conversation_shape(self, quality_router):
+        quality_router.litellm_router_instance.model_name_to_deployment_indices = {
+            "haiku": [0],
+            "sonnet": [1],
+            "opus": [2],
+            "opus-next": [3],
+        }
+        quality_router.litellm_router_instance.get_deployment_model_info.side_effect = (
+            lambda deployment_id, model: {
+                "input_cost_per_token": {
+                    "id-haiku": 0.000001,
+                    "id-sonnet": 0.000002,
+                    "id-opus": 0.000003,
+                    "id-opus-next": 0.000004,
+                }[deployment_id],
+                "output_cost_per_token": 0.000001,
+            }
         )
         request_kwargs: Dict[str, Any] = {}
         response = await quality_router.async_pre_routing_hook(
@@ -842,8 +854,8 @@ class TestDecisionMetadata:
 
         assert response is not None
         assert response.routing_decision["conversation_continuing"] is True
-        assert response.routing_decision["savings_baseline_model"] == "openai/opus-next"
-        assert response.routing_decision["savings_baseline_deployment_id"] == "id-opus-next"
+        assert response.routing_decision["savings_baseline_model"] == "openai/sonnet"
+        assert response.routing_decision["savings_baseline_deployment_id"] == "id-sonnet"
 
         first_turn = await quality_router.async_pre_routing_hook(
             model="quality-router-test",

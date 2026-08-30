@@ -47,7 +47,7 @@ class Baseline(NamedTuple):
 
 def conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None) -> bool:
     """Return whether the request contains evidence of an earlier assistant turn."""
-    return any(message.get("role") == "assistant" for message in messages or ())
+    return not messages or any(message.get("role") == "assistant" for message in messages)
 
 
 def canonical_model(model: str, custom_llm_provider: str | None = None) -> str | None:
