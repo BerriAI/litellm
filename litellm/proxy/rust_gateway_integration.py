@@ -138,6 +138,77 @@ def get_rust_gateway() -> Optional[RustGatewayManager]:
     return _rust_gateway
 
 
+def should_route_to_rust(
+    route: str,
+    request_body: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Determine if a request should be routed to the Rust gateway.
+    
+    Args:
+        route: The request path (e.g., "/v1/chat/completions")
+        request_body: The request body as a dict
+        
+    Returns:
+        True if the request should be routed to Rust, False otherwise
+    """
+    gateway = get_rust_gateway()
+    if gateway is None or not gateway.is_healthy():
+        return False
+        
+    # Only route specific endpoints to Rust
+    supported_routes = {
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/embeddings",
+    }
+    
+    if route not in supported_routes:
+        return False
+        
+    # Check if streaming is requested (Rust gateway handles streaming differently)
+    if request_body and request_body.get("stream", False):
+        # For now, route streaming to Python until streaming is fully tested
+        return False
+        
+    # Route to Rust
+    return True
+
+
+def route_to_rust(
+    method: str,
+    route: str,
+    headers: Dict[str, str],
+    body: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Route a request to the Rust gateway and return the response.
+    
+    Args:
+        method: HTTP method (GET, POST, etc.)
+        route: The request path
+        headers: Request headers
+        body: Request body
+        
+    Returns:
+        Response body as dict, or None if routing failed
+    """
+    if not should_route_to_rust(route, body):
+        return None
+        
+    gateway = get_rust_gateway()
+    if gateway is None:
+        return None
+        
+    response = gateway.forward_request(method, route, headers, body)
+    if response is None:
+        return None
+        
+    try:
+        return response.json()
+    except Exception as e:
+        verbose_logger.error(f"Failed to parse Rust gateway response: {e}")
+        return None
+
+
 def init_rust_gateway(**kwargs) -> Optional[RustGatewayManager]:
     """Initialize and start the Rust gateway."""
     global _rust_gateway
