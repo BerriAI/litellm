@@ -28,6 +28,7 @@ from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -1071,7 +1072,7 @@ async def bedrock_proxy_route(
     except ImportError:
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-    aws_region_name: Final = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
+    aws_region_name: Final = get_secret_str(secret_name="AWS_REGION_NAME")
     if not _is_bedrock_agent_runtime_route(endpoint=endpoint):
         return await bedrock_llm_proxy_route(
             endpoint=endpoint,
@@ -1086,7 +1087,7 @@ async def bedrock_proxy_route(
             detail="bedrock-agent-runtime pass-through is disabled on this proxy.",
         )
 
-    base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+    base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -1219,7 +1220,7 @@ async def comprehend_medical_proxy_route(
             "X-Amz-Target": f"{COMPREHEND_MEDICAL_TARGET_PREFIX}.{operation}",
         }
     )
-    target_url: Final = f"https://comprehendmedical.{aws_region_name}.amazonaws.com/"
+    target_url: Final = f"https://comprehendmedical.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
     _request: Final = AWSRequest(method="POST", url=target_url, data=json.dumps(data), headers=headers)
     sigv4.add_auth(_request)
     prepped: Final = _request.prepare()

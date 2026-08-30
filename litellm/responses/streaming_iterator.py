@@ -573,13 +573,16 @@ class BaseResponsesAPIStreamingIterator:
         ):
             return
 
-        if litellm.cache is None:
+        cache: Final = litellm.cache
+        if cache is None:
             return
 
         cached_response: Final = response_obj.model_dump_json()
         if is_async:
-            cache_write_task: Final = asyncio.create_task(
-                litellm.cache.async_add_cache(
+            from litellm.caching.caching_handler import create_cache_write_task
+
+            cache_write_task: Final = create_cache_write_task(
+                lambda: cache.async_add_cache(
                     cached_response,
                     dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
                     **request_kwargs,
@@ -592,7 +595,7 @@ class BaseResponsesAPIStreamingIterator:
                 )
             )
         else:
-            litellm.cache.add_cache(
+            cache.add_cache(
                 cached_response,
                 dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
                 **request_kwargs,
@@ -678,6 +681,8 @@ class BaseResponsesAPIStreamingIterator:
                 kwargs=request_payload,
                 start_time=self.start_time,
                 end_time=end_time,
+                # the provider call was timed to first byte, so the whole stream minus it is not overhead
+                include_overhead=False,
             )
         except Exception:
             # Non-blocking

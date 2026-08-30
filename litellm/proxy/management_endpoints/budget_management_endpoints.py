@@ -13,6 +13,7 @@ All /budget management endpoints
 
 #### BUDGET TABLE MANAGEMENT ####
 import math
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -178,13 +179,17 @@ async def update_budget(
         else {}
     )
 
-    response: Final = await BudgetRepository(prisma_client).table.update(
-        where={"budget_id": budget_obj.budget_id},
-        data={
+    budget_obj_jsonified: Final[Mapping[str, object]] = jsonify_object(
+        {
             **budget_obj.model_dump(exclude_unset=True),
             **recomputed_reset_at,
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        },
+        }
+    )
+
+    response: Final = await BudgetRepository(prisma_client).table.update(
+        where={"budget_id": budget_obj.budget_id},
+        data=budget_obj_jsonified,
     )
 
     return response

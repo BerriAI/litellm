@@ -1683,6 +1683,15 @@ class TestBedrockMantleResponsesPricing:
         assert info["cache_read_input_token_cost"] == pytest.approx(2.75e-07)
         assert info["max_input_tokens"] == 1050000
 
+    def test_gpt_5_6_cyber_pricing_and_mode(self, local_cost_map):
+        info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.6-cyber")
+        assert info["mode"] == "responses"
+        assert info["input_cost_per_token"] == pytest.approx(1.375e-05)
+        assert info["cache_creation_input_token_cost"] == pytest.approx(1.71875e-05)
+        assert info["cache_read_input_token_cost"] == pytest.approx(1.375e-06)
+        assert info["output_cost_per_token"] == pytest.approx(8.25e-05)
+        assert info["max_input_tokens"] == 272000
+
     @pytest.mark.parametrize(
         "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
         [

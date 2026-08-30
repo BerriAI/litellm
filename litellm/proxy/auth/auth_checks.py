@@ -32,6 +32,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
@@ -78,11 +79,15 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+    MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
     get_management_object_ttl,
+    model_access_group_cache_key,
+    model_access_group_registry_cache_key,
+    model_access_group_spend_counter_key,
     object_permission_cache_key,
     tag_cache_key,
     tag_registry_cache_key,
@@ -107,12 +112,14 @@ from litellm.repositories.table_repositories import (
     EndUserRepository,
     JWTKeyMappingRepository,
     ManagedVectorStoresRepository,
+    ModelAccessGroupBudgetRepository,
     TagRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import (
@@ -249,6 +256,43 @@ class _PrismaEndUserRow(Protocol):
 
 def _end_user_table(repo: _PrismaTableHolder[_PrismaEndUserRow]) -> _PrismaAuthTable[_PrismaEndUserRow]:
     return repo.table
+
+
+class _PrismaMaxBudgetRow(Protocol):
+    @property
+    def max_budget(self) -> float | None: ...
+
+
+class _PrismaModelAccessGroupBudgetRow(Protocol):
+    access_group_name: str
+
+    @property
+    def spend(self) -> float | None: ...
+
+    @property
+    def litellm_budget_table(self) -> _PrismaMaxBudgetRow | None: ...
+
+
+def _model_access_group_budget_table(
+    repo: _PrismaTableHolder[_PrismaModelAccessGroupBudgetRow],
+) -> _PrismaAuthTable[_PrismaModelAccessGroupBudgetRow]:
+    return repo.table
+
+
+class _MemberModelScope(Protocol):
+    @property
+    def allowed_models(self) -> Sequence[str] | None: ...
+
+
+class _TeamMembershipModelScope(Protocol):
+    @property
+    def litellm_budget_table(self) -> _MemberModelScope | None: ...
+
+
+def _member_allowed_models(membership: _TeamMembershipModelScope) -> Sequence[str]:
+    """The member's own model scope, read through a narrowed view of the membership row."""
+    budget_table: Final = membership.litellm_budget_table
+    return () if budget_table is None else (budget_table.allowed_models or ())
 
 
 class _RawCacheRead(Protocol):
@@ -807,6 +851,7 @@ async def common_checks(
     1.1. If project is blocked
     2. If team can call model
     2.2 If project can call model
+    2.3 Which model access groups authorized this request
     3. If team is in budget
     3.0.2. If project is in budget
     3.0.3. If project is over soft budget (alert only)
@@ -925,6 +970,18 @@ async def common_checks(
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    # 2.3 Which model access groups authorized this request
+    matched_model_access_groups: Final = await stamp_matched_model_access_groups(
+        model=_model,
+        valid_token=valid_token,
+        team_object=team_object,
+        project_object=project_object,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
 
@@ -1004,6 +1061,13 @@ async def common_checks(
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
                 ),
+                _model_access_group_max_budget_check(
+                    matched_model_access_groups=matched_model_access_groups,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+                if matched_model_access_groups
+                else None,
                 _user_max_budget_check(),
                 _check_team_member_budget(
                     team_object=team_object,
@@ -1444,6 +1508,7 @@ _REGISTRY_NOT_CACHED: Final = _RegistryNotCached()
 #: One lock per registry; module-level because the stampede to collapse is worker-wide.
 _TAG_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
 _END_USER_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
+_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
 
 
 async def _cached_registry(
@@ -1834,6 +1899,105 @@ async def _load_tag_registry(
         fetch_ids=fetch_ids,
         user_api_key_cache=user_api_key_cache,
     )
+
+
+async def _load_model_access_group_registry(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """The set of model access group names that have a row in ``LiteLLM_ModelAccessGroupBudgetTable``."""
+
+    async def fetch_ids() -> tuple[str, ...]:
+        registry_rows: Final = await _model_access_group_budget_table(
+            ModelAccessGroupBudgetRepository(prisma_client)
+        ).find_many(take=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE + 1)
+        return tuple(row.access_group_name for row in registry_rows)
+
+    return await _load_bounded_registry(
+        cache_key=model_access_group_registry_cache_key(),
+        overflow_sentinel=MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
+        max_size=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
+        load_lock=_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK,
+        fetch_ids=fetch_ids,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
+async def _fetch_uncached_model_access_group_budgets(
+    uncached_groups: Sequence[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[tuple[str, ModelAccessGroupBudget], ...]:
+    """Budget rows for the groups a cache probe missed.
+
+    No registry gate here, unlike the tag path: the names only ever come from
+    ``matched_model_access_groups``, which :func:`collect_matched_model_access_groups` already
+    intersected with the registry, so a name that has no row cannot reach this.
+    """
+    if not uncached_groups:
+        return ()
+
+    try:
+        db_rows: Final = await _model_access_group_budget_table(
+            ModelAccessGroupBudgetRepository(prisma_client)
+        ).find_many(
+            where={"access_group_name": {"in": list(uncached_groups)}},
+            include={"litellm_budget_table": True},
+        )
+        fetched: Final = tuple((row.access_group_name, _model_access_group_budget(row)) for row in db_rows)
+        for fetched_name, fetched_obj in fetched:
+            await user_api_key_cache.async_set_cache(
+                key=model_access_group_cache_key(fetched_name),
+                value=fetched_obj,
+                model_type=ModelAccessGroupBudget,
+                ttl=get_management_object_ttl(user_api_key_cache),
+            )
+    except Exception as e:  # noqa: BLE001  # fail-safe: a budget fetch error must yield "no budget rows", never break auth
+        verbose_proxy_logger.debug("Error batch fetching model access group budgets from database: %s", e)
+        return ()
+    else:
+        return fetched
+
+
+def _model_access_group_budget(row: _PrismaModelAccessGroupBudgetRow) -> ModelAccessGroupBudget:
+    budget_table: Final = row.litellm_budget_table
+    return ModelAccessGroupBudget(
+        access_group_name=row.access_group_name,
+        spend=row.spend or 0.0,
+        max_budget=None if budget_table is None else budget_table.max_budget,
+    )
+
+
+@log_db_metrics
+async def get_model_access_group_budgets_batch(
+    access_group_names: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> dict[str, ModelAccessGroupBudget]:
+    """Budget rows for the given model access groups, served from cache where possible.
+
+    Shared by the two enforcement paths so they read one row per group per request: the
+    reservation counters when reservations are on, and :func:`_model_access_group_max_budget_check`
+    when ``disable_budget_reservation`` turns them off.
+    """
+    if prisma_client is None or not access_group_names:
+        return {}
+
+    probed: Final = [
+        (
+            group,
+            await user_api_key_cache.async_get_cache(
+                key=model_access_group_cache_key(group), model_type=ModelAccessGroupBudget
+            ),
+        )
+        for group in access_group_names
+    ]
+    fetched: Final = await _fetch_uncached_model_access_group_budgets(
+        uncached_groups=tuple(group for group, budget in probed if budget is None),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return {group: budget for group, budget in (*probed, *fetched) if budget is not None}
 
 
 async def _fetch_uncached_tags(
@@ -2588,13 +2752,36 @@ async def _delete_cache_key_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ):
+    """
+    Evict one key object, best-effort, matching `delete_cache_team_object` and
+    `delete_cache_key_objects`.
+
+    Every caller runs this after its own write has already committed, and the in-memory entry is
+    dropped before the Redis round trip. Letting a cache-backend error raise here therefore reports
+    failure for work that succeeded without making the cache any less stale; the leftover Redis
+    entry expires at its TTL either way.
+
+    Also broadcasts the eviction to every other worker (LIT-3803): auth serves this object
+    cache-first with no freshness check, so a worker that never receives the broadcast keeps
+    admitting requests against the pre-mutation object (e.g. a just-reset spend) until its own
+    copy's TTL expires.
+    """
     key: Final = hashed_token
 
-    user_api_key_cache.delete_cache(key=key)
+    try:
+        user_api_key_cache.delete_cache(key=key)
 
-    ## UPDATE REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        ## UPDATE REDIS CACHE ##
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+    except Exception as e:  # noqa: BLE001  # best-effort: a cache error must not fail a committed write
+        verbose_proxy_logger.warning(
+            "Failed to invalidate cached key entry %s; a stale key object may be served until its TTL expires: %s",
+            key,
+            e,
+        )
+
+    await publish_auth_cache_invalidation(cache_key=key)
 
 
 async def delete_cache_key_objects(
@@ -2607,8 +2794,9 @@ async def delete_cache_key_objects(
     `/key/delete`. Auth resolves a cached key object without re-reading its team, so a key left
     cached after its row is gone keeps buying access until its TTL expires.
 
-    Evicting locally only reaches this worker, so each token is also broadcast: a deleted key left
-    in a peer worker's in-memory cache still authenticates there until its TTL expires.
+    Evicting locally only reaches this worker; `_delete_cache_key_object` itself broadcasts each
+    token, so a deleted key left in a peer worker's in-memory cache still authenticates there until
+    its TTL expires.
 
     Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
     cache backend must not abort the caller partway through its own cascade.
@@ -2632,7 +2820,6 @@ async def delete_cache_key_objects(
                 hashed_token,
                 result,
             )
-        await publish_auth_cache_invalidation(cache_key=hashed_token)
 
 
 class _TeamNotFoundDetail(TypedDict):
@@ -3859,6 +4046,192 @@ def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]
     return models
 
 
+def _model_access_groups_serving_model(
+    model: str | Sequence[str],
+    llm_router: Router,
+    team_id: str | None,
+) -> frozenset[str]:
+    """Every model access group whose deployments serve the requested model(s)."""
+    requested: Final = (model,) if isinstance(model, str) else tuple(model)
+    return frozenset(
+        group
+        for requested_model in requested
+        for group in llm_router.get_model_access_groups(model_name=requested_model, team_id=team_id)
+    )
+
+
+async def _team_member_granted_models(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> Sequence[str]:
+    """The member's own ``allowed_models`` scope; empty when the member is not narrowed below the team."""
+    if team_object is None or valid_token.user_id is None:
+        return ()
+
+    team_membership: Final = await get_team_membership(
+        user_id=valid_token.user_id,
+        team_id=team_object.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    return () if team_membership is None else _member_allowed_models(team_membership)
+
+
+async def _org_granted_models(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> Sequence[str]:
+    """The org allowlist reached through the key, or through its team when the key names no org."""
+    org_id: Final = valid_token.org_id or (team_object.organization_id if team_object is not None else None)
+    if org_id is None:
+        return ()
+
+    try:
+        org_object: Final = await get_org_object(
+            org_id=org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # fail-safe: attribution degrades to "no org grant", it must never break auth
+        verbose_proxy_logger.debug("access group attribution: org lookup failed: %s", e)
+        return ()
+    return org_object.models if org_object is not None else ()
+
+
+async def _granted_model_lists(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    project_object: LiteLLM_ProjectTableCachedObj | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[Sequence[str], ...]:
+    """One model allowlist per level that participates in authorizing the request."""
+    return (
+        _resolve_key_models_for_auth_check(valid_token=valid_token),
+        team_object.models if team_object is not None else (),
+        await _team_member_granted_models(
+            valid_token=valid_token,
+            team_object=team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+        project_object.models if project_object is not None else (),
+        await _org_granted_models(
+            valid_token=valid_token,
+            team_object=team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+    )
+
+
+async def collect_matched_model_access_groups(
+    model: str | Sequence[str] | None,
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    project_object: LiteLLM_ProjectTableCachedObj | None,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[str, ...]:
+    """
+    The budgeted model access groups that authorized this request, sorted and deduplicated.
+
+    A group is charged only when its name appears on an allowlist the caller was granted -- key,
+    team, team-member scope, project or org -- *and* that group serves the requested model. Asking
+    for a model that merely belongs to a group attributes nothing, because nothing about the caller
+    named the group.
+
+    Levels are unioned, never ranked: a team granted ``*`` whose member is scoped to one group is
+    still a caller gated by that group. An unrestricted allowlist (empty, ``*``) names no group and
+    so contributes nothing.
+
+    The whole walk is gated on the budget registry, because collecting every match costs a full scan
+    of each allowlist where the plain access check stops at the first hit. An empty registry means no
+    group carries a budget, so there is nothing to attribute and no work worth doing.
+    """
+    if model is None or valid_token is None or llm_router is None or prisma_client is None:
+        return ()
+
+    registry: Final = await _load_model_access_group_registry(
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if registry is not None and not registry:
+        return ()
+
+    covering_groups: Final = _model_access_groups_serving_model(
+        model=model,
+        llm_router=llm_router,
+        team_id=valid_token.team_id,
+    )
+    budgeted_groups: Final = covering_groups if registry is None else covering_groups & registry
+    if not budgeted_groups:
+        return ()
+
+    granted: Final = frozenset(
+        granted_model
+        for granted_models in await _granted_model_lists(
+            valid_token=valid_token,
+            team_object=team_object,
+            project_object=project_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        for granted_model in granted_models
+    )
+    return tuple(sorted(budgeted_groups & granted))
+
+
+async def stamp_matched_model_access_groups(
+    model: str | Sequence[str] | None,
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    project_object: LiteLLM_ProjectTableCachedObj | None,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[str, ...]:
+    """Record the groups that authorized this request on its auth object, for the post-call spend
+    writer and the reservation counters, and hand them back for the budget check."""
+    if valid_token is None:
+        return ()
+
+    try:
+        matched: Final = await collect_matched_model_access_groups(
+            model=model,
+            valid_token=valid_token,
+            team_object=team_object,
+            project_object=project_object,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # fail-safe: attribution is spend telemetry, it must never break auth
+        verbose_proxy_logger.debug("model access group attribution failed: %s", e)
+        return ()
+    if not matched:
+        return ()
+    matched_groups: Final = list(matched)  # mutable-ok: the auth field is typed list[str] | None
+    valid_token.matched_model_access_groups = matched_groups  # rebind-ok: request-scoped carrier for the writer
+    return matched
+
+
 async def can_key_call_model(
     model: str | list[str],
     llm_model_list: list | None,
@@ -4453,6 +4826,7 @@ async def _virtual_key_multi_budget_check(
             max_budget=w["max_budget"],
             window_entity_type="Key",
             window_entity_id=valid_token.token,
+            window_duration=str(w["budget_duration"]),
             window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
@@ -4826,6 +5200,7 @@ async def _team_multi_budget_check(
             max_budget=w["max_budget"],
             window_entity_type="Team",
             window_entity_id=team_object.team_id,
+            window_duration=str(w["budget_duration"]),
             window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
@@ -5231,6 +5606,61 @@ async def _tag_max_budget_check(
                 entity_type=Litellm_EntityType.TAG.value,
                 entity_id=tag_name,
             )
+
+
+async def _model_access_group_max_budget_check(
+    matched_model_access_groups: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Block the request when a model access group that authorized it is over its max budget.
+
+    Only the groups auth already matched are charged and therefore only they are checked, so a
+    request that no budgeted group authorized costs nothing here.
+
+    Like the tag check this is a plain read with no reservation, so concurrent requests can
+    overshoot the ceiling slightly. The reservation counters are the precise path; this one covers
+    the ``disable_budget_reservation`` case.
+
+    The ceiling is exclusive, unlike the tag check it otherwise mirrors: a pool whose recorded
+    spend has reached ``max_budget`` has nothing left to give, so the next request is refused.
+    Keys and organizations already draw the line there. A non-positive budget means no budget,
+    matching what the reservation path treats as unbudgeted.
+
+    Raises:
+        BudgetExceededError if a matched group is over its max budget.
+    """
+    if prisma_client is None or not matched_model_access_groups:
+        return
+
+    budgets: Final = await get_model_access_group_budgets_batch(
+        access_group_names=matched_model_access_groups,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for group in matched_model_access_groups:
+        budget = budgets.get(group)
+        if budget is None or budget.max_budget is None or budget.max_budget <= 0:
+            continue
+
+        group_spend = await get_current_spend(
+            counter_key=model_access_group_spend_counter_key(group),
+            fallback_spend=budget.spend,
+            max_budget=budget.max_budget,
+            fallback_authoritative=True,
+        )
+        if group_spend < budget.max_budget:
+            continue
+        raise litellm.BudgetExceededError(
+            current_cost=group_spend,
+            max_budget=budget.max_budget,
+            message=f"Budget has been exceeded! Model access group={group} Current cost: {group_spend}, Max budget: {budget.max_budget}",
+            entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP.value,
+            entity_id=group,
+        )
 
 
 def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:

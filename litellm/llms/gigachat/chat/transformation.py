@@ -25,6 +25,8 @@ from ..authenticator import get_access_token
 from ..file_handler import upload_file_sync
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -401,11 +403,11 @@ class GigaChatConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: Mapping[str, object],
-        messages: Sequence[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-        encoding: Any,
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

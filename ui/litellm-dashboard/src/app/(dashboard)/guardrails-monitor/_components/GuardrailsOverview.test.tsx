@@ -110,6 +110,7 @@ describe("GuardrailsOverview", () => {
 
     expect(await screen.findByRole("heading", { name: "Guardrails Monitor", level: 1 })).toBeInTheDocument();
     expect(screen.getByText("Monitor guardrail performance across all requests")).toBeInTheDocument();
+    expect(document.querySelector(".lucide-heart-pulse")).not.toBeNull();
     expect(screen.getByRole("button", { name: /Export Data/i })).toBeInTheDocument();
   });
 

@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from os import PathLike
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
 from openai.types.chat.chat_completion_custom_tool_param import (
@@ -1089,6 +1090,162 @@ def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSc
     return AnthropicInputSchema(**filtered)
 
 
+_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("allOf", "anyOf", "oneOf")
+_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS: Final = ("enum", "const", "not")
+_LOCAL_SCHEMA_REF_PREFIXES: Final = (("#/$defs/", "$defs"), ("#/definitions/", "definitions"))
+_MAX_SCHEMA_FLATTEN_DEPTH: Final = 32
+_EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
+    properties: Final = schema.get("properties")
+    return properties if isinstance(properties, dict) else _EMPTY_SCHEMA
+
+
+def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[object, ...]:
+    branches: Final = schema.get(combinator)
+    return tuple(branches) if isinstance(branches, list) else ()
+
+
+def _schema_required_names(schema: Mapping[str, object]) -> frozenset[str]:
+    required: Final = schema.get("required")
+    if not isinstance(required, list):
+        return frozenset()
+    return frozenset(name for name in required if isinstance(name, str))
+
+
+def _combinator_required_names(combinator: str, branches: tuple[Mapping[str, object], ...]) -> frozenset[str]:
+    branch_names: Final = tuple(_schema_required_names(branch) for branch in branches)
+    if not branch_names:
+        return frozenset()
+    if combinator == "allOf":
+        return branch_names[0].union(*branch_names[1:])
+    return branch_names[0].intersection(*branch_names[1:])
+
+
+def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[str, object] | None:
+    matched: Final = next(
+        ((prefix, container) for prefix, container in _LOCAL_SCHEMA_REF_PREFIXES if ref.startswith(prefix)),
+        None,
+    )
+    if matched is None:
+        return None
+    prefix, container = matched
+    definitions: Final = root.get(container)
+    if not isinstance(definitions, dict):
+        return None
+    target: Final = definitions.get(ref[len(prefix) :])
+    return target if isinstance(target, dict) else None
+
+
+def _mergeable_branch(
+    root: Mapping[str, object],
+    branch: object,
+    seen_refs: frozenset[str],
+    depth: int,
+    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
+) -> Mapping[str, object] | None:
+    if not isinstance(branch, dict) or depth > _MAX_SCHEMA_FLATTEN_DEPTH:
+        return None
+    ref: Final = branch.get("$ref")
+    if not isinstance(ref, str):
+        flattened: Final = _flatten_schema_against_root(branch, root, seen_refs, depth, expanded_refs)
+        if any(combinator in flattened for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS):
+            return None
+        return flattened
+    if ref in expanded_refs:
+        return expanded_refs[ref]
+    if ref in seen_refs:
+        return None
+    target: Final = _resolve_local_schema_ref(root, ref)
+    expanded: Final = (
+        None
+        if target is None
+        else _mergeable_branch(root, target, seen_refs | frozenset((ref,)), depth + 1, expanded_refs)
+    )
+    expanded_refs[ref] = expanded
+    return expanded
+
+
+def _is_object_schema(schema: Mapping[str, object]) -> bool:
+    return schema.get("type") == "object" or ("type" not in schema and "properties" in schema)
+
+
+def _flatten_schema_against_root(
+    schema: Mapping[str, object],
+    root: Mapping[str, object],
+    seen_refs: frozenset[str],
+    depth: int,
+    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
+) -> Mapping[str, object]:
+    raw_branch_groups: Final = tuple(
+        (
+            combinator,
+            tuple(
+                _mergeable_branch(root, branch, seen_refs, depth + 1, expanded_refs)
+                for branch in _schema_branches(schema, combinator)
+            ),
+        )
+        for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS
+        if isinstance(schema.get(combinator), list)
+    )
+    dropped: Final = (
+        *(combinator for combinator, _ in raw_branch_groups),
+        *(key for key in _OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS if key in schema),
+    )
+    if not dropped:
+        return schema
+
+    if any(branch is None for _, group in raw_branch_groups for branch in group):
+        return schema
+    branch_groups: Final = tuple(
+        (combinator, tuple(branch for branch in group if branch is not None)) for combinator, group in raw_branch_groups
+    )
+    branches: Final = tuple(branch for _, group in branch_groups for branch in group)
+    is_object_schema: Final = _is_object_schema(schema) or (
+        "type" not in schema and branches != () and all(_is_object_schema(branch) for branch in branches)
+    )
+    if not is_object_schema:
+        return schema
+
+    merged_properties: Final = {  # mutable-ok: tool parameters are JSON dicts
+        name: value for source in (*reversed(branches), schema) for name, value in _schema_properties(source).items()
+    }
+    required_names: Final = _schema_required_names(schema).union(
+        *(_combinator_required_names(combinator, group) for combinator, group in branch_groups)
+    )
+    kept: Final = MappingProxyType({key: value for key, value in schema.items() if key not in dropped})
+    required_update: Final = MappingProxyType({"required": sorted(required_names)}) if required_names else _EMPTY_SCHEMA
+    return {  # mutable-ok: tool parameters are JSON dicts
+        **kept,
+        "type": "object",
+        "properties": merged_properties,
+        **required_update,
+    }
+
+
+def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Merge top-level ``allOf``/``anyOf``/``oneOf`` branches into an object tool schema.
+
+    OpenAI's function-calling validator rejects tool ``parameters`` carrying
+    'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level (nested uses
+    are accepted), while lenient backends such as the ChatGPT backend Codex
+    talks to natively accept them, so an MCP tool declaring a top-level union
+    400s through LiteLLM. Branch properties merge without clobbering (the
+    top-level schema wins, then earlier branches); ``required`` becomes the
+    top-level list plus the intersection of the branch lists for anyOf/oneOf
+    or their union for allOf. Branches that are local ``$ref``s
+    (``#/$defs/...`` or ``#/definitions/...``) are resolved first, each ref
+    at most once per call, and branches that are themselves combinators are
+    flattened recursively up to a fixed depth; a branch that cannot be fully
+    merged (a boolean schema, an external or cyclic ``$ref``, a non-object
+    union, or nesting past the depth cap) leaves the whole schema untouched so
+    OpenAI's own validation still applies. Non-object schemas pass through
+    unchanged and the input is never mutated.
+    """
+    return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
+
+
 def _get_image_mime_type_from_url(url: str) -> str | None:
     """
     Get mime type for common image URLs
@@ -1745,6 +1902,46 @@ def hoist_images_from_tool_messages(
         for is_tool_run, run in groupby(messages, key=lambda message: message.get("role") == "tool")
         for rewritten_message in (_hoist_images_in_tool_message_run(run) if is_tool_run else run)
     ]
+
+
+def _is_tool_reference_part(part: object) -> bool:
+    return isinstance(part, dict) and part.get("type") == "tool_reference"
+
+
+def _tool_message_carries_tool_reference(message: AllMessageValues) -> bool:
+    if message.get("role") != "tool":
+        return False
+    content = message.get("content")
+    return isinstance(content, list) and any(_is_tool_reference_part(part) for part in content)
+
+
+def _drop_tool_reference_parts(message: AllMessageValues) -> AllMessageValues:
+    if not _tool_message_carries_tool_reference(message):
+        return message
+    content = cast(list, message.get("content"))  # cast-ok: shape checked by _tool_message_carries_tool_reference
+    remaining_parts = [  # mutable-ok: tool message content must stay a json list
+        part for part in content if not _is_tool_reference_part(part)
+    ]
+    new_content = remaining_parts if remaining_parts else ""
+    rewritten = {**message, "content": new_content}  # mutable-ok: chat messages are plain json dicts
+    return cast(AllMessageValues, rewritten)  # cast-ok: dict spread keeps keys like cache_control
+
+
+def drop_tool_reference_parts_from_tool_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    """
+    Remove tool_reference content parts from role:"tool" messages.
+
+    The OpenAI chat spec only accepts text in tool messages, so a tool_reference
+    part carried through the Anthropic adapter makes strict providers reject the
+    request. The reference names an already-declared tool rather than carrying
+    content, so it is dropped; a reference-only result keeps its tool message with
+    empty text so the preceding tool_call stays answered.
+    """
+    if not any(_tool_message_carries_tool_reference(message) for message in messages):
+        return messages
+    return [_drop_tool_reference_parts(message) for message in messages]  # mutable-ok: pipelines mutate message lists
 
 
 def _attempt_json_repair(s: str) -> Any | None:
