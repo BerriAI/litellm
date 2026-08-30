@@ -2202,6 +2202,18 @@ def _cli_sso_team_detail(team_row: Mapping[str, object]) -> CliSsoTeamDetail:
     )
 
 
+def _cli_sso_team_sort_key(detail: CliSsoTeamDetail) -> tuple[str, str]:
+    """Stable, predictable order for a user's team choices.
+
+    The DB returns rows in an arbitrary order, so the consent page (and the
+    classic login team choice, which shares this lookup) would preselect
+    whichever team happened to come back first -- silently binding a user who
+    takes the default to a team they did not mean to pick. Order by alias
+    case-insensitively, with team_id as a deterministic tiebreaker.
+    """
+    return ((detail.team_alias or "").casefold(), detail.team_id or "")
+
+
 async def fetch_cli_sso_team_details(
     prisma_client: PrismaClient,
     teams: Sequence[str],
@@ -2217,7 +2229,8 @@ async def fetch_cli_sso_team_details(
     except Exception as e:
         verbose_proxy_logger.error("Error fetching team details for CLI SSO session: %s", e)
         return None
-    return tuple(_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
+    details: Final = (_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
+    return tuple(sorted(details, key=_cli_sso_team_sort_key))
 
 
 def _cli_sso_session_teams(team_details: Sequence[CliSsoTeamDetail]) -> list[str]:

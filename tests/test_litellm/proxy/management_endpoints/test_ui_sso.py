@@ -8640,3 +8640,70 @@ class TestPersistReturnToCookieSharedHelper:
         resp = Response()
         _persist_return_to_cookie(resp, "https://cp.example.com/ui?page=models")
         assert "litellm_cp_return_to=" in self._cookie(resp)
+
+
+@pytest.mark.asyncio
+async def test_fetch_cli_sso_team_details_orders_by_alias_then_id():
+    """CLI SSO team choices must come back in a stable order.
+
+    The consent page preselects the first team, so an arbitrary DB order can
+    silently bind a user who takes the default to a team they did not mean to
+    pick. Teams must be ordered by alias case-insensitively, then team_id as a
+    deterministic tiebreaker. Regression for the CLI login consent page.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.management_endpoints import ui_sso as ui_sso_mod
+
+    def _row(team_id, alias):
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "team_id": team_id,
+            "team_alias": alias,
+            "models": [],
+        }
+        return row
+
+    # Deliberately scrambled DB order, mixed case, plus an alias-less team.
+    rows = [
+        _row("35551", "forge-team-b-35551"),
+        _row("10000", "Forge-Team-A-35551"),
+        _row("99999", None),
+    ]
+    repo = MagicMock()
+    repo.find_many = AsyncMock(return_value=rows)
+
+    with patch.object(ui_sso_mod, "TeamRepository", return_value=MagicMock()), patch.object(
+        ui_sso_mod, "_team_detail_db", return_value=repo
+    ):
+        result = await ui_sso_mod.fetch_cli_sso_team_details(
+            prisma_client=MagicMock(), teams=["35551", "10000", "99999"]
+        )
+
+    assert result is not None
+    # None alias sorts first (""), then case-insensitive "Forge-Team-A" < "forge-team-b".
+    assert [d.team_alias for d in result] == [
+        None,
+        "Forge-Team-A-35551",
+        "forge-team-b-35551",
+    ]
+
+
+def test_cli_sso_team_sort_key_case_insensitive_with_id_tiebreaker():
+    """Directly exercise the sort key, including the alias-None and team_id-None
+    fallbacks, so ordering is stable regardless of how the DB row is shaped.
+    """
+    from litellm.proxy.management_endpoints import ui_sso as ui_sso_mod
+
+    CliSsoTeamDetail = ui_sso_mod.CliSsoTeamDetail
+    key = ui_sso_mod._cli_sso_team_sort_key
+
+    a = CliSsoTeamDetail(team_id="2", team_alias="Alpha", team_models=())
+    b = CliSsoTeamDetail(team_id="1", team_alias="alpha", team_models=())
+    c = CliSsoTeamDetail(team_id=None, team_alias=None, team_models=())
+
+    # Both `or ""` fallbacks are taken for c.
+    assert key(c) == ("", "")
+    # Case-insensitive alias equality falls back to team_id ("1" < "2");
+    # the alias-less team sorts first.
+    assert [t.team_id for t in sorted([a, b, c], key=key)] == [None, "1", "2"]
