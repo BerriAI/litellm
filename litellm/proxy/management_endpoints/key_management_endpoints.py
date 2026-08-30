@@ -18,7 +18,7 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
 
@@ -238,6 +238,48 @@ def _config_table(prisma_client: PrismaClient) -> _ConfigTableActions:
     return cast(  # cast-ok: ConfigRepository.table hides the write actions this module needs on that same object
         "_ConfigTableActions", ConfigRepository(prisma_client).table
     )
+
+
+class _CustomKeyHooksModule(Protocol):
+    user_custom_key_generate: Callable[..., Awaitable[Mapping[str, object]]] | None
+    user_custom_key_update: Callable[..., Awaitable[Mapping[str, object]]] | None
+
+
+def _custom_key_generate_hook(
+    hooks: _CustomKeyHooksModule,
+) -> Callable[..., Awaitable[Mapping[str, object]]] | None:
+    return hooks.user_custom_key_generate
+
+
+def _custom_key_update_hook(
+    hooks: _CustomKeyHooksModule,
+) -> Callable[..., Awaitable[Mapping[str, object]]] | None:
+    return hooks.user_custom_key_update
+
+
+class _LegacyDumpable(Protocol):
+    def dict(self) -> Mapping[str, object]: ...
+
+
+def _legacy_model_dict(row: _LegacyDumpable) -> Mapping[str, object]:
+    return row.dict()
+
+
+def _as_object_dict(values: Mapping[str, object]) -> Mapping[str, object]:
+    return values
+
+
+def _model_items(model: BaseModel) -> Iterator[tuple[str, object]]:
+    return iter(model)
+
+
+class _EnvVarsParam(Protocol):
+    @property
+    def param_value(self) -> Mapping[str, str] | None: ...
+
+
+def _env_vars_param_value(param: _EnvVarsParam) -> Mapping[str, str] | None:
+    return param.param_value
 
 
 async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
@@ -920,7 +962,7 @@ async def _common_key_generation_helper(
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
-        for elem in data:
+        for elem in _model_items(data):
             key, value = elem
             if (
                 value is None
@@ -1702,11 +1744,11 @@ async def generate_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
     try:
+        from litellm.proxy import proxy_server
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
             prisma_client,
             user_api_key_cache,
-            user_custom_key_generate,
         )
 
         if prisma_client is None:
@@ -1733,7 +1775,7 @@ async def generate_key_fn(
             )
 
         custom_key_generate_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = (
-            user_custom_key_generate
+            _custom_key_generate_hook(proxy_server)
         )
         if custom_key_generate_hook is not None:
             if inspect.iscoroutinefunction(custom_key_generate_hook):
@@ -1902,11 +1944,11 @@ async def generate_service_account_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
 
     """
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import (
         prisma_client,
         user_api_key_cache,
-        user_custom_key_generate,
     )
 
     if prisma_client is None:
@@ -1934,7 +1976,9 @@ async def generate_service_account_key_fn(
 
     verbose_proxy_logger.debug("entered /key/generate")
 
-    custom_key_generate_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = user_custom_key_generate
+    custom_key_generate_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = _custom_key_generate_hook(
+        proxy_server
+    )
     if custom_key_generate_hook is not None:
         if inspect.iscoroutinefunction(custom_key_generate_hook):
             result: Final = await custom_key_generate_hook(data)
@@ -2008,7 +2052,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
             )
         casted_metadata[reserved_field] = existing_value
 
-    data_json: Final[Mapping[str, object]] = data.model_dump(exclude_unset=True, exclude_none=True)
+    data_json: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
 
     try:
         for k, v in data_json.items():
@@ -2815,13 +2859,13 @@ async def update_key_fn(
     }'
     ```
     """
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
         llm_router,
         premium_user,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
-        user_custom_key_update,
     )
 
     try:
@@ -2852,7 +2896,9 @@ async def update_key_fn(
         )
 
         # Custom key update hook
-        custom_key_update_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = user_custom_key_update
+        custom_key_update_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = _custom_key_update_hook(
+            proxy_server
+        )
         if custom_key_update_hook is not None:
             if inspect.iscoroutinefunction(custom_key_update_hook):
                 result: Final = await custom_key_update_hook(data)
@@ -3014,13 +3060,15 @@ async def bulk_update_keys(
     }'
     ```
     """
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
         llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
-        user_custom_key_update,
     )
+
+    custom_key_update_hook: Final = _custom_key_update_hook(proxy_server)
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(
@@ -3067,7 +3115,7 @@ async def bulk_update_keys(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 llm_router=llm_router,
-                user_custom_key_update=user_custom_key_update,
+                user_custom_key_update=custom_key_update_hook,
             )
 
             successful_updates.append(
@@ -3145,7 +3193,7 @@ def _build_failed_team_key_update(
         if hasattr(existing_key_row, "model_dump"):
             key_info = existing_key_row.model_dump()
         elif hasattr(existing_key_row, "dict"):
-            key_info = existing_key_row.dict()
+            key_info = dict[str, object](_legacy_model_dict(existing_key_row))
         if key_info:
             key_info.pop("token", None)
 
@@ -3176,13 +3224,15 @@ async def bulk_update_team_keys(
 
     Callable by proxy admins, or by team admins with `KEY_UPDATE` permission.
     """
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
         llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
-        user_custom_key_update,
     )
+
+    custom_key_update_hook: Final = _custom_key_update_hook(proxy_server)
 
     if prisma_client is None:
         raise HTTPException(
@@ -3312,7 +3362,7 @@ async def bulk_update_team_keys(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 llm_router=llm_router,
-                user_custom_key_update=user_custom_key_update,
+                user_custom_key_update=custom_key_update_hook,
                 existing_key_row=existing_by_token[db_token],
             )
 
@@ -4311,7 +4361,7 @@ def _transform_verification_tokens_to_deleted_records(
                 "litellm_changed_by": litellm_changed_by,
             }
         )
-        record = deleted_record.model_dump()
+        record = dict[str, object](_as_object_dict(deleted_record.model_dump()))
 
         # Map org_id to organization_id (model uses org_id, but schema expects organization_id)
         org_id_value: object = record.pop("org_id", None)
@@ -4469,14 +4519,14 @@ async def _rotate_master_key(
 
     if config:
         """If environment_variables is found, decrypt it and encrypt it with the new master key"""
-        environment_variables_dict = {}
+        environment_variables_dict: Mapping[str, str] | None = {}
         for c in config:
             if c.param_name == "environment_variables":
-                environment_variables_dict = c.param_value
+                environment_variables_dict = _env_vars_param_value(c)
 
         if environment_variables_dict:
             decrypted_env_vars: Final = proxy_config._decrypt_and_set_db_env_variables(
-                environment_variables=environment_variables_dict
+                environment_variables=dict[str, str](environment_variables_dict)
             )
             encrypted_env_vars: Final = proxy_config._encrypt_env_variables(
                 environment_variables=decrypted_env_vars,
@@ -4542,7 +4592,7 @@ async def _rotate_master_key(
                     updated_patch=decrypted_cred,
                     new_encryption_key=new_master_key,
                 )
-                _cred_data = encrypted_cred.model_dump(exclude_none=True)
+                _cred_data = dict[str, object](_as_object_dict(encrypted_cred.model_dump(exclude_none=True)))
                 if "credential_values" in _cred_data:
                     _cred_data["credential_values"] = prisma.Json(_cred_data["credential_values"])
                 if "credential_info" in _cred_data:
