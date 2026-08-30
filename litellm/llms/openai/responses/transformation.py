@@ -136,10 +136,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 
                 unsupported_effort: Final = (
-                    effort == "xhigh" and not OpenAIGPT5Config._supports_reasoning_effort_level(model, effort)
+                    effort == "xhigh"
+                    and not OpenAIGPT5Config._supports_reasoning_effort_level(  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportCallIssue]  # shared GPT-5 capability gate
+                        model, effort
+                    )
                 ) or (
                     effort in ("minimal", "low")
-                    and OpenAIGPT5Config._is_reasoning_effort_level_explicitly_disabled(model, effort)
+                    and OpenAIGPT5Config._is_reasoning_effort_level_explicitly_disabled(  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportCallIssue]  # shared GPT-5 capability gate
+                        model, effort
+                    )
                 )
                 if unsupported_effort:
                     if drop_params or litellm.drop_params:
