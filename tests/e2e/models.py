@@ -333,6 +333,7 @@ class OutMessage(BaseModel):
 
 class ChatChoice(BaseModel):
     message: OutMessage | None = None
+    finish_reason: str | None = None
 
 
 class PromptTokensDetails(BaseModel):

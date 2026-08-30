@@ -8609,9 +8609,9 @@ def _joined_streamed_citations(streamed_citations: "tuple[object, ...]") -> "lis
 
 
 def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
-    model_name: Final = getattr(response, "model", None)
+    model_name: Final = response.model
     usage: Final = getattr(response, "usage", None)
-    if not isinstance(model_name, str) or not model_name or not isinstance(usage, Usage):
+    if not model_name or not isinstance(usage, Usage):
         return None
     try:
         prompt_cost, completion_tokens_cost = litellm.cost_per_token(model=model_name, usage_object=usage)

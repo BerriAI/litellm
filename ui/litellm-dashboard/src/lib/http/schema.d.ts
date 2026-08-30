@@ -432,7 +432,8 @@ export interface paths {
          * List Access Groups
          * @description List all access groups.
          *
-         *     Returns a list of all access groups with their model names and deployment counts.
+         *     Returns a list of all access groups with their model names, deployment counts, shared budget
+         *     and the spend drawn against it.
          *
          *     Example:
          *     ```bash
@@ -497,6 +498,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/access_group/{access_group}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Access Group Budget
+         * @description Get the shared budget of an access group, and the spend drawn against it.
+         *
+         *     Example:
+         *     ```bash
+         *     curl -X GET 'http://localhost:4000/access_group/production-models/budget' \
+         *       -H 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Parameters:
+         *     - access_group: str - The access group name (URL path parameter)
+         *
+         *     Returns:
+         *     - AccessGroupBudgetResponse; budget is null when the group has no budget set
+         *
+         *     Raises:
+         *     - HTTPException 404: If access group not found
+         */
+        get: operations["get_access_group_budget_access_group__access_group__budget_get"];
+        /**
+         * Set Access Group Budget
+         * @description Set or replace the shared budget of an access group. Idempotent.
+         *
+         *     Every key that can reach a model in the group draws from this one budget.
+         *
+         *     Example:
+         *     ```bash
+         *     curl -X PUT 'http://localhost:4000/access_group/production-models/budget' \
+         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H 'Content-Type: application/json' \
+         *       -d '{
+         *         "max_budget": 100.0,
+         *         "budget_duration": "30d"
+         *       }'
+         *     ```
+         *
+         *     Parameters:
+         *     - access_group: str - The access group name (URL path parameter)
+         *     - max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this
+         *     - soft_budget: Optional[float] - Fires an alert when reached; requests still succeed
+         *     - budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')
+         *     - budget_id: Optional[str] - Link an existing budget instead of creating one
+         *
+         *     Returns:
+         *     - AccessGroupBudgetResponse with the stored budget and current spend
+         *
+         *     Raises:
+         *     - HTTPException 400: If no budget field is given, or budget_duration cannot be parsed
+         *     - HTTPException 404: If access group not found
+         */
+        put: operations["set_access_group_budget_access_group__access_group__budget_put"];
+        post?: never;
+        /**
+         * Delete Access Group Budget
+         * @description Clear the shared budget of an access group, leaving the group itself in place.
+         *
+         *     Example:
+         *     ```bash
+         *     curl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \
+         *       -H 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Parameters:
+         *     - access_group: str - The access group name (URL path parameter)
+         *
+         *     Returns:
+         *     - DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear
+         *
+         *     Raises:
+         *     - HTTPException 404: If access group not found
+         */
+        delete: operations["delete_access_group_budget_access_group__access_group__budget_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/access_group/{access_group}/delete": {
         parameters: {
             query?: never;
@@ -555,7 +641,7 @@ export interface paths {
          *     - access_group: str - The access group name (URL path parameter)
          *
          *     Returns:
-         *     - AccessGroupInfo with the access group details
+         *     - AccessGroupInfo with the access group details, its shared budget and its spend
          *
          *     Raises:
          *     - HTTPException 404: If access group not found
@@ -2852,6 +2938,59 @@ export interface paths {
         get: operations["config_yaml_endpoint_config_yaml_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config_overrides/cyberark": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cyberark Config
+         * @description Get current CyberArk Conjur configuration.
+         *     Returns decrypted values from DB, or falls back to current env vars.
+         *     Sensitive fields are masked before leaving the server.
+         */
+        get: operations["get_cyberark_config_config_overrides_cyberark_get"];
+        put?: never;
+        /**
+         * Update Cyberark Config
+         * @description Update CyberArk Conjur secret manager configuration.
+         *     Sets environment variables, encrypts sensitive fields, and stores in DB.
+         *     Reinitializes the secret manager on this pod.
+         */
+        post: operations["update_cyberark_config_config_overrides_cyberark_post"];
+        /**
+         * Delete Cyberark Config
+         * @description Delete CyberArk Conjur configuration. Idempotent.
+         */
+        delete: operations["delete_cyberark_config_config_overrides_cyberark_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config_overrides/cyberark/test_connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Cyberark Connection
+         * @description Test the connection to the currently configured CyberArk Conjur server.
+         *     Uses the already-initialized secret manager client. Does not modify any state.
+         */
+        post: operations["test_cyberark_connection_config_overrides_cyberark_test_connection_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6968,6 +7107,30 @@ export interface paths {
          *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
          */
         post: operations["cancel_interaction_interactions__interaction_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/introspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Introspect Endpoint
+         * @description RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /
+         *     ``llm_srefresh_``), so an external gateway can validate them without the signing
+         *     secret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by
+         *     the route dependency); any token the gateway cannot vouch for answers
+         *     ``{"active": false}`` with no further detail.
+         */
+        post: operations["introspect_endpoint_introspect_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -18030,6 +18193,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/server/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Mcp Servers
+         * @description Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON
+         */
+        post: operations["import_mcp_servers_v1_mcp_server_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/server/oauth/session": {
         parameters: {
             query?: never;
@@ -22182,6 +22365,38 @@ export interface components {
              */
             type: "restricted_sso_group";
         };
+        /** AccessGroupBudget */
+        AccessGroupBudget: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id: string;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+        };
+        /** AccessGroupBudgetRequest */
+        AccessGroupBudgetRequest: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+        };
+        /** AccessGroupBudgetResponse */
+        AccessGroupBudgetResponse: {
+            /** Access Group */
+            access_group: string;
+            budget?: components["schemas"]["AccessGroupBudget"] | null;
+            /** Spend */
+            spend: number;
+        };
         /** AccessGroupCreateRequest */
         AccessGroupCreateRequest: {
             /** Access Agent Ids */
@@ -22203,10 +22418,13 @@ export interface components {
         AccessGroupInfo: {
             /** Access Group */
             access_group: string;
+            budget?: components["schemas"]["AccessGroupBudget"] | null;
             /** Deployment Count */
             deployment_count: number;
             /** Model Names */
             model_names: string[];
+            /** Spend */
+            spend?: number | null;
         };
         /** AccessGroupResponse */
         AccessGroupResponse: {
@@ -23473,6 +23691,11 @@ export interface components {
             mask?: string[] | null;
             /** Mask[] */
             "mask[]"?: string[] | null;
+        };
+        /** Body_introspect_endpoint_introspect_post */
+        Body_introspect_endpoint_introspect_post: {
+            /** Token */
+            token: string;
         };
         /** Body_revoke_endpoint_revoke_post */
         Body_revoke_endpoint_revoke_post: {
@@ -25812,6 +26035,52 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /**
+         * CyberArkConfig
+         * @description Configuration for CyberArk Conjur secret manager integration.
+         */
+        CyberArkConfig: {
+            /**
+             * Client Cert
+             * @description Path to the client TLS certificate for certificate-based authentication
+             */
+            client_cert?: string | null;
+            /**
+             * Client Key
+             * @description Path to the client TLS private key for certificate-based authentication
+             */
+            client_key?: string | null;
+            /**
+             * Cyberark Account
+             * @description The Conjur organization account name
+             */
+            cyberark_account?: string | null;
+            /**
+             * Cyberark Api Base
+             * @description The address of the CyberArk Conjur server (e.g., https://conjur.example.com)
+             */
+            cyberark_api_base?: string | null;
+            /**
+             * Cyberark Api Key
+             * @description API key for Conjur API-key authentication
+             */
+            cyberark_api_key?: string | null;
+            /**
+             * Cyberark Username
+             * @description The Conjur username (login) to authenticate as
+             */
+            cyberark_username?: string | null;
+            /**
+             * Refresh Interval
+             * @description Auth token cache TTL in seconds (default: 300)
+             */
+            refresh_interval?: string | null;
+            /**
+             * Ssl Verify
+             * @description Set to false to disable SSL verification (e.g., for self-signed certificates)
+             */
+            ssl_verify?: string | null;
+        };
         /** DailySpendData */
         DailySpendData: {
             breakdown?: components["schemas"]["BreakdownMetrics"];
@@ -26003,6 +26272,15 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** DeleteAccessGroupBudgetResponse */
+        DeleteAccessGroupBudgetResponse: {
+            /** Access Group */
+            access_group: string;
+            /** Budget Deleted */
+            budget_deleted: boolean;
+            /** Message */
+            message: string;
         };
         /**
          * DeleteCustomerRequest
@@ -30307,6 +30585,70 @@ export interface components {
              * @enum {string}
              */
             status?: "healthy" | "unhealthy";
+        };
+        /** MCPConnectorEntry */
+        MCPConnectorEntry: {
+            /** Args */
+            args?: string[];
+            /** Authorization Token */
+            authorization_token?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Env */
+            env?: {
+                [key: string]: string;
+            };
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            } | null;
+            /** Name */
+            name?: string | null;
+            /** Type */
+            type?: string | null;
+            /** Url */
+            url?: string | null;
+        };
+        /** MCPConnectorImportFailure */
+        MCPConnectorImportFailure: {
+            /** Error */
+            error: string;
+            /** Name */
+            name: string;
+        };
+        /** MCPConnectorImportRequest */
+        MCPConnectorImportRequest: {
+            /** Mcp Servers */
+            mcp_servers: {
+                [key: string]: components["schemas"]["MCPConnectorEntry"];
+            } | components["schemas"]["MCPConnectorEntry"][];
+        };
+        /** MCPConnectorImportResponse */
+        MCPConnectorImportResponse: {
+            /** Errors */
+            errors: components["schemas"]["MCPConnectorImportFailure"][];
+            /** Imported */
+            imported: components["schemas"]["MCPConnectorImportResult"][];
+            /** Skipped */
+            skipped: components["schemas"]["MCPConnectorImportSkipped"][];
+        };
+        /** MCPConnectorImportResult */
+        MCPConnectorImportResult: {
+            /** Alias */
+            alias: string;
+            /** Name */
+            name: string;
+            /** Server Id */
+            server_id: string;
+        };
+        /** MCPConnectorImportSkipped */
+        MCPConnectorImportSkipped: {
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
         };
         /** MCPCredentials */
         MCPCredentials: {
@@ -39024,6 +39366,103 @@ export interface operations {
             };
         };
     };
+    get_access_group_budget_access_group__access_group__budget_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                access_group: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGroupBudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_access_group_budget_access_group__access_group__budget_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                access_group: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGroupBudgetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGroupBudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_access_group_budget_access_group__access_group__budget_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                access_group: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteAccessGroupBudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_access_group_access_group__access_group__delete_delete: {
         parameters: {
             query?: never;
@@ -42753,6 +43192,120 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cyberark_config_config_overrides_cyberark_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigOverrideSettingsResponse"];
+                };
+            };
+        };
+    };
+    update_cyberark_config_config_overrides_cyberark_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CyberArkConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_cyberark_config_config_overrides_cyberark_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_cyberark_connection_config_overrides_cyberark_test_connection_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };
@@ -47630,6 +48183,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    introspect_endpoint_introspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_introspect_endpoint_introspect_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -60953,6 +61539,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_mcp_servers_v1_mcp_server_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPConnectorImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConnectorImportResponse"];
                 };
             };
             /** @description Validation Error */

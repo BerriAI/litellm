@@ -1,12 +1,12 @@
 {
   "ANN001": {
-    "limit": 3012
+    "limit": 2998
   },
   "ANN002": {
     "limit": 71
   },
   "ANN003": {
-    "limit": 827
+    "limit": 809
   },
   "ANN201": {
     "limit": 2001
@@ -15,7 +15,7 @@
     "limit": 845
   },
   "ANN204": {
-    "limit": 702
+    "limit": 698
   },
   "ANN205": {
     "limit": 112
@@ -24,7 +24,7 @@
     "limit": 133
   },
   "ANN401": {
-    "limit": 655
+    "limit": 597
   },
   "ASYNC230": {
     "limit": 11
@@ -195,7 +195,7 @@
     "limit": 22
   },
   "SIM101": {
-    "limit": 58
+    "limit": 56
   },
   "SIM102": {
     "limit": 315
@@ -231,7 +231,7 @@
     "limit": 5
   },
   "TID251": {
-    "limit": 1117
+    "limit": 1111
   },
   "TRY002": {
     "limit": 524
