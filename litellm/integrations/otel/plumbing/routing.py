@@ -27,6 +27,7 @@ from litellm.constants import OTEL_SERVICE_NAME_METADATA_KEYS
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
+    exporter_transport,
     get_tracer,
 )
 from litellm.integrations.otel.presets import (
@@ -175,16 +176,18 @@ class TenantTracerCache:
         self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
         # Oldest-first so an overflow of draining providers sheds the stalest.
         self._retired: OrderedDict[TracerProvider, None] = OrderedDict()  # mutable-ok: draining evicted providers
-        self._project_routable = any(
-            spec.owner == callback_name and spec.kind.lower() not in (*_NON_OTLP_KINDS, *_GRPC_KINDS)
-            for spec in config.exporters
+        # An owned exporter is routable only when its kind actually resolves to a
+        # header-carrying OTLP exporter. A denylist would accept a typo'd or
+        # unavailable kind, which ``_exporter_from_spec`` falls back to a
+        # header-ignoring console exporter: detaching such a span would strand it
+        # on the operator's console, never reaching the tenant backend. Project
+        # headers are HTTP-only; credentials ride gRPC metadata too (Arize's
+        # default exporter is gRPC), so they accept either OTLP transport.
+        owned_transports: Final = tuple(
+            exporter_transport(spec.kind) for spec in config.exporters if spec.owner == callback_name
         )
-        # Credentials ride gRPC metadata too (Arize's default exporter is gRPC),
-        # so unlike project headers they only need an owned OTLP exporter of any
-        # transport, not specifically HTTP.
-        self._credential_routable = any(
-            spec.owner == callback_name and spec.kind.lower() not in _NON_OTLP_KINDS for spec in config.exporters
-        )
+        self._project_routable = "http" in owned_transports
+        self._credential_routable = "http" in owned_transports or "grpc" in owned_transports
         self._warned_project_unroutable = False
         self._warned_credential_unroutable = False
 

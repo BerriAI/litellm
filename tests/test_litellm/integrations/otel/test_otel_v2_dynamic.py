@@ -6,14 +6,14 @@ import pytest
 from opentelemetry.trace import NoOpTracer
 
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.plumbing.providers import parse_headers
+from litellm.integrations.otel.plumbing.routing import TenantTracerCache
 from litellm.integrations.otel.presets import (
     DYNAMIC_HEADERS_BY_CALLBACK,
     dynamic_otlp_endpoint,
     dynamic_otlp_headers,
     project_routing_headers,
 )
-from litellm.integrations.otel.plumbing.providers import parse_headers
-from litellm.integrations.otel.plumbing.routing import TenantTracerCache
 
 
 def _cache(callback_name, exporters=None):
@@ -558,6 +558,25 @@ def test_credential_route_without_owned_otlp_exporter_stays_parented():
     # backend unchanged. Detaching there would orphan it on the very backend
     # that holds its parent, so it must stay parented (mirrors the project guard).
     cache = _cache("newrelic", exporters=[ExporterSpec(kind="in_memory")])
+    default = NoOpTracer()
+    routed = cache.route_for(default, {"newrelic_api_key": "NRAL-KEY"})
+    assert routed.tracer is default  # no scoped provider built
+    assert routed.detached is False
+    assert cache._providers == {}
+
+
+@pytest.mark.parametrize("typo_kind", ["otlp", "grcp", "htttp", "otlphttp"])
+def test_credential_route_with_unresolvable_exporter_kind_stays_parented(typo_kind):
+    # An owned exporter whose kind does not resolve to a real OTLP exporter
+    # (a typo or an unavailable protocol) falls back to a header-ignoring
+    # console exporter, so the dynamic credentials never reach a tenant backend.
+    # A denylist would wrongly treat it as routable and detach the span onto the
+    # operator's console, orphaning it; routability must instead follow the same
+    # kind resolution the exporter build uses.
+    cache = _cache(
+        "newrelic",
+        exporters=[ExporterSpec(kind="in_memory"), ExporterSpec(kind=typo_kind, owner="newrelic")],
+    )
     default = NoOpTracer()
     routed = cache.route_for(default, {"newrelic_api_key": "NRAL-KEY"})
     assert routed.tracer is default  # no scoped provider built
