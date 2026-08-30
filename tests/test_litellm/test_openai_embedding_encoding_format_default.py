@@ -54,7 +54,11 @@ def test_openai_embedding_encoding_format_default(
 def test_openai_embedding_encoding_format_env_none_omits_param(
     monkeypatch, env_none
 ):
-    """LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT=none omits encoding_format (provider default)."""
+    """LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT=none omits encoding_format from the
+    wire request entirely. embeddings.create() hard-defaults the field to "base64"
+    whenever the kwarg is absent, so the suppressed path posts the body directly
+    (#38661); a chained LiteLLM proxy forwarding to a provider with zero supported
+    embedding params (e.g. Bedrock titan) would otherwise reject the injected field."""
     monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", env_none)
 
     mock_response = MagicMock()
@@ -76,16 +80,26 @@ def test_openai_embedding_encoding_format_env_none_omits_param(
         mock_client_instance.embeddings.with_raw_response.create.return_value = (
             mock_response
         )
+        mock_client_instance.post.return_value = MagicMock(
+            model_dump=lambda: {
+                "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
+                "model": "text-embedding-ada-002",
+                "object": "list",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            }
+        )
 
         embedding(
             model="text-embedding-ada-002",
             input="Hello world",
         )
 
-        call_kwargs = (
-            mock_client_instance.embeddings.with_raw_response.create.call_args[1]
-        )
-        assert "encoding_format" not in call_kwargs
+        # create() cannot represent an absent encoding_format, so the suppressed
+        # path must not go through it at all
+        mock_client_instance.embeddings.with_raw_response.create.assert_not_called()
+        post_args, post_kwargs = mock_client_instance.post.call_args
+        assert post_args[0] == "/embeddings"
+        assert "encoding_format" not in post_kwargs["body"]
 
 
 def test_openai_embedding_encoding_format_explicit_overrides_env(monkeypatch):

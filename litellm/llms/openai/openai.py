@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 import openai
 from openai import AsyncOpenAI, OpenAI
+from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel
@@ -1155,9 +1156,24 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call embeddings.create by default
         """
         try:
+            if "encoding_format" not in data:
+                # embeddings.create() hard-defaults encoding_format="base64" when the
+                # kwarg is omitted, so a caller (or
+                # LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT=none) that deliberately
+                # removed the field cannot keep it off the wire — and a chained LiteLLM
+                # proxy forwarding to a provider with zero supported embedding params
+                # (e.g. Bedrock titan) then rejects the request (#38661). Post the body
+                # directly so an absent field stays absent.
+                response: Final = await openai_aclient.post(
+                    "/embeddings",
+                    body=data,
+                    cast_to=CreateEmbeddingResponse,
+                    options={"timeout": timeout},
+                )
+                return {}, response
             raw_response = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)
             headers: Final = dict(raw_response.headers)
-            response: Final = raw_response.parse()
+            response = raw_response.parse()
             return headers, response
         except Exception as e:
             raise e
@@ -1176,6 +1192,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call embeddings.create by default
         """
         try:
+            if "encoding_format" not in data:
+                # See make_openai_embedding_request: keep a deliberately-omitted
+                # encoding_format off the wire instead of letting the SDK
+                # re-inject its "base64" default (#38661).
+                sync_response: Final = openai_client.post(
+                    "/embeddings",
+                    body=data,
+                    cast_to=CreateEmbeddingResponse,
+                    options={"timeout": timeout},
+                )
+                return {}, sync_response
             raw_response = openai_client.embeddings.with_raw_response.create(**data, timeout=timeout)
 
             headers: Final = dict(raw_response.headers)
