@@ -24,7 +24,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import OTEL_QUERY_URL, POLL_INTERVAL, POLL_TIMEOUT
-from e2e_http import URL, NoBody, Success, get
+from e2e_http import URL, NetworkError, NoBody, Result, Success, get
 
 #: OTEL resource service.name the proxy exports under (OTEL_SERVICE_NAME default).
 JAEGER_SERVICE = "litellm"
@@ -100,18 +100,20 @@ def _settled(trace: JaegerTrace, names: set[str], prefixes: set[str]) -> bool:
 class OtelReader:
     query_url: str
 
-    def traces_for_call(self, call_id: str) -> list[JaegerTrace]:
-        """Every trace holding a span tagged with this call id. Jaeger matches
-        spans server-side and returns their full traces; more than one hit for
-        one call IS the split-trace bug, so this never collapses to one."""
-        result = get(
+    def _query_traces(self, call_id: str) -> Result[JaegerTracesPage]:
+        return get(
             URL(f"{self.query_url}/api/traces"),
             headers=NoBody(),
             params=_TracesQuery(service=JAEGER_SERVICE, tags=json.dumps({CALL_ID_TAG: call_id})),
             response_type=JaegerTracesPage,
             timeout=30.0,
         )
-        match result:
+
+    def traces_for_call(self, call_id: str) -> list[JaegerTrace]:
+        """Every trace holding a span tagged with this call id. Jaeger matches
+        spans server-side and returns their full traces; more than one hit for
+        one call IS the split-trace bug, so this never collapses to one."""
+        match self._query_traces(call_id):
             case Success(data=page):
                 return page.data
             case failure:
@@ -128,11 +130,24 @@ class OtelReader:
         on a split trace this never settles and the orphan comes back."""
         deadline = time.monotonic() + POLL_TIMEOUT
         hits: list[JaegerTrace] = []
+        unreachable: NetworkError | None = None
         while time.monotonic() < deadline:
-            hits = self.traces_for_call(call_id)
-            if len(hits) == 1 and _settled(hits[0], settled_names, settled_prefixes):
-                return hits
+            match self._query_traces(call_id):
+                case Success(data=page):
+                    unreachable = None
+                    hits = page.data
+                    if len(hits) == 1 and _settled(hits[0], settled_names, settled_prefixes):
+                        return hits
+                case NetworkError() as failure:
+                    unreachable = failure
+                case failure:
+                    pytest.fail(f"Jaeger query API at {self.query_url} failed: {failure}")
             time.sleep(POLL_INTERVAL)
+        if unreachable is not None:
+            pytest.fail(
+                f"Jaeger query API at {self.query_url} stayed unreachable until the "
+                f"{POLL_TIMEOUT}s poll deadline: {unreachable}"
+            )
         return hits
 
 

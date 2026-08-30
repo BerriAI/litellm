@@ -4,9 +4,11 @@ import React, { useState } from "react";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -15,7 +17,6 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 import {
   ALL_ROUTERS,
-  WINDOW_LABELS,
   bucketRows,
   bucketTurnsTotal,
   durationLabel,
@@ -27,27 +28,35 @@ import {
   type AutoRouterBenchmarksResponse,
   type AutoRouterCacheStats,
   type BenchmarkView,
-  type BenchmarkWindow,
   type BucketRow,
 } from "./autoRouterBenchmarks";
-import { usd } from "./costOptimizationUtils";
+import { formatRangeLabel, usd } from "./costOptimizationUtils";
 import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
+import { DailyActivityRange } from "./useDailyActivityRange";
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <p className="py-8 text-center text-sm text-muted-foreground">{children}</p>
 );
 
-const Metric: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+const Metric: React.FC<{ label: string; value: string; hint?: string }> = ({ label, value, hint }) => (
   <Card size="sm">
     <CardHeader>
       <CardTitle className="text-sm font-normal text-muted-foreground">{label}</CardTitle>
     </CardHeader>
-    <CardContent>
+    <CardContent className="flex flex-wrap items-baseline gap-2">
       <p className="text-3xl font-semibold text-foreground">{value}</p>
+      {hint && <p className="text-sm text-muted-foreground">{hint}</p>}
     </CardContent>
   </Card>
+);
+
+const SpendRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <dl className="flex items-baseline justify-between gap-6 py-3">
+    <dt className="text-sm text-muted-foreground">{label}</dt>
+    <dd className="text-base font-semibold tabular-nums text-foreground">{value}</dd>
+  </dl>
 );
 
 const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
@@ -55,35 +64,27 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const cheaper = stats.saved_spend >= 0;
   return (
     <Card className="overflow-hidden py-0">
-      <div className="grid md:grid-cols-[1fr_1fr]">
-        <div className="flex flex-col justify-center gap-3 p-6">
-          <p className="text-sm text-muted-foreground">Total estimated savings</p>
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_spend)}</p>
+      <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="flex flex-col items-center justify-center gap-2 p-6">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Total estimated savings
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <p className="text-6xl font-semibold tracking-tight text-foreground">{usd(stats.saved_spend)}</p>
             <Badge
               variant="secondary"
-              className={cheaper ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-destructive"}
+              className={`h-6 px-2.5 text-sm ${cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
             >
               {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
               {Math.abs(stats.saved_pct).toFixed(0)}%
             </Badge>
           </div>
-          <dl className="divide-y text-sm">
-            <div className="flex items-baseline justify-between gap-6 py-3">
-              <dt className="text-muted-foreground">Actual auto-router spend</dt>
-              <dd className="font-medium tabular-nums text-foreground">{usd(stats.spend)}</dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-6 py-3">
-              <dt className="text-muted-foreground">Estimated spend at highest-tier model</dt>
-              <dd className="font-medium tabular-nums text-foreground">{usd(stats.baseline_spend)}</dd>
-            </div>
-          </dl>
         </div>
 
-        <div className="flex flex-col items-center justify-center gap-2 border-t p-6 md:border-t-0 md:border-l">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Avg saved per session</p>
-          <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_per_session)}</p>
-          <p className="text-sm text-muted-foreground">across {stats.sessions.toLocaleString()} sessions</p>
+        <div className="flex flex-col justify-center border-t p-6 md:border-t-0 md:border-l">
+          <SpendRow label="Actual auto-router spend" value={usd(stats.spend)} />
+          <Separator />
+          <SpendRow label="Estimated spend at highest-tier model" value={usd(stats.baseline_spend)} />
         </div>
       </div>
     </Card>
@@ -239,7 +240,12 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
       <TierTurnsChart view={view} autoRouters={autoRouters} />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Metric
+          label="Avg saved per session"
+          value={usd(stats.saved_per_session)}
+          hint={`· ${stats.sessions.toLocaleString()} sessions`}
+        />
         <Metric label="Avg turns per session" value={stats.avg_turns_per_session.toFixed(1)} />
         <Metric label="Avg session length" value={durationLabel(stats.avg_session_seconds)} />
         <Metric label="Avg tokens per session" value={formatNumberWithCommas(stats.avg_tokens_per_session, 1, true)} />
@@ -248,7 +254,8 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
       <p className="text-xs text-muted-foreground">
         Compares your actual routed spend with the estimated cost of using only the most expensive model configured in
         the auto-router. It accounts for both the cache savings from staying on one model and the added cache costs from
-        switching models.
+        switching models. The range counts whole sessions that overlap it, so totals can differ slightly from the
+        Overall tab, which buckets savings by UTC day.
       </p>
 
       <div className="space-y-4">
@@ -266,32 +273,28 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
 interface AutoRouterBenchmarksTabProps {
   accessToken: string | null;
+  activity: DailyActivityRange;
 }
 
-const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
-  const [range, setRange] = useState<BenchmarkWindow>("30d");
-  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, range);
+const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
+  const { dateValue, onDateChange } = activity;
+  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
   const { data: autoRouters } = useAutoRouters();
 
   const groups = data?.groups ?? [];
   const selectedLabel = data ? viewFor(data, selectedKey).label : "All auto-routers";
+  const rangeLabel = formatRangeLabel(dateValue.from, dateValue.to);
 
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-foreground">Auto-router usage</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{WINDOW_LABELS[range]}</p>
+          {rangeLabel && <p className="mt-1 text-sm text-muted-foreground">{rangeLabel} (UTC)</p>}
         </div>
         <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
-          <Tabs value={range} onValueChange={(value) => setRange(value === "7d" || value === "24h" ? value : "30d")}>
-            <TabsList>
-              <TabsTrigger value="30d">30d</TabsTrigger>
-              <TabsTrigger value="7d">7d</TabsTrigger>
-              <TabsTrigger value="24h">24h</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
           <div className="w-full sm:w-64">
             <Select value={selectedKey} onValueChange={(value: string | null) => setSelectedKey(value ?? ALL_ROUTERS)}>
               <SelectTrigger className="w-full">
@@ -321,7 +324,7 @@ const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
   );
 };
 
-const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
+const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
   const [visitedTabs, setVisitedTabs] = useState<readonly string[]>(["usage"]);
 
   const handleTabChange = (value: unknown) => {
@@ -344,7 +347,7 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
       </TabsList>
 
       <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
-        <UsageView accessToken={accessToken} />
+        <UsageView accessToken={accessToken} activity={activity} />
       </TabsContent>
       <TabsContent value="shadow-evals" keepMounted={visitedTabs.includes("shadow-evals")}>
         <ShadowEvalSection />

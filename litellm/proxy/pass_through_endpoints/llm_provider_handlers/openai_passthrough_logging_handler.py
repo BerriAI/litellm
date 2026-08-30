@@ -230,6 +230,25 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return 0.0
 
     @staticmethod
+    def _calculate_embeddings_cost(
+        litellm_model_response: EmbeddingResponse,
+        model: str,
+        custom_llm_provider: str,
+    ) -> float:
+        try:
+            return litellm.completion_cost(
+                completion_response=litellm_model_response,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                call_type="aembedding",
+            )
+        except Exception as e:  # noqa: BLE001  # completion_cost raises bare Exception for unmapped models; cost failure must never drop the spend log
+            verbose_proxy_logger.warning(
+                "Error calculating embeddings cost for model %s, logging spend with cost 0: %s", model, e
+            )
+            return 0.0
+
+    @staticmethod
     def _build_responses_api_response_and_cost(
         model: str,
         httpx_response: httpx.Response,
@@ -351,11 +370,10 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model_response_object=EmbeddingResponse(),
                     response_type="embedding",
                 )
-                response_cost = litellm.completion_cost(
-                    completion_response=litellm_model_response,
+                response_cost = OpenAIPassthroughLoggingHandler._calculate_embeddings_cost(
+                    litellm_model_response=litellm_model_response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    call_type="aembedding",
                 )
                 litellm_model_response._hidden_params["response_cost"] = response_cost
             elif is_image_generation:
@@ -471,6 +489,12 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
         except Exception as e:
             verbose_proxy_logger.error("Error in OpenAI passthrough cost tracking: %s", e)
+            if not is_chat_completions:
+                unbilled_result: Final[PassThroughEndpointLoggingTypedDict] = {
+                    "result": None,
+                    "kwargs": kwargs,
+                }
+                return unbilled_result
             # Fall back to base handler without cost tracking
             base_handler = OpenAIPassthroughLoggingHandler()
             return base_handler.passthrough_chat_handler(

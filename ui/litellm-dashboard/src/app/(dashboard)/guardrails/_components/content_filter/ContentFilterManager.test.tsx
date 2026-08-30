@@ -124,7 +124,7 @@ describe("ContentFilterManager", () => {
 
     expect(screen.queryByTestId("content-filter-config")).not.toBeInTheDocument();
     expect(screen.queryByTestId("content-filter-display")).not.toBeInTheDocument();
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render read-only display when isEditing is false", async () => {

@@ -1,4 +1,4 @@
-import { parseAsString, useQueryStates } from "nuqs";
+import { parseAsString, useQueryState, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 
 export interface ModelDetailRouting {
@@ -40,4 +40,22 @@ export function useModelDetailRouting(): ModelDetailRouting {
     openTeam,
     close,
   };
+}
+
+export interface ModelGroupFilterRouting {
+  modelGroup: string | null;
+  setModelGroup: (modelGroup: string | null) => void;
+}
+
+export function useModelGroupFilterRouting(): ModelGroupFilterRouting {
+  const [modelGroup, setParam] = useQueryState("model_group", parseAsString);
+
+  const setModelGroup = useCallback(
+    (next: string | null) => {
+      void setParam(next);
+    },
+    [setParam],
+  );
+
+  return { modelGroup, setModelGroup };
 }

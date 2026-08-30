@@ -1,10 +1,16 @@
+import asyncio
+import re
+import time
+from collections.abc import Mapping, Sequence
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
+import httpx
 import pytest
 
 from litellm.proxy._types import (
+    DEFAULT_JWKS_STALE_TTL,
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
     LiteLLM_TeamMembership,
@@ -15,7 +21,16 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
 )
-from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.caching.dual_cache import DualCache
+from litellm.proxy.auth.handle_jwt import (
+    JWKS_FETCH_ATTEMPTS,
+    STALE_CACHE_KEY_PREFIX,
+    STALE_WRITTEN_AT_CACHE_KEY_PREFIX,
+    JWKSUnreachableError,
+    JWTAuthManager,
+    JWTHandler,
+    NoMatchingJWTPublicKeyError,
+)
 
 
 @pytest.mark.asyncio
@@ -2574,7 +2589,7 @@ async def test_find_and_validate_raises_when_required_team_not_found():
     # Token without team info
     jwt_token = {"sub": "user-1"}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="No team found in token\\. Checked team_id field 'None' and") as exc_info:
         await JWTAuthManager.find_and_validate_specific_team_id(
             jwt_handler=jwt_handler,
             jwt_valid_token=jwt_token,
@@ -2901,7 +2916,7 @@ async def test_find_and_validate_specific_team_id_hints_bracket_notation():
     # token has roles as a list — dot-notation won't find anything
     token = {"roles": ["team1"]}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="is not supported\\. Use 'roles' instead — LiteLLM") as exc_info:
         await JWTAuthManager.find_and_validate_specific_team_id(
             jwt_handler=handler,
             jwt_valid_token=token,
@@ -2932,7 +2947,7 @@ async def test_find_and_validate_specific_team_id_hints_bracket_index_notation()
     handler = _make_jwt_handler("roles[0]")
     token = {"roles": ["team1"]}
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="is not supported in team_id_jwt_field\\. Use 'roles' instead") as exc_info:
         await JWTAuthManager.find_and_validate_specific_team_id(
             jwt_handler=handler,
             jwt_valid_token=token,
@@ -2962,7 +2977,7 @@ async def test_find_and_validate_specific_team_id_no_hint_for_valid_field():
     handler = _make_jwt_handler("appid")
     token = {}  # no appid — triggers the "no team found" path
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="No team found in token\\. Checked team_id field 'appid' and") as exc_info:
         await JWTAuthManager.find_and_validate_specific_team_id(
             jwt_handler=handler,
             jwt_valid_token=token,
@@ -3921,6 +3936,7 @@ async def test_get_public_key_fetches_and_caches_jwks_response():
     expected_key_id = "cached-key"
     _, jwk = _get_rsa_key_and_jwk(kid=expected_key_id)
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {"keys": [jwk]}
     jwt_handler.http_handler.get = AsyncMock(return_value=mock_response)
 
@@ -3934,6 +3950,560 @@ async def test_get_public_key_fetches_and_caches_jwks_response():
         key="litellm_jwt_auth_keys_https://issuer.example.com/keys"
     )
     assert cached_keys == [jwk]
+
+
+class _ScriptedJWKSEndpoint:
+    """Injected stand-in for ``JWTHandler.http_handler`` with scripted per-call outcomes.
+
+    Each outcome is either an exception to raise or a JSON body to return; the
+    last outcome repeats for any further calls.
+    """
+
+    def __init__(
+        self,
+        outcomes: Sequence[Exception | Mapping[str, object] | MagicMock],
+        delay: float = 0.0,
+    ) -> None:
+        self.outcomes = outcomes
+        self.delay = delay
+        self.call_count = 0
+
+    async def get(
+        self,
+        url: str,
+        params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> MagicMock:
+        self.call_count += 1
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        outcome = self.outcomes[min(self.call_count - 1, len(self.outcomes) - 1)]
+        if isinstance(outcome, Exception):
+            raise outcome
+        if isinstance(outcome, MagicMock):
+            return outcome
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = outcome
+        return response
+
+
+def _get_jwt_handler_with_scripted_endpoint(
+    cache: "DualCache",
+    endpoint: _ScriptedJWKSEndpoint,
+    public_key_ttl: float = 600,
+    public_key_stale_ttl: float = DEFAULT_JWKS_STALE_TTL,
+) -> JWTHandler:
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            public_key_ttl=public_key_ttl,
+            public_key_stale_ttl=public_key_stale_ttl,
+        ),
+    )
+    jwt_handler.http_handler = endpoint
+    return jwt_handler
+
+
+@pytest.mark.asyncio
+async def test_get_public_key_retries_transient_jwks_fetch_failure():
+    """A single connect timeout to the IdP must be retried, not surfaced to the caller."""
+    from litellm.caching.dual_cache import DualCache
+
+    _, jwk = _get_rsa_key_and_jwk(kid="retried-key")
+    endpoint = _ScriptedJWKSEndpoint((httpx.ConnectTimeout("connect timed out"), {"keys": [jwk]}))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(DualCache(), endpoint)
+
+    public_key = await jwt_handler._get_public_key_from_jwks_url(
+        jwks_url="https://issuer.example.com/keys",
+        kid="retried-key",
+    )
+
+    assert public_key == jwk
+    assert endpoint.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_public_key_serves_stale_keys_when_jwks_refresh_fails():
+    """Once the TTL lapses, an unreachable IdP must not invalidate a still-valid signing key."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://issuer.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="stale-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="stale-key") == jwk
+
+    await cache.async_delete_cache(key=f"litellm_jwt_auth_keys_{jwks_url}")
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+
+    public_key = await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="stale-key")
+
+    assert public_key == jwk
+
+
+@pytest.mark.asyncio
+async def test_stale_jwks_window_is_the_configured_grace_past_a_long_public_key_ttl():
+    """The stale window is `public_key_stale_ttl` past the active entry, whatever `public_key_ttl` is set to.
+
+    Deriving the window from `public_key_ttl` instead would collapse it to nothing on the long TTLs that
+    make the fallback worth having.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://long-ttl-issuer.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="long-ttl-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(
+        cache,
+        endpoint,
+        public_key_ttl=90000,
+        public_key_stale_ttl=3600,
+    )
+
+    await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="long-ttl-key")
+
+    active_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    active_deadline = cache.in_memory_cache.ttl_dict[active_key]
+    stale_deadline = cache.in_memory_cache.ttl_dict[f"{STALE_CACHE_KEY_PREFIX}{active_key}"]
+
+    assert stale_deadline - active_deadline == pytest.approx(3600, abs=1)
+
+
+@pytest.mark.asyncio
+async def test_long_public_key_ttl_still_serves_stale_keys_when_the_idp_is_unreachable():
+    """A long `public_key_ttl` must not leave the stale fallback inert once that TTL finally lapses."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://long-ttl-fallback.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="long-ttl-fallback-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint, public_key_ttl=604800)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="long-ttl-fallback-key") == jwk
+
+    await cache.async_delete_cache(key=f"litellm_jwt_auth_keys_{jwks_url}")
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="long-ttl-fallback-key") == jwk
+
+
+@pytest.mark.asyncio
+async def test_removed_signing_key_stops_being_trusted_once_the_stale_window_expires(monkeypatch):
+    """The stale fallback is bounded: past its window a key the IdP dropped is no longer served."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://revoking-issuer.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+
+    _, jwk = _get_rsa_key_and_jwk(kid="revoked-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    assert await jwt_handler.get_public_key(kid="revoked-key") == jwk
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+
+    assert await jwt_handler.get_public_key(kid="revoked-key") == jwk
+
+    await cache.async_delete_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await jwt_handler.get_public_key(kid="revoked-key")
+
+    assert exc_info.value.code == "503"
+    assert exc_info.value.type == ProxyErrorTypes.auth_provider_unavailable
+
+
+@pytest.mark.asyncio
+async def test_key_removed_from_a_reachable_jwks_is_rejected_without_consulting_the_stale_copy():
+    """A reachable IdP always wins: dropping a key revokes it immediately, stale copy included."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://rotating-issuer.example.com/keys"
+    _, retired_jwk = _get_rsa_key_and_jwk(kid="retired-key")
+    _, current_jwk = _get_rsa_key_and_jwk(kid="current-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [retired_jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="retired-key") == retired_jwk
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
+    endpoint.outcomes = ({"keys": [current_jwk]},)
+
+    with pytest.raises(NoMatchingJWTPublicKeyError):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="retired-key")
+
+    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") == [current_jwk]
+
+
+@pytest.mark.asyncio
+async def test_zero_public_key_stale_ttl_fails_closed_instead_of_serving_stale_keys():
+    """`public_key_stale_ttl=0` is the escape hatch for deployments that cannot trust an unrefreshed key."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://fail-closed-issuer.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="fail-closed-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint, public_key_stale_ttl=0)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="fail-closed-key") == jwk
+    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}litellm_jwt_auth_keys_{jwks_url}") is None
+
+    await cache.async_delete_cache(key=f"litellm_jwt_auth_keys_{jwks_url}")
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+
+    with pytest.raises(JWKSUnreachableError):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="fail-closed-key")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lowered_stale_ttl", [0, 30])
+async def test_lowering_public_key_stale_ttl_stops_serving_a_copy_cached_under_the_old_setting(lowered_stale_ttl):
+    """Lowering the window has to bite immediately: an operator does this mid-incident, on a shared cache.
+
+    The stale entry keeps whatever expiry it was written with, so enforcing the bound only at write time would
+    leave a copy taken under the old, longer setting servable until it aged out on its own.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://relaxed-then-tightened.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="tightened-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    generous = _get_jwt_handler_with_scripted_endpoint(cache, endpoint, public_key_stale_ttl=86400)
+
+    assert await generous._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="tightened-key") == jwk
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
+    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") == [jwk]
+
+    # The operator tightens the window and restarts; the cache, and its long-lived copy, survive.
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+    tightened = _get_jwt_handler_with_scripted_endpoint(
+        cache, endpoint, public_key_stale_ttl=lowered_stale_ttl
+    )
+    await cache.async_set_cache(
+        key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}",
+        value=time.time() - 7200,
+        ttl=86400,
+    )
+
+    with pytest.raises(JWKSUnreachableError):
+        await tightened._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="tightened-key")
+
+
+@pytest.mark.asyncio
+async def test_zero_public_key_stale_ttl_fails_closed_even_for_a_freshly_written_copy():
+    """`0` must fail closed on its own, not merely because the copy happens to be older than `public_key_ttl`.
+
+    The active entry can disappear before it expires, through cache eviction or a flush, which leaves a stale
+    copy younger than `public_key_ttl`. Bounding only on age would still serve it.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://evicted-active-entry.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="fresh-copy-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    generous = _get_jwt_handler_with_scripted_endpoint(cache, endpoint, public_key_ttl=600, public_key_stale_ttl=3600)
+
+    assert await generous._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="fresh-copy-key") == jwk
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
+    written_at = await cache.async_get_cache(key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}")
+    assert time.time() - written_at < 600
+
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+    fail_closed = _get_jwt_handler_with_scripted_endpoint(cache, endpoint, public_key_ttl=600, public_key_stale_ttl=0)
+
+    with pytest.raises(JWKSUnreachableError):
+        await fail_closed._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="fresh-copy-key")
+
+
+@pytest.mark.asyncio
+async def test_stale_copy_with_no_recorded_write_time_is_not_served():
+    """The bound is enforced from the recorded write time, so losing it must fail closed, never open."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://undated-copy.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="undated-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="undated-key") == jwk
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
+    await cache.async_delete_cache(key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}")
+    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") == [jwk]
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+
+    with pytest.raises(JWKSUnreachableError):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="undated-key")
+
+
+@pytest.mark.asyncio
+async def test_increasing_public_key_stale_ttl_only_extends_within_the_new_bound():
+    """Raising the window re-measures from the copy's refresh time; it does not bless whatever is cached."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://widened-window.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="widened-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    narrow = _get_jwt_handler_with_scripted_endpoint(cache, endpoint, public_key_ttl=600, public_key_stale_ttl=60)
+
+    assert await narrow._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="widened-key") == jwk
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    written_at_key = f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}"
+    await cache.async_delete_cache(key=active_cache_key)
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+    widened = _get_jwt_handler_with_scripted_endpoint(cache, endpoint, public_key_ttl=600, public_key_stale_ttl=3600)
+
+    # Older than the widened bound of 600 + 3600, so widening must not revive it.
+    await cache.async_set_cache(key=written_at_key, value=time.time() - 5000, ttl=86400)
+    with pytest.raises(JWKSUnreachableError):
+        await widened._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="widened-key")
+
+    # Inside the widened bound, so it is servable again.
+    await cache.async_set_cache(key=written_at_key, value=time.time() - 1000, ttl=86400)
+    assert await widened._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="widened-key") == jwk
+
+
+@pytest.mark.asyncio
+async def test_stale_copy_written_at_survives_a_whole_number_epoch():
+    """A Redis JSON round-trip can return the epoch as an int, and that must not read as a missing timestamp.
+
+    Rejecting it would fail closed on a copy that is well inside the window, in the shared-cache deployment
+    the stale fallback exists to serve.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://int-epoch.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="int-epoch-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="int-epoch-key") == jwk
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
+    await cache.async_set_cache(
+        key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}",
+        value=int(time.time()) - 60,
+        ttl=86400,
+    )
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="int-epoch-key") == jwk
+
+
+@pytest.mark.asyncio
+async def test_stale_copy_with_a_malformed_write_time_is_not_served():
+    """An unreadable refresh timestamp is indistinguishable from an unbounded one, so it fails closed."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://malformed-timestamp.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="malformed-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="malformed-key") == jwk
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
+    await cache.async_set_cache(
+        key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}",
+        value="whenever",
+        ttl=86400,
+    )
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+
+    with pytest.raises(JWKSUnreachableError):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="malformed-key")
+
+
+@pytest.mark.asyncio
+async def test_public_key_stale_ttl_defaults_to_one_hour():
+    """The default is the exposure bound for a key the IdP revoked mid-outage, so it stays short deliberately."""
+    assert LiteLLM_JWTAuth().public_key_stale_ttl == 3600
+
+
+@pytest.mark.asyncio
+async def test_stale_fallback_warns_with_the_kid_and_how_stale_the_jwks_copy_is(caplog):
+    """Serving an unrefreshed signing key is a security-relevant event, so it must be legible in the logs."""
+    import logging
+
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://warned-issuer.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="warned-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint, public_key_stale_ttl=1800)
+
+    await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="warned-key")
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
+    await cache.async_set_cache(
+        key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}",
+        value=time.time() - 120,
+        ttl=600,
+    )
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+
+    caplog.set_level(logging.WARNING)
+    await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="warned-key")
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    stale_warnings = [m for m in warnings if "stale JWKS copy" in m]
+    assert len(stale_warnings) == 1
+    assert "kid=warned-key" in stale_warnings[0]
+    assert jwks_url in stale_warnings[0]
+
+    freshness = re.search(r"last refreshed (\d+)s ago, stops being trusted in (\d+)s", stale_warnings[0])
+    assert freshness is not None
+    age, remaining = int(freshness.group(1)), int(freshness.group(2))
+    assert age == pytest.approx(120, abs=2)
+    assert remaining == pytest.approx(600 + 1800 - 120, abs=2)
+
+
+@pytest.mark.asyncio
+async def test_unparseable_jwks_response_does_not_fall_back_to_the_stale_copy():
+    """Only an unreachable IdP unlocks the stale copy. A reachable one that answers badly must surface the error."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://garbled-issuer.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="garbled-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="garbled-key") == jwk
+
+    await cache.async_delete_cache(key=f"litellm_jwt_auth_keys_{jwks_url}")
+    garbled = MagicMock()
+    garbled.status_code = 200
+    garbled.text = "<html>not json</html>"
+    garbled.json.side_effect = ValueError("Expecting value: line 1 column 1")
+    endpoint.outcomes = (garbled,)
+
+    with pytest.raises(Exception, match="Error parsing response"):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="garbled-key")
+
+
+@pytest.mark.asyncio
+async def test_jwks_error_response_is_not_cached_over_the_last_known_good_keys():
+    """An IdP error body must never be stored as the key set, least of all as the stale copy."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://erroring-issuer.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="erroring-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="erroring-key") == jwk
+
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
+    server_error = MagicMock()
+    server_error.status_code = 503
+    server_error.text = '{"error": "upstream unavailable"}'
+    server_error.json.return_value = {"error": "upstream unavailable"}
+    endpoint.outcomes = (server_error,)
+
+    with pytest.raises(Exception, match="returned status 503"):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="erroring-key")
+
+    assert await cache.async_get_cache(key=active_cache_key) is None
+    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") == [jwk]
+
+
+@pytest.mark.asyncio
+async def test_sustained_jwks_outage_refetches_once_per_backoff_window_not_once_per_request():
+    """Without a backoff, every request during an outage pays three timeouts serialised behind the refresh lock."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://flooded-issuer.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="flooded-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="flooded-key")
+
+    await cache.async_delete_cache(key=f"litellm_jwt_auth_keys_{jwks_url}")
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+    calls_before_outage = endpoint.call_count
+
+    public_keys = await asyncio.gather(
+        *[jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="flooded-key") for _ in range(6)]
+    )
+
+    assert public_keys == [jwk] * 6
+    assert endpoint.call_count - calls_before_outage == JWKS_FETCH_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_get_public_key_raises_503_when_jwks_unreachable_and_no_cached_keys(monkeypatch):
+    """An unreachable IdP is an infra failure: 503, never a 401 that clients read as bad credentials."""
+    from litellm.caching.dual_cache import DualCache
+
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://issuer.example.com/keys")
+    endpoint = _ScriptedJWKSEndpoint((httpx.ConnectTimeout("connect timed out"),))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(DualCache(), endpoint)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await jwt_handler.get_public_key(kid="any-key")
+
+    assert exc_info.value.code == "503"
+    assert exc_info.value.type == ProxyErrorTypes.auth_provider_unavailable
+    assert "ConnectTimeout" in exc_info.value.message
+    assert endpoint.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_get_public_key_coalesces_concurrent_jwks_refreshes():
+    """Concurrent requests in the TTL-expiry window share one JWKS fetch."""
+    from litellm.caching.dual_cache import DualCache
+
+    _, jwk = _get_rsa_key_and_jwk(kid="coalesced-key")
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},), delay=0.05)
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(DualCache(), endpoint)
+
+    public_keys = await asyncio.gather(
+        *[
+            jwt_handler._get_public_key_from_jwks_url(
+                jwks_url="https://coalesce.example.com/keys",
+                kid="coalesced-key",
+            )
+            for _ in range(5)
+        ]
+    )
+
+    assert public_keys == [jwk] * 5
+    assert endpoint.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -4141,6 +4711,38 @@ async def test_auth_jwt_issuer_path_expired_token_raises_401(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_auth_jwt_issuer_path_unreachable_jwks_raises_503(monkeypatch):
+    """The issuer-scoped path must report an unreachable IdP as 503, not as a credential failure."""
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://unreachable-issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, _ = _get_rsa_key_and_jwk(kid="unreachable-kid")
+
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[{"issuer": issuer, "jwks_url": jwks_url, "audience": "my-audience"}],
+        keys_by_url={},
+    )
+    endpoint = _ScriptedJWKSEndpoint((httpx.ConnectTimeout("connect timed out"),))
+    jwt_handler.http_handler = endpoint
+
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="my-audience",
+        kid="unreachable-kid",
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await jwt_handler.auth_jwt(token=token)
+
+    assert exc_info.value.code == "503"
+    assert exc_info.value.type == ProxyErrorTypes.auth_provider_unavailable
+    assert endpoint.call_count == 3
+
+
+@pytest.mark.asyncio
 async def test_multi_issuer_jwt_maps_kubernetes_namespace_claim(monkeypatch):
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
@@ -4205,7 +4807,7 @@ async def test_multi_issuer_jwt_unknown_issuer_falls_back_to_global_jwks(monkeyp
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='Missing JWT Public Key URL from environment\\.') as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Missing JWT Public Key URL from environment." in str(exc.value)
@@ -4236,7 +4838,7 @@ async def test_multi_issuer_jwt_rejects_wrong_audience(monkeypatch):
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match="Validation fails: Audience doesn't match") as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Validation fails" in str(exc.value)
@@ -4279,7 +4881,7 @@ async def test_multi_issuer_jwt_same_kid_does_not_cross_issuer_keys(monkeypatch)
         kid=shared_kid,
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='Validation fails: Signature verification failed') as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Validation fails" in str(exc.value)
@@ -4334,7 +4936,7 @@ def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
     issuer = "https://issuer.example.com"
     jwks_url = f"{issuer}/keys"
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='must configure audience or set') as exc:
         LiteLLM_JWTAuth(
             issuers=[
                 {
@@ -4351,7 +4953,7 @@ def test_multi_issuer_jwt_rejects_audience_with_disable_audience_validation():
     issuer = "https://issuer.example.com"
     jwks_url = f"{issuer}/keys"
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='cannot set audience and disable_audience_validation=True') as exc:
         LiteLLM_JWTAuth(
             issuers=[
                 {

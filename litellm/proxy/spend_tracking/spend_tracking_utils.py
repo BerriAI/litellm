@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from typing import Any, Final, Literal, cast
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     REDACTED_BY_LITELM_STRING,
@@ -20,6 +22,12 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
+)
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+from litellm.litellm_core_utils.litellm_logging import (
+    coerce_model_access_groups,
+    is_valid_sha256_hash,
+    request_model_access_groups_from_litellm_params,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -53,13 +61,6 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
-def _hash_api_key_for_spend_log(api_key: str) -> str:
-    stripped: Final = api_key[7:] if api_key[:7].lower() == "bearer " else api_key
-    if stripped.startswith("sk-"):
-        return hash_token(stripped)
-    return stripped
-
-
 def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     """
     Raw-only constant-time master-key comparison. The hashed form is never
@@ -70,10 +71,34 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     return secrets.compare_digest(api_key, _master_key)
 
 
+_HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
+
+
+def _is_non_secret_key_value(value: str) -> bool:
+    return (
+        value == LITELLM_PROXY_MASTER_KEY_ALIAS
+        or is_valid_sha256_hash(value)
+        or _HASHED_JWT_RE.fullmatch(value) is not None
+    )
+
+
+def _redact_logged_api_key(value: str | None, *, already_redacted: bool = False) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    stripped: Final = re.sub(r"(?i)^bearer ", "", value)
+    if not stripped:
+        return None
+    if already_redacted and _is_non_secret_key_value(stripped):
+        return stripped
+    return hash_token(stripped)
+
+
 def _get_spend_logs_metadata(
     metadata: dict | None,
     applied_guardrails: list[str] | None = None,
     batch_models: list[str] | None = None,
+    batch_successful_requests: int | None = None,
+    batch_failed_requests: int | None = None,
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = None,
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None = None,
     guardrail_information: list[StandardLoggingGuardrailInformation] | None = None,
@@ -83,6 +108,7 @@ def _get_spend_logs_metadata(
     litellm_overhead_time_ms: float | None = None,
     cost_breakdown: CostBreakdown | None = None,
     litellm_call_id: str | None = None,
+    autorouter_savings: float | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -102,6 +128,8 @@ def _get_spend_logs_metadata(
             error_information=None,
             proxy_server_request=None,
             batch_models=None,
+            batch_successful_requests=None,
+            batch_failed_requests=None,
             mcp_tool_call_metadata=None,
             vector_store_request_metadata=None,
             model_map_information=None,
@@ -113,8 +141,12 @@ def _get_spend_logs_metadata(
             litellm_overhead_time_ms=None,
             attempted_retries=None,
             max_retries=None,
+            attempted_fallbacks=None,
+            original_model_group=None,
             cost_breakdown=None,
             compression_savings=None,
+            autorouter_savings=autorouter_savings,
+            litellm_gateway_injected_cache=None,
             litellm_call_id=litellm_call_id,
         )
     verbose_proxy_logger.debug(
@@ -123,11 +155,16 @@ def _get_spend_logs_metadata(
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(**{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__})
-    raw_user_api_key: Final = clean_metadata.get("user_api_key")
-    if raw_user_api_key is not None and isinstance(raw_user_api_key, str):
-        clean_metadata["user_api_key"] = _hash_api_key_for_spend_log(raw_user_api_key)
+    _raw_key: Final = clean_metadata.get("user_api_key")
+    _trusted_hash: Final = metadata.get("user_api_key_hash")
+    _already_redacted: Final = (
+        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == _raw_key
+    )
+    clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_redacted=_already_redacted)
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
+    clean_metadata["batch_successful_requests"] = batch_successful_requests
+    clean_metadata["batch_failed_requests"] = batch_failed_requests
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
         vector_store_request_metadata
@@ -138,6 +175,7 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
+    clean_metadata["autorouter_savings"] = autorouter_savings
     clean_metadata["litellm_call_id"] = litellm_call_id
 
     return clean_metadata
@@ -216,6 +254,32 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         return {}
 
 
+def get_request_model_access_groups(kwargs: Mapping[str, object] | None) -> tuple[str, ...]:
+    """Model access groups that authorized this request, as stamped onto request metadata at auth time."""
+    if kwargs is None:
+        return ()
+
+    standard_logging_payload: Final = kwargs.get("standard_logging_object")
+    if isinstance(standard_logging_payload, Mapping):
+        from_payload: Final = coerce_model_access_groups(standard_logging_payload.get("request_model_access_groups"))
+        if from_payload:
+            return from_payload
+
+    litellm_params: Final = kwargs.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return ()
+    return request_model_access_groups_from_litellm_params(litellm_params)
+
+
+def _sl_attribution_fallback(
+    standard_logging_payload: StandardLoggingPayload | None,
+    field: Literal["model_id", "model_group", "api_base", "custom_llm_provider"],
+) -> str:
+    if standard_logging_payload is None:
+        return ""
+    return standard_logging_payload.get(field) or ""
+
+
 def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
@@ -243,7 +307,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     usage: dict = {}
     if call_type in ["ocr", "aocr"]:
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
-    else:
+    elif not is_unbilled_non_inference_call(call_type, metadata, response_obj_dict):
         # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
         _usage: Final = response_obj_dict.get("usage", None) or {}
         if isinstance(_usage, litellm.Usage):
@@ -272,24 +336,38 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         standard_logging_prompt_tokens = standard_logging_payload.get("prompt_tokens", 0)
         standard_logging_completion_tokens = standard_logging_payload.get("completion_tokens", 0)
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
-    if api_key is not None and isinstance(api_key, str):
-        api_key = _hash_api_key_for_spend_log(api_key)
+    _trusted_hash = metadata.get("user_api_key_hash")
+    _key_already_redacted = (
+        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == api_key
+    )
+    api_key = _redact_logged_api_key(api_key, already_redacted=_key_already_redacted) or ""
 
     if (
         standard_logging_payload is not None
     ):  # [TODO] migrate completely to sl payload. currently missing pass-through endpoint data
-        api_key = api_key or standard_logging_payload["metadata"].get("user_api_key_hash") or ""
+        api_key = (
+            api_key
+            or _redact_logged_api_key(
+                standard_logging_payload["metadata"].get("user_api_key_hash"), already_redacted=True
+            )
+            or ""
+        )
         end_user_id = end_user_id or standard_logging_payload["metadata"].get("user_api_key_end_user_id")
-    # BUG FIX: Don't overwrite api_key when standard_logging_payload is None
-    # The api_key was already extracted from metadata (line 243) and hashed (lines 256-259)
     request_tags = safe_dumps(metadata.get("tags", [])) if isinstance(metadata.get("tags", []), list) else "[]"
     if (
         standard_logging_payload is not None and standard_logging_payload.get("request_tags") is not None
     ):  # use 'tags' from standard logging payload instead
         request_tags = safe_dumps(standard_logging_payload["request_tags"])
 
-    _model_id: Final = metadata.get("model_info", {}).get("id", "")
-    _model_group: Final = metadata.get("model_group", "")
+    _model_id: Final = metadata.get("model_info", {}).get("id", "") or _sl_attribution_fallback(
+        standard_logging_payload, "model_id"
+    )
+    _model_group: Final = metadata.get("model_group", "") or _sl_attribution_fallback(
+        standard_logging_payload, "model_group"
+    )
+    _api_base: Final = litellm_params.get("api_base", "") or _sl_attribution_fallback(
+        standard_logging_payload, "api_base"
+    )
 
     # Extract overhead from hidden_params if available
     litellm_overhead_time_ms = None
@@ -307,6 +385,16 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         ),
         batch_models=(
             standard_logging_payload.get("hidden_params", {}).get("batch_models", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        batch_successful_requests=(
+            standard_logging_payload.get("hidden_params", {}).get("batch_successful_requests", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        batch_failed_requests=(
+            standard_logging_payload.get("hidden_params", {}).get("batch_failed_requests", None)
             if standard_logging_payload is not None
             else None
         ),
@@ -341,6 +429,9 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         litellm_overhead_time_ms=litellm_overhead_time_ms,
         cost_breakdown=(
             standard_logging_payload.get("cost_breakdown", None) if standard_logging_payload is not None else None
+        ),
+        autorouter_savings=(
+            standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
         ),
         litellm_call_id=cast(
             str | None,
@@ -389,9 +480,15 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Final[str | None] = kwargs.get("agent_id") or metadata.get("agent_id")
-    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+    custom_llm_provider: Final = (
+        kwargs.get("custom_llm_provider")
+        or _sl_attribution_fallback(standard_logging_payload, "custom_llm_provider")
+        or None
+    )
     raw_model: Final = cast(str, kwargs.get("model") or "")
-    model_name: Final = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+    model_name: Final = (
+        standard_logging_payload.get("model") if standard_logging_payload is not None else None
+    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: Final[SpendLogsPayload] = SpendLogsPayload(
@@ -414,13 +511,13 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             completion_tokens=usage.get("completion_tokens", standard_logging_completion_tokens),
             request_tags=request_tags,
             end_user=end_user_id or "",
-            api_base=litellm_params.get("api_base", ""),
+            api_base=_api_base,
             model_group=_model_group,
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             agent_id=agent_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
-            custom_llm_provider=kwargs.get("custom_llm_provider", ""),
+            custom_llm_provider=custom_llm_provider or "",
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),

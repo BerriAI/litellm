@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
@@ -9,6 +9,7 @@ from litellm.types.mcp import (
     MCPAuthType,
     MCPTokenEndpointAuthMethod,
     MCPTransportType,
+    normalize_upstream_header_name,
 )
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
@@ -86,6 +87,22 @@ class MCPServer(BaseModel):
     # today's behavior; "auto" derives the canonical URI from ``url``; any other value is sent
     # verbatim. Resolved by ``oauth_utils.resolve_upstream_resource``.
     upstream_resource: str | None = None
+    # Which upstream header carries the credential LiteLLM resolves for this server (the minted
+    # OAuth token, or the static key). None keeps RFC 6750's default, ``Authorization``. An ESB or
+    # API gateway that terminates its own credential in a private header needs this so a second,
+    # operator-configured ``Authorization`` can pass through to the origin untouched.
+    upstream_token_header: str | None = None
+
+    @field_validator("upstream_token_header")
+    @classmethod
+    def _check_upstream_token_header(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        normalized: Final = normalize_upstream_header_name(value)
+        if normalized is None:
+            raise ValueError(f"upstream_token_header must be a valid HTTP header name (RFC 7230 token), got {value!r}")
+        return normalized
+
     # AWS SigV4 fields
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
@@ -184,6 +201,18 @@ class MCPServer(BaseModel):
         return self.__repr__()
 
     @property
+    def effective_authorization_url(self) -> str | None:
+        return self.authorization_url or self.configured_authorization_url
+
+    @property
+    def effective_token_url(self) -> str | None:
+        return self.token_url or self.configured_token_url
+
+    @property
+    def effective_registration_url(self) -> str | None:
+        return self.registration_url or self.configured_registration_url
+
+    @property
     def has_client_credentials(self) -> bool:
         """True if this server should use the OAuth2 client_credentials (M2M) flow.
 
@@ -225,13 +254,21 @@ class MCPServer(BaseModel):
         return self.auth_type == MCPAuth.oauth_delegate
 
     @property
+    def is_client_forwarded_token(self) -> bool:
+        """True for the two modes whose upstream credential is the caller's own bearer, forwarded
+        unchanged: the gateway mints nothing for them and holds no OAuth client identity, so a
+        discovered ``authorization_url`` / ``token_url`` enriches only the gateway's own OAuth front
+        door and is never a precondition for opening a session."""
+        return self.is_true_passthrough or self.is_oauth_delegate
+
+    @property
     def is_dcr_bridge(self) -> bool:
         """True when this client-forwarded-token server serves the gateway-hosted DCR front door
         (gateway-self protected-resource and authorization-server metadata plus the register,
         authorize, and token relays) instead of relaying the upstream's own OAuth discovery
         verbatim. ``dcr_bridge`` is rejected on every other auth type at create, update, and
         config load, so the mode gate here only defends rows edited outside those paths."""
-        return bool(self.dcr_bridge) and (self.is_true_passthrough or self.is_oauth_delegate)
+        return bool(self.dcr_bridge) and self.is_client_forwarded_token
 
     @property
     def requires_per_user_auth(self) -> bool:
@@ -248,7 +285,7 @@ class MCPServer(BaseModel):
         if self.needs_user_oauth_token:
             return True
 
-        if self.is_true_passthrough or self.is_oauth_delegate:
+        if self.is_client_forwarded_token:
             return True
 
         # PAT passthrough: auth_type is none but extra_headers includes auth headers
