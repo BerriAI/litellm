@@ -1,7 +1,7 @@
 import asyncio
 import aiohttp
 import json
-from typing import Any, Optional
+from typing import Any
 
 # Asynchronously fetch data from a given URL
 async def fetch_data(url):
@@ -58,7 +58,7 @@ EFFORT_FLAG_MAP = {
 }
 
 
-def _find_base_model_entry(base_model: str, local_data: dict) -> Optional[str]:
+def _find_base_model_entry(base_model: str, local_data: dict) -> str | None:
     if not base_model:
         return None
     bm_tail = base_model.split("/")[-1].lower()
