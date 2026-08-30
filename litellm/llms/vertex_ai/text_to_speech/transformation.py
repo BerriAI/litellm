@@ -192,9 +192,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         )
         if not isinstance(raw_speaker_configs, list):
             return []  # mutable-ok: malformed speaker configuration produces a concrete empty list
-        speaker_configs: Final[
+        speaker_configs: Final[  # mutable-ok: validated payloads are accumulated for serialization
             list[dict[str, str]]
-        ] = []  # mutable-ok: validated speaker payloads are accumulated for serialization
+        ] = []
         for raw_config in raw_speaker_configs:
             if not isinstance(raw_config, dict):
                 continue
