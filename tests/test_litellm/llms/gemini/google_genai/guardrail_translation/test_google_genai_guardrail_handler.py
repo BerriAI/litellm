@@ -7,12 +7,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
 
 from litellm.llms.gemini.google_genai.guardrail_translation.handler import (
     GoogleGenAIGenerateContentHandler,
 )
 from litellm.types.utils import CallTypes
+
+
+class GuardrailBlockedError(Exception):
+    pass
 
 
 def _mock_guardrail(returned_texts):
@@ -37,6 +40,42 @@ async def test_input_contents_text_is_guardrailed_and_written_back():
     assert call_kwargs["inputs"]["model"] == "gemini-2.5-flash"
     assert call_kwargs["input_type"] == "request"
     assert result["contents"][0]["parts"][0]["text"] == "masked question"
+
+
+@pytest.mark.asyncio
+async def test_input_system_instruction_text_is_scanned_and_written_back():
+    handler = GoogleGenAIGenerateContentHandler()
+    guardrail = _mock_guardrail(["masked instruction", "masked question"])
+    data = {
+        "model": "gemini-2.5-flash",
+        "systemInstruction": {"role": "system", "parts": [{"text": "prohibited instruction"}]},
+        "contents": [{"role": "user", "parts": [{"text": "benign question"}]}],
+    }
+
+    result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"] == [
+        "prohibited instruction",
+        "benign question",
+    ]
+    assert result["systemInstruction"]["parts"][0]["text"] == "masked instruction"
+    assert result["contents"][0]["parts"][0]["text"] == "masked question"
+
+
+@pytest.mark.asyncio
+async def test_input_config_nested_snake_case_system_instruction_is_scanned():
+    handler = GoogleGenAIGenerateContentHandler()
+    guardrail = _mock_guardrail(["clean"])
+    instruction_part = SimpleNamespace(text="prohibited instruction")
+    data = {
+        "contents": [],
+        "config": SimpleNamespace(system_instruction=SimpleNamespace(parts=[instruction_part])),
+    }
+
+    await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"] == ["prohibited instruction"]
+    assert instruction_part.text == "clean"
 
 
 @pytest.mark.asyncio
@@ -107,10 +146,10 @@ async def test_output_without_text_skips_guardrail():
 async def test_output_blocking_guardrail_exception_propagates():
     handler = GoogleGenAIGenerateContentHandler()
     guardrail = MagicMock()
-    guardrail.apply_guardrail = AsyncMock(side_effect=HTTPException(status_code=400, detail="blocked"))
+    guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlockedError("blocked"))
     response = {"candidates": [{"content": {"parts": [{"text": "harmful answer"}]}}]}
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(GuardrailBlockedError):
         await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
 
@@ -155,10 +194,10 @@ async def test_streaming_raw_sse_chunks_accumulate_text_across_split_frames():
 async def test_streaming_blocking_guardrail_exception_propagates():
     handler = GoogleGenAIGenerateContentHandler()
     guardrail = MagicMock()
-    guardrail.apply_guardrail = AsyncMock(side_effect=HTTPException(status_code=400, detail="blocked"))
+    guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlockedError("blocked"))
     chunks = [{"candidates": [{"content": {"parts": [{"text": "harmful"}]}}]}]
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(GuardrailBlockedError):
         await handler.process_output_streaming_response(responses_so_far=chunks, guardrail_to_apply=guardrail)
 
 
