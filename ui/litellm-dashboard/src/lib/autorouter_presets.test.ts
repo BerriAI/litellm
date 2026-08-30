@@ -109,6 +109,14 @@ describe("autorouter_presets", () => {
     });
   });
 
+  // Kimi K3 at max needs the map to declare max for kimi-k3, which is the commit below this one.
+  it("pins the lite preset's per-tier reasoning efforts", () => {
+    expect(getPresetByKey("lite")!.complexity_router_config.tier_model_configs).toEqual({
+      MEDIUM: [{ model_name: "muse-spark-1.2", litellm_params: { reasoning_effort: "xhigh" } }],
+      COMPLEX: [{ model_name: "kimi-k3", litellm_params: { reasoning_effort: "max" } }],
+    });
+  });
+
   // serializeTierModelConfigs filters on the tier's models, so a stray name drops silently.
   it("never names a model in tier_model_configs that its own tier does not hold", () => {
     for (const preset of getAllPresets()) {
@@ -126,6 +134,15 @@ describe("autorouter_presets", () => {
     const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
     expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
       REASONING: { "claude-opus-5": { reasoning_effort: "high" } },
+    });
+  });
+
+  it("prefills the lite preset's efforts through to tier_model_params", () => {
+    const lite = getPresetByKey("lite")!;
+    const prefill = buildPresetPrefill(lite.complexity_router_config, groupsOnly(getRequiredModelsInPreset(lite)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      MEDIUM: { "muse-spark-1.2": { reasoning_effort: "xhigh" } },
+      COMPLEX: { "kimi-k3": { reasoning_effort: "max" } },
     });
   });
 

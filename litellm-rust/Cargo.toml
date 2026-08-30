@@ -18,6 +18,7 @@ litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
 axum = "0.7"
 pyo3 = "0.29.0"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
+pythonize = "0.29.0"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "http2", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }

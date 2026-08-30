@@ -18,10 +18,13 @@ import asyncio
 import contextlib
 import json
 from collections.abc import AsyncIterator
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 HOLD_BACK_PING_INTERVAL_SECONDS: Final = 15.0
 SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES: Final = (
@@ -181,7 +184,7 @@ class AgenticAnthropicStreamingIterator:
         messages: list[dict],
         anthropic_messages_provider_config: Any,
         anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
         kwargs: dict,
         hold_back: bool = False,
