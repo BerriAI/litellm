@@ -12,6 +12,7 @@ import uuid
 from typing import Final
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -53,8 +54,8 @@ def _parse_data_url(data_url: str) -> tuple[bytes, str, str] | None:
 
 def _download_image_sync(url: str) -> tuple[bytes, str, str]:
     """Download image from URL synchronously."""
-    client: Final = _get_httpx_client(params={"ssl_verify": False})
-    response: Final = client.get(url)
+    client: Final = _get_httpx_client()
+    response: Final = safe_get(client, url)
     response.raise_for_status()
 
     content_type: Final = response.headers.get("content-type", "image/jpeg")
@@ -65,11 +66,8 @@ def _download_image_sync(url: str) -> tuple[bytes, str, str]:
 
 async def _download_image_async(url: str) -> tuple[bytes, str, str]:
     """Download image from URL asynchronously."""
-    client: Final = get_async_httpx_client(
-        llm_provider=LlmProviders.GIGACHAT,
-        params={"ssl_verify": False},
-    )
-    response: Final = await client.get(url)
+    client: Final = get_async_httpx_client(llm_provider=LlmProviders.GIGACHAT)
+    response: Final = await async_safe_get(client, url)
     response.raise_for_status()
 
     content_type: Final = response.headers.get("content-type", "image/jpeg")
@@ -138,6 +136,8 @@ def upload_file_sync(
 
         return file_id
 
+    except SSRFError:
+        raise
     except Exception as e:
         verbose_logger.error("Error uploading file to GigaChat: %s", e)
         return None
@@ -206,6 +206,8 @@ async def upload_file_async(
 
         return file_id
 
+    except SSRFError:
+        raise
     except Exception as e:
         verbose_logger.error("Error uploading file to GigaChat: %s", e)
         return None
