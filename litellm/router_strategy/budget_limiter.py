@@ -630,45 +630,44 @@ class RouterBudgetLimiting(CustomLogger):
             # No need to sync if Redis cache is not initialized
             if self.dual_cache.redis_cache is None:
                 return
-
-            # 1. Push all provider spend increments to Redis
-            flush_succeeded: Final = await self._push_in_memory_increments_to_redis()
-            if not flush_succeeded:
-                return
-
-            # 2. Fetch all current provider spend from Redis to update in-memory cache
-            cache_keys: Final = []
-
-            if self.provider_budget_config is not None:
-                for provider, config in self.provider_budget_config.items():
-                    if config is None:
-                        continue
-                    cache_keys.append(f"provider_spend:{provider}:{config.budget_duration}")
-
-            if self.deployment_budget_config is not None:
-                for model_id, config in self.deployment_budget_config.items():
-                    if config is None:
-                        continue
-                    cache_keys.append(f"deployment_spend:{model_id}:{config.budget_duration}")
-
-            if self.tag_budget_config is not None:
-                for tag, config in self.tag_budget_config.items():
-                    if config is None:
-                        continue
-                    cache_keys.append(f"tag_spend:{tag}:{config.budget_duration}")
-
-            # Batch fetch current spend values from Redis
-            redis_values: Final = await self.dual_cache.redis_cache.async_batch_get_cache(key_list=cache_keys)
-
-            # Update in-memory cache with Redis values
-            if isinstance(redis_values, dict):  # Check if redis_values is a dictionary
-                for key, value in redis_values.items():
-                    if value is not None:
-                        await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=float(value))
-                        verbose_router_logger.debug("Updated in-memory cache for %s: %s", key, value)
-
+            await self._flush_increments_then_copy_redis_spend()
         except Exception as e:
             verbose_router_logger.error("Error syncing in-memory cache with Redis: %s", e)
+
+    async def _flush_increments_then_copy_redis_spend(self) -> None:
+        if not await self._push_in_memory_increments_to_redis():
+            return
+
+        cache_keys: Final = []
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None:
+            return
+
+        if self.provider_budget_config is not None:
+            for provider, config in self.provider_budget_config.items():
+                if config is None:
+                    continue
+                cache_keys.append(f"provider_spend:{provider}:{config.budget_duration}")
+
+        if self.deployment_budget_config is not None:
+            for model_id, config in self.deployment_budget_config.items():
+                if config is None:
+                    continue
+                cache_keys.append(f"deployment_spend:{model_id}:{config.budget_duration}")
+
+        if self.tag_budget_config is not None:
+            for tag, config in self.tag_budget_config.items():
+                if config is None:
+                    continue
+                cache_keys.append(f"tag_spend:{tag}:{config.budget_duration}")
+
+        redis_values: Final = await redis_cache.async_batch_get_cache(key_list=cache_keys)
+
+        if isinstance(redis_values, dict):
+            for key, value in redis_values.items():
+                if value is not None:
+                    await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=float(value))
+                    verbose_router_logger.debug("Updated in-memory cache for %s: %s", key, value)
 
     def _get_budget_config_for_deployment(
         self,
