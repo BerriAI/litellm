@@ -229,21 +229,18 @@ def record_pre_routing_selection(request_kwargs: Mapping[str, Any] | None, selec
     """
     if request_kwargs is None:
         return
-    for bucket_name in _ROUTER_METADATA_BUCKETS:
-        bucket: Final = request_kwargs.get(bucket_name)
+    for bucket in (request_kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS):
         if isinstance(bucket, dict):
             bucket[PRE_ROUTING_SELECTED_MODEL_KEY] = selected_model
 
 
 def get_pre_routing_selection(kwargs: Mapping[str, Any]) -> str | None:
     """The model a pre-routing hook selected for this request, if one did."""
-    for bucket_name in _ROUTER_METADATA_BUCKETS:
-        bucket: Final = kwargs.get(bucket_name)
-        if isinstance(bucket, dict):
-            selected: Final = bucket.get(PRE_ROUTING_SELECTED_MODEL_KEY)
-            if isinstance(selected, str) and selected:
-                return selected
-    return None
+    buckets: Final = (kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS)
+    selections: Final = (
+        bucket.get(PRE_ROUTING_SELECTED_MODEL_KEY) for bucket in buckets if isinstance(bucket, dict)
+    )
+    return next((selected for selected in selections if isinstance(selected, str) and selected), None)
 
 
 def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
