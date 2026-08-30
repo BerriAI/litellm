@@ -1104,6 +1104,89 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         output_text = result[-1]["response"]["output"][0]["content"][0]["text"]
         assert output_text == original_text
 
+    @staticmethod
+    def _ended_stream_events() -> List[dict]:
+        content = [{"type": "output_text", "text": "hello world"}]
+        item = {
+            "type": "message",
+            "id": "msg_123",
+            "status": "completed",
+            "role": "assistant",
+            "content": content,
+        }
+        return [
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "world"},
+            {"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": "hello world"},
+            {
+                "type": "response.content_part.done",
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "hello world"},
+            },
+            {"type": "response.output_item.done", "output_index": 0, "item": {**item, "content": [dict(c) for c in content]}},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "model": "gpt-4o",
+                    "output": [{**item, "content": [dict(c) for c in content]}],
+                    "status": "completed",
+                },
+            },
+        ]
+
+    @staticmethod
+    def _masking_guardrail() -> CustomGuardrail:
+        class MaskWorld(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                texts = inputs.get("texts", [])
+                return {**inputs, "texts": [t.replace("world", "[MASKED]") for t in texts]}
+
+        return MaskWorld(guardrail_name="test-mask")
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_syncs_all_stream_events(self):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_stream_events()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert events[0]["delta"] == "hello [MASKED]"
+        assert events[1]["delta"] == ""
+        assert events[2]["text"] == "hello [MASKED]"
+        assert events[3]["part"]["text"] == "hello [MASKED]"
+        assert events[4]["item"]["content"][0]["text"] == "hello [MASKED]"
+        assert events[5]["response"]["output"][0]["content"][0]["text"] == "hello [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_rewrite_leaves_delta_events_untouched_by_default(self):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_stream_events()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+        )
+
+        assert events[0]["delta"] == "hello "
+        assert events[1]["delta"] == "world"
+        assert events[2]["text"] == "hello world"
+        assert events[5]["response"]["output"][0]["content"][0]["text"] == "hello [MASKED]"
+
 
 class TestGetStructuredMessages:
     """Test the get_structured_messages method for Responses API handler."""

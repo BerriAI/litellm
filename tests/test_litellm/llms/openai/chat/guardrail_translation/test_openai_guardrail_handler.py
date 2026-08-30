@@ -1073,6 +1073,61 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         # Should return the responses
         assert result == responses_so_far
 
+    @staticmethod
+    def _ended_stream_chunks() -> list:
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return [
+            ModelResponseStream(
+                id="chatcmpl-123",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=0, delta=Delta(content="Hello"), finish_reason=None)],
+            ),
+            ModelResponseStream(
+                id="chatcmpl-123",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=0, delta=Delta(content=" world"), finish_reason="stop")],
+            ),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_text_back_into_chunks(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        chunks = self._ended_stream_chunks()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert chunks[0].choices[0].delta.content == "HELLO WORLD"
+        assert chunks[1].choices[0].delta.content in (None, "")
+        assert chunks[1].choices[0].finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_rewrite_leaves_chunks_untouched_by_default(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        chunks = self._ended_stream_chunks()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert chunks[0].choices[0].delta.content == "Hello"
+        assert chunks[1].choices[0].delta.content == " world"
+        assert chunks[1].choices[0].finish_reason == "stop"
+
 
 class TestGetStructuredMessages:
     """Test the get_structured_messages method."""
