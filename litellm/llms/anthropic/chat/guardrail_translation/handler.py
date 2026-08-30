@@ -58,6 +58,8 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
     from litellm.integrations.custom_guardrail import (
         CustomGuardrail,
         ModifyResponseException,
@@ -206,6 +208,19 @@ class AnthropicMessagesHandler(BaseTranslation):
         if stream_started:
             return list(self._block_continuation_chunks(exc, responses_so_far or []))
         return self._standalone_block_chunks(exc)
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[Any] | None:
+        from litellm.proxy.common_request_processing import (
+            serialize_http_exception_detail,
+        )
+        from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
+
+        message, _ = serialize_http_exception_detail(exc.detail)
+        return tuple(anthropic_sse_error_frames(message))
 
     def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
         import uuid
