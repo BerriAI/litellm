@@ -203,7 +203,7 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
                 "window_duration": "30d",
                 "window_start": "2026-08-01T00:00:00.000000",
                 "spend": 3.0,
-                "request_ids": ["req-1"],
+                "started_at": None,
             }
         ]
     )
@@ -233,13 +233,11 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
         window_spend,
     ) = result
 
-    # Budget window spend from two pods is summed per window, not overwritten,
-    # and both pods' request ids reach the seed exclusion.
+    # Budget window spend from two pods is summed per window, not overwritten.
     assert window_spend is not None
     assert len(window_spend) == 1
     assert window_spend[0]["spend"] == 6.0
     assert window_spend[0]["entity_id"] == "hashed-token"
-    assert window_spend[0]["request_ids"] == ("req-1",)
 
     # Verify db spend was parsed correctly
     assert db_spend is not None
@@ -326,7 +324,6 @@ async def test_restored_window_spend_transactions_drain_back_unchanged(redis_upd
             window_duration="30d",
             window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
             spend=3.0,
-            request_id="req-1",
             started_at=datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
         ),
     )
@@ -500,7 +497,6 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
             window_duration="30d",
             window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
             spend=1.25,
-            request_id="req-1",
             started_at=datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc),
         )
     )
@@ -526,7 +522,6 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
             "window_duration": "30d",
             "window_start": "2026-08-01T00:00:00.000000",
             "spend": 1.25,
-            "request_ids": ["req-1"],
             "started_at": "2026-08-10T12:00:00.000000",
         }
     ]
