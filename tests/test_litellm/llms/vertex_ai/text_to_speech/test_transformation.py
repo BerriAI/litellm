@@ -38,8 +38,12 @@ class TestVertexAITextToSpeechConfig:
 
         assert url == custom_url
 
-    @patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
-    @patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
+    @patch.object(  # test-quality-ok: isolates provider credentials while testing request serialization
+        VertexAITextToSpeechConfig, "_ensure_access_token"
+    )
+    @patch.object(  # test-quality-ok: fixes the provider URL at the authentication boundary
+        VertexAITextToSpeechConfig, "_get_token_and_url"
+    )
     def test_transform_text_to_speech_request_body(self, mock_get_token, mock_ensure_token):
         """Test that transform_text_to_speech_request generates correct request body"""
         # Mock authentication
@@ -217,8 +221,12 @@ class TestVertexAITextToSpeechConfig:
         )
         assert optional_params["vertex_voice_dict"]["modelName"] == routed_model
 
-    @patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
-    @patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
+    @patch.object(  # test-quality-ok: isolates provider credentials while testing Gemini request serialization
+        VertexAITextToSpeechConfig, "_ensure_access_token"
+    )
+    @patch.object(  # test-quality-ok: fixes the Gemini provider URL at the authentication boundary
+        VertexAITextToSpeechConfig, "_get_token_and_url"
+    )
     def test_gemini_tts_mp3_request_body(self, mock_get_token, mock_ensure_token):
         mock_ensure_token.return_value = ("mock-token", "test-project")
         mock_get_token.return_value = ("mock-token", "mock-url")
@@ -318,9 +326,15 @@ def test_transform_text_to_speech_response_leaves_unknown_bytes_unlabeled():
     assert result.response.content == raw_pcm
 
 
-@patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post")
-@patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
-@patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
+@patch(  # test-quality-ok: exercises public speech dispatch up to the outbound HTTP boundary
+    "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+)
+@patch.object(  # test-quality-ok: isolates provider credentials in the public API test
+    VertexAITextToSpeechConfig, "_ensure_access_token"
+)
+@patch.object(  # test-quality-ok: fixes the provider URL for deterministic dispatch assertions
+    VertexAITextToSpeechConfig, "_get_token_and_url"
+)
 def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_post):
     """
     Test that litellm.speech(model="vertex_ai/chirp") sends the correct URL and request body
@@ -374,9 +388,15 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
     assert call_kwargs["headers"]["Authorization"] == "Bearer mock-token"
 
 
-@patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post")
-@patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
-@patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
+@patch(  # test-quality-ok: exercises public Gemini speech dispatch up to the outbound HTTP boundary
+    "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+)
+@patch.object(  # test-quality-ok: isolates provider credentials in the public Gemini API test
+    VertexAITextToSpeechConfig, "_ensure_access_token"
+)
+@patch.object(  # test-quality-ok: fixes the Gemini provider URL for deterministic dispatch assertions
+    VertexAITextToSpeechConfig, "_get_token_and_url"
+)
 def test_litellm_speech_vertex_ai_gemini_tts_mp3_uses_cloud_tts(mock_get_token, mock_ensure_token, mock_post):
     mock_ensure_token.return_value = ("mock-token", "test-project")
     mock_get_token.return_value = ("mock-token", "mock-url")
