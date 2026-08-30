@@ -361,4 +361,32 @@ describe("PaginatedSearchSelect", () => {
     await user.click(screen.getByRole("combobox"));
     expect(await screen.findByTestId("paginated-search-select-loading-more")).toBeInTheDocument();
   });
+
+  it("queries the trimmed label when a character is deleted from the end of the selection", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange, value: "alias-alpha" });
+
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    await user.keyboard("{Backspace}");
+
+    expect(input).toHaveValue("alias-alph");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("alias-alph"));
+  });
+
+  it("queries what is left when a character is deleted from inside the selection", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange, value: "alias-alpha" });
+
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    input.focus();
+    input.setSelectionRange(6, 6);
+    await user.keyboard("{Backspace}");
+
+    expect(input).toHaveValue("aliasalpha");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("aliasalpha"));
+  });
 });
