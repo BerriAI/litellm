@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping, MutableMapping
 from typing import Any, Final
 
 import httpx
@@ -1134,6 +1134,40 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
         return base_url_with_deployment
 
+    @staticmethod
+    def _set_azure_ad_auth_header(
+        headers: MutableMapping[str, str],  # mutable-ok: the caller's header dict is updated in place
+        api_key: str | None,
+        azure_ad_token: str | None,
+        azure_ad_token_provider: Callable | None,
+        azure_client_params: Mapping[str, Any],
+    ) -> None:
+        """Put an Entra ID bearer token on the image-generation request headers.
+
+        Image generation does not send its request through the Azure SDK client,
+        so the credential ``initialize_azure_sdk_client`` resolved never reaches
+        the wire on its own — only an ``api-key`` header set by the caller does.
+        A deployment with no API key therefore sends no credential at all and
+        Azure answers ``401 Access denied due to invalid subscription key``, on
+        the same account and the same identity that serve chat, embeddings and
+        transcription key-less.
+
+        ``azure_client_params`` is the fallback source because it is where the
+        managed-identity / DefaultAzureCredential provider ends up when it comes
+        from ``litellm.enable_azure_ad_token_refresh`` rather than from explicit
+        service-principal params.
+        """
+        if api_key is not None or "Authorization" in headers:
+            return
+
+        provider: Final = azure_ad_token_provider or azure_client_params.get("azure_ad_token_provider")
+        static_token: Final = azure_ad_token or azure_client_params.get("azure_ad_token")
+        token: Final = provider() if provider is not None and callable(provider) else static_token
+
+        if token:
+            headers.pop("api-key", None)
+            headers["Authorization"] = f"Bearer {token}"
+
     async def aimage_generation(
         self,
         data: dict,
@@ -1261,12 +1295,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(status_code=422, message="max retries must be an int")
 
-            if api_key is None and azure_ad_token_provider is not None:
-                azure_ad_token = azure_ad_token_provider()
-                if azure_ad_token:
-                    headers.pop("api-key", None)
-                    headers["Authorization"] = f"Bearer {azure_ad_token}"
-
             # init AzureOpenAI Client
             azure_client_params: Final[dict[str, Any]] = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
@@ -1275,6 +1303,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_version=api_version,
                 api_base=api_base,
                 is_async=False,
+            )
+
+            self._set_azure_ad_auth_header(
+                headers=headers,
+                api_key=api_key,
+                azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
+                azure_client_params=azure_client_params,
             )
             if aimg_generation is True:
                 return self.aimage_generation(
