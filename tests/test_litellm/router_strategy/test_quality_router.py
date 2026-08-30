@@ -845,6 +845,14 @@ class TestDecisionMetadata:
         assert response.routing_decision["savings_baseline_model"] == "openai/opus-next"
         assert response.routing_decision["savings_baseline_deployment_id"] == "id-opus-next"
 
+        first_turn = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "first request"}],
+        )
+        assert first_turn is not None
+        assert first_turn.routing_decision["conversation_continuing"] is False
+
     @pytest.mark.asyncio
     async def test_hook_stashes_decision_in_request_kwargs_metadata(
         self, quality_router
