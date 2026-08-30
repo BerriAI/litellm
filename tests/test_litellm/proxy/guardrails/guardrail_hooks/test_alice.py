@@ -1,6 +1,8 @@
 import os
+from copy import deepcopy
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from httpx import Request, Response
 
@@ -10,30 +12,22 @@ from litellm.proxy.guardrails.guardrail_hooks.alice.alice import (
     GUARDRAIL_NAME,
     AliceGuardrail,
     AliceGuardrailMissingSecrets,
+    _json_safe,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
 def _guardrail(**overrides) -> AliceGuardrail:
-    params = {
-        "api_key": "test-key",
-        "guardrail_name": "alice",
-        "event_hook": "pre_call",
-    }
+    params = {"api_key": "test-key", "guardrail_name": "alice", "event_hook": "pre_call"}
     params.update(overrides)
     return AliceGuardrail(**params)
 
 
-def _authenticated(**metadata) -> dict:
-    """What the proxy writes for an authenticated virtual key."""
-    return {"metadata": {"user_api_key_metadata": metadata}}
-
-
-def _response(payload: dict, status_code: int = 200) -> Response:
+def _verdict(payload: dict, status_code: int = 200) -> Response:
     return Response(
         status_code=status_code,
         json=payload,
-        request=Request("POST", "https://api.alice.io/v2/evaluate/message"),
+        request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
     )
 
 
@@ -46,11 +40,7 @@ def test_alice_guardrail_config(monkeypatch: pytest.MonkeyPatch):
         all_guardrails=[
             {
                 "guardrail_name": "alice",
-                "litellm_params": {
-                    "guardrail": "alice",
-                    "mode": "pre_call",
-                    "default_on": True,
-                },
+                "litellm_params": {"guardrail": "alice", "mode": "pre_call", "default_on": True},
             }
         ],
         config_file_path="",
@@ -73,183 +63,53 @@ class TestAliceGuardrailInitialization:
         guardrail = AliceGuardrail(guardrail_name="alice", event_hook="pre_call")
 
         assert guardrail.alice_api_key == "env-key"
-        assert guardrail.api_base == "https://env.alice.test/v2/evaluate/message"
+        assert guardrail.api_base == "https://env.alice.test/v2/evaluate/litellm"
 
     def test_defaults_the_api_base(self):
-        assert _guardrail().api_base == "https://api.alice.io/v2/evaluate/message"
+        assert _guardrail().api_base == "https://api.alice.io/v2/evaluate/litellm"
 
     def test_trailing_slash_does_not_double_up(self):
-        guardrail = _guardrail(api_base="https://api.alice.io/")
-
-        assert guardrail.api_base == "https://api.alice.io/v2/evaluate/message"
+        assert _guardrail(api_base="https://api.alice.io/").api_base == ("https://api.alice.io/v2/evaluate/litellm")
 
 
-class TestAliceApplicationResolution:
-    """The application is named by the authenticated key, never by the caller."""
+class TestAliceForwarding:
+    """The hook's arguments cross the wire as they were received — nothing selected, nothing renamed."""
 
     @pytest.mark.asyncio
-    async def test_reads_the_app_id_from_key_metadata(self):
+    async def test_forwards_the_hook_arguments_verbatim(self):
         guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(return_value=_response({"action": "", "detections": [], "errors": []}))
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        inputs = {"texts": ["hello"], "structured_messages": [{"role": "user", "content": "hello"}]}
+        request_data = {"model": "gpt-4o", "metadata": {"user_api_key_alias": "payments-bot"}}
+        # Snapshot before the call: @log_guardrail_information writes its own entry into
+        # request_data["metadata"] afterwards, so the original is no longer what was sent.
+        sent_inputs = deepcopy(inputs)
+        sent_request_data = deepcopy(request_data)
 
-        await guardrail.apply_guardrail(
-            inputs={"texts": ["hello"]},
-            request_data=_authenticated(alice_app_id="payments-bot"),
-            input_type="request",
-        )
+        await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
 
-        assert guardrail.async_handler.post.call_args.kwargs["json"]["app_id"] == "payments-bot"
+        body = guardrail.async_handler.post.call_args.kwargs["json"]
+        assert body["input_type"] == "request"
+        assert body["inputs"] == sent_inputs
+        assert body["request_data"] == sent_request_data
 
     @pytest.mark.asyncio
-    async def test_ignores_an_app_id_the_caller_supplied(self):
+    async def test_sends_the_credential(self):
         guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(return_value=_response({"action": "", "detections": [], "errors": []}))
-        request_data = {
-            "metadata": {
-                "user_api_key_metadata": {"alice_app_id": "payments-bot"},
-                "alice_app_id": "forged",
-            }
-        }
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
 
-        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type="request")
+        await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type="request")
 
-        assert guardrail.async_handler.post.call_args.kwargs["json"]["app_id"] == "payments-bot"
+        assert guardrail.async_handler.post.call_args.kwargs["headers"]["af-api-key"] == "test-key"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_the_key_alias(self):
+    async def test_marks_a_completion_as_a_response(self):
         guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(return_value=_response({"action": "", "detections": [], "errors": []}))
-        request_data = {"metadata": {"user_api_key_metadata": {}, "user_api_key_alias": "billing-app"}}
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
 
-        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type="request")
+        await guardrail.apply_guardrail(inputs={"texts": ["answer"]}, request_data={}, input_type="response")
 
-        assert guardrail.async_handler.post.call_args.kwargs["json"]["app_id"] == "billing-app"
-
-    @pytest.mark.asyncio
-    async def test_refuses_when_no_key_names_an_application(self):
-        guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock()
-
-        with pytest.raises(GuardrailRaisedException, match="No Alice application"):
-            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
-
-        guardrail.async_handler.post.assert_not_called()
-
-
-class TestAliceVerdicts:
-    @pytest.mark.asyncio
-    async def test_allows_when_no_policy_matched(self):
-        guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(return_value=_response({"action": "", "detections": [], "errors": []}))
-
-        result = await guardrail.apply_guardrail(
-            inputs={"texts": ["hello"]},
-            request_data=_authenticated(alice_app_id="app"),
-            input_type="request",
-        )
-
-        assert result["texts"] == ["hello"]
-
-    @pytest.mark.asyncio
-    async def test_blocks_and_surfaces_the_configured_message(self):
-        guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(
-            return_value=_response(
-                {
-                    "action": "BLOCK",
-                    "action_text": "Blocked by your organization's policy",
-                    "detections": [{"type": "self_harm", "score": 0.97}],
-                    "errors": [],
-                }
-            )
-        )
-
-        with pytest.raises(GuardrailRaisedException) as error:
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["bad"]},
-                request_data=_authenticated(alice_app_id="app"),
-                input_type="request",
-            )
-
-        assert "Blocked by your organization's policy" in str(error.value)
-
-    @pytest.mark.asyncio
-    async def test_masks_by_substituting_the_redacted_text(self):
-        guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(
-            return_value=_response({"action": "MASK", "action_text": "my ssn is ***", "detections": [], "errors": []})
-        )
-
-        result = await guardrail.apply_guardrail(
-            inputs={"texts": ["my ssn is 123-45-6789"]},
-            request_data=_authenticated(alice_app_id="app"),
-            input_type="request",
-        )
-
-        assert result["texts"] == ["my ssn is ***"]
-
-    @pytest.mark.asyncio
-    async def test_a_mask_with_nothing_to_substitute_blocks(self):
-        guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(
-            return_value=_response({"action": "MASK", "detections": [], "errors": []})
-        )
-
-        with pytest.raises(GuardrailRaisedException):
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["secret"]},
-                request_data=_authenticated(alice_app_id="app"),
-                input_type="request",
-            )
-
-    @pytest.mark.asyncio
-    async def test_detect_allows_and_leaves_the_text_alone(self):
-        guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(
-            return_value=_response(
-                {
-                    "action": "DETECT",
-                    "correlation_id": "c1",
-                    "detections": [{"type": "profanity", "score": 0.6}],
-                    "errors": [],
-                }
-            )
-        )
-
-        result = await guardrail.apply_guardrail(
-            inputs={"texts": ["mild"]},
-            request_data=_authenticated(alice_app_id="app"),
-            input_type="request",
-        )
-
-        assert result["texts"] == ["mild"]
-
-    @pytest.mark.asyncio
-    async def test_a_verdict_reporting_errors_is_a_failure_not_a_pass(self):
-        guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(
-            return_value=_response({"action": "", "detections": [], "errors": [{"type": "timeout"}]})
-        )
-
-        with pytest.raises(GuardrailRaisedException, match="reported errors"):
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["hello"]},
-                request_data=_authenticated(alice_app_id="app"),
-                input_type="request",
-            )
-
-    @pytest.mark.asyncio
-    async def test_sends_a_completion_as_a_response(self):
-        guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(return_value=_response({"action": "", "detections": [], "errors": []}))
-
-        await guardrail.apply_guardrail(
-            inputs={"texts": ["the answer"]},
-            request_data=_authenticated(alice_app_id="app"),
-            input_type="response",
-        )
-
-        assert guardrail.async_handler.post.call_args.kwargs["json"]["message_type"] == "response"
+        assert guardrail.async_handler.post.call_args.kwargs["json"]["input_type"] == "response"
 
     @pytest.mark.asyncio
     async def test_no_texts_reaches_no_evaluation(self):
@@ -261,36 +121,165 @@ class TestAliceVerdicts:
         assert result == {"texts": []}
         guardrail.async_handler.post.assert_not_called()
 
-
-class TestAliceUnreachable:
     @pytest.mark.asyncio
-    async def test_fails_closed_by_default(self):
-        import httpx
-
-        guardrail = _guardrail()
-        guardrail.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
-
-        with pytest.raises(GuardrailRaisedException, match="unavailable"):
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["hello"]},
-                request_data=_authenticated(alice_app_id="app"),
-                input_type="request",
-            )
-
-    @pytest.mark.asyncio
-    async def test_fails_open_when_configured(self):
-        import httpx
-
+    async def test_makes_exactly_one_attempt(self):
         guardrail = _guardrail(unreachable_fallback="fail_open")
         guardrail.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
+        await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type="request")
+
+        assert guardrail.async_handler.post.call_count == 1
+
+
+class TestAliceVerdicts:
+    @pytest.mark.asyncio
+    async def test_allow_leaves_the_inputs_untouched(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+
+        result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+        assert result["texts"] == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_block_surfaces_the_policy_message(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            return_value=_verdict(
+                {
+                    "verdict": "BLOCK",
+                    "categories": ["self_harm"],
+                    "correlation_id": "c1",
+                    "message": "Blocked by your organization's policy",
+                }
+            )
+        )
+
+        with pytest.raises(GuardrailRaisedException) as error:
+            await guardrail.apply_guardrail(inputs={"texts": ["bad"]}, request_data={}, input_type="request")
+
+        assert "Blocked by your organization's policy" in str(error.value)
+
+    @pytest.mark.asyncio
+    async def test_block_without_a_message_still_blocks(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "BLOCK", "categories": []}))
+
+        with pytest.raises(GuardrailRaisedException):
+            await guardrail.apply_guardrail(inputs={"texts": ["bad"]}, request_data={}, input_type="request")
+
+    @pytest.mark.asyncio
+    async def test_mask_substitutes_by_position(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            return_value=_verdict(
+                {
+                    "verdict": "MASK",
+                    "categories": ["pii"],
+                    "replacements": [{"index": 1, "text": "my ssn is ***"}],
+                }
+            )
+        )
+
         result = await guardrail.apply_guardrail(
-            inputs={"texts": ["hello"]},
-            request_data=_authenticated(alice_app_id="app"),
+            inputs={"texts": ["untouched", "my ssn is 123-45-6789"]},
+            request_data={},
             input_type="request",
         )
 
+        assert result["texts"] == ["untouched", "my ssn is ***"]
+
+    @pytest.mark.asyncio
+    async def test_mask_that_lands_nowhere_blocks(self):
+        """A mask that wrote nothing would let the text through under a verdict that said not to."""
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            return_value=_verdict({"verdict": "MASK", "categories": [], "replacements": [{"index": 9, "text": "***"}]})
+        )
+
+        with pytest.raises(GuardrailRaisedException):
+            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    @pytest.mark.asyncio
+    async def test_mask_leaves_structured_messages_identical(self):
+        """A new structured_messages object makes the translation layer skip the texts write-back."""
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            return_value=_verdict({"verdict": "MASK", "categories": [], "replacements": [{"index": 0, "text": "***"}]})
+        )
+        messages = [{"role": "user", "content": "secret"}]
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["secret"], "structured_messages": messages},
+            request_data={},
+            input_type="request",
+        )
+
+        assert result["structured_messages"] is messages
+
+    @pytest.mark.asyncio
+    async def test_detect_allows_and_leaves_the_text_alone(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            return_value=_verdict({"verdict": "DETECT", "categories": ["profanity"], "correlation_id": "c1"})
+        )
+
+        result = await guardrail.apply_guardrail(inputs={"texts": ["mild"]}, request_data={}, input_type="request")
+
+        assert result["texts"] == ["mild"]
+
+
+class TestAliceUnreachable:
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            pytest.param({"side_effect": httpx.ConnectError("refused")}, id="connect-error"),
+            pytest.param({"return_value": _verdict({"verdict": "MAYBE"})}, id="unrecognized-verdict"),
+            pytest.param({"return_value": _verdict({})}, id="no-verdict"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_fails_closed_by_default(self, failure: dict):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(**failure)
+
+        with pytest.raises(GuardrailRaisedException, match="unavailable"):
+            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    @pytest.mark.asyncio
+    async def test_fails_open_when_configured(self):
+        guardrail = _guardrail(unreachable_fallback="fail_open")
+        guardrail.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+        result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
         assert result["texts"] == ["hello"]
+
+
+class TestAliceSerialization:
+    """`request_data` carries live objects, so it cannot be posted as it stands."""
+
+    def test_drops_what_cannot_serialize_and_keeps_the_rest(self):
+        class Span:
+            pass
+
+        result = _json_safe({"model": "x", "metadata": {"span": Span(), "user": "u1"}, "n": 1})
+
+        assert result == {"model": "x", "metadata": {"span": None, "user": "u1"}, "n": 1}
+
+    def test_survives_a_cycle(self):
+        data: dict = {"a": 1}
+        data["self"] = data
+
+        assert _json_safe(data) == {"a": 1, "self": None}
+
+    def test_dumps_pydantic_models(self):
+        from pydantic import BaseModel
+
+        class Model(BaseModel):
+            name: str
+
+        assert _json_safe({"m": Model(name="x")}) == {"m": {"name": "x"}}
 
 
 def test_config_model_is_exposed_for_the_ui():

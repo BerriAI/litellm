@@ -5,6 +5,7 @@
 #
 # +-------------------------------------------------------------+
 
+import json
 import os
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
@@ -30,36 +31,37 @@ if TYPE_CHECKING:
 GUARDRAIL_NAME: Final = "alice"
 
 _DEFAULT_API_BASE: Final = "https://api.alice.io"
-_EVALUATE_PATH: Final = "/v2/evaluate/message"
+_EVALUATE_PATH: Final = "/v2/evaluate/litellm"
 
-# The key a customer sets on a virtual key's metadata to name the application whose policies
-# apply. Read only from the authenticated key's metadata, never from the request body.
-_APP_ID_METADATA_KEY: Final = "alice_app_id"
+_VERDICT_ALLOW: Final = "ALLOW"
+_VERDICT_BLOCK: Final = "BLOCK"
+_VERDICT_MASK: Final = "MASK"
+_VERDICT_DETECT: Final = "DETECT"
+_KNOWN_VERDICTS: Final = frozenset({_VERDICT_ALLOW, _VERDICT_BLOCK, _VERDICT_MASK, _VERDICT_DETECT})
 
-# Alice enforces these on the evaluate contract; exceeding either is a 400.
-_MAX_TEXT_CHARS: Final = 10_240
-_MAX_ID_CHARS: Final = 100
+_DEFAULT_BLOCK_MESSAGE: Final = "Blocked by your organization's content policy."
 
-# What a request is attributed to when the gateway names no end user. The contract requires a
-# non-empty id holding a word character, and a constant is honest about what is not known.
-_FALLBACK_USER_ID: Final = "litellm-unknown"
-
-
-class AliceDetection(TypedDict):
-    """One policy that matched, as Alice reports it."""
-
-    type: ReadOnly[NotRequired[str]]
-    score: ReadOnly[NotRequired[float]]
+# Caps on the outbound copy of request_data. A payload deeper or wider than this is malformed
+# rather than large, and serializing it would cost more than the evaluation it feeds.
+_MAX_DEPTH: Final = 12
+_MAX_ITEMS: Final = 5000
 
 
-class AliceEvaluateResponse(TypedDict):
-    """Body returned by Alice's evaluate endpoint."""
+class AliceReplacement(TypedDict):
+    """A masked substitution, positional against the texts that were submitted."""
 
+    index: ReadOnly[NotRequired[int]]
+    text: ReadOnly[NotRequired[str]]
+
+
+class AliceVerdict(TypedDict):
+    """Body returned by Alice's LiteLLM evaluate endpoint."""
+
+    verdict: ReadOnly[NotRequired[str]]
+    categories: ReadOnly[NotRequired["list[str]"]]
     correlation_id: ReadOnly[NotRequired[str]]
-    action: ReadOnly[NotRequired[str]]
-    action_text: ReadOnly[NotRequired[str]]
-    detections: ReadOnly[NotRequired["list[AliceDetection]"]]
-    errors: ReadOnly[NotRequired["list[dict[str, object]]"]]
+    message: ReadOnly[NotRequired[str]]
+    replacements: ReadOnly[NotRequired["list[AliceReplacement]"]]
 
 
 class AliceGuardrailMissingSecrets(Exception):
@@ -70,20 +72,21 @@ class AliceGuardrail(CustomGuardrail):
     """
     Alice by ActiveFence — policy-based guardrails for prompts and model responses.
 
-    Alice evaluates against policies configured per *application*, so one proxy can enforce a
-    different policy set per team or product while sharing a single project credential. The
-    application is named on the LiteLLM virtual key rather than in this config, because a proxy
-    typically fronts several of them:
+    This forwards the hook's arguments as it received them and enforces the verdict that comes
+    back. It selects nothing and renames nothing: which parts of a conversation are worth
+    evaluating, and how a verdict is reached, are decided by Alice — so changing either is a
+    change on their side rather than a LiteLLM upgrade.
+
+    Alice evaluates against policies configured per *application*, and one proxy typically fronts
+    several, so the application is named on the virtual key rather than in this config:
 
         curl $PROXY/key/generate -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
           -d '{"key_alias": "payments-bot",
                "metadata": {"alice_app_id": "payments-bot"}}'
 
-    `alice_app_id` is read first and the key's `key_alias` is the fallback, so naming the key
-    after the application is enough. Either value must match the Application ID configured on
-    that application in Alice. Only the authenticated key is consulted — a value a caller puts in
-    its own request body is ignored, so a caller cannot select a laxer application than the one
-    its key was issued for.
+    Alice reads that off the authenticated key. Because the proxy strips caller-supplied
+    `user_api_key_*` from the request before a guardrail sees it, a caller cannot point its own
+    traffic at an application with laxer policies than the one its key was issued for.
 
     Configuration example (litellm config YAML):
         guardrails:
@@ -134,187 +137,121 @@ class AliceGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        texts: Final = inputs.get("texts") or []
-        if not texts:
+        if not inputs.get("texts"):
             return inputs
 
-        app_id: Final = self._resolve_app_id(request_data)
-        if not app_id:
-            # Refuse rather than guess: evaluating against an arbitrary application would apply
-            # the wrong policy set, which is worse than not evaluating at all.
-            raise GuardrailRaisedException(
-                guardrail_name=GUARDRAIL_NAME,
-                message=(
-                    "No Alice application is named by this key. Set "
-                    f"`metadata.{_APP_ID_METADATA_KEY}` or `key_alias` on the virtual key."
-                ),
-                should_wrap_with_default_message=False,
-            )
-
-        shared: Final = {
-            "app_id": app_id,
-            "message_type": "prompt" if input_type == "request" else "response",
-            "session_id": self._resolve_session_id(request_data, logging_obj),
-            "user_id": self._resolve_user_id(request_data),
-        }
-
-        masked: Final[list[str]] = []
-        for text in texts:
-            masked.append(await self._evaluate_one(text=text, shared=shared))
-
-        if masked != list(texts):
-            inputs["texts"] = masked
-        return inputs
-
-    async def _evaluate_one(self, text: str, shared: dict[str, str]) -> str:
-        """Evaluate one text, returning it unchanged, masked, or raising to block."""
-        if not text.strip():
-            return text
-
         try:
-            response: Final = await self.async_handler.post(
-                url=self.api_base,
-                json={"text": text[:_MAX_TEXT_CHARS], **shared},
-                headers={
-                    "Content-Type": "application/json",
-                    "af-api-key": self.alice_api_key,
-                },
+            verdict: AliceVerdict = await self._evaluate(
+                inputs=inputs, request_data=request_data, input_type=input_type
             )
-            response.raise_for_status()
-            body: AliceEvaluateResponse = response.json()
         except GuardrailRaisedException:
             raise
         except Timeout as e:
-            return self._on_unreachable(e, text)
+            return self._on_unreachable(e, inputs)
         except httpx.HTTPStatusError as e:
             status_code: Final = getattr(getattr(e, "response", None), "status_code", None)
             if status_code in (502, 503, 504):
-                return self._on_unreachable(e, text)
+                return self._on_unreachable(e, inputs)
             raise
         except httpx.RequestError as e:
-            return self._on_unreachable(e, text)
+            return self._on_unreachable(e, inputs)
 
-        return self._enforce(body, text)
+        return self._enforce(verdict, inputs)
 
-    def _enforce(self, body: AliceEvaluateResponse, text: str) -> str:
-        """Turn Alice's verdict into an action on this text."""
-        # A verdict carrying errors[] is a failure, not a pass — reporting it as one would let a
-        # half-evaluated message through.
-        if body.get("errors"):
+    async def _evaluate(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: str,
+    ) -> AliceVerdict:
+        response: Final = await self.async_handler.post(
+            url=self.api_base,
+            json={
+                "input_type": input_type,
+                "inputs": _json_safe(inputs),
+                "request_data": _json_safe(request_data),
+            },
+            headers={
+                "Content-Type": "application/json",
+                "af-api-key": self.alice_api_key,
+            },
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict):
+            raise ValueError("Alice returned a non-object body")
+        return body
+
+    def _enforce(self, verdict: AliceVerdict, inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+        """Act on the verdict. An answer we cannot read is treated as unavailable, never as a pass."""
+        name: Final = verdict.get("verdict")
+        if name not in _KNOWN_VERDICTS:
+            return self._on_unreachable(ValueError(f"unrecognized verdict: {name!r}"), inputs)
+
+        if name == _VERDICT_BLOCK:
             raise GuardrailRaisedException(
                 guardrail_name=GUARDRAIL_NAME,
-                message="Alice reported errors while evaluating this content",
-                should_wrap_with_default_message=False,
-            )
-
-        action: Final = body.get("action") or ""
-        correlation_id: Final = body.get("correlation_id")
-
-        if action == "BLOCK":
-            raise GuardrailRaisedException(
-                guardrail_name=GUARDRAIL_NAME,
-                message=body.get("action_text") or "Blocked by Alice policy",
+                message=verdict.get("message") or _DEFAULT_BLOCK_MESSAGE,
                 should_wrap_with_default_message=False,
                 blocked_content=True,
             )
 
-        if action == "MASK":
-            # `action_text` is the redacted text. Absent it there is nothing to substitute, and
-            # returning the original would defeat the verdict.
-            masked: Final = body.get("action_text")
-            if masked is None:
-                raise GuardrailRaisedException(
-                    guardrail_name=GUARDRAIL_NAME,
-                    message="Blocked by Alice policy",
-                    should_wrap_with_default_message=False,
-                    blocked_content=True,
-                )
-            return masked
-
-        if action == "DETECT":
+        if name == _VERDICT_DETECT:
             # Recorded by Alice and allowed through. The correlation id is what ties this request
-            # to that record; the text itself is never logged.
+            # to that record; the evaluated text itself is never logged.
             verbose_proxy_logger.warning(
-                "Alice guardrail: detection recorded, request allowed (correlation_id=%s, types=%s)",
-                correlation_id,
-                [d.get("type") for d in body.get("detections") or []],
+                "Alice guardrail: detection recorded, request allowed (correlation_id=%s, categories=%s)",
+                verdict.get("correlation_id"),
+                verdict.get("categories"),
             )
+            return inputs
 
-        return text
+        if name == _VERDICT_MASK:
+            self._apply_replacements(verdict, inputs)
 
-    def _on_unreachable(self, error: Exception, text: str) -> str:
-        """Apply the configured policy when Alice cannot be reached."""
+        return inputs
+
+    def _apply_replacements(self, verdict: AliceVerdict, inputs: GenericGuardrailAPIInputs) -> None:
+        """
+        Write each replacement onto the text it names.
+
+        Only `texts` is touched. The chat translation layer maps a returned `texts` list back onto
+        the request positionally, but takes a different branch entirely when `structured_messages`
+        comes back as a new object — which would drop these edits.
+        """
+        texts: Final = inputs.get("texts") or []
+        applied = 0
+        for replacement in verdict.get("replacements") or []:
+            index = replacement.get("index")
+            text = replacement.get("text")
+            if isinstance(index, int) and isinstance(text, str) and 0 <= index < len(texts):
+                texts[index] = text
+                applied += 1
+
+        if applied == 0:
+            # A mask that wrote nothing is an allow wearing a mask's name. Refuse it rather than
+            # let the text through unmasked under a verdict that said it should not go.
+            raise GuardrailRaisedException(
+                guardrail_name=GUARDRAIL_NAME,
+                message=verdict.get("message") or _DEFAULT_BLOCK_MESSAGE,
+                should_wrap_with_default_message=False,
+                blocked_content=True,
+            )
+        inputs["texts"] = texts
+
+    def _on_unreachable(self, error: Exception, inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+        """Apply the configured policy when Alice cannot be reached or cannot be understood."""
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.critical(
                 "Alice guardrail unreachable, allowing request per unreachable_fallback: %s",
                 error,
             )
-            return text
+            return inputs
         raise GuardrailRaisedException(
             guardrail_name=GUARDRAIL_NAME,
             message="Alice guardrail is unavailable and this request cannot be checked",
             should_wrap_with_default_message=False,
         ) from error
-
-    def _resolve_app_id(self, request_data: dict) -> str | None:
-        """
-        The application whose policies apply, taken from the authenticated virtual key.
-
-        `_get_admin_metadata` reads whichever metadata holder the proxy wrote the key's own
-        values into, which differs by route, and the proxy strips caller-supplied `user_api_key_*`
-        keys from both — so this cannot be set by whoever makes the call.
-        """
-        admin_metadata: Final = self._get_admin_metadata(request_data)
-        configured: Final = admin_metadata.get(_APP_ID_METADATA_KEY)
-        if isinstance(configured, str) and configured.strip():
-            return configured.strip()[:_MAX_ID_CHARS]
-
-        for holder_name in ("litellm_metadata", "metadata"):
-            holder = request_data.get(holder_name)
-            if not isinstance(holder, dict):
-                continue
-            alias = holder.get("user_api_key_alias")
-            if isinstance(alias, str) and alias.strip():
-                return alias.strip()[:_MAX_ID_CHARS]
-        return None
-
-    @staticmethod
-    def _resolve_session_id(request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]) -> str:
-        """
-        Alice groups a conversation by session id, so the trace id is preferred: it spans every
-        call of one conversation where the per-call id does not.
-        """
-        candidates: Final = (
-            getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None,
-            request_data.get("litellm_trace_id"),
-            getattr(logging_obj, "litellm_call_id", None) if logging_obj else None,
-            request_data.get("litellm_call_id"),
-        )
-        for candidate in candidates:
-            if isinstance(candidate, str) and candidate.strip():
-                return candidate.strip()[:_MAX_ID_CHARS]
-        return _FALLBACK_USER_ID
-
-    def _resolve_user_id(self, request_data: dict) -> str:
-        """
-        The end user comes first: on a multi-tenant proxy the key belongs to a team or an
-        application, so keying on its owner would attribute every one of that tenant's users to a
-        single identity.
-        """
-        for holder_name in ("litellm_metadata", "metadata"):
-            holder = request_data.get(holder_name)
-            if not isinstance(holder, dict):
-                continue
-            for field in (
-                "user_api_key_end_user_id",
-                "user_api_key_user_email",
-                "user_api_key_user_id",
-                "user_api_key_hash",
-            ):
-                value = holder.get(field)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()[:_MAX_ID_CHARS]
-        return _FALLBACK_USER_ID
 
     @staticmethod
     def get_config_model() -> type | None:
@@ -323,3 +260,43 @@ class AliceGuardrail(CustomGuardrail):
         )
 
         return AliceGuardrailConfigModel
+
+
+def _json_safe(value: Any, depth: int = 0, seen: frozenset[int] = frozenset()) -> Any:
+    """
+    Copy `value` into something `json.dumps` accepts, dropping only what cannot cross.
+
+    `request_data` carries live Python objects — an OpenTelemetry span among them — so it cannot
+    be serialized as it stands. What is dropped is decided by a mechanical rule rather than a
+    field list: a list drifts from what the far side needs, a rule cannot. Serializing naively
+    raises, and that error would be read as "guardrail unavailable" on every single request.
+    """
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if depth >= _MAX_DEPTH or id(value) in seen:
+        return None
+
+    nested: Final = seen | {id(value)}
+
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in list(value.items())[:_MAX_ITEMS]:
+            if isinstance(key, str):
+                out[key] = _json_safe(item, depth + 1, nested)
+        return out
+
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_safe(item, depth + 1, nested) for item in list(value)[:_MAX_ITEMS]]
+
+    dump: Final = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            return _json_safe(dump(mode="json"), depth + 1, nested)
+        except Exception:  # noqa: BLE001  # a model that will not dump is one we drop
+            return None
+
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return None
+    return value
