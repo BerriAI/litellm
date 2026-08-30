@@ -143,7 +143,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 )
                 if unsupported_effort:
                     if drop_params or litellm.drop_params:
-                        updated_reasoning: Final = dict(reasoning)
+                        updated_reasoning: Final = dict(reasoning)  # mutable-ok: local request payload copy before removing unsupported effort
                         updated_reasoning.pop("effort", None)
                         if updated_reasoning:
                             params["reasoning"] = updated_reasoning
@@ -157,7 +157,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
             temperature: Final = params.get("temperature")
             if temperature is not None and temperature != 1:
-                transformed_reasoning: Final = params.get("reasoning") or {}
+                transformed_reasoning: Final = params.get("reasoning") or {}  # mutable-ok: local request view for transformed effort validation
                 transformed_effort: Final = (
                     transformed_reasoning.get("effort") if isinstance(transformed_reasoning, dict) else None
                 )
@@ -365,7 +365,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         else item_data.get("reasoning_content", "")
                     )
 
-                # Create ResponseReasoningItem object from the item data
+                # Create ResponsesReasoningItem object with item data
                 reasoning_item: Final = ResponseReasoningItem(**item_data)
 
                 # Convert back to dict with exclude_none=True to exclude None fields
