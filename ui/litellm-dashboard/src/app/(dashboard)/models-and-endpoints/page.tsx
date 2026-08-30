@@ -23,6 +23,7 @@ import PassThroughPanel from "@/app/(dashboard)/models-and-endpoints/panels/Pass
 import HealthStatusPanel from "@/app/(dashboard)/models-and-endpoints/panels/HealthStatusPanel";
 import ModelRetrySettingsPanel from "@/app/(dashboard)/models-and-endpoints/panels/ModelRetrySettingsPanel";
 import ModelGroupAliasPanel from "@/app/(dashboard)/models-and-endpoints/panels/ModelGroupAliasPanel";
+import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/panels/AccessGroupBudgetsPanel";
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -36,6 +37,7 @@ type ModelTabSlug =
   | "health"
   | "retry-settings"
   | "model-group-alias"
+  | "access-group-budgets"
   | "price-data";
 
 const BASE_TAB_KEY = "all-models";
@@ -49,6 +51,7 @@ const TAB_LABELS: Record<ModelTabSlug, string> = {
   health: "Health Status",
   "retry-settings": "Model Retry Settings",
   "model-group-alias": "Model Group Alias",
+  "access-group-budgets": "Model Access Group Budgets",
   "price-data": "Price Data Reload",
 };
 
@@ -72,6 +75,8 @@ const renderPanel = (key: string) => {
       return <ModelRetrySettingsPanel />;
     case "model-group-alias":
       return <ModelGroupAliasPanel />;
+    case "access-group-budgets":
+      return <AccessGroupBudgetsPanel />;
     case "price-data":
       return <PriceDataPanel />;
     default:
@@ -110,7 +115,15 @@ export default function ModelsAndEndpointsPage() {
       // a viewer this write-only wizard; only the raw-role isViewOnly separates them.
       ...(isAdmin && !isViewOnly ? (["add-provider"] as const) : []),
       ...(isAdmin
-        ? (["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"] as const)
+        ? ([
+            "llm-credentials",
+            "pass-through",
+            "health",
+            "retry-settings",
+            "model-group-alias",
+            "access-group-budgets",
+            "price-data",
+          ] as const)
         : []),
     ],
     [canCreate, isAdmin, isViewOnly],
@@ -119,7 +132,7 @@ export default function ModelsAndEndpointsPage() {
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
-    if (slug === "auto-routers") {
+    if (slug === "auto-routers" || slug === "access-group-budgets") {
       return (
         <span className="flex items-center gap-2">
           {TAB_LABELS[slug]} <BetaBadge />

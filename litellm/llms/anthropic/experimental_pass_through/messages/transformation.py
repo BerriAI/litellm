@@ -52,6 +52,11 @@ DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING: Final = (
     "minimum thinking budget."
 )
 
+DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
+    "Dropping `thinking` mapped from reasoning_effort=%s for model=%s: max_tokens=%s "
+    "is too small to fit the minimum thinking budget."
+)
+
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     _workload_identity_eligible: ClassVar[bool] = True
@@ -420,11 +425,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         )
 
     @staticmethod
-    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: dict, custom_llm_provider: str) -> None:
+    def _translate_reasoning_effort_to_anthropic(
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+    ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
-        ``effort='none'`` clears both. Invalid efforts raise a 400.
+        ``effort='none'`` clears both. Invalid efforts raise a 400. A mapped
+        thinking budget is capped below ``max_tokens`` and dropped when even
+        the minimum budget cannot fit.
         """
         from litellm.exceptions import BadRequestError as _BadRequestError
         from litellm.llms.anthropic.chat.transformation import (
@@ -450,7 +459,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params.pop("output_config", None)
             return
 
-        optional_params.setdefault("thinking", mapped_thinking)
+        fitted_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
+        if fitted_thinking is None:
+            verbose_logger.warning(DROP_UNFITTING_REASONING_EFFORT_WARNING, reasoning_effort, model, max_tokens)
+            return
+
+        optional_params.setdefault("thinking", fitted_thinking)
         if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
             mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
@@ -595,7 +609,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
         capped_thinking: Final = (
-            AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+            AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
             if legacy_thinking is not None
             else None
         )
@@ -667,6 +681,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
+            max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
         )
 

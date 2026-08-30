@@ -1270,7 +1270,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
     @staticmethod
-    def _cap_thinking_budget_to_max_tokens(
+    def cap_thinking_budget_to_max_tokens(
         thinking: AnthropicThinkingParam, max_tokens: int | None
     ) -> AnthropicThinkingParam | None:
         """Cap a legacy ``thinking.budget_tokens`` below ``max_tokens`` (Anthropic
@@ -1532,7 +1532,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         llm_provider=self._resolved_provider,
                     )
                     capped_thinking = (
-                        AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
                         if legacy_thinking is not None
                         else None
                     )
