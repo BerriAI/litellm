@@ -157,6 +157,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "server")]
     fn test_callback_config_deserialization() {
         use crate::config::CallbackConfig;
 

@@ -116,8 +116,10 @@ pub async fn csrf_middleware_from_app_state(
         request.method(),
         &axum::http::Method::POST | &axum::http::Method::PUT | &axum::http::Method::DELETE | &axum::http::Method::PATCH
     ) {
-        // Skip CSRF validation for API requests with Authorization header
-        if request.headers().get("Authorization").is_some() {
+        // Skip CSRF validation for API routes that use bearer token authentication
+        // CSRF protection is mainly needed for cookie-based authentication in browsers
+        let path = request.uri().path();
+        if path.starts_with("/v1/") || request.headers().get("Authorization").is_some() {
             return Ok(next.run(request).await);
         }
 
