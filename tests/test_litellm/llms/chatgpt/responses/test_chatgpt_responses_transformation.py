@@ -156,6 +156,55 @@ class TestChatGPTResponsesAPITransformation:
         }
 
     @pytest.mark.parametrize(
+        "text_param",
+        [
+            {
+                "format": {
+                    "type": "json_schema",
+                    "name": "verdict",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"block": {"type": "boolean"}},
+                        "required": ["block"],
+                    },
+                }
+            },
+            {"format": {"type": "json_object"}},
+        ],
+    )
+    def test_chatgpt_preserves_structured_output_text(self, text_param):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input="hi",
+            response_api_optional_request_params={"text": text_param},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["text"] == text_param
+
+    @pytest.mark.parametrize(
+        "text_param",
+        [
+            {"format": {"type": "text"}},
+            {"verbosity": "low"},
+            "not-a-dict",
+        ],
+    )
+    def test_chatgpt_drops_non_structured_text_param(self, text_param):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input="hi",
+            response_api_optional_request_params={"text": text_param},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "text" not in request
+
+    @pytest.mark.parametrize(
         ("model_name", "response_model"),
         [
             ("chatgpt/gpt-5.2-codex", "gpt-5.2-codex"),
