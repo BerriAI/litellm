@@ -197,14 +197,11 @@ class RepelloAIGuardrail(CustomGuardrail):
         repelloai_response: RepelloAIAnalyzeResponse | None = None
         try:
             verbose_proxy_logger.debug("RepelloAI Argus request: %s", request)
-            raw_response: HttpxResponse | None = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
+            response: Final[HttpxResponse] = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
                 url=endpoint,
                 headers={"X-API-Key": self.repelloai_api_key},
                 json=request,
             )
-            if raw_response is None:
-                raise ValueError("RepelloAI Argus returned no response")
-            response: Final[HttpxResponse] = raw_response
             self._raise_for_config_error(response)
             response.raise_for_status()
             try:
