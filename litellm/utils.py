@@ -5857,6 +5857,7 @@ def _get_model_info_helper(
                 ),
                 input_cost_per_token_above_512k_tokens=_model_info.get("input_cost_per_token_above_512k_tokens", None),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
+                input_cost_per_result=_model_info.get("input_cost_per_result", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
@@ -9328,6 +9329,7 @@ class ProviderConfigManager:
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
         from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+        from litellm.llms.xquik.search.transformation import XquikSearchConfig
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
         PROVIDER_TO_CONFIG_MAP: Final = {
@@ -9351,6 +9353,7 @@ class ProviderConfigManager:
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
+            SearchProviders.XQUIK: XquikSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

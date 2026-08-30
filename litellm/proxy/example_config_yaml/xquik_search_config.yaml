@@ -1,0 +1,5 @@
+search_tools:
+  - search_tool_name: xquik_search
+    litellm_params:
+      search_provider: xquik
+      api_key: os.environ/XQUIK_API_KEY
