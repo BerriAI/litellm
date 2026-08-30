@@ -2,8 +2,7 @@ name: Guard main branch
 
 on:
   pull_request:
-    branches:
-      - main
+    types: [opened, synchronize, reopened, edited]
   merge_group:
 
 permissions: {}
@@ -25,11 +24,17 @@ jobs:
       - name: Check head branch name
         env:
           HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
         run: |
           echo "PR head repo: $HEAD_REPO"
           echo "PR head branch: $HEAD_REF"
+          echo "PR base branch: $BASE_REF"
+          if [ "$BASE_REF" != "main" ]; then
+            echo "Base is '$BASE_REF', not 'main' — branch-name guard does not apply."
+            exit 0
+          fi
           if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
             echo "::error::PRs to main must originate from the canonical repository ($BASE_REPO), not a fork ($HEAD_REPO). External contributors should open PRs against 'litellm_internal_staging' instead."
             exit 1
