@@ -15,6 +15,7 @@ Endpoints here:
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -134,6 +135,9 @@ class _BudgetRow(Protocol):
 
 class _ModelAccessGroupBudgetRow(Protocol):
     @property
+    def access_group_name(self) -> str: ...
+
+    @property
     def spend(self) -> float: ...
 
     @property
@@ -155,6 +159,10 @@ class _ModelAccessGroupBudgetTableClient(Protocol):
         data: Mapping[str, object],
         include: Mapping[str, object] | None = None,
     ) -> _ModelAccessGroupBudgetRow: ...
+
+    async def find_many(
+        self, *, include: Mapping[str, object] | None = None
+    ) -> Sequence[_ModelAccessGroupBudgetRow]: ...
 
     async def delete(self, *, where: Mapping[str, object]) -> _ModelAccessGroupBudgetRow | None: ...
 
@@ -203,6 +211,28 @@ async def _model_access_group_budget_row(
     where: Final[_ModelAccessGroupWhere] = {"access_group_name": access_group}
     include: Final[_BudgetInclude] = {"litellm_budget_table": True}
     return await _model_access_group_budget_table(prisma_client).find_unique(where=where, include=include)
+
+
+async def _model_access_group_budget_rows(
+    prisma_client: PrismaClient,
+) -> Mapping[str, _ModelAccessGroupBudgetRow]:
+    """Every group's budget row in one read, so listing groups does not fan out into one query
+    per group."""
+    include: Final[_BudgetInclude] = {"litellm_budget_table": True}
+    rows: Final = await _model_access_group_budget_table(prisma_client).find_many(include=include)
+    return MappingProxyType({row.access_group_name: row for row in rows})
+
+
+def _with_budget(info: AccessGroupInfo, row: _ModelAccessGroupBudgetRow | None) -> AccessGroupInfo:
+    """The group as listed, plus whatever budget hangs off it. A group with no row has spent
+    nothing, because clearing a budget drops the row that recorded the spend."""
+    return AccessGroupInfo(
+        access_group=info.access_group,
+        model_names=info.model_names,
+        deployment_count=info.deployment_count,
+        spend=row.spend if row is not None else 0.0,
+        budget=_budget_or_none(row),
+    )
 
 
 def _budget_or_none(row: _ModelAccessGroupBudgetRow | None) -> AccessGroupBudget | None:
@@ -698,7 +728,8 @@ async def list_access_groups(
     """
     List all access groups.
     
-    Returns a list of all access groups with their model names and deployment counts.
+    Returns a list of all access groups with their model names, deployment counts, shared budget
+    and the spend drawn against it.
     
     Example:
     ```bash
@@ -719,11 +750,11 @@ async def list_access_groups(
 
     try:
         access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        budget_rows: Final = await _model_access_group_budget_rows(prisma_client)
 
-        # Sort by access group name
         access_groups_list: Final = sorted(
-            access_groups_map.values(),
-            key=lambda x: x.access_group,
+            (_with_budget(info, budget_rows.get(info.access_group)) for info in access_groups_map.values()),
+            key=lambda group: group.access_group,
         )
 
         return ListAccessGroupsResponse(access_groups=access_groups_list)
@@ -780,14 +811,9 @@ async def get_access_group_info(
                 detail={"error": f"Access group '{access_group}' not found"},
             )
 
-        info: Final = access_groups_map[access_group]
-        budget_row: Final = await _model_access_group_budget_row(access_group, prisma_client)
-        return AccessGroupInfo(
-            access_group=info.access_group,
-            model_names=info.model_names,
-            deployment_count=info.deployment_count,
-            spend=budget_row.spend if budget_row is not None else 0.0,
-            budget=_budget_or_none(budget_row),
+        return _with_budget(
+            access_groups_map[access_group],
+            await _model_access_group_budget_row(access_group, prisma_client),
         )
 
     except HTTPException:
