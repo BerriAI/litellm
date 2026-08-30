@@ -6035,3 +6035,110 @@ def test_normalize_logging_result_extracts_usage_for_responses_websocket():
         custom_llm_provider="openai",
     )
     assert cost > 0
+
+
+def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for_dict_results(logging_obj):
+    """LIT-5466: /v1/messages returns a plain dict with no _hidden_params, so the overhead
+    recorded on the logging object must reach hidden_params.litellm_overhead_time_ms (SpendLogs)."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj.set_response_timing_metrics({"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0})
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj={"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == 100.0
+
+
+def test_get_standard_logging_object_payload_survives_logging_obj_without_timing_metrics(logging_obj):
+    """The payload is built inside a blanket except that returns None, so a logging object without
+    the timing carrier (custom subclasses, older pickles) must not silently drop every spend log."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    del logging_obj.response_timing_metrics
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj={"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] is None
+
+
+def test_get_standard_logging_object_payload_failure_status_keeps_overhead_none(logging_obj):
+    """A post_call guardrail can fail the request after the upstream call succeeded; the failure
+    payload keeps litellm_overhead_time_ms None, matching responses that carry their own _hidden_params."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj.set_response_timing_metrics({"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0})
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="failure",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] is None
+
+
+def test_get_standard_logging_object_payload_prefers_response_hidden_params_overhead(logging_obj):
+    """A response that carries its own litellm_overhead_time_ms (chat completions) wins over the logging object."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj.set_response_timing_metrics({"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0})
+    response = ModelResponse()
+    response._hidden_params = {"litellm_overhead_time_ms": 5.0}
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == 5.0
+
+
+def test_response_timing_metrics_survive_deepcopy(logging_obj):
+    """Proxy pre-call hooks deep-copy the logging object; the timing carrier must stay copyable."""
+    import copy
+
+    assert logging_obj.response_timing_metrics == {}
+    logging_obj.set_response_timing_metrics({"_response_ms": 12.5})
+
+    assert copy.deepcopy(logging_obj).response_timing_metrics == {"_response_ms": 12.5}
