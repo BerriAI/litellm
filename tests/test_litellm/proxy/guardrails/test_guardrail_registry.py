@@ -154,29 +154,51 @@ def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
         registry_module.guardrail_initializer_registry.pop("dup_name_test", None)
 
 
-def test_update_in_memory_guardrail():
+def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
+    """
+    Regression for PUT /guardrails/{id}: the DB row arrives with litellm_params as
+    a plain jsonb dict, and the deleted update_in_memory_guardrail cast it to
+    LitellmParams without constructing one, so vars() raised and the running proxy
+    kept enforcing the stale config forever. The PUT endpoint now routes through
+    sync_guardrail_from_db, which must rebuild the live instance from the dict:
+    new blocked words compiled in, old ones gone, and the event hook re-derived
+    from mode (the base-class setattr path wrote self.mode while dispatch reads
+    self.event_hook, so only a full re-init applies a mode change).
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+
     handler = InMemoryGuardrailHandler()
-    handler.guardrail_id_to_custom_guardrail["123"] = CustomGuardrail(
-        guardrail_name="test-guardrail",
-        default_on=False,
-        event_hook=GuardrailEventHooks.pre_call,
-    )
+    gid = "66666666-6666-6666-6666-666666666666"
 
-    handler.update_in_memory_guardrail(
-        "123",
-        Guardrail(
-            guardrail_name="test-guardrail",
-            litellm_params=LitellmParams(guardrail="test-guardrail", mode="pre_call", default_on=True),
-        ),
-    )
-
-    assert (
-        handler.guardrail_id_to_custom_guardrail["123"].should_run_guardrail(
-            data={}, event_type=GuardrailEventHooks.pre_call
+    def db_guardrail(word: str, mode: str) -> Guardrail:
+        return Guardrail(
+            guardrail_id=gid,
+            guardrail_name="cf-put-sync",
+            litellm_params={
+                "guardrail": "litellm_content_filter",
+                "mode": mode,
+                "default_on": True,
+                "blocked_words": [{"keyword": word, "action": "BLOCK"}],
+            },
         )
-        is True
-    )
-    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.sync_guardrail_from_db(db_guardrail("foobarblock", "pre_call"))
+        handler.sync_guardrail_from_db(db_guardrail("quxnewblock", "during_call"))
+
+        instance = handler.guardrail_id_to_custom_guardrail[gid]
+        assert isinstance(instance, ContentFilterGuardrail)
+        assert instance._check_blocked_words("hello QUXNEWBLOCK") is not None
+        assert instance._check_blocked_words("hello FOOBARBLOCK") is None
+        assert instance.event_hook == GuardrailEventHooks.during_call
+        assert instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.during_call) is True
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
 
 
 def _make_guardrail(guardrail_id: str, name: str = "g") -> Guardrail:
@@ -774,3 +796,49 @@ def test_reinitialize_guardrail_restores_previous_on_failure():
         assert restored.guardrail_name == "restore-me"
     finally:
         registry_module.guardrail_initializer_registry.pop("restore_test", None)
+
+
+def test_reinitialize_guardrail_raises_value_error_for_non_value_error_init_failures():
+    """Regression for the LIT-6479 fix's 422 path: a constructor failure that is not
+    already a ValueError/TypeError (re.error from an invalid regex has neither in its
+    MRO) must still surface as ValueError, so the PUT/PATCH endpoints' rollback+422
+    catch is exhaustive instead of warn-and-200 persisting a broken config."""
+    import re
+
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        if litellm_params.api_key == "bad-regex":
+            re.compile("([")
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    registry_module.guardrail_initializer_registry["regex_test"] = _initializer
+    try:
+        handler = InMemoryGuardrailHandler()
+        created = handler.initialize_guardrail(
+            guardrail={
+                "guardrail_name": "regex-me",
+                "litellm_params": {"guardrail": "regex_test", "mode": "pre_call", "api_key": "ok"},
+            },
+        )
+        guardrail_id = created["guardrail_id"]
+
+        with pytest.raises(ValueError, match="Guardrail initialization failed") as excinfo:
+            handler.reinitialize_guardrail(
+                guardrail={
+                    "guardrail_id": guardrail_id,
+                    "guardrail_name": "regex-me",
+                    "litellm_params": {"guardrail": "regex_test", "mode": "pre_call", "api_key": "bad-regex"},
+                },
+            )
+
+        assert isinstance(excinfo.value.__cause__, re.error)
+        assert guardrail_id in handler.IN_MEMORY_GUARDRAILS
+        restored = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+        assert restored is not None and restored.guardrail_name == "regex-me"
+    finally:
+        registry_module.guardrail_initializer_registry.pop("regex_test", None)
