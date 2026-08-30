@@ -143,6 +143,7 @@ from litellm.router_utils.cooldown_handlers import (
 from litellm.router_utils.fallback_event_handlers import (
     AttemptedFallbackTargets,
     _check_non_standard_fallback_format,
+    clear_pre_routing_selection,
     get_fallback_model_group,
     get_pre_routing_selection,
     record_pre_routing_selection,
@@ -7049,6 +7050,7 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         model_group: Final[str | None] = kwargs.get("model")
+        clear_pre_routing_selection(cast("Mapping[str, object]", kwargs))
         if not isinstance(kwargs.get("attempted_targets"), AttemptedFallbackTargets):
             _fallback_metadata_key: Final = _get_router_metadata_variable_name(
                 function_name=getattr(kwargs.get("original_function"), "__name__", None)
