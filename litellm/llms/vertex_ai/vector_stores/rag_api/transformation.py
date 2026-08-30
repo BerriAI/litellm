@@ -97,7 +97,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def __init__(self):
         super().__init__()
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         # Get credentials and project info
         vertex_credentials: Final = self.get_vertex_ai_credentials(dict(litellm_params))
         vertex_project: Final = self.get_vertex_ai_project(dict(litellm_params))
@@ -122,7 +122,9 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             "write": [("POST", "/ragCorpora")],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         """
         Validate and set up authentication for Vertex AI RAG API
         """
@@ -135,7 +137,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the Base endpoint for Vertex AI RAG API
