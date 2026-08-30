@@ -2402,9 +2402,12 @@ class CustomStreamWrapper:
         (https://github.com/BerriAI/litellm/issues/13786).
 
         Re-raise the failure the stream died of, without logging it a second time.
+        The traceback is dropped first: raising one retained exception object over
+        and over would otherwise chain a frame per read onto it, holding every
+        consumer frame alive and growing the traceback without bound.
         """
         if self._terminal_failure is not None:
-            raise self._terminal_failure
+            raise self._terminal_failure.with_traceback(None)
 
     def _raise_terminal_failure(self, exc: Exception) -> "NoReturn":
         self._terminal_failure = exc

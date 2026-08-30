@@ -2270,6 +2270,43 @@ def test_sync_stream_stays_failed_after_raising_and_logs_failure_once():
     assert len(failures) == 1
 
 
+def test_failed_stream_traceback_does_not_grow_per_read():
+    """A consumer that keeps reading past the failure gets the same size traceback every time."""
+
+    def looping_stream():
+        while True:
+            yield _make_chunk("the model is stuck on this")
+
+    logging_obj = MagicMock()
+    logging_obj.completion_start_time = None
+    logging_obj.failure_handler = lambda exception, traceback_exception: None
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=looping_stream(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    def _traceback_length(error: BaseException) -> int:
+        length = 0
+        tb = error.__traceback__
+        while tb is not None:
+            length += 1
+            tb = tb.tb_next
+        return length
+
+    lengths = []
+    for _ in range(litellm.REPEATED_STREAMING_CHUNK_LIMIT + 20):
+        try:
+            next(wrapper)
+        except Exception as e:
+            lengths.append(_traceback_length(e))
+
+    assert len(lengths) == 20
+    assert len(set(lengths[1:])) == 1
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
