@@ -502,3 +502,27 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+
+class TestOllamaCompletionReasoningEffortMapping:
+    @pytest.mark.parametrize(
+        ("reasoning_effort", "model", "expected"),
+        [
+            ("medium", "qwen3", {"think": True}),
+            ("none", "qwen3", {"think": False}),
+            ({"effort": "medium", "summary": "auto"}, "qwen3", {"think": True}),
+            ({"effort": "medium"}, "gpt-oss-123", {"think": "medium"}),
+            ({"summary": "auto"}, "qwen3", {}),
+        ],
+    )
+    def test_map_openai_params_reasoning_effort(self, reasoning_effort, model, expected):
+        config = OllamaConfig()
+
+        result = config.map_openai_params(
+            {"reasoning_effort": reasoning_effort},
+            {},
+            model,
+            False,
+        )
+
+        assert result == expected

@@ -934,10 +934,12 @@ class AmazonConverseConfig(BaseConfig):
                         litellm.verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING, model)
                 else:
                     optional_params["thinking"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
-                self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
-                )
+            elif param == "reasoning_effort":
+                effort_value = value.get("effort") if isinstance(value, dict) else value
+                if isinstance(effort_value, str):
+                    self._handle_reasoning_effort_parameter(
+                        model=model, reasoning_effort=effort_value, optional_params=optional_params
+                    )
             elif param == "output_config" and isinstance(value, dict):
                 mapped_output_config = dict(value)
                 normalize_bedrock_opus_output_config_effort(model=model, output_config=mapped_output_config)
