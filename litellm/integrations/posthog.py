@@ -35,6 +35,11 @@ from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPa
 
 
 class PostHogLogger(CustomBatchLogger):
+    # Without this, CustomBatchLogger.flush_queue() clears the *entire* live
+    # queue after a successful send, including events appended by concurrent
+    # requests while the batch POST was in flight, silently dropping them.
+    preserve_events_added_during_flush = True
+
     def __init__(self, **kwargs):
         """
         Initializes the PostHog logger, checks if the correct env variables are set
@@ -321,18 +326,27 @@ class PostHogLogger(CustomBatchLogger):
         """
         Sends the in memory logs queue to PostHog API
 
+        Note: does NOT remove events from ``self.log_queue`` - the caller
+        (``CustomBatchLogger.flush_queue``) owns queue draining, using the
+        queue length it captured before this call started so events
+        appended concurrently are preserved (see
+        ``preserve_events_added_during_flush``).
+
         Raises:
-            Raises a NON Blocking verbose_logger.exception if an error occurs
+            Re-raises any error from sending the batch so the caller does
+            NOT treat a failed send as success and clear the queue. The
+            un-acknowledged events are preserved by
+            ``CustomBatchLogger.flush_queue`` and retried on the next flush.
         """
+        if not self.log_queue:
+            return
+
+        verbose_logger.debug("PostHog: Sending batch of %s events", len(self.log_queue))
+
+        if self.is_mock_mode:
+            verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
+
         try:
-            if not self.log_queue:
-                return
-
-            verbose_logger.debug("PostHog: Sending batch of %s events", len(self.log_queue))
-
-            if self.is_mock_mode:
-                verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
-
             # Group events by credentials for batch sending
             batches_by_credentials: Final[dict[tuple[str, str], list]] = {}
             for item in self.log_queue:
@@ -361,13 +375,14 @@ class PostHogLogger(CustomBatchLogger):
                     raise Exception(
                         f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
                     )
-
-            if self.is_mock_mode:
-                verbose_logger.debug("[POSTHOG MOCK] Batch of %s events successfully mocked", len(self.log_queue))
-            else:
-                verbose_logger.debug("PostHog: Batch of %s events successfully sent", len(self.log_queue))
         except Exception as e:
             verbose_logger.exception("PostHog Error sending batch API - %s", e)
+            raise
+
+        if self.is_mock_mode:
+            verbose_logger.debug("[POSTHOG MOCK] Batch of %s events successfully mocked", len(self.log_queue))
+        else:
+            verbose_logger.debug("PostHog: Batch of %s events successfully sent", len(self.log_queue))
 
     def _ensure_async_setup(self):
         if not self._async_initialized:
