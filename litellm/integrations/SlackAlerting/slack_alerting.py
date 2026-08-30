@@ -658,7 +658,10 @@ class SlackAlerting(CustomBatchLogger):
         Create a standard message for a budget alert
         """
         _all_fields_as_dict: Final = user_info.model_dump(exclude_none=True)
-        _all_fields_as_dict.pop("token")
+        # CallInfo.token is Optional and exclude_none=True drops it when unset, so
+        # this must tolerate its absence. It is unset for JWT-authenticated
+        # requests, where UserAPIKeyAuth is built without a token.
+        _all_fields_as_dict.pop("token", None)
         msg = ""
         for k, v in _all_fields_as_dict.items():
             if isinstance(v, Litellm_EntityType):
