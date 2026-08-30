@@ -82,6 +82,10 @@ class ResponsesStreamChunk(TypedDict, total=False):
 
     type: ReadOnly[str]
     text: ReadOnly[str]
+    delta: ReadOnly[str]
+    item_id: ReadOnly[str]
+    output_index: ReadOnly[int]
+    content_index: ReadOnly[int]
 
 
 def _next_stream_sequence_number(responses_so_far: Sequence[Any] | None) -> int:
@@ -658,8 +662,32 @@ class OpenAIResponsesHandler(BaseTranslation):
     def get_streaming_string_so_far(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> str:
         """
         Get the string so far from the responses so far.
+
+        ``response.output_text.done`` events carry the whole part in ``text``, while
+        ``response.output_text.delta`` events carry fragments in ``delta``. A stream
+        that dies before its done event (``response.failed`` / ``response.incomplete``)
+        has text only in deltas, so per content part the done text wins when present
+        and the joined deltas fill in otherwise, never both.
         """
-        return "".join([response.get("text", "") for response in responses_so_far])
+        keyed_events: Final = tuple(
+            (
+                (event.get("item_id"), event.get("output_index"), event.get("content_index")),
+                event.get("text"),
+                event.get("delta"),
+            )
+            for event in responses_so_far
+            if isinstance(event.get("text"), str) or isinstance(event.get("delta"), str)
+        )
+
+        def part_text(part_key: tuple[object, object, object]) -> str:
+            done_texts: Final = tuple(
+                text for key, text, _ in keyed_events if key == part_key and isinstance(text, str)
+            )
+            if done_texts:
+                return done_texts[-1]
+            return "".join(delta for key, _, delta in keyed_events if key == part_key and isinstance(delta, str))
+
+        return "".join(part_text(key) for key in dict.fromkeys(key for key, _, _ in keyed_events))
 
     def _has_text_content(self, response: "ResponsesAPIResponse") -> bool:
         """
