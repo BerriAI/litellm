@@ -67,6 +67,13 @@ pub async fn csrf_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Skip CSRF validation for API routes that use bearer token authentication
+    // CSRF protection is mainly needed for cookie-based authentication in browsers
+    let path = request.uri().path();
+    if path.starts_with("/v1/") || request.headers().get("Authorization").is_some() {
+        return Ok(next.run(request).await);
+    }
+    
     // Only validate CSRF token for state-changing methods
     if matches!(
         request.method(),

@@ -106,6 +106,10 @@ impl IntoResponse for ImagesRouteError {
                 StatusCode::BAD_REQUEST,
                 format!("images request is not supported: {reason}"),
             ),
+            CoreError::Timeout(message) => (
+                StatusCode::GATEWAY_TIMEOUT,
+                format!("images request timed out: {message}"),
+            ),
         };
         (
             status,

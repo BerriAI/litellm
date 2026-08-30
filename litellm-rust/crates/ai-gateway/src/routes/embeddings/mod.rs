@@ -87,6 +87,10 @@ impl IntoResponse for EmbeddingsRouteError {
                 StatusCode::BAD_REQUEST,
                 format!("embeddings request is not supported: {reason}"),
             ),
+            CoreError::Timeout(message) => (
+                StatusCode::GATEWAY_TIMEOUT,
+                format!("embeddings request timed out: {message}"),
+            ),
         };
         (
             status,

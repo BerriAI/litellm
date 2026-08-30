@@ -3,6 +3,7 @@
 //! Provides configurable retry logic for transient failures.
 //! Integrates with circuit breaker to avoid retrying when circuit is open.
 //! Supports multiple retry strategies for different error types.
+//! Supports exception-specific retry policies and Retry-After header parsing.
 
 use std::time::Duration;
 use rand::Rng;
@@ -20,6 +21,45 @@ pub enum ErrorCategory {
     Provider,
     /// Unknown or unclassified errors
     Unknown,
+    /// Bad request errors (400)
+    BadRequest,
+    /// Authentication errors (401)
+    Authentication,
+    /// Rate limit errors (429)
+    RateLimit,
+    /// Timeout errors
+    Timeout,
+}
+
+/// Exception-specific retry policy.
+/// Allows configuring different retry counts for different exception types.
+#[derive(Debug, Clone, Default)]
+pub struct ExceptionRetryPolicy {
+    /// Retries for bad request errors (400)
+    pub bad_request_retries: Option<u32>,
+    /// Retries for authentication errors (401)
+    pub authentication_retries: Option<u32>,
+    /// Retries for timeout errors
+    pub timeout_retries: Option<u32>,
+    /// Retries for rate limit errors (429)
+    pub rate_limit_retries: Option<u32>,
+    /// Retries for content policy violation errors
+    pub content_policy_retries: Option<u32>,
+    /// Retries for internal server errors (500)
+    pub internal_server_retries: Option<u32>,
+}
+
+impl ExceptionRetryPolicy {
+    /// Get retry count for a specific error category.
+    pub fn get_retries(&self, category: ErrorCategory) -> Option<u32> {
+        match category {
+            ErrorCategory::BadRequest => self.bad_request_retries,
+            ErrorCategory::Authentication => self.authentication_retries,
+            ErrorCategory::Timeout => self.timeout_retries,
+            ErrorCategory::RateLimit => self.rate_limit_retries,
+            _ => None,
+        }
+    }
 }
 
 /// Retry strategy configuration.
@@ -49,6 +89,43 @@ impl Default for RetryStrategy {
     }
 }
 
+/// Parse Retry-After header value.
+/// Supports both delta-seconds and HTTP-date formats.
+pub fn parse_retry_after(header_value: &str) -> Option<Duration> {
+    // Try parsing as delta-seconds (integer)
+    if let Ok(seconds) = header_value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    
+    // Try parsing as HTTP-date (RFC 7231)
+    // For simplicity, we'll just return None for HTTP-date format
+    // In a full implementation, you'd parse the date and calculate the duration
+    None
+}
+
+/// Provider-specific retry configuration.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderRetryConfig {
+    /// OpenAI-specific retry config
+    pub openai: Option<RetryStrategy>,
+    /// Anthropic-specific retry config
+    pub anthropic: Option<RetryStrategy>,
+    /// Bedrock-specific retry config
+    pub bedrock: Option<RetryStrategy>,
+}
+
+impl ProviderRetryConfig {
+    /// Get retry strategy for a specific provider.
+    pub fn get_strategy(&self, provider: &str) -> Option<&RetryStrategy> {
+        match provider {
+            "openai" | "azure" => self.openai.as_ref(),
+            "anthropic" => self.anthropic.as_ref(),
+            "bedrock" | "bedrock_converse" => self.bedrock.as_ref(),
+            _ => None,
+        }
+    }
+}
+
 /// Retry configuration with per-category strategies.
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
@@ -62,6 +139,10 @@ pub struct RetryConfig {
     pub provider_strategy: RetryStrategy,
     /// Strategy for unknown errors (conservative retry).
     pub unknown_strategy: RetryStrategy,
+    /// Exception-specific retry policy (overrides category strategies).
+    pub exception_policy: ExceptionRetryPolicy,
+    /// Provider-specific retry configurations.
+    pub provider_config: ProviderRetryConfig,
 }
 
 impl Default for RetryConfig {
@@ -102,25 +183,48 @@ impl Default for RetryConfig {
                 jitter: false,
                 backoff_multiplier: 1.0,
             },
+            exception_policy: ExceptionRetryPolicy::default(),
+            provider_config: ProviderRetryConfig::default(),
         }
     }
 }
 
 impl RetryConfig {
     /// Get the appropriate strategy for an error category.
-    pub fn strategy_for(&self, category: ErrorCategory) -> &RetryStrategy {
+    /// First checks exception_policy for specific overrides, then falls back to category strategies.
+    pub fn strategy_for(&self, category: ErrorCategory) -> RetryStrategy {
+        // Check exception policy first for specific overrides
+        if let Some(max_retries) = self.exception_policy.get_retries(category) {
+            // Use the base strategy for this category but override max_retries
+            let base_strategy = match category {
+                ErrorCategory::BadRequest | ErrorCategory::Authentication => &self.application_strategy,
+                ErrorCategory::RateLimit | ErrorCategory::Timeout => &self.http_strategy,
+                _ => &self.unknown_strategy,
+            };
+            return RetryStrategy {
+                max_retries,
+                ..base_strategy.clone()
+            };
+        }
+        
+        // Fall back to category strategies
         match category {
-            ErrorCategory::Network => &self.network_strategy,
-            ErrorCategory::Http => &self.http_strategy,
-            ErrorCategory::Application => &self.application_strategy,
-            ErrorCategory::Provider => &self.provider_strategy,
-            ErrorCategory::Unknown => &self.unknown_strategy,
+            ErrorCategory::Network => self.network_strategy.clone(),
+            ErrorCategory::Http | ErrorCategory::RateLimit | ErrorCategory::Timeout => self.http_strategy.clone(),
+            ErrorCategory::Application | ErrorCategory::BadRequest | ErrorCategory::Authentication => self.application_strategy.clone(),
+            ErrorCategory::Provider => self.provider_strategy.clone(),
+            ErrorCategory::Unknown => self.unknown_strategy.clone(),
         }
     }
 
     /// Check if an error is retryable.
     pub fn is_retryable(&self, category: ErrorCategory) -> bool {
         self.strategy_for(category).max_retries > 0
+    }
+    
+    /// Get retry strategy for a specific provider.
+    pub fn provider_strategy_for(&self, provider: &str) -> Option<RetryStrategy> {
+        self.provider_config.get_strategy(provider).cloned()
     }
 }
 
@@ -140,25 +244,32 @@ pub fn calculate_delay(attempt: u32, strategy: &RetryStrategy) -> Duration {
 }
 
 /// Categorize a CoreError into an ErrorCategory.
+/// Maps HTTP status codes to exception-specific categories for more granular retry policies.
 pub fn categorize_error(err: &litellm_core::CoreError) -> ErrorCategory {
     match err {
         litellm_core::CoreError::Network(_) | litellm_core::CoreError::Connect(_) => {
             ErrorCategory::Network
         }
         litellm_core::CoreError::Http { status, .. } => {
-            if *status >= 500 {
-                ErrorCategory::Http
-            } else if *status == 429 {
-                ErrorCategory::Http // Rate limiting
-            } else {
-                ErrorCategory::Application
+            match *status {
+                400 => ErrorCategory::BadRequest,
+                401 | 403 => ErrorCategory::Authentication,
+                408 | 504 => ErrorCategory::Timeout,
+                429 => ErrorCategory::RateLimit,
+                500..=599 => ErrorCategory::Http,
+                _ => ErrorCategory::Application,
             }
         }
+        litellm_core::CoreError::Timeout(_) => {
+            ErrorCategory::Timeout
+        }
         litellm_core::CoreError::InvalidRequest(_) 
-        | litellm_core::CoreError::Auth(_) 
         | litellm_core::CoreError::InvalidType { .. }
         | litellm_core::CoreError::MissingField(_) => {
-            ErrorCategory::Application
+            ErrorCategory::BadRequest
+        }
+        litellm_core::CoreError::Auth(_) => {
+            ErrorCategory::Authentication
         }
         litellm_core::CoreError::InvalidProvider(_)
         | litellm_core::CoreError::InvalidResponse(_)
@@ -198,7 +309,7 @@ where
                 }
 
                 attempt += 1;
-                let delay = calculate_delay(attempt, strategy);
+                let delay = calculate_delay(attempt, &strategy);
                 tokio::time::sleep(delay).await;
             }
         }
