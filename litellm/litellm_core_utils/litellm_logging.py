@@ -47,6 +47,7 @@ from litellm.constants import (
 )
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
+    ResponsesWebSocketTokenUsageProcessor,
     _select_model_name_for_cost_calc,
 )
 from litellm.exceptions import (
@@ -1970,6 +1971,17 @@ class Logging(LiteLLMLoggingBaseClass):
             logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
                 usage=combined_usage_object,
                 results=result,
+            )
+
+        elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+            combined_ws_usage: Final = (
+                ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
+                    results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                )
+            )
+            logging_result = LiteLLMRealtimeStreamLoggingObject(
+                usage=combined_ws_usage,
+                results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
             )
 
         elif (

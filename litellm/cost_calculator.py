@@ -185,6 +185,7 @@ _SEARCH_CALL_TYPES: Final = frozenset(
 )
 
 _AREALTIME_CALL_TYPE: Final = CallTypes.arealtime.value
+_ARESPONSES_WEBSOCKET_CALL_TYPE: Final = CallTypes.aresponses_websocket.value
 _MCP_CALL_TYPE: Final = CallTypes.call_mcp_tool.value
 
 
@@ -1562,7 +1563,7 @@ def completion_cost(
                     )
 
                     return _final_cost
-                elif call_type == _AREALTIME_CALL_TYPE and isinstance(
+                elif call_type in (_AREALTIME_CALL_TYPE, _ARESPONSES_WEBSOCKET_CALL_TYPE) and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):
                     if cost_per_token_usage_object is None or custom_llm_provider is None:
@@ -2383,6 +2384,41 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
         return LiteLLMRealtimeStreamLoggingObject(
             usage=usage,
             results=results,
+        )
+
+
+class _ResponsesWsEventResponse(BaseModel):
+    usage: Mapping[str, object] | None = None
+
+
+class _ResponsesWsEvent(BaseModel):
+    type: str = ""
+    response: _ResponsesWsEventResponse | None = None
+
+
+class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
+    @staticmethod
+    def collect_usage_from_responses_ws_results(
+        results: Sequence[Mapping[str, object]],
+    ) -> tuple[Usage, ...]:
+        events: Final = tuple(_ResponsesWsEvent.model_validate(result) for result in results)
+        return tuple(
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the realtime processor uses
+                event.response.usage
+            )
+            for event in events
+            if event.type == "response.completed" and event.response is not None and event.response.usage is not None
+        )
+
+    @staticmethod
+    def collect_and_combine_usage_from_responses_ws_results(
+        results: Sequence[Mapping[str, object]],
+    ) -> Usage:
+        collected_usage_objects: Final = ResponsesWebSocketTokenUsageProcessor.collect_usage_from_responses_ws_results(
+            results
+        )
+        return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(
+            list(collected_usage_objects)  # mutable-ok: combine_usage_objects requires a list parameter
         )
 
 

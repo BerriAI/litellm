@@ -5994,3 +5994,44 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
         request_kwargs=untouched,
     )
     assert "litellm_gateway_injected_cache" not in untouched["metadata"]
+
+
+def test_normalize_logging_result_extracts_usage_for_responses_websocket():
+    """Regression: native /v1/responses WebSocket sessions logged $0 spend because
+    usage in stored response.completed events was never extracted (Pylon #7872)."""
+    from litellm.types.utils import CallTypes, LiteLLMRealtimeStreamLoggingObject
+
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id="responses-ws-usage-test",
+        function_id="responses-ws-usage-test",
+    )
+    events = [
+        {"type": "response.created", "response": {}},
+        {
+            "type": "response.completed",
+            "response": {"usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140}},
+        },
+        {
+            "type": "response.completed",
+            "response": {"usage": {"input_tokens": 60, "output_tokens": 10, "total_tokens": 70}},
+        },
+    ]
+
+    normalized = logging_obj.normalize_logging_result(result=events)
+
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.usage.prompt_tokens == 160
+    assert normalized.usage.completion_tokens == 50
+
+    cost = litellm.completion_cost(
+        completion_response=normalized,
+        model="gpt-4o",
+        call_type=CallTypes.aresponses_websocket.value,
+        custom_llm_provider="openai",
+    )
+    assert cost > 0
