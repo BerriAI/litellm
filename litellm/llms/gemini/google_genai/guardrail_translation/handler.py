@@ -1,8 +1,9 @@
 """
 Google GenAI generateContent handler for Unified Guardrails.
 
-Extracts text from generateContent requests (contents[].parts[].text) and
-responses (candidates[].content.parts[].text), applies the guardrail, and
+Extracts text from generateContent requests (systemInstruction.parts[].text
+and contents[].parts[].text) and responses (candidates[].content.parts[].text),
+applies the guardrail, and
 writes the guardrailed text back in place. Requests and responses may be
 dicts (wire format) or google-genai SDK objects; streaming chunks may
 additionally be raw SSE frames, which are scanned for detection (a blocking
@@ -56,12 +57,29 @@ def _content_text_parts(content: object) -> tuple[object, ...]:
     return tuple(part for part in parts if _part_text(part) is not None)
 
 
+def _system_instruction(data: Mapping[str, object]) -> object | None:
+    return next(
+        (
+            value
+            for container in (data, data.get("config"))
+            if container is not None
+            for key in ("systemInstruction", "system_instruction")
+            for value in (_field(container, key),)
+            if value is not None
+        ),
+        None,
+    )
+
+
 def _request_text_parts(data: Mapping[str, object]) -> tuple[object, ...]:
     contents: Final = data.get("contents")
     content_list: Final = (
         (contents,) if isinstance(contents, dict) else tuple(contents) if isinstance(contents, list) else ()
     )
-    return tuple(part for content in content_list for part in _content_text_parts(content))
+    return (
+        *_content_text_parts(_system_instruction(data)),
+        *(part for content in content_list for part in _content_text_parts(content)),
+    )
 
 
 def _response_text_parts(response: object) -> tuple[object, ...]:
