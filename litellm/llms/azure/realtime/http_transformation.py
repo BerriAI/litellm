@@ -4,7 +4,6 @@ from typing import Final
 
 import litellm
 from litellm.constants import AZURE_GA_REALTIME_MODELS
-from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -12,7 +11,7 @@ from litellm.secret_managers.main import get_secret_str
 class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
     @staticmethod
     def _uses_ga_api(model: str, api_version: str | None) -> bool:
-        return BaseAzureLLM._is_azure_v1_api_version(api_version) or model in AZURE_GA_REALTIME_MODELS
+        return api_version in ("preview", "latest", "v1") or model in AZURE_GA_REALTIME_MODELS
 
     def get_api_base(self, api_base: str | None, **kwargs) -> str:
         return api_base or litellm.api_base or get_secret_str("AZURE_API_BASE") or ""

@@ -163,7 +163,9 @@ def test_non_billable_realtime_credential_endpoints_require_opt_in(
     proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user")
     try:
         client = TestClient(proxy_app, raise_server_exceptions=False)
-        with patch("litellm.proxy.proxy_server.route_request") as mock_route_request:
+        with patch(  # test-quality-ok: endpoint gate must prove routing is never reached
+            "litellm.proxy.proxy_server.route_request"
+        ) as mock_route_request:
             response = client.post(
                 path,
                 headers={"Authorization": "Bearer sk-test-master-key"},
@@ -201,7 +203,9 @@ def test_non_billable_realtime_sdp_endpoints_require_opt_in(
     )
     encrypted_token = encrypt_value_helper(token_payload)
     client = TestClient(proxy_app, raise_server_exceptions=False)
-    with patch("litellm.proxy.proxy_server.route_request") as mock_route_request:
+    with patch(  # test-quality-ok: endpoint gate must prove routing is never reached
+        "litellm.proxy.proxy_server.route_request"
+    ) as mock_route_request:
         response = client.post(
             path,
             headers={"Authorization": f"Bearer {encrypted_token}"},
@@ -1160,12 +1164,16 @@ def test_translation_client_secret_aliases_bind_token_family(
     try:
         client = TestClient(proxy_app)
         with (
-            patch("litellm.proxy.proxy_server.route_request", side_effect=capture_route),
-            patch(
+            patch(  # test-quality-ok: endpoint test captures the proxy routing boundary
+                "litellm.proxy.proxy_server.route_request", side_effect=capture_route
+            ),
+            patch(  # test-quality-ok: endpoint test isolates request metadata enrichment
                 "litellm.proxy.proxy_server.add_litellm_data_to_request",
                 side_effect=mock_add_litellm_data,
             ),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj") as logging,
+            patch(  # test-quality-ok: endpoint test isolates the process-wide proxy logger
+                "litellm.proxy.proxy_server.proxy_logging_obj"
+            ) as logging,
         ):
             logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
             logging.post_call_failure_hook = AsyncMock()
@@ -1227,12 +1235,16 @@ def test_translation_calls_aliases_route_translation_session(
 
     client = TestClient(proxy_app)
     with (
-        patch("litellm.proxy.proxy_server.route_request", side_effect=capture_route),
-        patch(
+        patch(  # test-quality-ok: endpoint test captures the proxy routing boundary
+            "litellm.proxy.proxy_server.route_request", side_effect=capture_route
+        ),
+        patch(  # test-quality-ok: endpoint test isolates request metadata enrichment
             "litellm.proxy.proxy_server.add_litellm_data_to_request",
             side_effect=mock_add_litellm_data,
         ),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as logging,
+        patch(  # test-quality-ok: endpoint test isolates the process-wide proxy logger
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as logging,
     ):
         logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
         logging.post_call_failure_hook = AsyncMock()

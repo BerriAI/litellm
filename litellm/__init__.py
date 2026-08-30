@@ -1319,7 +1319,109 @@ from .llms.xai.common_utils import XAIModelInfo
 from litellm.types.utils import LlmProviders
 
 ## Lazy loading this is not straightforward, will leave it here for now.
-from .main import *  # type: ignore
+from .main import *
+from .compression import compress
+
+# Skills API
+from .skills.main import (
+    create_skill,
+    acreate_skill,
+    list_skills,
+    alist_skills,
+    get_skill,
+    aget_skill,
+    delete_skill,
+    adelete_skill,
+)
+from .evals.main import (
+    create_eval,
+    acreate_eval,
+    list_evals,
+    alist_evals,
+    get_eval,
+    aget_eval,
+    delete_eval,
+    adelete_eval,
+    cancel_eval,
+    acancel_eval,
+    create_run,
+    acreate_run,
+    list_runs,
+    alist_runs,
+    get_run,
+    aget_run,
+    delete_run,
+    adelete_run,
+    cancel_run,
+    acancel_run,
+)
+from .integrations import *
+from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
+from .exceptions import (
+    AuthenticationError,
+    InvalidRequestError,
+    BadRequestError,
+    ImageFetchError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+    RateLimitErrorCategory,
+    RateLimitType,
+    ServiceUnavailableError,
+    BadGatewayError,
+    OpenAIError,
+    ContextWindowExceededError,
+    ContentPolicyViolationError,
+    BudgetExceededError,
+    APIError,
+    Timeout,
+    APIConnectionError,
+    UnsupportedParamsError,
+    APIResponseValidationError,
+    UnprocessableEntityError,
+    InternalServerError,
+    JSONSchemaValidationError,
+    LITELLM_EXCEPTION_TYPES,
+    MockException,
+)
+from .budget_manager import BudgetManager
+from .proxy.proxy_cli import run_server
+from .router import Router
+from .assistants.main import *
+from .batches.main import *
+from .images.main import *
+from .videos.main import *
+from .batch_completion.main import *
+from .rerank_api.main import *
+from .llms.anthropic.experimental_pass_through.messages.handler import *
+from .responses.main import *
+
+# Interactions API is available as litellm.interactions module
+# Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
+from . import interactions
+from .interactions.agents.main import (
+    acreate as acreate_agent,
+    create as create_agent,
+    alist as alist_agents,
+    list as list_agents,
+    aget as aget_agent,
+    get as get_agent,
+    adelete as adelete_agent,
+    delete as delete_agent,
+    alist_versions as alist_agent_versions,
+    list_versions as list_agent_versions,
+)
+from .skills.main import (
+    create_skill,
+    acreate_skill,
+    list_skills,
+    alist_skills,
+    get_skill,
+    aget_skill,
+    delete_skill,
+    adelete_skill,
+)
+from .containers.main import *
 from .ocr.main import *
 from .rust_bridge import rust
 from .rag.main import *

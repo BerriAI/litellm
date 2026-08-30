@@ -20,6 +20,7 @@ import yaml
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+from starlette.datastructures import URL
 
 
 import litellm
@@ -9532,7 +9533,7 @@ def _lit6973_fake_realtime_ws() -> MagicMock:
     ws = MagicMock()
     ws.headers = {}
     ws.scope = {"headers": [], "type": "websocket"}
-    ws.url = "ws://testserver/v1/realtime"
+    ws.url = URL("ws://testserver/v1/realtime")
     ws.accept = AsyncMock()
     ws.send_text = AsyncMock()
     ws.close = AsyncMock()
