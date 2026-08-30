@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -141,5 +142,43 @@ def test_audio_predict_response_supports_bytes_base64_encoded(
         request_body={"instances": [{"prompt": "ambient piano"}]},
     )
 
+    assert result["kwargs"]["response_cost"] == pytest.approx(0.06)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.06)
+
+
+def test_lyria_predict_cost_falls_back_to_bundled_map_when_runtime_map_omits_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_runtime_model_cost: Final = {
+        key: value for key, value in litellm.model_cost.items() if key != "vertex_ai/lyria-002"
+    }
+    monkeypatch.setattr(litellm, "model_cost", stale_runtime_model_cost)
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    response = httpx.Response(
+        status_code=200,
+        json={
+            "predictions": [
+                {
+                    "audioContent": "clip",
+                    "mimeType": "audio/wav",
+                }
+            ]
+        },
+    )
+
+    result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+        httpx_response=response,
+        logging_obj=logging_obj,
+        url_route="/v1/projects/test/locations/us-central1/publishers/google/models/lyria-002:predict",
+        result=response.text,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body={"instances": [{"prompt": "ambient piano"}]},
+    )
+
+    assert "vertex_ai/lyria-002" not in litellm.model_cost
+    assert result["kwargs"]["model"] == "lyria-002"
     assert result["kwargs"]["response_cost"] == pytest.approx(0.06)
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.06)

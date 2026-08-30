@@ -1,5 +1,6 @@
 import asyncio
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
@@ -10,7 +11,10 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.vertex_ai.common_utils import get_vertex_location_from_url
+from litellm.llms.vertex_ai.common_utils import (
+    get_vertex_ai_lyria_model_info,
+    get_vertex_location_from_url,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
@@ -388,8 +392,18 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _get_audio_prediction_unit_cost(model: str) -> float | None:
-        model_info: Final = litellm.model_cost.get(f"vertex_ai/{model}")
-        if model_info is None:
+        runtime_unit_cost: Final = VertexPassthroughLoggingHandler._audio_prediction_unit_cost_from_model_info(
+            model_info=litellm.model_cost.get(f"vertex_ai/{model}")
+        )
+        if runtime_unit_cost is not None:
+            return runtime_unit_cost
+        return VertexPassthroughLoggingHandler._audio_prediction_unit_cost_from_model_info(
+            model_info=get_vertex_ai_lyria_model_info(model=model)
+        )
+
+    @staticmethod
+    def _audio_prediction_unit_cost_from_model_info(model_info: object) -> float | None:
+        if not isinstance(model_info, Mapping):
             return None
         output_cost_per_second: Final = model_info.get("output_cost_per_second")
         audio_seconds_per_prediction: Final = model_info.get("audio_seconds_per_prediction")

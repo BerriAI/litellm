@@ -28,6 +28,8 @@ class VertexAILyriaModelInfo(TypedDict):
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"]]
     supported_audio_formats: ReadOnly[tuple[Literal["mp3", "wav"], ...]]
     output_cost_per_image: NotRequired[ReadOnly[float]]
+    output_cost_per_second: NotRequired[ReadOnly[float]]
+    audio_seconds_per_prediction: NotRequired[ReadOnly[float]]
 
 
 _VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER: Final = TypeAdapter(VertexAILyriaModelInfo)
