@@ -40,6 +40,8 @@ pub mod metrics;
 #[cfg(feature = "server")]
 pub mod routes;
 #[cfg(feature = "server")]
+pub mod streaming;
+#[cfg(feature = "server")]
 pub mod state;
 #[cfg(feature = "server")]
 pub mod validation;
