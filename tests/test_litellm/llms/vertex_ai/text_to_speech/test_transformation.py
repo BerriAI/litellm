@@ -335,16 +335,17 @@ class TestVertexAILyriaTextToSpeechConfig:
             ),
         ],
     )
-    @patch.object(VertexAILyriaTextToSpeechConfig, "_ensure_access_token")
     def test_transform_request(
         self,
-        mock_ensure_token,
         model,
         response_format,
         expected_body,
     ):
-        mock_ensure_token.return_value = ("mock-token", "music-project")
-        config = VertexAILyriaTextToSpeechConfig()
+        class _LyriaConfig(VertexAILyriaTextToSpeechConfig):
+            def _ensure_access_token(self, *args: object, **kwargs: object) -> tuple[str, str]:
+                return "mock-token", "music-project"
+
+        config = _LyriaConfig()
 
         request = config.transform_text_to_speech_request(
             model=model,
@@ -514,12 +515,12 @@ class TestVertexAILyriaTextToSpeechConfig:
         mock_response.status_code = 200
         mock_response.json.return_value = response_json
         with (
-            patch.object(
+            patch.object(  # test-quality-ok: litellm.speech has no seam for Vertex token minting
                 VertexAILyriaTextToSpeechConfig,
                 "_ensure_access_token",
                 return_value=("mock-token", "music-project"),
             ),
-            patch(
+            patch(  # test-quality-ok: litellm.speech has no seam for the HTTP handler
                 "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post",
                 return_value=mock_response,
             ) as mock_post,
