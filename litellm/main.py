@@ -8214,7 +8214,7 @@ def speech(
         if api_key is not None:
             litellm_params_dict["api_key"] = api_key
 
-        response: Final = base_llm_http_handler.text_to_speech_handler(
+        response = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
             voice=voice_id,
@@ -8246,17 +8246,17 @@ def speech(
                 model=model,
                 llm_provider=custom_llm_provider,
             )
-        voice_id: Final = voice_input.strip()
+        gandr_voice_id: Final = voice_input.strip()
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
         if api_key is not None:
             litellm_params_dict["api_key"] = api_key
 
-        response = base_llm_http_handler.text_to_speech_handler(
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: every provider branch assigns response for the shared return
             model=model,
             input=input,
-            voice=voice_id,
+            voice=gandr_voice_id,
             text_to_speech_provider_config=gandr_config,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
