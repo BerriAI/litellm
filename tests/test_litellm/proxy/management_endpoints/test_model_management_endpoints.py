@@ -4469,12 +4469,6 @@ class TestEnforceRpmTpmOnModelAdd:
 
 
 class TestBlockModelResponseSerialization:
-    """POST /model/block and /model/unblock return the raw prisma row through this
-    route's `LiteLLM_ProxyModelTable | None` response validation. The row is not a
-    dict, so the dict-assuming before-validator used to raise AttributeError inside
-    FastAPI's serialization layer: a 500 for the caller after the DB write already
-    landed. The routes must serialize the row to a 200 with the updated blocked flag."""
-
     @pytest.mark.parametrize(
         ("route", "blocked"), [("/model/block", True), ("/model/unblock", False)]
     )
