@@ -27,7 +27,6 @@ def test_friendli_glm_5_3_flash_model_info():
     assert info["supports_max_reasoning_effort"] is True
     assert info["supports_tool_choice"] is True
     assert info["supports_prompt_caching"] is True
-    # Friendli serves image and video input
     assert info["supports_vision"] is True
     assert info["supports_image_input"] is True
     assert info["supports_video_input"] is True
