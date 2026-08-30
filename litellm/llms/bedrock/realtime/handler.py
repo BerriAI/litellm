@@ -94,7 +94,7 @@ class BedrockRealtime(BaseAWSLLM):
         aws_sts_endpoint: str | None = None,
         aws_bedrock_runtime_endpoint: str | None = None,
         aws_external_id: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         """
         Establish bidirectional streaming connection with Bedrock Nova Sonic.
@@ -166,13 +166,16 @@ class BedrockRealtime(BaseAWSLLM):
         )
         bedrock_client: Final = BedrockRuntimeClient(config=config)
 
+        async def open_bidirectional_stream() -> BedrockBidirectionalStream:
+            return await bedrock_client.invoke_model_with_bidirectional_stream(
+                InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
+            )
+
         transformation_config: Final = BedrockRealtimeConfig()
 
         try:
             # Initialize the bidirectional stream
-            bedrock_stream: Final = await bedrock_client.invoke_model_with_bidirectional_stream(
-                InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
-            )
+            bedrock_stream: Final = await open_bidirectional_stream()
 
             verbose_proxy_logger.debug("Bedrock Realtime: Bidirectional stream established")
 
@@ -243,10 +246,11 @@ class BedrockRealtime(BaseAWSLLM):
             InvokeModelWithBidirectionalStreamInputChunk,
         )
 
+        def build_input_chunk(payload: bytes) -> object:
+            return InvokeModelWithBidirectionalStreamInputChunk(value=BidirectionalInputPayloadPart(bytes_=payload))
+
         async def send_to_bedrock(bedrock_message: str) -> None:
-            event: Final = InvokeModelWithBidirectionalStreamInputChunk(
-                value=BidirectionalInputPayloadPart(bytes_=bedrock_message.encode("utf-8"))
-            )
+            event: Final = build_input_chunk(bedrock_message.encode("utf-8"))
             await bedrock_stream.input_stream.send(event)
             verbose_proxy_logger.debug("Bedrock Realtime: Sent to Bedrock: %s", bedrock_message[:200])
 
