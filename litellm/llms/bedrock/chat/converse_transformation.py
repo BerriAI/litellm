@@ -599,7 +599,9 @@ class AmazonConverseConfig(BaseConfig):
                     message=f"Bedrock doesn't support tool_choice={tool_choice}. To drop it from the call, set `litellm.drop_params = True.",
                     status_code=400,
                 )
-        elif tool_choice == "required":
+        elif tool_choice in ("required", "any"):
+            # Bedrock's native value for "call some tool" is literally `any`,
+            # so accepting "required" while rejecting "any" was incoherent.
             return ToolChoiceValuesBlock(any={})
         elif tool_choice == "auto":
             return ToolChoiceValuesBlock(auto={})
@@ -611,7 +613,7 @@ class AmazonConverseConfig(BaseConfig):
             return ToolChoiceValuesBlock(tool=specific_tool)
         else:
             raise litellm.utils.UnsupportedParamsError(
-                message=f"Bedrock doesn't support tool_choice={tool_choice}. Supported tool_choice values=['auto', 'required', json object]. To drop it from the call, set `litellm.drop_params = True.",
+                message=f"Bedrock doesn't support tool_choice={tool_choice}. Supported tool_choice values=['auto', 'required', 'any', json object]. To drop it from the call, set `litellm.drop_params = True.",
                 status_code=400,
             )
 
