@@ -14,7 +14,12 @@ from pydantic import BaseModel, JsonValue
 
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ModelResponse, ModelResponseStream
-from tests.route_parity.compare import validate_harness
+from tests.route_parity.compare import (
+    assert_request_parity,
+    assert_response_parity,
+    json_values_equal,
+    validate_harness,
+)
 from tests.route_parity.fixture_models import JsonObject
 from tests.route_parity.models import Execution, SDKCommand, SDKReport, WorkerFailure, WorkerResult, WorkerSuccess
 from tests.route_parity.runner import (
@@ -24,7 +29,7 @@ from tests.route_parity.runner import (
     parity_worker_main,
     run_execution,
 )
-from tests.test_litellm.rust_bridge.chat_completions_fixture_models import (
+from tests.test_litellm.rust_bridge.chat_completions.fixture_models import (
     AnthropicChatCompletionSdkInput,
     ChatCompletionParityCase,
 )
@@ -152,18 +157,10 @@ def sdk_workers() -> Generator[tuple[PythonScriptWorker, PythonScriptWorker]]:
         yield workers
 
 
-def _json_values_equal(left: JsonValue | _Missing, right: JsonValue | _Missing) -> bool:
+def _response_gap_values_equal(left: JsonValue | _Missing, right: JsonValue | _Missing) -> bool:
     if isinstance(left, _Missing) or isinstance(right, _Missing):
         return left is right
-    if type(left) is not type(right):
-        return False
-    if isinstance(left, dict) and isinstance(right, dict):
-        return left.keys() == right.keys() and all(_json_values_equal(left[key], right[key]) for key in left)
-    if isinstance(left, list) and isinstance(right, list):
-        return len(left) == len(right) and all(
-            _json_values_equal(left_value, right_value) for left_value, right_value in zip(left, right, strict=True)
-        )
-    return left == right
+    return json_values_equal(left, right)
 
 
 def _json_difference_paths(left: JsonValue, right: JsonValue, path: str = "$") -> tuple[str, ...]:
@@ -188,12 +185,7 @@ def _json_difference_paths(left: JsonValue, right: JsonValue, path: str = "$") -
             for index in range(len(left))
             for difference in _json_difference_paths(left[index], right[index], f"{path}[{index}]")
         )
-    return () if _json_values_equal(left, right) else (path,)
-
-
-def test_json_comparison_preserves_scalar_types() -> None:
-    assert _json_values_equal(False, 0) is False
-    assert _json_difference_paths(False, 0) == ("$",)
+    return () if json_values_equal(left, right) else (path,)
 
 
 def _json_value_at(value: JsonValue, path: JsonPath) -> JsonValue | _Missing:
@@ -212,28 +204,16 @@ def _format_json_path(path: JsonPath) -> str:
     return "$" + "".join(f"[{segment}]" if isinstance(segment, int) else f".{segment}" for segment in path)
 
 
-def _assert_request_parity(python: Execution, accelerated: Execution) -> None:
-    python_request: Final = cast(
-        JsonObject,
-        python.request.model_copy(update={"user_agent": None}).model_dump(mode="json"),
-    )
-    accelerated_request: Final = cast(
-        JsonObject,
-        accelerated.request.model_copy(update={"user_agent": None}).model_dump(mode="json"),
-    )
-    assert _json_values_equal(python_request, accelerated_request)
-
-
 def _assert_streaming_fallback(python: Execution, accelerated: Execution) -> None:
     assert python.request.user_agent == PYTHON_HTTP_SENTINEL
     assert accelerated.request.user_agent == PYTHON_HTTP_SENTINEL
-    _assert_request_parity(python, accelerated)
-    assert _json_values_equal(python.report.response, accelerated.report.response)
+    assert_request_parity(python, accelerated)
+    assert_response_parity(python, accelerated)
 
 
 def _assert_known_response_gaps(python: Execution, accelerated: Execution) -> None:
     validate_harness(python, accelerated, PYTHON_HTTP_SENTINEL)
-    _assert_request_parity(python, accelerated)
+    assert_request_parity(python, accelerated)
     completion_tokens: Final = _json_value_at(python.report.response, ("usage", "completion_tokens"))
     assert isinstance(completion_tokens, int) and not isinstance(completion_tokens, bool)
     response_gaps: Final = (
@@ -264,7 +244,8 @@ def _assert_known_response_gaps(python: Execution, accelerated: Execution) -> No
     )
     expected_values: Final = tuple((gap.python_value, gap.rust_value) for gap in response_gaps)
     assert all(
-        _json_values_equal(actual_python, expected_python) and _json_values_equal(actual_rust, expected_rust)
+        _response_gap_values_equal(actual_python, expected_python)
+        and _response_gap_values_equal(actual_rust, expected_rust)
         for (actual_python, actual_rust), (expected_python, expected_rust) in zip(
             actual_values,
             expected_values,
@@ -310,5 +291,5 @@ def _execute_worker_command(
 
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] != "--parity-worker":
-        raise SystemExit("usage: test_chat_completions_sdk_parity.py --parity-worker MOCK_URL")
+        raise SystemExit("usage: test_sdk_parity.py --parity-worker MOCK_URL")
     parity_worker_main(_execute_worker_command, sys.argv[2])

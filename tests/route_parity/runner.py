@@ -46,7 +46,7 @@ class PythonScriptRunner:
 
 class PythonScriptWorker:
     def __init__(self, runner: PythonScriptRunner, provider: ReplayServer, rust_enabled: bool) -> None:
-        project_root: Final = str(runner.entrypoint.resolve().parents[3])
+        project_root: Final = str(Path(__file__).resolve().parents[2])
         existing_pythonpath: Final = os.environ.get("PYTHONPATH")
         env: Final = {
             **os.environ,

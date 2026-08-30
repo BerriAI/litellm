@@ -5,7 +5,7 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
-from tests.route_parity.compare import assert_parity
+from tests.route_parity.compare import assert_parity, json_values_equal
 from tests.route_parity.models import CapturedRequest, Execution, SDKReport
 
 SENTINEL: Final = "python-parity-fallback"
@@ -46,3 +46,7 @@ def test_parity_rejects_rust_fallback() -> None:
 
     with pytest.raises(AssertionError, match="fell back"):
         assert_parity(python, rust, SENTINEL)
+
+
+def test_json_comparison_preserves_scalar_types() -> None:
+    assert json_values_equal(False, 0) is False

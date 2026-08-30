@@ -18,7 +18,7 @@ from tests.route_parity.fixture_generator import (
 )
 from tests.route_parity.fixture_generator import require_targets as require_fixture_targets
 from tests.route_parity.fixture_recorder import ProviderSpec, fixture_directory
-from tests.test_litellm.rust_bridge.chat_completions_fixture_models import (
+from tests.test_litellm.rust_bridge.chat_completions.fixture_models import (
     AnthropicChatCompletionSdkInput,
     ChatCompletionParityCase,
     ChatMessage,
@@ -93,7 +93,7 @@ def main() -> None:
     root: Final = fixture_directory(
         args.fixture_dir,
         os.environ.get(FIXTURE_DIR_ENV),
-        Path(__file__).with_name("chat_completions_fixtures"),
+        Path(__file__).with_name("fixtures"),
     )
     with patch.dict(os.environ, {"LITELLM_RUST": "0"}):
         for target in targets:

@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 
 from tests.route_parity.fixture_recorder import fixture_id, parametrize_recorded_fixtures
-from tests.test_litellm.rust_bridge.chat_completions_fixture_models import ChatCompletionParityCase
+from tests.test_litellm.rust_bridge.chat_completions.fixture_models import ChatCompletionParityCase
 
 FIXTURE_DIR_ENV: Final = "LITELLM_CHAT_COMPLETIONS_FIXTURE_DIR"
 
@@ -18,7 +18,7 @@ def _fixture_id(fixture: ChatCompletionParityCase) -> str:
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    default_directory: Final = Path(__file__).with_name("chat_completions_fixtures")
+    default_directory: Final = Path(__file__).with_name("fixtures")
     parametrize_recorded_fixtures(
         metafunc,
         fixture_name="chat_completion_fixture",
@@ -26,7 +26,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         env_var=FIXTURE_DIR_ENV,
         default_directory=default_directory,
         regeneration_command=(
-            "uv run python tests/test_litellm/rust_bridge/generate_chat_completions_fixtures.py "
+            "uv run python tests/test_litellm/rust_bridge/chat_completions/generate_fixtures.py "
             f"--fixture-dir {default_directory} --examples 2"
         ),
         id_builder=_fixture_id,
