@@ -7617,7 +7617,10 @@ async def amoderation(
 
 
 @client
-async def atranscription(*args, **kwargs) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:  # noqa: ANN002, ANN003  # public SDK wrapper preserves variadic call compatibility
+async def atranscription(
+    *args,  # noqa: ANN002  # public SDK wrapper preserves positional call compatibility
+    **kwargs,  # noqa: ANN003  # kwargs-ok: public SDK wrapper preserves keyword call compatibility
+) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:
     """
     Calls openai + azure whisper endpoints.
 
@@ -7670,7 +7673,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse | AsyncStream
             if existing_duration is None:
                 sync_calculated_duration: Final = calculate_request_duration(file)
                 if sync_calculated_duration is not None:
-                    response._hidden_params["audio_transcription_duration"] = sync_calculated_duration
+                    response.set_audio_transcription_duration(sync_calculated_duration)
 
         return response
     except Exception as e:
@@ -7996,7 +7999,7 @@ def transcription(
             if calculated_duration is not None:
                 response.__dict__["_litellm_audio_duration"] = calculated_duration
         elif getattr(response, "duration", None) is None and calculated_duration is not None:
-            response._hidden_params["audio_transcription_duration"] = calculated_duration
+            response.set_audio_transcription_duration(calculated_duration)
 
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")

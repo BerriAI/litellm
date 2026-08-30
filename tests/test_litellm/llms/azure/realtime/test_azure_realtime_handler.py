@@ -14,7 +14,6 @@ async def test_async_realtime_uses_max_size_parameter():
 
     This verifies the fix for: https://github.com/BerriAI/litellm/issues/15747
     """
-    from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
     from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
 
     handler = AzureOpenAIRealtime()
@@ -40,7 +39,9 @@ async def test_async_realtime_uses_max_size_parameter():
     shared_context = get_shared_realtime_ssl_context()
     with (
         patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
-        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
+        patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
     ):
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
@@ -316,7 +317,9 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
 
     with (
         patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
-        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
+        patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
     ):
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
@@ -373,7 +376,9 @@ async def test_async_realtime_ga_without_api_version():
 
     with (
         patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
-        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
+        patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
     ):
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
@@ -425,7 +430,6 @@ async def test_realtime_protocol_env_var_fallback():
     Test that LITELLM_AZURE_REALTIME_PROTOCOL env var is used as fallback.
     Fixes #22127: no way to set realtime_protocol from config.
     """
-    from litellm.realtime_api.main import _arealtime
     from litellm.types.router import GenericLiteLLMParams
 
     with patch.dict(os.environ, {"LITELLM_AZURE_REALTIME_PROTOCOL": "v1"}):
@@ -523,7 +527,9 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
 
     with (
         patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
-        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
+        patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
     ):
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance

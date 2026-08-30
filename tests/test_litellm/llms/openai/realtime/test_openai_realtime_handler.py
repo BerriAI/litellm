@@ -3,8 +3,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from openai import AsyncOpenAI, omit
 
-from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
-
 
 class DummySDKConnectionManager:
     def __init__(self, connection):
@@ -116,7 +114,9 @@ async def test_async_realtime_success():
     dummy_websocket = AsyncMock()
     dummy_logging_obj = MagicMock()
     sdk_client = make_realtime_sdk_client()
-    with patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+    with patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+        "litellm.llms.openai.realtime.handler.RealTimeStreaming"
+    ) as mock_realtime_streaming:
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -153,7 +153,9 @@ async def test_async_realtime_url_contains_model():
     dummy_websocket = AsyncMock()
     dummy_logging_obj = MagicMock()
     sdk_client = make_realtime_sdk_client()
-    with patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+    with patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+        "litellm.llms.openai.realtime.handler.RealTimeStreaming"
+    ) as mock_realtime_streaming:
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -188,7 +190,9 @@ async def test_async_realtime_transcription_omits_sdk_model_query():
     websocket = AsyncMock()
     logging_obj = MagicMock()
     sdk_client = make_realtime_sdk_client()
-    with patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+    with patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+        "litellm.llms.openai.realtime.handler.RealTimeStreaming"
+    ) as mock_realtime_streaming:
         mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
 
         await handler.async_realtime(
@@ -225,7 +229,9 @@ async def test_async_realtime_forwards_openai_beta_header_when_client_sends_it()
     }
     dummy_logging_obj = MagicMock()
     sdk_client = make_realtime_sdk_client()
-    with patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+    with patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+        "litellm.llms.openai.realtime.handler.RealTimeStreaming"
+    ) as mock_realtime_streaming:
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -268,7 +274,9 @@ async def test_async_realtime_uses_max_size_parameter():
     dummy_websocket = AsyncMock()
     dummy_logging_obj = MagicMock()
     sdk_client = make_realtime_sdk_client()
-    with patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+    with patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+        "litellm.llms.openai.realtime.handler.RealTimeStreaming"
+    ) as mock_realtime_streaming:
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -287,8 +295,7 @@ async def test_async_realtime_uses_max_size_parameter():
         called_kwargs = sdk_client.realtime.connect.call_args.kwargs
         connection_options = called_kwargs["websocket_connection_options"]
         assert connection_options["max_size"] is REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
-        assert connection_options["ssl"] is not None
-        assert connection_options["ssl"] is not False
+        assert "ssl" not in connection_options
 
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
@@ -314,7 +321,9 @@ async def test_async_realtime_ws_url_has_no_ssl():
     dummy_websocket = AsyncMock()
     dummy_logging_obj = MagicMock()
     sdk_client = make_realtime_sdk_client()
-    with patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+    with patch(  # test-quality-ok: orchestration test replaces the unbounded streaming loop
+        "litellm.llms.openai.realtime.handler.RealTimeStreaming"
+    ) as mock_realtime_streaming:
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -332,7 +341,7 @@ async def test_async_realtime_ws_url_has_no_ssl():
         sdk_client.realtime.connect.assert_called_once()
         called_kwargs = sdk_client.realtime.connect.call_args.kwargs
         assert called_kwargs["model"] == model
-        assert called_kwargs["websocket_connection_options"]["ssl"] is None
+        assert "ssl" not in called_kwargs["websocket_connection_options"]
 
 
 def test_translation_url_uses_dedicated_path():
@@ -365,10 +374,21 @@ async def test_translation_websocket_uses_direct_transport():
     websocket.close = AsyncMock()
     logging_obj = MagicMock()
     handler = OpenAIRealtime()
+    expected_url = "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
+    assert (
+        handler._construct_url(
+            api_base="https://api.openai.com/v1",
+            query_params={"model": "gpt-realtime-translate"},
+            realtime_mode="translation",
+        )
+        == expected_url
+    )
 
     with (
         patch("websockets.connect", return_value=TranslationConnectionManager()) as connect,
-        patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as streaming,
+        patch(  # test-quality-ok: transport test replaces the unbounded streaming loop
+            "litellm.llms.openai.realtime.handler.RealTimeStreaming"
+        ) as streaming,
     ):
         streaming.return_value.bidirectional_forward = AsyncMock()
         await handler.async_realtime(
@@ -382,5 +402,5 @@ async def test_translation_websocket_uses_direct_transport():
         )
 
     connect.assert_called_once()
-    assert connect.call_args.args[0] == ("wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate")
+    assert connect.call_args.args[0] == expected_url
     assert streaming.call_args.kwargs["translation_session"] is True

@@ -58,10 +58,7 @@ class TestDiarizedJsonUsageParsing:
         assert result.usage.seconds == 295.8
 
     def test_usage_duration_object_accepts_float_seconds(self):
-        assert (
-            TranscriptionUsageDurationObject(type="duration", seconds=295.8).seconds
-            == 295.8
-        )
+        assert TranscriptionUsageDurationObject(type="duration", seconds=295.8).seconds == 295.8
 
 
 class TestTranscriptionDurationNotInResponseBody:
@@ -129,7 +126,9 @@ class TestTranscriptionDurationNotInResponseBody:
 class TestCostCalculatorReadsDurationFromHiddenParams:
     """The cost calculator should read duration from _hidden_params via completion_cost()."""
 
-    @patch("litellm.cost_calculator.openai_cost_per_second")
+    @patch(  # test-quality-ok: isolates duration selection from the model pricing table
+        "litellm.cost_calculator.openai_cost_per_second"
+    )
     def test_completion_cost_prefers_provider_usage_duration(self, mock_cost_fn):
         mock_cost_fn.return_value = (0.001, 0.0)
         response = TranscriptionResponse(

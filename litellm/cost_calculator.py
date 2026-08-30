@@ -2577,7 +2577,7 @@ def handle_realtime_translation_cost_calculation(
     custom_llm_provider: str,
     litellm_model_name: str,
 ) -> float:
-    output_seconds = 0.0
+    output_seconds = 0.0  # rebind-ok: duration is accumulated across translation close events
     for result in results:
         if result.get("type") != _TRANSLATION_CLOSED_EVENT_TYPE:
             continue

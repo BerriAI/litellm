@@ -12,6 +12,7 @@ import httpx
 from httpx._types import FileContent
 from openai import AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
+from openai.types.realtime import RealtimeSessionCreateRequestParam
 
 import litellm
 import litellm.litellm_core_utils
@@ -5969,6 +5970,7 @@ class BaseLLMHTTPHandler:
             "BasePassthroughConfig",
             "BaseContainerConfig",
             BaseEvalsAPIConfig,
+            BaseRealtimeHTTPConfig,
         ],
     ):
         received_status_code: Final = (
@@ -6209,9 +6211,10 @@ class BaseLLMHTTPHandler:
         header auth when available; falls back to the legacy OpenAI-style defaults.
         """
         if use_openai_sdk:
-            normalized_api_base = api_base.rstrip("/")
-            if not normalized_api_base.endswith("/v1"):
-                normalized_api_base = f"{normalized_api_base}/v1"
+            trimmed_api_base: Final = api_base.rstrip("/")
+            normalized_api_base: Final = (
+                trimmed_api_base if trimmed_api_base.endswith("/v1") else f"{trimmed_api_base}/v1"
+            )
             owns_client: Final = not isinstance(client, AsyncOpenAI)
             openai_client: Final = (
                 client
@@ -6227,14 +6230,21 @@ class BaseLLMHTTPHandler:
                 },
             )
             try:
-                raw_response: Final = await openai_client.realtime.client_secrets.with_raw_response.create(
-                    **request_data,
-                    extra_headers=extra_headers,
+                configured_client: Final = openai_client.with_options(
                     timeout=timeout,
+                    set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
+                        key: str(value)  # mutable-ok: SDK headers are materialized as a concrete string mapping
+                        for key, value in (extra_headers or {}).items()  # mutable-ok: SDK requires concrete headers
+                    },
                 )
-                response_headers: Final = {
-                    key: value
-                    for key, value in raw_response.headers.items()
+                raw_response: Final = await configured_client.post(
+                    "/realtime/client_secrets",
+                    cast_to=httpx.Response,
+                    body=request_data,
+                )
+                response_headers: Final = {  # mutable-ok: httpx requires a concrete response-header mapping
+                    key: value  # mutable-ok: transport headers are materialized after filtering
+                    for key, value in raw_response.headers.items()  # mutable-ok: transport headers are materialized
                     if key.lower() not in ("content-encoding", "content-length", "transfer-encoding")
                 }
                 return httpx.Response(
@@ -6292,7 +6302,7 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: Mapping[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
@@ -6474,10 +6484,17 @@ class BaseLLMHTTPHandler:
                     cast_to=httpx.Response,
                     content=sdp_text.encode("utf-8"),
                 )
+            realtime_session_data: Final = cast(  # cast-ok: endpoint validation produced an OpenAI realtime session
+                RealtimeSessionCreateRequestParam,
+                session_data,
+            )
+            sdk_extra_headers: Final = {  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
+                key: str(value) for key, value in (extra_headers or {}).items()
+            }
             raw_response: Final = await openai_client.realtime.calls.with_raw_response.create(
                 sdp=sdp_text,
-                session=session_data,
-                extra_headers=extra_headers,
+                session=realtime_session_data,
+                extra_headers=sdk_extra_headers,
                 timeout=timeout,
             )
             return httpx.Response(
@@ -6522,13 +6539,17 @@ class BaseLLMHTTPHandler:
           - sdp: the SDP offer (text)
           - session: JSON string with {"type": "realtime", "model": "...", ...}
         """
-        session_data = {**(session_config or {})}  # mutable-ok: model and session type are resolved locally
+        session_data: Final[dict[str, object]] = {  # mutable-ok: model and session type are resolved locally
+            **(
+                session_config or {}  # mutable-ok: absent session configuration starts from an empty provider payload
+            )
+        }
         if "type" not in session_data:
             session_data["type"] = "translation" if translation else "realtime"
         if "model" not in session_data and model:
             session_data["model"] = model
 
-        sdp_text = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
+        sdp_text: Final = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
 
         if use_openai_sdk:
             return await self._async_realtime_calls_sdk(

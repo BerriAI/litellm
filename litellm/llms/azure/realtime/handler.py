@@ -86,21 +86,26 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         )
         intent: Final = (query_params or {}).get("intent")
 
-        if realtime_mode == "translation":
-            path = "/openai/v1/realtime/translations"
-            query_parts = (urlencode((("model", model),)),)
-        elif _is_ga:
-            path = "/openai/v1/realtime"
-            query_parts = ()
-            if intent != "transcription" and (query_params is None or "model" in query_params):
-                query_parts = (*query_parts, urlencode((("model", model),)))
-        else:
-            # Default to beta path for backwards compatibility
-            path = "/openai/realtime"
-            query_parts = (urlencode((("api-version", api_version), ("deployment", model))),)
+        path: Final = (
+            "/openai/v1/realtime/translations"
+            if realtime_mode == "translation"
+            else "/openai/v1/realtime"
+            if _is_ga
+            else "/openai/realtime"
+        )
+        base_query_parts: Final = (
+            (urlencode((("model", model),)),)
+            if realtime_mode == "translation"
+            else (
+                (urlencode((("model", model),)),)
+                if intent != "transcription" and (query_params is None or "model" in query_params)
+                else ()
+            )
+            if _is_ga
+            else (urlencode((("api-version", api_version), ("deployment", model))),)
+        )
 
-        if intent:
-            query_parts = (*query_parts, urlencode((("intent", intent),)))
+        query_parts: Final = (*base_query_parts, urlencode((("intent", intent),))) if intent else base_query_parts
 
         qs: Final = "&".join(query_parts)
         return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"

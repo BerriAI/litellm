@@ -445,15 +445,15 @@ class RealTimeStreaming:
         for event in self.messages:
             if event.get("type") != "session.closed":
                 continue
-            usage = event.get("usage")
-            if isinstance(usage, dict) and isinstance(usage.get("output_seconds"), (int, float)):
+            event_usage = event.get("usage")  # rebind-ok: each close event carries independent usage
+            if isinstance(event_usage, dict) and isinstance(event_usage.get("output_seconds"), (int, float)):
                 self._translation_usage_finalized = True
                 return
         if self._translation_output_audio_bytes == 0:
             return
         output_seconds: Final = self._translation_output_audio_bytes / self._translation_output_bytes_per_second
-        usage = OpenAIRealtimeTranslationDurationUsage(type="duration", output_seconds=output_seconds)
-        self.messages.append(OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=usage))
+        synthetic_usage: Final = OpenAIRealtimeTranslationDurationUsage(type="duration", output_seconds=output_seconds)
+        self.messages.append(OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=synthetic_usage))
         self._translation_usage_finalized = True
 
     async def _send_to_backend(self, message: str) -> bool:
@@ -552,7 +552,7 @@ class RealTimeStreaming:
 
         transcription: Final = session.get("input_audio_transcription")
         rewrite_flat: Final = isinstance(transcription, dict) and transcription.get("model") != authorized_model
-        if rewrite_flat:
+        if isinstance(transcription, dict) and rewrite_flat:
             session["input_audio_transcription"] = {
                 **transcription,
                 "model": authorized_model,
@@ -567,7 +567,12 @@ class RealTimeStreaming:
             and isinstance(nested_transcription, dict)
             and nested_transcription.get("model") != authorized_model
         )
-        if rewrite_nested:
+        if (
+            isinstance(audio, dict)
+            and isinstance(audio_input, dict)
+            and isinstance(nested_transcription, dict)
+            and rewrite_nested
+        ):
             session["audio"] = {
                 **audio,
                 "input": {
@@ -1040,7 +1045,10 @@ class RealTimeStreaming:
 
     async def _handle_provider_config_message(self, raw_response: str) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
-        returned_object: Final = self.provider_config.transform_realtime_response(
+        provider_config: Final = self.provider_config
+        if provider_config is None:
+            raise RuntimeError("Provider response handling requires a provider configuration")
+        returned_object: Final = provider_config.transform_realtime_response(
             raw_response,
             self.model,
             self.logging_obj,

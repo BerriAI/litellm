@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 
+import httpx
+
 import litellm
 from litellm.constants import (
     AZURE_GA_REALTIME_MODELS,
@@ -249,11 +251,11 @@ async def acreate_realtime_translation_client_secret(
     session: Mapping[str, Any] | None = None,
     expires_after: Mapping[str, Any] | None = None,
     timeout: float | None = None,
-    **kwargs,  # noqa: ANN003  # public client wrapper forwards provider-specific options
-):
+    **kwargs,  # noqa: ANN003  # kwargs-ok: public client wrapper forwards provider-specific options
+) -> httpx.Response:
     requested_model_name: Final = model or (session or {}).get("model") or "gpt-realtime-translate"
-    session_config: Final = RealtimeSessionConfig(
-        **{  # mutable-ok: Pydantic validates this request-scoped translation session payload
+    session_config: Final = RealtimeSessionConfig.model_validate(
+        {  # mutable-ok: Pydantic validates this request-scoped translation session payload
             **(session or {}),
             "type": "translation",
             "model": requested_model_name,
@@ -458,8 +460,8 @@ async def arealtime_translation_calls(
     model: str | None = None,
     session: Mapping[str, Any] | None = None,
     timeout: float | None = None,
-    **kwargs,  # noqa: ANN003  # public client wrapper forwards provider-specific options
-):
+    **kwargs,  # noqa: ANN003  # kwargs-ok: public client wrapper forwards provider-specific options
+) -> httpx.Response:
     requested_model_name: Final = model or "gpt-realtime-translate"
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(litellm_logging_obj, LiteLLMLogging):

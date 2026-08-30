@@ -84,7 +84,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         )
 
         response: Final = azure_client.audio.transcriptions.create(
-            **data,
+            **data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
             timeout=timeout,
         )
 
@@ -157,10 +157,14 @@ class AzureAudioTranscription(AzureChatCompletion):
             )
 
             if data.get("stream") is True:
-                return await async_azure_client.audio.transcriptions.create(**data, timeout=timeout)
+                return await async_azure_client.audio.transcriptions.create(
+                    **data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+                    timeout=timeout,
+                )
 
             raw_response: Final = await async_azure_client.audio.transcriptions.with_raw_response.create(
-                **data, timeout=timeout
+                **data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+                timeout=timeout,
             )
 
             headers: Final = dict(raw_response.headers)

@@ -1141,6 +1141,8 @@ def function_setup(
             applied_guardrails=applied_guardrails,
             supports_correlation_logging=is_async_call,
         )
+        if logging_obj is None:
+            raise RuntimeError("LiteLLM logging initialization returned no logger")
 
         ## check if metadata is passed in
         litellm_params: Final[dict[str, object]] = {"api_base": ""}

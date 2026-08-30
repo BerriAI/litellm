@@ -193,7 +193,6 @@ class OpenAIRealtime(OpenAIChatCompletion):
             extra_headers=headers,
             websocket_connection_options={  # mutable-ok: OpenAI SDK forwards a mutable options mapping
                 "max_size": REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-                "ssl": ssl_config,
             },
             max_retries=0,
         )

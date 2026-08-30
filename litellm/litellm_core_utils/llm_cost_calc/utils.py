@@ -893,10 +893,12 @@ def _calculate_input_cost(
         audio=prompt_tokens_details["audio_tokens"],
         image=prompt_tokens_details["image_tokens"],
     )
-    prompt_cost = float(effective_prompt_tokens.text) * prompt_base_cost
+    prompt_cost = (  # rebind-ok: modality and cache components accumulate into one input cost
+        float(effective_prompt_tokens.text) * prompt_base_cost
+    )
 
     ### CACHE READ COST - Now uses tiered pricing
-    prompt_cost += _calculate_cache_read_cost(
+    prompt_cost += _calculate_cache_read_cost(  # rebind-ok: cached-token cost contributes to input cost
         prompt_tokens_details=prompt_tokens_details,
         model_info=model_info,
         cache_read_cost=cache_read_cost,
@@ -906,7 +908,9 @@ def _calculate_input_cost(
     ### AUDIO COST
     if effective_prompt_tokens.audio:
         audio_cost_key: Final = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
-        prompt_cost += calculate_cost_component(model_info, audio_cost_key, effective_prompt_tokens.audio)
+        prompt_cost += calculate_cost_component(  # rebind-ok: audio cost contributes to input cost
+            model_info, audio_cost_key, effective_prompt_tokens.audio
+        )
 
     ### IMAGE TOKEN COST
     if effective_prompt_tokens.image:
@@ -915,7 +919,9 @@ def _calculate_input_cost(
         image_token_cost_key = "input_cost_per_image_token"
         if model_info.get(image_token_cost_key) is None:
             image_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, image_token_cost_key, effective_prompt_tokens.image)
+        prompt_cost += calculate_cost_component(  # rebind-ok: image cost contributes to input cost
+            model_info, image_token_cost_key, effective_prompt_tokens.image
+        )
 
     ### VIDEO TOKEN COST
     if prompt_tokens_details["video_tokens"]:
@@ -980,17 +986,23 @@ def _calculate_cache_read_cost(
     cached_image_tokens: Final = prompt_tokens_details["cached_image_tokens"]
     classified_cached_tokens: Final = cached_text_tokens + cached_audio_tokens + cached_image_tokens
     unclassified_cached_tokens: Final = max(prompt_tokens_details["cache_hit_tokens"] - classified_cached_tokens, 0)
-    total_cost = float(cached_text_tokens + unclassified_cached_tokens) * cache_read_cost
+    total_cost = (  # rebind-ok: cached modality components accumulate into one cache-read cost
+        float(cached_text_tokens + unclassified_cached_tokens) * cache_read_cost
+    )
 
     if cached_audio_tokens:
         cached_audio_cost_key: Final = _get_service_tier_cost_key("cache_read_input_audio_token_cost", service_tier)
         cached_audio_cost: Final = _get_cost_per_unit(model_info, cached_audio_cost_key, cache_read_cost)
-        total_cost += float(cached_audio_tokens) * float(cached_audio_cost or 0.0)
+        total_cost += (  # rebind-ok: cached audio contributes to cache-read cost
+            float(cached_audio_tokens) * float(cached_audio_cost or 0.0)
+        )
 
     if cached_image_tokens:
         cached_image_cost_key: Final = _get_service_tier_cost_key("cache_read_input_image_token_cost", service_tier)
         cached_image_cost: Final = _get_cost_per_unit(model_info, cached_image_cost_key, cache_read_cost)
-        total_cost += float(cached_image_tokens) * float(cached_image_cost or 0.0)
+        total_cost += (  # rebind-ok: cached images contribute to cache-read cost
+            float(cached_image_tokens) * float(cached_image_cost or 0.0)
+        )
 
     return total_cost
 
@@ -1014,10 +1026,13 @@ def _get_uncached_prompt_token_details(
         )
         unclassified_cached_tokens: Final = max(cache_hit_tokens - classified_cached_tokens, 0)
         modality_tokens: Final = text_tokens + audio_tokens + image_tokens + video_tokens
-        inferred_text_tokens = text_tokens + max(usage.prompt_tokens - modality_tokens - cache_creation_tokens, 0)
+        cached_inferred_text_tokens: Final = text_tokens + max(
+            usage.prompt_tokens - modality_tokens - cache_creation_tokens,
+            0,
+        )
         return _UncachedPromptTokens(
             text=max(
-                inferred_text_tokens - prompt_tokens_details["cached_text_tokens"] - unclassified_cached_tokens,
+                cached_inferred_text_tokens - prompt_tokens_details["cached_text_tokens"] - unclassified_cached_tokens,
                 0,
             ),
             audio=max(audio_tokens - prompt_tokens_details["cached_audio_tokens"], 0),
@@ -1042,12 +1057,12 @@ def _get_uncached_prompt_token_details(
             image=billable_image,
         )
     if text_tokens == 0 and prompt_tokens_details["image_count"] == 0:
-        inferred_text_tokens = max(
+        uncached_inferred_text_tokens: Final = max(
             usage.prompt_tokens - cache_hit_tokens - audio_tokens - cache_creation_tokens - image_tokens - video_tokens,
             0,
         )
         return _UncachedPromptTokens(
-            text=inferred_text_tokens,
+            text=uncached_inferred_text_tokens,
             audio=audio_tokens,
             image=image_tokens,
         )
@@ -1420,7 +1435,7 @@ def get_token_type_cost_breakdown(
     if not cache_creation_tokens:
         cache_creation_tokens = _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0))
 
-    cache_read_cost = (
+    cache_read_cost = (  # rebind-ok: provider-specific cache tiers adjust the base cache cost below
         _calculate_cache_read_cost(
             prompt_tokens_details=prompt_tokens_details,
             model_info=model_info,

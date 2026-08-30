@@ -339,7 +339,9 @@ RouteType = Literal[
     "alist_input_items",
     "_arealtime",  # private function for realtime API
     "acreate_realtime_client_secret",
+    "acreate_realtime_translation_client_secret",
     "arealtime_calls",
+    "arealtime_translation_calls",
     "acreate_realtime_transcription_session",
     "_aresponses_websocket",  # private function for responses WebSocket mode
     "aimage_edit",

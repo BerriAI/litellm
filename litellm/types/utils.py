@@ -2626,6 +2626,9 @@ class TranscriptionResponse(OpenAIObject):
     def __init__(self, text=None, usage=None, languages=None, **kwargs) -> None:  # noqa: ANN003  # OpenAI-compatible response accepts provider extension fields
         super().__init__(text=text, usage=usage, languages=languages, **kwargs)
 
+    def set_audio_transcription_duration(self, duration: float) -> None:
+        self._hidden_params["audio_transcription_duration"] = duration
+
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
