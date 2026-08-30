@@ -61,6 +61,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     Methods can be overridden to customize behavior for different message formats.
     """
 
+    delivers_ended_stream_text_rewrites = True
+
     def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
         """
         Convert chat completions request data to OpenAI-spec structured messages.
@@ -440,6 +442,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
+        deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
         """
         Process output streaming responses by applying guardrails to text content.
@@ -454,6 +457,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 accumulated text (``responses_so_far`` is left untouched so it stays
                 a correct raw accumulator across rounds) and the guardrailed text
                 plus requested holdback are reported per choice on the sink.
+            deliver_ended_stream_rewrites: When True and the buffered stream has
+                ended, guardrail text rewrites are written back across
+                ``responses_so_far`` (full rewritten text in each choice's first
+                content-carrying chunk, the rest blanked) instead of discarded.
 
         Returns:
             The (unmodified) list of responses.
@@ -479,6 +486,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             litellm_logging_obj=litellm_logging_obj,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
+            deliver_ended_stream_rewrites=deliver_ended_stream_rewrites,
         )
 
     async def _process_streaming_block_only(
@@ -489,10 +497,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: Any | None,
         request_data: dict | None,
+        deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
         """Block-only streaming path: run the guardrail so an in-flight BLOCK can
         terminate the stream. Text rewrites are not propagated to the client here
-        (see ``_process_streaming_transform`` for the incremental_diff path)."""
+        (see ``_process_streaming_transform`` for the incremental_diff path) unless
+        ``deliver_ended_stream_rewrites`` opts the ended-stream branch in."""
         # check if the stream has ended
         has_stream_ended = False
         for chunk in responses_so_far:
@@ -501,20 +511,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 break
 
         if has_stream_ended:
-            # convert to model response
-            model_response: Final = cast(
-                ModelResponse,
-                stream_chunk_builder(chunks=responses_so_far, logging_obj=litellm_logging_obj),
-            )
-            # run process_output_response
-            await self.process_output_response(
-                response=model_response,
+            await self._process_ended_stream(
+                responses_so_far=responses_so_far,
                 guardrail_to_apply=guardrail_to_apply,
                 litellm_logging_obj=litellm_logging_obj,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
+                deliver_ended_stream_rewrites=deliver_ended_stream_rewrites,
             )
-
             return responses_so_far
 
         # Step 0: Check if any response has text content to process
@@ -590,6 +594,38 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
         return responses_so_far
+
+    async def _process_ended_stream(
+        self,
+        *,
+        responses_so_far: list["ModelResponseStream"],  # mutable-ok: rewrites the caller's buffered chunks in place
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        user_api_key_dict: object,
+        request_data: dict[str, object] | None,  # mutable-ok: same request-payload shape the hooks take
+        deliver_ended_stream_rewrites: bool,
+    ) -> None:
+        """Ended-stream path: rebuild the full response, run the non-streaming
+        output guardrail against it, and (when opted in) write any text rewrite
+        back across the buffered chunks."""
+        model_response: Final = cast(
+            ModelResponse,
+            stream_chunk_builder(chunks=responses_so_far, logging_obj=litellm_logging_obj),
+        )
+        pre_guardrail_texts: Final = self._string_choice_contents(model_response)
+        await self.process_output_response(
+            response=model_response,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        )
+        if deliver_ended_stream_rewrites:
+            await self._write_ended_stream_text_rewrites(
+                responses_so_far=responses_so_far,
+                guardrailed_response=model_response,
+                pre_guardrail_texts=pre_guardrail_texts,
+            )
 
     @staticmethod
     def _accumulate_string_content_by_choice_index(
@@ -921,6 +957,41 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 existing_tool_call.function.arguments = func_dict["arguments"]
                             if "name" in func_dict:
                                 existing_tool_call.function.name = func_dict["name"]
+
+    @staticmethod
+    def _string_choice_contents(response: "ModelResponse") -> tuple[str | None, ...]:
+        return tuple(
+            choice.message.content if isinstance(choice.message.content, str) else None for choice in response.choices
+        )
+
+    async def _write_ended_stream_text_rewrites(
+        self,
+        responses_so_far: list["ModelResponseStream"],  # mutable-ok: rewrites the caller's buffered chunks in place
+        guardrailed_response: "ModelResponse",
+        pre_guardrail_texts: tuple[str | None, ...],
+    ) -> None:
+        """Write ended-stream guardrail text rewrites back across the buffered
+        chunks: each rewritten choice's full text lands in its first
+        content-carrying chunk and the rest are blanked, the same shape the
+        in-flight write-back uses. Chunks carrying only finish_reason or usage
+        stay untouched."""
+        post_guardrail_texts: Final = self._string_choice_contents(guardrailed_response)
+        changed: Final = tuple(
+            (choice_idx, after)
+            for choice_idx, (before, after) in enumerate(zip(pre_guardrail_texts, post_guardrail_texts))
+            if before is not None and after is not None and after != before
+        )
+        if not changed:
+            return
+        await self._apply_guardrail_responses_to_output_streaming(
+            responses=responses_so_far,
+            guardrailed_texts=[
+                after for _choice_idx, after in changed
+            ],  # mutable-ok: the callee's signature predates this change and takes lists
+            task_mappings=[
+                (choice_idx, None) for choice_idx, _after in changed
+            ],  # mutable-ok: the callee's signature predates this change and takes lists
+        )
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,

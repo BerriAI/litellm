@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.guardrail_translation.base_translation import (
         BaseTranslation,
     )
+    from litellm.proxy._types import UserAPIKeyAuth
 
 try:
     from fastapi.exceptions import HTTPException
@@ -44,7 +45,8 @@ except ImportError:
 class UndeliverableStreamRewrite(Exception):
     def __init__(self, guardrail_name: str) -> None:
         super().__init__(
-            f"Guardrail '{guardrail_name}' rewrote the streamed response, which streaming pipelines cannot deliver"
+            f"Guardrail '{guardrail_name}' rewrote the streamed response in a way this endpoint's "
+            "streaming pipeline cannot deliver"
         )
         self.guardrail_name: Final = guardrail_name
 
@@ -57,28 +59,31 @@ def _tool_call_shape(tool_call: object) -> tuple[object, object]:
     return (function.get("name"), function.get("arguments"))
 
 
-def _rewrote_texts(sent: Sequence[str] | None, returned: Sequence[str] | None) -> bool:
-    return sent is not None and returned is not None and list(returned) != list(sent)
+def _text_snapshot(texts: Sequence[str] | None) -> tuple[str, ...] | None:
+    return None if texts is None else tuple(texts)
 
 
-def _rewrote_tool_calls(sent: Sequence[object] | None, returned: Sequence[object] | None) -> bool:
-    if sent is None or returned is None:
-        return False
-    return [_tool_call_shape(tool_call) for tool_call in returned] != [
-        _tool_call_shape(tool_call) for tool_call in sent
-    ]
+def _tool_call_shapes(tool_calls: Sequence[object] | None) -> tuple[tuple[object, object], ...] | None:
+    return None if tool_calls is None else tuple(_tool_call_shape(tool_call) for tool_call in tool_calls)
+
+
+def _rewrote(sent: tuple[object, ...] | None, returned: tuple[object, ...] | None) -> bool:
+    return sent is not None and returned is not None and returned != sent
 
 
 class _StreamRewriteObserver(CustomGuardrail):
     """Stand-in handed to the endpoint translation in place of a streaming pipeline step's
-    guardrail. Translations cannot rewrite every buffered chunk consistently, so the gate
-    withholds the stream whenever the guardrail returned different output than it was given,
-    which for guardrails like Bedrock's ANONYMIZED action is only known at runtime."""
+    guardrail. It records whether the guardrail returned different output than it was given,
+    which for guardrails like Bedrock's ANONYMIZED action is only known at runtime. Text
+    rewrites are deliverable on translations that write them back across the buffered chunks
+    (``delivers_ended_stream_text_rewrites``); tool-call rewrites and text rewrites on any
+    other translation make the gate withhold the stream."""
 
     def __init__(self, inner: CustomGuardrail) -> None:
         super().__init__(guardrail_name=inner.guardrail_name)
         self.inner: Final = inner
-        self.rewrote = False
+        self.rewrote_texts = False
+        self.rewrote_tool_calls = False
 
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
@@ -90,13 +95,14 @@ class _StreamRewriteObserver(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
+        sent_texts: Final = _text_snapshot(inputs.get("texts"))
+        sent_tool_shapes: Final = _tool_call_shapes(inputs.get("tool_calls"))
         outputs: Final = await self.inner.apply_guardrail(
             inputs=inputs, request_data=request_data, input_type=input_type, logging_obj=logging_obj
         )
-        self.rewrote = (
-            self.rewrote
-            or _rewrote_texts(inputs.get("texts"), outputs.get("texts"))
-            or _rewrote_tool_calls(inputs.get("tool_calls"), outputs.get("tool_calls"))
+        self.rewrote_texts = self.rewrote_texts or _rewrote(sent_texts, _text_snapshot(outputs.get("texts")))
+        self.rewrote_tool_calls = self.rewrote_tool_calls or _rewrote(
+            sent_tool_shapes, _tool_call_shapes(outputs.get("tool_calls"))
         )
         return outputs
 
@@ -251,6 +257,41 @@ class PipelineExecutor:
         )
 
     @staticmethod
+    async def _run_streaming_step(
+        step: PipelineStep,
+        callback: CustomGuardrail,
+        endpoint_translation: "BaseTranslation",
+        streaming_chunks: list[object],  # mutable-ok: shared buffered-stream chunks the translation rewrites in place
+        hook_input: dict[str, object],  # mutable-ok: same request-payload shape as data
+        user_api_key_dict: "UserAPIKeyAuth | None",
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+    ) -> None:
+        """Run one streaming post_call step through the endpoint translation, delivering
+        text rewrites on translations that support ended-stream write-back and raising
+        ``UndeliverableStreamRewrite`` for any rewrite that cannot reach the client."""
+        observer: Final = _StreamRewriteObserver(callback)
+        deliver_rewrites: Final = type(endpoint_translation).delivers_ended_stream_text_rewrites
+        if deliver_rewrites:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=streaming_chunks,
+                guardrail_to_apply=observer,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=hook_input,
+                deliver_ended_stream_rewrites=True,
+            )
+        else:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=streaming_chunks,
+                guardrail_to_apply=observer,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=hook_input,
+            )
+        if observer.rewrote_tool_calls or (observer.rewrote_texts and not deliver_rewrites):
+            raise UndeliverableStreamRewrite(step.guardrail)
+
+    @staticmethod
     async def _run_step(
         step: PipelineStep,
         mode: str,
@@ -312,16 +353,15 @@ class PipelineExecutor:
                         f"Guardrail '{step.guardrail}' does not support streaming pipeline execution",
                         None,
                     )
-                observer: Final = _StreamRewriteObserver(callback)
-                await endpoint_translation.process_output_streaming_response(
-                    responses_so_far=streaming_chunks,
-                    guardrail_to_apply=observer,
-                    litellm_logging_obj=data.get("litellm_logging_obj"),
+                await PipelineExecutor._run_streaming_step(
+                    step=step,
+                    callback=callback,
+                    endpoint_translation=endpoint_translation,
+                    streaming_chunks=streaming_chunks,
+                    hook_input=hook_input,
                     user_api_key_dict=user_api_key_dict,
-                    request_data=hook_input,
+                    litellm_logging_obj=data.get("litellm_logging_obj"),
                 )
-                if observer.rewrote:
-                    raise UndeliverableStreamRewrite(step.guardrail)
                 response = None
             elif mode == "post_call":
                 response = await target.async_post_call_success_hook(
