@@ -48,7 +48,7 @@ _STRUCTURED_ERROR_SIGNAL_KEYS: Final = (
 )
 
 
-def _normalise_structured_marker(value: Any) -> str:
+def _normalise_structured_marker(value: object) -> str:
     """Normalize provider code/type values for marker comparison."""
     if not isinstance(value, (int, str)):
         return ""
@@ -78,7 +78,7 @@ def _structured_validation_signal(
     *,
     error_str: str,
     response: httpx.Response | None = None,
-    error_body: Any | None = None,
+    error_body: object | None = None,
 ) -> bool:
     """Return whether the provider supplies an explicit validation signal."""
     payloads: list[dict[str, Any]] = []
@@ -87,7 +87,7 @@ def _structured_validation_signal(
     if response is not None:
         try:
             response_payload = response.json()
-        except Exception:
+        except (TypeError, ValueError):
             response_payload = None
         if isinstance(response_payload, dict):
             payloads.append(response_payload)
@@ -126,7 +126,7 @@ class ExceptionCheckers:
         status_code: int | None = None,
         *,
         response: httpx.Response | None = None,
-        error_body: Any | None = None,
+        error_body: object | None = None,
     ) -> bool:
         """
         Check if an error string indicates a rate limit error.
