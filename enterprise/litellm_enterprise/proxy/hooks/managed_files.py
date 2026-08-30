@@ -308,7 +308,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             file_purpose=file_purpose,
             file_object=file_object,
         )
-
         await self.internal_usage_cache.async_set_cache(
             key=unified_object_id,
             value=litellm_managed_object.model_dump(),
