@@ -35,6 +35,7 @@ prometheus = "0.13"
 tower = { version = "0.5.3", features = ["limit"] }
 tower-http = { version = "0.6", features = ["timeout"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 notify = "7"
 parking_lot.workspace = true
 smallvec.workspace = true
