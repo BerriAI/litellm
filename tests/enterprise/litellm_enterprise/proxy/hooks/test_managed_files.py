@@ -3227,7 +3227,7 @@ async def test_team_b_cannot_access_team_a_provider_format_batch(
 
     assert exc_info.value.status_code == 403
     prisma_client.db.litellm_managedobjecttable.find_first.assert_awaited_once_with(
-        where={"unified_object_id": batch_id}
+        where={"OR": [{"unified_object_id": batch_id}, {"model_object_id": batch_id}]}
     )
 
 
@@ -3360,7 +3360,7 @@ async def test_team_b_cannot_access_team_a_provider_format_file(
 
     assert exc_info.value.status_code == 403
     prisma_client.db.litellm_managedfiletable.find_first.assert_awaited_once_with(
-        where={"unified_file_id": file_id}
+        where={"OR": [{"unified_file_id": file_id}, {"flat_model_file_ids": {"has": file_id}}]}
     )
 
 

@@ -438,7 +438,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return
         managed_object = (
             await self.prisma_client.db.litellm_managedobjecttable.find_first(
-                where={"unified_object_id": object_id}
+                where={"OR": [{"unified_object_id": object_id}, {"model_object_id": object_id}]}
             )
         )
         if managed_object is None:
@@ -466,7 +466,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return
         managed_file = (
             await self.prisma_client.db.litellm_managedfiletable.find_first(
-                where={"unified_file_id": file_id}
+                where={"OR": [{"unified_file_id": file_id}, {"flat_model_file_ids": {"has": file_id}}]}
             )
         )
         if managed_file is None:
