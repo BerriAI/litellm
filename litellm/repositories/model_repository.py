@@ -115,6 +115,25 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         all_models: Final = await self.find_all()
         return [m for m in all_models if m.team_id == team_id]
 
+    async def find_by_team_public_name(self, team_id: str, model_name: str) -> list[LiteLLM_ProxyModelTable]:
+        """Find a team's model by its caller-facing alias."""
+        from prisma import Json  # noqa: LIT004  # optional proxy dependency; pyright: ignore[reportUnknownVariableType]
+
+        records: Final = await self.table.find_many(
+            where={
+                "AND": [
+                    {"model_info": {"path": ["team_id"], "equals": Json(team_id)}},
+                    {
+                        "model_info": {
+                            "path": ["team_public_model_name"],
+                            "equals": Json(model_name),
+                        }
+                    },
+                ]
+            }
+        )
+        return self._to_model_list(records)
+
     async def create_model(
         self,
         model_name: str,

@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
@@ -34,13 +34,13 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreListResponse,
@@ -65,28 +65,6 @@ _LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker()
 
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
-
-# Use-time embedding-config resolution runs on every vector-store request
-# whose persisted row carries only a model reference (the post-fix shape).
-# Without a cache, that's one ``litellm_proxymodeltable.find_first`` per
-# request — the no-DB-in-critical-path rule. Hold the resolved config in
-# memory for a short TTL so a hot model name pays the DB lookup at most
-# once per ``_EMBEDDING_CONFIG_CACHE_TTL`` seconds. Cleartext credentials
-# only ever live in process memory (never persisted, never echoed in
-# management responses), so the cache doesn't widen the disclosure surface.
-_EMBEDDING_CONFIG_CACHE_TTL: Final = 60
-_EMBEDDING_CONFIG_CACHE_MAX_SIZE: Final = 256
-_embedding_config_cache: InMemoryCache | None = None
-
-
-def _get_embedding_config_cache() -> InMemoryCache:
-    global _embedding_config_cache
-    if _embedding_config_cache is None:
-        _embedding_config_cache = InMemoryCache(
-            max_size_in_memory=_EMBEDDING_CONFIG_CACHE_MAX_SIZE,
-            default_ttl=_EMBEDDING_CONFIG_CACHE_TTL,
-        )
-    return _embedding_config_cache
 
 
 def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> Any:
@@ -157,20 +135,38 @@ async def _fetch_and_authorize_vector_store(
     return typed
 
 
+def _resolve_embedding_secret(value: object) -> object:
+    if isinstance(value, str) and value.startswith("os.environ/"):
+        return get_secret_str(value)
+    return value
+
+
 def _embedding_config_from_params(params: Mapping[str, object]) -> Mapping[str, object]:
+    resolved_params: Final = dict(params)
+    credential_name: Final = resolved_params.pop("litellm_credential_name", None)
+    if isinstance(credential_name, str):
+        resolved_params.update(CredentialAccessor.get_credential_values(credential_name))
+
+    credential_params: Final[Mapping[str, object]] = CredentialLiteLLMParams.model_validate(resolved_params).model_dump(
+        exclude_none=True
+    )
+    routing_params: Final[dict[str, str]] = {
+        key: value
+        for key in ("model", "custom_llm_provider", "project_id")
+        if isinstance(value := resolved_params.get(key), str) and value
+    }
     return MappingProxyType(
         {
-            key: get_secret(value)
-            if key in ("api_key", "api_base") and isinstance(value, str) and value.startswith("os.environ/")
-            else value
-            for key, value in params.items()
-            if key in ("model", "custom_llm_provider", "api_key", "api_base", "api_version", "project_id") and value
+            key: _resolve_embedding_secret(value) if key in ("api_key", "api_base") else value
+            for key, value in {**credential_params, **routing_params}.items()
         }
     )
 
 
 def _resolve_embedding_config_from_router(
-    embedding_model: str, llm_router: "Router | None"
+    embedding_model: str,
+    llm_router: "Router | None",
+    team_id: str | None = None,
 ) -> Mapping[str, object] | None:
     if not embedding_model or llm_router is None:
         return None
@@ -180,10 +176,15 @@ def _resolve_embedding_config_from_router(
     )
     for model_name in model_name_candidates:
         try:
-            deployment = llm_router.get_deployment_by_model_group_name(model_group_name=model_name)
-            if deployment is None:
+            if (
+                credentials := llm_router.get_deployment_credentials_with_provider(
+                    model_id=model_name,
+                    team_id=team_id,
+                    enforce_team_access=True,
+                )
+            ) is None:
                 continue
-            return _embedding_config_from_params(deployment.litellm_params.model_dump(exclude_none=True))
+            return _embedding_config_from_params(credentials)
         except Exception as error:
             verbose_proxy_logger.debug(
                 "Error resolving embedding config from router for model %s: %s", model_name, error
@@ -192,7 +193,9 @@ def _resolve_embedding_config_from_router(
 
 
 async def _resolve_embedding_config_from_db(
-    embedding_model: str, prisma_client: "PrismaClient"
+    embedding_model: str,
+    prisma_client: "PrismaClient",
+    team_id: str | None = None,
 ) -> Mapping[str, object] | None:
     """
     Resolve embedding config from database model configuration.
@@ -203,12 +206,15 @@ async def _resolve_embedding_config_from_db(
     Args:
         embedding_model: The embedding model string (e.g., "text-embedding-ada-002" or "azure/text-embedding-3-large")
         prisma_client: The Prisma client instance
+        team_id: Optional team id used to exclude deployments owned by other teams
 
     Returns:
         Embedding model, provider, and connection settings if found, None otherwise
     """
     if not embedding_model:
         return None
+
+    repository: Final = ModelRepository(prisma_client)
 
     # Extract model name - could be "text-embedding-ada-002" or "azure/text-embedding-3-large"
     # Try to find model by exact match first, then try without provider prefix
@@ -221,29 +227,21 @@ async def _resolve_embedding_config_from_db(
     # Try to find model in database
     for model_name in model_name_candidates:
         try:
-            db_model = await ModelRepository(prisma_client).table.find_first(where={"model_name": model_name})
+            if team_id is not None:
+                db_models = await repository.find_by_team_public_name(team_id, model_name)
+                if not db_models:
+                    db_models = await repository.find_by_name(model_name)
+            else:
+                db_models = await repository.find_by_name(model_name)
 
-            if db_model and db_model.litellm_params:
-                # Extract litellm_params (could be dict or JSON string)
-                model_params = db_model.litellm_params
-                if isinstance(model_params, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json is str
-                    model_params = json.loads(model_params)
+            for db_model in db_models:
+                if db_model.blocked or (db_model.team_id is not None and db_model.team_id != team_id):
+                    continue
+                model_params: Mapping[str, object] = db_model.litellm_params
+                if not model_params:
+                    continue
 
-                # Decrypt values from database (similar to how proxy_server.py does it)
-                # Values stored in DB are encrypted, so we need to decrypt them first
-                decrypted_params = {}
-                if isinstance(model_params, dict):
-                    for k, v in model_params.items():
-                        if isinstance(v, str):
-                            # Decrypt value - returns original value if decryption fails or no key is set
-                            decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=True)
-                            decrypted_params[k] = decrypted_value
-                        else:
-                            decrypted_params[k] = v
-                else:
-                    decrypted_params = model_params
-
-                embedding_config = _embedding_config_from_params(decrypted_params)
+                embedding_config = _embedding_config_from_params(model_params)
                 if embedding_config:
                     verbose_proxy_logger.debug(
                         "Resolved embedding config from database model %s: %s", model_name, tuple(embedding_config)
@@ -257,18 +255,16 @@ async def _resolve_embedding_config_from_db(
 
 
 async def _resolve_embedding_config(
-    embedding_model: str, prisma_client: "PrismaClient | None", llm_router: "Router | None" = None
+    embedding_model: str,
+    prisma_client: "PrismaClient | None",
+    llm_router: "Router | None" = None,
+    team_id: str | None = None,
 ) -> Mapping[str, object] | None:
     """
     Resolve embedding config from either router (config-defined) or database models.
 
     This function first checks the router for config-defined models, then falls back
     to the database. This allows users to use models defined in either location.
-
-    Results are cached in process memory for ``_EMBEDDING_CONFIG_CACHE_TTL``
-    seconds so the request-handling path doesn't hit the database on every
-    vector-store call. Negative results (model not found) are intentionally
-    not cached to avoid blocking a freshly-added model behind the TTL.
 
     Args:
         embedding_model: The embedding model string (e.g., "text-embedding-ada-002" or "azure/text-embedding-3-large")
@@ -281,11 +277,6 @@ async def _resolve_embedding_config(
     if not embedding_model:
         return None
 
-    cache: Final = _get_embedding_config_cache()
-    cached: Final = cache.get_cache(embedding_model)
-    if cached is not None:
-        return cached
-
     # Import llm_router if not provided
     if llm_router is None:
         try:
@@ -295,20 +286,24 @@ async def _resolve_embedding_config(
 
     # First try to resolve from router (config-defined models)
     if llm_router is not None:
-        router_config = _resolve_embedding_config_from_router(embedding_model=embedding_model, llm_router=llm_router)
+        router_config = _resolve_embedding_config_from_router(
+            embedding_model=embedding_model,
+            llm_router=llm_router,
+            team_id=team_id,
+        )
         if router_config:
             verbose_proxy_logger.debug("Resolved embedding config from router for model %s", embedding_model)
-            cache.set_cache(embedding_model, router_config)
             return router_config
 
     # Fall back to database
     if prisma_client is not None:
         db_config: Final = await _resolve_embedding_config_from_db(
-            embedding_model=embedding_model, prisma_client=prisma_client
+            embedding_model=embedding_model,
+            prisma_client=prisma_client,
+            team_id=team_id,
         )
         if db_config:
             verbose_proxy_logger.debug("Resolved embedding config from database for model %s", embedding_model)
-            cache.set_cache(embedding_model, db_config)
             return db_config
 
     verbose_proxy_logger.debug(

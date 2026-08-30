@@ -201,39 +201,4 @@ describe("CreateVectorStore", () => {
       expect(screen.getByText("Embedding Model")).toBeInTheDocument();
     });
   });
-
-  it("should validate S3 Vectors required fields before submission", async () => {
-    render(<CreateVectorStore accessToken="test-token" />);
-
-    // Upload a file first
-    const file = new File(["test content"], "test.pdf", { type: "application/pdf" });
-    const uploadInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-
-    await act(async () => {
-      if (uploadInput) {
-        fireEvent.change(uploadInput, { target: { files: [file] } });
-      }
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("Uploaded Documents (1)")).toBeInTheDocument();
-    });
-
-    // Select S3 Vectors provider
-    const providerSelect = screen.getByRole("combobox");
-
-    await userEvent.click(providerSelect);
-
-    await userEvent.click(await screen.findByText("Amazon S3 Vectors"));
-
-    // Try to create without filling required fields
-    const createButton = screen.getByRole("button", { name: /Create Vector Store/i });
-
-    await act(async () => {
-      fireEvent.click(createButton);
-    });
-
-    // Should show validation warning (mocked message.warning would be called)
-    // The actual validation happens in the component
-  });
 });

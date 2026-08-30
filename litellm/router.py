@@ -9544,7 +9544,10 @@ class Router:
         )
 
     def get_deployment_credentials_with_provider(
-        self, model_id: str, team_id: str | None = None
+        self,
+        model_id: str,
+        team_id: str | None = None,
+        enforce_team_access: bool = False,
     ) -> dict[str, Any] | None:
         """
         Get API credentials and provider info from a model name in model_list.
@@ -9561,6 +9564,9 @@ class Router:
                 wildcard lookups never resolve a deployment owned by a
                 different team, so shared model names can't leak another
                 team's credentials.
+            enforce_team_access: Reject team-owned deployment IDs for unscoped
+                callers. Request paths should enable this; trusted internal
+                callers that already selected a deployment can use the default.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -9574,12 +9580,14 @@ class Router:
         """
         # Try to get deployment by model_id first
         deployment = self.get_deployment(model_id=model_id)
+        if (
+            (team_id is not None or enforce_team_access)
+            and deployment is not None
+            and not self._deployment_usable_by_team(deployment, team_id)
+        ):
+            deployment = None
 
-        # If not found, try by model_group_name
-        if deployment is None:
-            deployment = self._get_model_group_deployment_usable_by_team(model_group_name=model_id, team_id=team_id)
-
-        # If not found, check team-scoped deployments whose team public model
+        # Check team-scoped deployments whose team public model
         # name exactly matches model_id (wildcard team names are matched via
         # team_pattern_routers below).
         if deployment is None and team_id is not None:
@@ -9587,6 +9595,10 @@ class Router:
             if team_indices:
                 team_model: Final = self.model_list[team_indices[0]]
                 deployment = Deployment(**team_model) if isinstance(team_model, dict) else team_model
+
+        # If not found, try by model_group_name
+        if deployment is None:
+            deployment = self._get_model_group_deployment_usable_by_team(model_group_name=model_id, team_id=team_id)
 
         # If still not found, check for wildcard pattern matches. Team wildcard
         # matches take priority so a global pattern (e.g. "openai/*") doesn't

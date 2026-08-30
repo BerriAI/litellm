@@ -1,4 +1,3 @@
-from types import MappingProxyType
 from typing import (
     Annotated,
     Any,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
@@ -72,15 +71,15 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
                 from litellm.proxy.proxy_server import prisma_client
 
                 resolved_config: Final = await _resolve_embedding_config(
-                    embedding_model=embedding_model, prisma_client=prisma_client
+                    embedding_model=embedding_model,
+                    prisma_client=prisma_client,
+                    team_id=user_api_key_dict.team_id if user_api_key_dict is not None else None,
                 )
                 if resolved_config:
-                    embedding_config: Final = MappingProxyType(
-                        {
-                            **resolved_config,
-                            **(litellm_params.get("litellm_embedding_config") or MappingProxyType({})),
-                        }
-                    )
+                    embedding_config: Final = {
+                        **(litellm_params.get("litellm_embedding_config") or {}),
+                        **resolved_config,
+                    }
                     litellm_params = {
                         **litellm_params,
                         "litellm_embedding_model": embedding_config.get("model", embedding_model),

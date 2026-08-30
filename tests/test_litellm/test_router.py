@@ -4739,6 +4739,69 @@ def test_get_deployment_credentials_with_provider_no_fallback_to_other_team_only
     )
 
 
+def test_get_deployment_credentials_with_provider_scopes_exact_deployment_id():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "vertex_project": "team-b-project",
+                },
+                "model_info": {"id": "team-b-vertex", "team_id": "team-b"},
+            },
+        ]
+    )
+
+    assert (
+        router.get_deployment_credentials_with_provider(model_id="team-b-vertex", team_id="team-a") is None
+    )
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="team-b-vertex", enforce_team_access=True
+        )
+        is None
+    )
+    unscoped_credentials = router.get_deployment_credentials_with_provider(model_id="team-b-vertex")
+    assert unscoped_credentials is not None
+    assert unscoped_credentials["vertex_project"] == "team-b-project"
+    owner_credentials = router.get_deployment_credentials_with_provider(
+        model_id="team-b-vertex", team_id="team-b"
+    )
+    assert owner_credentials is not None
+    assert owner_credentials["vertex_project"] == "team-b-project"
+
+
+def test_get_deployment_credentials_with_provider_prioritizes_team_public_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "shared-alias",
+                "litellm_params": {"model": "openai/global-model", "api_key": "global-key"},
+            },
+            {
+                "model_name": "model_name_team-a_123",
+                "litellm_params": {"model": "openai/team-model", "api_key": "team-key"},
+                "model_info": {
+                    "id": "team-model-id",
+                    "team_id": "team-a",
+                    "team_public_model_name": "shared-alias",
+                },
+            },
+        ]
+    )
+
+    team_credentials = router.get_deployment_credentials_with_provider(
+        model_id="shared-alias", team_id="team-a"
+    )
+    assert team_credentials is not None
+    assert team_credentials["api_key"] == "team-key"
+
+    global_credentials = router.get_deployment_credentials_with_provider(model_id="shared-alias")
+    assert global_credentials is not None
+    assert global_credentials["api_key"] == "global-key"
+
+
 def test_deployment_usable_by_team_helpers():
     """
     Direct coverage of the team-ownership filter: a team-scoped deployment is

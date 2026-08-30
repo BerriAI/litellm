@@ -767,3 +767,83 @@ describe("daily activity api_key filter", () => {
     expect(requestedUrl(mockFetch)).toContain("user_id=");
   });
 });
+
+describe("ragIngestCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("serializes the embedding model separately from S3 vector store options", async () => {
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ status: "completed", vector_store_id: "vs-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    global.fetch = mockFetch;
+
+    await Networking.ragIngestCall(
+      "token",
+      new File(["content"], "test.txt"),
+      "s3_vectors",
+      undefined,
+      undefined,
+      undefined,
+      {
+        embedding_model: "text-embedding-3-large",
+        vector_bucket_name: "test-bucket",
+        aws_region_name: "us-west-2",
+      },
+    );
+
+    const request: RequestInit = mockFetch.mock.calls[0][1] ?? {};
+    const body = request.body as FormData;
+    expect(JSON.parse(String(body.get("request")))).toEqual({
+      ingest_options: {
+        embedding: { model: "text-embedding-3-large" },
+        vector_store: {
+          custom_llm_provider: "s3_vectors",
+          vector_bucket_name: "test-bucket",
+          aws_region_name: "us-west-2",
+        },
+      },
+    });
+  });
+
+  it("keeps the embedding model in non-S3 vector store options", async () => {
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ status: "completed", vector_store_id: "vs-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    global.fetch = mockFetch;
+
+    await Networking.ragIngestCall(
+      "token",
+      new File(["content"], "test.txt"),
+      "bedrock",
+      undefined,
+      undefined,
+      undefined,
+      {
+        embedding_model: "amazon.titan-embed-text-v2:0",
+        aws_region_name: "us-west-2",
+      },
+    );
+
+    const request: RequestInit = mockFetch.mock.calls[0][1] ?? {};
+    const body = request.body as FormData;
+    expect(JSON.parse(String(body.get("request")))).toEqual({
+      ingest_options: {
+        vector_store: {
+          custom_llm_provider: "bedrock",
+          embedding_model: "amazon.titan-embed-text-v2:0",
+          aws_region_name: "us-west-2",
+        },
+      },
+    });
+  });
+});
