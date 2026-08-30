@@ -1057,11 +1057,13 @@ def test_bedrock_tools_pt_forwards_freeform_tool_without_custom_field():
 
 def test_bedrock_tools_pt_still_drops_unnamed_builtin_tools():
     """Responses built-in tools (web_search, image_generation, ...) have no top-level
-    name and no Bedrock toolSpec equivalent; they must stay dropped.
+    name and no Bedrock toolSpec equivalent; they must stay dropped. A `custom`-typed
+    tool without a name is equally unmappable — only a named one is forwarded.
     """
     tools = [
         {"type": "web_search_preview"},
         {"type": "image_generation"},
+        {"type": "custom"},
     ]
     assert _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5") == []
 
