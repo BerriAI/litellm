@@ -14867,14 +14867,14 @@ export interface paths {
          * @description [PROXY-ADMIN ONLY] Filter teams based on partial match of team_id or team_alias with pagination.
          *
          *     Args:
-         *         user_id (Optional[str]): Partial user ID to search for
-         *         user_email (Optional[str]): Partial email to search for
+         *         team_id (Optional[str]): Partial team ID to search for
+         *         team_alias (Optional[str]): Partial team alias to search for
          *         page (int): Page number for pagination (starts at 1)
          *         page_size (int): Number of items per page (max 100)
          *         user_api_key_dict (UserAPIKeyAuth): User authentication information
          *
          *     Returns:
-         *         List[LiteLLM_SpendLogs]: Paginated list of matching user records
+         *         List[LiteLLM_TeamTable]: Paginated list of matching team records
          */
         get: operations["ui_view_teams_team_filter_ui_get"];
         put?: never;
@@ -16362,8 +16362,8 @@ export interface paths {
          *             - internal_user_viewer
          *         user_ids: Optional[str]
          *             Get list of users by user_ids. Comma separated list of user_ids.
-         *         sso_ids: Optional[str]
-         *             Get list of users by sso_ids. Comma separated list of sso_ids.
+         *         sso_user_ids: Optional[str]
+         *             Get list of users by sso_user_ids. Comma separated list of sso_user_ids.
          *         user_email: Optional[str]
          *             Filter users by partial email match
          *         team: Optional[str]
