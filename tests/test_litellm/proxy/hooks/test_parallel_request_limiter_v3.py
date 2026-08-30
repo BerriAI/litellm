@@ -29,6 +29,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
+    descriptor_window_key,
+    legacy_descriptor_window_key,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.caching import RedisPipelineIncrementOperation
@@ -6406,3 +6408,22 @@ def test_is_cache_list_over_limit_ignores_counter_from_expired_window(time_contr
     # Without now_int the legacy (window-blind) behavior is preserved.
     response = parallel_request_handler.is_cache_list_over_limit(keys_to_fetch, ["0", 3], key_metadata)
     assert response["overall_code"] == "OVER_LIMIT"
+
+
+@pytest.mark.asyncio
+async def test_new_window_keys_backfill_active_legacy_window(time_controller):
+    """A rolling upgrade preserves an active legacy window in the new keys."""
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+    descriptor_key = "api_key"
+    descriptor_value = "sk-24677-migration"
+    legacy_key = legacy_descriptor_window_key(descriptor_key, descriptor_value)
+    new_key = descriptor_window_key(descriptor_key, descriptor_value, "requests")
+
+    await local_cache.async_set_cache(key=legacy_key, value="100", ttl=60)
+    await parallel_request_handler._backfill_legacy_window_keys([new_key])
+
+    assert await local_cache.async_get_cache(key=new_key) == 100
