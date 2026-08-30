@@ -20,6 +20,18 @@ pub struct Deployment {
     /// Public alias clients request, e.g. `gpt-realtime`.
     pub model_name: String,
     pub litellm_params: LiteLLMParams,
+    /// Whether the deployment is healthy (can receive traffic).
+    #[serde(default)]
+    pub healthy: Option<bool>,
+    /// Weight for weighted routing (higher = more traffic).
+    #[serde(default)]
+    pub weight: Option<u32>,
+    /// Input cost per token (for cost-based routing).
+    #[serde(default)]
+    pub input_cost_per_token: Option<f64>,
+    /// Output cost per token (for cost-based routing).
+    #[serde(default)]
+    pub output_cost_per_token: Option<f64>,
 }
 
 #[cfg(test)]

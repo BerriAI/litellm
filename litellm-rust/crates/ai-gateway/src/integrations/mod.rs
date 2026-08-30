@@ -6,7 +6,13 @@
 //!     to the Python proxy's `/v1/rust_control_plane/logs` endpoint
 //!   - [`types`] — the typed `StandardLoggingPayload` wire contract
 
+pub mod callback_tests;
 pub mod custom_guardrail;
 pub mod custom_logger;
+pub mod datadog;
+pub mod langfuse;
 pub mod litellm_python_proxy_api;
+pub mod opentelemetry;
+pub mod slack;
 pub mod types;
+pub mod webhooks;

@@ -5,14 +5,16 @@ use reqwest::Client;
 
 use crate::auth::circuit_breaker::CircuitBreakerRegistry;
 use crate::hardening::{AuditLogShipper, GlobalRateLimiter, SecretRotator};
+use crate::integrations::custom_guardrail::CustomGuardrailRunner;
+use crate::integrations::custom_logger::CustomLogger;
 use crate::io::realtime_pool::RealtimePool;
 use crate::metrics::GatewayMetrics;
+use crate::middleware::alerting::AlertingState;
+use crate::middleware::csrf::CsrfState;
 use litellm_core::auth::KeyCache;
 use litellm_core::persistence::{PostgresStore, RedisStore};
 use litellm_core::router::Router;
 use litellm_core::spend_tracking::SpendWorker;
-
-use crate::integrations::custom_logger::CustomLogger;
 
 /// Configuration values read once from the environment at startup.
 /// Avoids per-request `std::env::var()` allocations on the hot path.
@@ -88,6 +90,12 @@ pub struct AppState {
     pub secret_rotator: Option<Arc<SecretRotator>>,
     /// Audit log shipper for external log delivery.
     pub audit_log_shipper: Option<Arc<AuditLogShipper>>,
+    /// Guardrail runner for pre-call and post-call content moderation.
+    pub guardrail_runner: Arc<CustomGuardrailRunner>,
+    /// CSRF protection state for token-based validation.
+    pub csrf_state: Arc<CsrfState>,
+    /// Alerting state for error rate and latency monitoring.
+    pub alerting_state: Arc<AlertingState>,
 }
 
 impl AppState {

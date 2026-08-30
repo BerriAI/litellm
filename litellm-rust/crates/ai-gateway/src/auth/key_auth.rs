@@ -68,17 +68,7 @@ impl From<AuthRejection> for (StatusCode, String) {
 
 /// Extract the raw API key from request headers. Zero-alloc: borrows from Parts.
 fn extract_raw_key<'a>(parts: &'a Parts) -> Option<&'a str> {
-    for &header_name in KEY_HEADERS {
-        if let Some(value) = parts.headers.get(header_name) {
-            if let Ok(s) = value.to_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed);
-                }
-            }
-        }
-    }
-
+    // Check Authorization header first (standard HTTP auth)
     if let Some(auth) = parts.headers.get(AUTHORIZATION) {
         if let Ok(value) = auth.to_str() {
             let trimmed = value.trim();
@@ -92,6 +82,18 @@ fn extract_raw_key<'a>(parts: &'a Parts) -> Option<&'a str> {
             }
             if !trimmed.is_empty() {
                 return Some(trimmed);
+            }
+        }
+    }
+
+    // Then check custom key headers
+    for &header_name in KEY_HEADERS {
+        if let Some(value) = parts.headers.get(header_name) {
+            if let Ok(s) = value.to_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed);
+                }
             }
         }
     }

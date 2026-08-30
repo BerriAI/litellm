@@ -182,6 +182,10 @@ mod tests {
                     api_key: Some("upstream-key".to_string()),
                     api_base: Some(api_base),
                 },
+                healthy: Some(true),
+                weight: None,
+                input_cost_per_token: None,
+                output_cost_per_token: None,
             }])),
             master_key: master_key.map(Arc::from),
             loggers: Arc::new(Vec::new()),
@@ -199,6 +203,7 @@ mod tests {
             global_rate_limiter: Arc::new(crate::hardening::GlobalRateLimiter::new(10_000, 60)),
             secret_rotator: None,
             audit_log_shipper: None,
+            guardrail_runner: Arc::new(crate::integrations::custom_guardrail::CustomGuardrailRunner::new(Vec::new())),
         }
     }
 

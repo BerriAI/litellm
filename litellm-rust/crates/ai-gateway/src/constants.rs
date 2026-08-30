@@ -49,3 +49,38 @@ pub(crate) const CHAT_COMPLETIONS_ROUTE_PATH: &str = "/v1/chat/completions";
 #[cfg(feature = "server")]
 pub(crate) const CHAT_COMPLETIONS_HEADERS_NOT_FORWARDED: &[&str] =
     &["authorization", "connection", "content-length", "host"];
+
+/// HTTP path for the OpenAI-compatible embeddings route.
+#[cfg(feature = "server")]
+pub(crate) const EMBEDDINGS_ROUTE_PATH: &str = "/v1/embeddings";
+
+/// Request headers owned by the gateway and never forwarded upstream for embeddings.
+#[cfg(feature = "server")]
+pub(crate) const EMBEDDINGS_HEADERS_NOT_FORWARDED: &[&str] =
+    &["authorization", "connection", "content-length", "host"];
+
+/// HTTP path for the OpenAI-compatible images generation route.
+#[cfg(feature = "server")]
+pub(crate) const IMAGES_ROUTE_PATH_GENERATIONS: &str = "/v1/images/generations";
+
+/// HTTP path for the OpenAI-compatible images edit route.
+#[cfg(feature = "server")]
+pub(crate) const IMAGES_ROUTE_PATH_EDITS: &str = "/v1/images/edits";
+
+/// Request headers owned by the gateway and never forwarded upstream for images.
+#[cfg(feature = "server")]
+pub(crate) const IMAGES_HEADERS_NOT_FORWARDED: &[&str] =
+    &["authorization", "connection", "content-length", "host"];
+
+/// HTTP path for the OpenAI-compatible audio speech (TTS) route.
+#[cfg(feature = "server")]
+pub(crate) const AUDIO_ROUTE_PATH_SPEECH: &str = "/v1/audio/speech";
+
+/// HTTP path for the OpenAI-compatible audio transcriptions (STT) route.
+#[cfg(feature = "server")]
+pub(crate) const AUDIO_ROUTE_PATH_TRANSCRIPTIONS: &str = "/v1/audio/transcriptions";
+
+/// Request headers owned by the gateway and never forwarded upstream for audio.
+#[cfg(feature = "server")]
+pub(crate) const AUDIO_HEADERS_NOT_FORWARDED: &[&str] =
+    &["authorization", "connection", "content-length", "host"];

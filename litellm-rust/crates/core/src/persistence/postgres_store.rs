@@ -171,3 +171,182 @@ impl DatabaseStore for PostgresStore {
         Ok(())
     }
 }
+
+impl PostgresStore {
+    /// Get key information by hashed token.
+    pub async fn get_key_by_hashed_token(&self, hashed_token: &str) -> Result<Option<Value>, PersistenceError> {
+        let row: Option<(Value,)> = sqlx::query_as(
+            r#"
+            SELECT row_to_json(t)
+            FROM (
+                SELECT token, key_name, key_alias, user_id, team_id, org_id,
+                       max_budget, budget_duration, spend, models,
+                       tpm_limit, rpm_limit, allowed_routes, metadata
+                FROM "LiteLLM_VerificationToken"
+                WHERE token = $1
+            ) t
+            "#,
+        )
+        .bind(hashed_token)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| PersistenceError::Postgres(format!("get_key_by_hashed_token failed: {e}")))?;
+
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Get spend logs with optional filtering and pagination.
+    pub async fn get_spend_logs(
+        &self,
+        start_time: Option<&str>,
+        end_time: Option<&str>,
+        user_id: Option<&str>,
+        team_id: Option<&str>,
+        model: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Value>, PersistenceError> {
+        // Build query with all possible filters
+        let rows: Vec<(Value,)> = if let (Some(start), Some(end), Some(user), Some(team), Some(m)) =
+            (start_time, end_time, user_id, team_id, model)
+        {
+            sqlx::query_as(
+                r#"
+                SELECT row_to_json(t)
+                FROM (
+                    SELECT request_id, call_type, api_key, spend,
+                           total_tokens, prompt_tokens, completion_tokens,
+                           model, "user", team_id, organization_id,
+                           metadata, "startTime", "endTime", status
+                    FROM "LiteLLM_SpendLogs"
+                    WHERE "startTime" >= $1 AND "endTime" <= $2
+                      AND "user" = $3 AND team_id = $4 AND model = $5
+                    ORDER BY "startTime" DESC
+                    LIMIT $6 OFFSET $7
+                ) t
+                "#,
+            )
+            .bind(start)
+            .bind(end)
+            .bind(user)
+            .bind(team)
+            .bind(m)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PersistenceError::Postgres(format!("get_spend_logs failed: {e}")))?
+        } else if let (Some(start), Some(end)) = (start_time, end_time) {
+            sqlx::query_as(
+                r#"
+                SELECT row_to_json(t)
+                FROM (
+                    SELECT request_id, call_type, api_key, spend,
+                           total_tokens, prompt_tokens, completion_tokens,
+                           model, "user", team_id, organization_id,
+                           metadata, "startTime", "endTime", status
+                    FROM "LiteLLM_SpendLogs"
+                    WHERE "startTime" >= $1 AND "endTime" <= $2
+                    ORDER BY "startTime" DESC
+                    LIMIT $3 OFFSET $4
+                ) t
+                "#,
+            )
+            .bind(start)
+            .bind(end)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PersistenceError::Postgres(format!("get_spend_logs failed: {e}")))?
+        } else {
+            sqlx::query_as(
+                r#"
+                SELECT row_to_json(t)
+                FROM (
+                    SELECT request_id, call_type, api_key, spend,
+                           total_tokens, prompt_tokens, completion_tokens,
+                           model, "user", team_id, organization_id,
+                           metadata, "startTime", "endTime", status
+                    FROM "LiteLLM_SpendLogs"
+                    ORDER BY "startTime" DESC
+                    LIMIT $1 OFFSET $2
+                ) t
+                "#,
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PersistenceError::Postgres(format!("get_spend_logs failed: {e}")))?
+        };
+
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Get user information by user ID.
+    pub async fn get_user_by_id(&self, user_id: &str) -> Result<Option<Value>, PersistenceError> {
+        let row: Option<(Value,)> = sqlx::query_as(
+            r#"
+            SELECT row_to_json(t)
+            FROM (
+                SELECT user_id, user_email, user_role, max_budget,
+                       budget_duration, spend, models, tpm_limit, rpm_limit,
+                       metadata, "createdAt", "updatedAt"
+                FROM "LiteLLM_UserTable"
+                WHERE user_id = $1
+            ) t
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| PersistenceError::Postgres(format!("get_user_by_id failed: {e}")))?;
+
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Get team information by team ID.
+    pub async fn get_team_by_id(&self, team_id: &str) -> Result<Option<Value>, PersistenceError> {
+        let row: Option<(Value,)> = sqlx::query_as(
+            r#"
+            SELECT row_to_json(t)
+            FROM (
+                SELECT team_id, team_alias, organization_id, max_budget,
+                       budget_duration, spend, models, tpm_limit, rpm_limit,
+                       metadata, "createdAt", "updatedAt"
+                FROM "LiteLLM_TeamTable"
+                WHERE team_id = $1
+            ) t
+            "#,
+        )
+        .bind(team_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| PersistenceError::Postgres(format!("get_team_by_id failed: {e}")))?;
+
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Get organization information by organization ID.
+    pub async fn get_organization_by_id(&self, org_id: &str) -> Result<Option<Value>, PersistenceError> {
+        let row: Option<(Value,)> = sqlx::query_as(
+            r#"
+            SELECT row_to_json(t)
+            FROM (
+                SELECT org_id, organization_alias, max_budget,
+                       budget_duration, spend, models, tpm_limit, rpm_limit,
+                       metadata, "createdAt", "updatedAt"
+                FROM "LiteLLM_OrganizationTable"
+                WHERE org_id = $1
+            ) t
+            "#,
+        )
+        .bind(org_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| PersistenceError::Postgres(format!("get_organization_by_id failed: {e}")))?;
+
+        Ok(row.map(|r| r.0))
+    }
+}

@@ -23,6 +23,10 @@ mod tests {
                 api_key: None,
                 api_base: None,
             },
+            healthy: Some(true),
+            weight: None,
+            input_cost_per_token: None,
+            output_cost_per_token: None,
         }
     }
 

@@ -30,6 +30,18 @@ pub(crate) const CHAT_COMPLETIONS_TIMEOUT_SECS: u64 = 600;
 /// Connect timeout for chat completions provider calls, in seconds.
 pub(crate) const CHAT_COMPLETIONS_CONNECT_TIMEOUT_SECS: u64 = 10;
 
+/// Full-request timeout ceiling for embeddings provider calls, in seconds.
+pub(crate) const EMBEDDINGS_TIMEOUT_SECS: u64 = 600;
+
+/// Connect timeout for embeddings provider calls, in seconds.
+pub(crate) const EMBEDDINGS_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// Full-request timeout ceiling for images provider calls, in seconds.
+pub(crate) const IMAGES_TIMEOUT_SECS: u64 = 600;
+
+/// Connect timeout for images provider calls, in seconds.
+pub(crate) const IMAGES_CONNECT_TIMEOUT_SECS: u64 = 10;
+
 /// `object` field every non-streaming chat completion response carries.
 pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 
