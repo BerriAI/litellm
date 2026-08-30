@@ -1099,6 +1099,25 @@ def is_empty_thinking_block(block: object) -> bool:
     return not isinstance(thinking, str) or not thinking.strip()
 
 
+def is_empty_unsigned_thinking_block(block: object) -> bool:
+    """
+    True for an empty ``{"type": "thinking"}`` block carrying no signature.
+
+    The emit-side predicate: response paths drop a thinking block only when it
+    holds nothing the client could need.  A signature-only block is a real
+    provider response (Bedrock Converse under adaptive thinking emits a
+    reasoning block with empty text and only a signature) and the client needs
+    the signature to replay reasoning across tool-use turns, so it must be
+    emitted.  Request paths keep using :func:`is_empty_thinking_block`:
+    Anthropic rejects empty thinking blocks in request history regardless of
+    signature, and the inbound strip self-heals a replayed signature-only
+    block.
+    """
+    if not isinstance(block, dict) or not is_empty_thinking_block(block):
+        return False
+    return not block.get("signature")
+
+
 def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     """
     Normalize a tool_use / tool_result id for Anthropic's ``^[a-zA-Z0-9_-]+$``

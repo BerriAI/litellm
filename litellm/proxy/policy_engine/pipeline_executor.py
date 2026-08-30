@@ -185,7 +185,7 @@ class PipelineExecutor:
             # snapshot instead of `data` (which earlier pass_data steps in
             # this same pipeline may have already rewritten), same reason
             # the normal sequential/parallel guardrail loops do this.
-            scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+            scans_raw_request: Final = callback.scan_raw_request
             hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
                 independent_snapshot(raw_request_snapshot)
                 if scans_raw_request and raw_request_snapshot is not None

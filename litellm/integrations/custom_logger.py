@@ -2,7 +2,7 @@
 #    On success, logs events to Promptlayer
 import re
 import traceback
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
@@ -123,11 +123,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             return []
 
         callbacks: Final = AllCallbacks()
-        callback_info: Final = getattr(callbacks, lookup_name, None)
+        callback_info: Final[object] = getattr(callbacks, lookup_name, None)
         if callback_info is None:
             return []
 
-        params: Final = getattr(callback_info, "litellm_callback_params", None)
+        params: Final[Sequence[str] | None] = getattr(callback_info, "litellm_callback_params", None)
         if not params:
             return []
 
@@ -851,7 +851,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             - Converting to string and then truncating the logged content catches this
         2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
         """
-        field_value: Final = standard_logging_object.get(field_name)
+        field_value: Final[object] = standard_logging_object.get(field_name)
         if field_value:
             str_value: Final = str(field_value)
             if len(str_value) > max_length:
@@ -1005,8 +1005,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
           • Keep untyped or text content.
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
-        raw_messages: Final[Any] = payload.get("messages", [])
-        messages: Final[list[Any]] = raw_messages if isinstance(raw_messages, list) else []
+        raw_messages: Final[object] = payload.get("messages", [])
+        messages: Final[list[object]] = raw_messages if isinstance(raw_messages, list) else []
         verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
 
         if messages:
@@ -1037,8 +1037,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
           • Keep untyped or text content.
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
-        raw_messages: Final[Any] = payload.get("messages", [])
-        messages: Final[list[Any]] = raw_messages if isinstance(raw_messages, list) else []
+        raw_messages: Final[object] = payload.get("messages", [])
+        messages: Final[list[object]] = raw_messages if isinstance(raw_messages, list) else []
         verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
 
         if messages:
@@ -1059,7 +1059,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         value: Any,
         depth: int = 0,
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
-    ) -> Any:
+    ) -> object:
         """Recursively redact inline base64 from any nested structure with a max recursion depth limit."""
         if depth > max_depth:
             verbose_logger.warning("[CustomLogger] Max recursion depth %s reached while redacting base64", max_depth)
@@ -1090,16 +1090,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     def _process_messages(
         self,
-        messages: list[Any],
+        messages: list[object],
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
-    ) -> list[dict[str, Any]]:
-        filtered_messages: Final[list[dict[str, Any]]] = []
+    ) -> list[dict[str, object]]:
+        filtered_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
-            contents: Any = msg.get("content")
+            contents: object = msg.get("content")
             if isinstance(contents, list):
-                cleaned: list[Any] = []
+                cleaned: list[object] = []
                 for c in contents:
                     if self._should_keep_content(content=c):
                         cleaned.append(self._redact_base64(value=c, max_depth=max_depth))
