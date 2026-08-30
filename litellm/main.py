@@ -8458,12 +8458,16 @@ async def ahealth_check(
         api_base_from_params: Final = model_params.get("api_base", None)
         api_key_from_params: Final = model_params.get("api_key", None)
 
-        model, custom_llm_provider, _, _ = get_llm_provider(
+        model, custom_llm_provider, dynamic_api_key, returned_api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
+        if returned_api_base is not None and not model_params.get("api_base"):
+            model_params["api_base"] = returned_api_base
+        if dynamic_api_key is not None and not model_params.get("api_key"):
+            model_params["api_key"] = dynamic_api_key
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
