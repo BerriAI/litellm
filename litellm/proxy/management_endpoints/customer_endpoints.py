@@ -19,10 +19,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
     from prisma.models import LiteLLM_BudgetTable as PrismaBudgetRow
     from prisma.models import LiteLLM_EndUserTable as PrismaEndUserRow
-
-    from litellm.proxy.utils import PrismaClient
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -676,6 +675,16 @@ async def update_end_user(
         if budget_table_data:
             if end_user_budget_table is None:
                 ## Create new budget ##
+                # Compute budget_reset_at from budget_duration when creating a new budget,
+                # matching the behavior of new_budget_request (fixes #33941)
+                if (
+                    budget_table_data.get("budget_reset_at") is None
+                    and budget_table_data.get("budget_duration") is not None
+                ):
+                    budget_table_data["budget_reset_at"] = datetime.utcnow() + timedelta(
+                        seconds=duration_in_seconds(duration=budget_table_data["budget_duration"])
+                    )
+
                 budget_table_data_record = await _typed_table(BudgetRepository(prisma_client)).create(
                     data={
                         **budget_table_data,
@@ -688,6 +697,16 @@ async def update_end_user(
                 update_end_user_table_data["budget_id"] = budget_table_data_record.budget_id
             else:
                 ## Update existing budget ##
+                # Recompute budget_reset_at when the update changes budget_duration,
+                # so the budget reset schedule stays in sync (fixes #33941)
+                if (
+                    budget_table_data.get("budget_reset_at") is None
+                    and budget_table_data.get("budget_duration") is not None
+                ):
+                    budget_table_data["budget_reset_at"] = datetime.utcnow() + timedelta(
+                        seconds=duration_in_seconds(duration=budget_table_data["budget_duration"])
+                    )
+
                 budget_table_data_record = await _typed_table(BudgetRepository(prisma_client)).update(
                     where={"budget_id": end_user_budget_table.budget_id},
                     data=budget_table_data,

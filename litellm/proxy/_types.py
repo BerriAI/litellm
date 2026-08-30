@@ -1848,6 +1848,7 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     alias: str | None = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: float | None = None
+    budget_duration: str | None = None  # e.g. '1hr', '1d', '28d' - budget reset interval
     budget_id: str | None = None  # give either a budget_id or max_budget
     allowed_model_region: AllowedModelRegion | None = (
         None  # require all user requests to use models in this specific region
@@ -2479,10 +2480,6 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_request_size_mb: int | None = Field(
         None,
         description="max request size in MB, if a request is larger than this size it will be rejected",
-    )
-    max_batch_file_size_mb: int | None = Field(
-        None,
-        description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
     max_response_size_mb: int | None = Field(
         None,
