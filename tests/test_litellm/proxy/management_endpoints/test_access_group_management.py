@@ -665,6 +665,10 @@ class _FakeAccessGroupBudgetTable:
     async def find_unique(self, where, include=None):
         return self._resolve(self.rows.get(where["access_group_name"]), include)
 
+    async def find_many(self, include=None):
+        self.journal.append("access_group_budget.find_many")
+        return [self._resolve(row, include) for row in self.rows.values()]
+
     async def upsert(self, where, data, include=None):
         access_group_name = where["access_group_name"]
         self.upsert_calls.append(dict(data))
@@ -1124,6 +1128,53 @@ async def test_access_group_info_surfaces_the_budget_and_spend():
     assert info.budget is not None
     assert info.budget.max_budget == 100.0
     assert info.budget.soft_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_list_access_groups_carries_each_group_budget_and_spend():
+    """The dashboard renders the budget column straight off the listing, so a group's budget has to
+    ride along with it rather than needing a follow-up read per row."""
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        list_access_groups,
+    )
+
+    journal: list[str] = []
+    prisma = _FakePrismaClient(
+        journal,
+        deployments=[
+            _deployment(model_id="deploy-1", model_name="gpt-4o", access_groups=("prod-models",)),
+            _deployment(model_id="deploy-2", model_name="gpt-4o-mini", access_groups=("free-models",)),
+        ],
+    )
+    _seed_budget(prisma, "prod-models", spend=9.5, max_budget=100.0, budget_duration="30d")
+
+    with _proxy(prisma):
+        listing = await list_access_groups(user_api_key_dict=_admin())
+
+    by_name = {group.access_group: group for group in listing.access_groups}
+    assert [group.access_group for group in listing.access_groups] == ["free-models", "prod-models"]
+    assert by_name["prod-models"].spend == 9.5
+    assert by_name["prod-models"].budget is not None
+    assert by_name["prod-models"].budget.max_budget == 100.0
+    assert by_name["prod-models"].budget.budget_duration == "30d"
+    assert journal.count("access_group_budget.find_many") == 1
+
+
+@pytest.mark.asyncio
+async def test_list_access_groups_reports_a_budgetless_group_as_unbudgeted_rather_than_omitting_it():
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        list_access_groups,
+    )
+
+    prisma = _FakePrismaClient([], deployments=[_deployment(access_groups=("free-models",))])
+
+    with _proxy(prisma):
+        listing = await list_access_groups(user_api_key_dict=_admin())
+
+    assert len(listing.access_groups) == 1
+    assert listing.access_groups[0].access_group == "free-models"
+    assert listing.access_groups[0].budget is None
+    assert listing.access_groups[0].spend == 0.0
 
 
 @pytest.mark.asyncio
