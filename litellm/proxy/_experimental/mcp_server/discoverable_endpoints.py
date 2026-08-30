@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
@@ -46,6 +46,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     aggregate_authorize,
     aggregate_token,
     complete_connect_flow,
+    introspect_gateway_token,
     is_gateway_dcr_client_id,
     is_proxy_api_resource,
     native_client_auth_contract,
@@ -67,6 +68,7 @@ from litellm.proxy._experimental.mcp_server.proxy_api_credentials import (
     mint_proxy_credential,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -1939,6 +1941,26 @@ async def revoke_endpoint(request: Request, token: str = Form(...), client_id: s
     return await revoke_refresh_token(token=token, client_id=client_id, master_key=master_key, cache=user_api_key_cache)
 
 
+@router.post("/introspect", dependencies=[Depends(user_api_key_auth)])
+async def introspect_endpoint(token: str = Form(...)) -> Response:
+    """RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /
+    ``llm_srefresh_``), so an external gateway can validate them without the signing
+    secret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by
+    the route dependency); any token the gateway cannot vouch for answers
+    ``{"active": false}`` with no further detail."""
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
+        master_key,
+        user_api_key_cache,
+    )
+
+    return await introspect_gateway_token(
+        token=token,
+        master_key=master_key,
+        reload_user=_reload_active_user_by_id,
+        cache=user_api_key_cache,
+    )
+
+
 @router.get("/.well-known/litellm-cli-auth")
 async def native_client_auth_discovery(request: Request) -> JSONResponse:
     """The versioned contract a native client (``lite login --pkce``, or a CLI in any other
@@ -2444,6 +2466,7 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
         "issuer": f"{request_base_url}/mcp",
         "authorization_endpoint": f"{request_base_url}/authorize",
         "token_endpoint": f"{request_base_url}/token",
+        "introspection_endpoint": f"{request_base_url}/introspect",
         "registration_endpoint": f"{request_base_url}/register",
         "response_types_supported": ["code"],
         "scopes_supported": [],

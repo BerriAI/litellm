@@ -68,6 +68,10 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
     table_name = "litellm_spendlogs"
 
 
+class BudgetWindowSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_BudgetWindowSpend"]):
+    table_name = "litellm_budgetwindowspend"
+
+
 class ClaudeCodePluginRepository(PrismaTableRepository["prisma_models.LiteLLM_ClaudeCodePluginTable"]):
     table_name = "litellm_claudecodeplugintable"
 
@@ -98,6 +102,10 @@ class PromptRepository(PrismaTableRepository["prisma_models.LiteLLM_PromptTable"
 
 class TagRepository(PrismaTableRepository["prisma_models.LiteLLM_TagTable"]):
     table_name = "litellm_tagtable"
+
+
+class ModelAccessGroupBudgetRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelAccessGroupBudgetTable"]):
+    table_name = "litellm_modelaccessgroupbudgettable"
 
 
 class InvitationLinkRepository(PrismaTableRepository["prisma_models.LiteLLM_InvitationLink"]):
