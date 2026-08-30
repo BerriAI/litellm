@@ -17,7 +17,7 @@ import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, Protocol, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -1181,7 +1181,29 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
-def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
+class UserUpdateFieldResolver(Protocol):
+    """Decides which fields a user-update request writes; see `update_single_user`."""
+
+    def __call__(
+        self,
+        data_json: Mapping[str, object],
+        data: "UpdateUserRequest | UpdateUserRequestNoUserIDorEmail",
+    ) -> Mapping[str, object]: ...
+
+
+def _update_internal_user_params(
+    data_json: Mapping[str, object],
+    data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail,
+) -> dict:  # mutable-ok: `/user/bulk_update` pops identity fields off this result before writing it
+    """Legacy `/user/update` field resolution: a null (or `[]`/`{}`) means "not sent", so it is dropped.
+
+    Retained verbatim for backwards compatibility. It dates to when `data_json` came from
+    `data.json()`, which serialized every unset field at its non-None default (`models=[]`,
+    `metadata={}`, `spend=0`), so without this filter every update wiped them. `exclude_unset=True`
+    has done that job since #10993, leaving the filter to do nothing but swallow deliberate clears,
+    which is why `max_budget` needed a `fields_set` carve-out to become clearable at all. New
+    surfaces should use the merge-patch resolver in `management_v1/users.py` instead.
+    """
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
@@ -1266,7 +1288,13 @@ def _check_user_update_authz(
     existing_user_row: BaseModel | None,
 ) -> None:
     """Authorization checks for /user/update — raises HTTPException on failure."""
-    if user_request.user_role is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+    # Presence, not truthiness: a merge-patch caller clearing their own role to null would otherwise
+    # slip past a `is not None` check and demote themselves out of whatever an admin assigned.
+    sends_role: Final = (
+        "user_role" in (user_request.fields_set() if hasattr(user_request, "fields_set") else frozenset())
+        or user_request.user_role is not None
+    )
+    if sends_role and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(status_code=403, detail="Only proxy admins can modify user roles.")
 
     if existing_user_row is not None:
@@ -1347,14 +1375,21 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
             verbose_proxy_logger.warning("Failed to invalidate cached entitlement key %r: %s", key, e)
 
 
-async def _update_single_user_helper(
+async def update_single_user(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
+    resolve_fields: UserUpdateFieldResolver = _update_internal_user_params,
 ) -> dict[str, Any]:
     """
     Helper function to update a single user.
     Used by both user_update and bulk_user_update endpoints.
+
+    Everything past field resolution is policy the two surfaces must share: authorization, the
+    self-escalation guard, metadata merging, entitlement upsert, audit logging and cache
+    invalidation. Only the question of *which* fields a request writes differs, so that is the one
+    step injected: `/user/update` keeps its legacy drop-nulls rule, while `/management/v1` passes a
+    merge-patch resolver where an explicit null clears.
 
     Returns the updated user data or raises an exception on failure.
     """
@@ -1372,7 +1407,8 @@ async def _update_single_user_helper(
     )
 
     data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
-    non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
+    resolved_fields: Final = resolve_fields(data_json, user_request)
+    non_default_values = dict(resolved_fields)  # mutable-ok: the write path stamps into this before prisma takes it
     _hash_password_in_dict(non_default_values)
 
     existing_user_row: BaseModel | None = None
@@ -1588,7 +1624,7 @@ async def user_update(
     try:
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
 
-        response: Final = await _update_single_user_helper(
+        response: Final = await update_single_user(
             user_request=data,
             user_api_key_dict=user_api_key_dict,
         )
@@ -1626,7 +1662,7 @@ async def bulk_update_processed_users(
     try:
         for user_request in users_to_update:
             try:
-                response = await _update_single_user_helper(
+                response = await update_single_user(
                     user_request=user_request,
                     user_api_key_dict=user_api_key_dict,
                     litellm_changed_by=litellm_changed_by,

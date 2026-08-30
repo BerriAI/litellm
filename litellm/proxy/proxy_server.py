@@ -498,7 +498,11 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.management_v1 import (
     router as management_v1_router,
 )
-from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
+from litellm.proxy.management_endpoints.management_v1.common import (
+    MANAGEMENT_V1_PREFIX,
+    add_problem_detail_component,
+    validation_problem,
+)
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     router as model_access_group_management_router,
 )
@@ -1530,6 +1534,9 @@ def get_openapi_schema():
     openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
+    # `/management/v1` problem responses `$ref` this; nothing reachable from a response_model does.
+    add_problem_detail_component(openapi_schema)
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -1713,17 +1720,22 @@ class _ValidationErrorDetail(TypedDict):
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
-        _close_dangling_otel_server_span(request, 400, exc=exc)
         validation_errors: Final[Sequence[_ValidationErrorDetail]] = exc.errors()
+        # A rejected body is a 422 and a rejected query string a 400; conflating them would report an
+        # unknown body key (which `extra="forbid"` mutation models refuse) as a query-parameter fault.
+        from_body: Final = any(error["loc"][:1] == ("body",) for error in validation_errors)
+        summary: Final = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in validation_errors
+        )
+        _close_dangling_otel_server_span(request, 422 if from_body else 400, exc=exc)
         return problem_response(
-            ProblemDetail(
+            validation_problem(summary or "The request body is invalid.")
+            if from_body
+            else ProblemDetail(
                 type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
                 title="Invalid query parameter",
                 status=400,
-                detail="; ".join(
-                    f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in validation_errors
-                )
-                or "The request query parameters are invalid.",
+                detail=summary or "The request query parameters are invalid.",
             )
         )
     _close_dangling_otel_server_span(request, 422, exc=exc)

@@ -1208,14 +1208,14 @@ async def test_new_user_admin_can_set_permissions(mocker):
 
 @pytest.mark.asyncio
 async def test_update_single_user_non_admin_permissions_rejected(mocker):
-    """`_update_single_user_helper` rejects a non-admin when `permissions`
+    """`update_single_user` rejects a non-admin when `permissions`
     is present in the request body. Covers both `/user/update` and
     `/user/bulk_update`, which share this helper."""
     from fastapi import HTTPException
 
     from litellm.proxy._types import UpdateUserRequest
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = mocker.MagicMock()
@@ -1231,7 +1231,7 @@ async def test_update_single_user_non_admin_permissions_rejected(mocker):
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await _update_single_user_helper(
+        await update_single_user(
             user_request=data, user_api_key_dict=caller
         )
     assert exc_info.value.status_code == 403
@@ -1240,13 +1240,13 @@ async def test_update_single_user_non_admin_permissions_rejected(mocker):
 
 @pytest.mark.asyncio
 async def test_update_single_user_non_admin_permissions_explicit_empty_rejected(mocker):
-    """`_update_single_user_helper` rejects a non-admin when `permissions`
+    """`update_single_user` rejects a non-admin when `permissions`
     is present as `{}` in the request body."""
     from fastapi import HTTPException
 
     from litellm.proxy._types import UpdateUserRequest
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = mocker.MagicMock()
@@ -1260,7 +1260,7 @@ async def test_update_single_user_non_admin_permissions_explicit_empty_rejected(
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await _update_single_user_helper(
+        await update_single_user(
             user_request=data, user_api_key_dict=caller
         )
     assert exc_info.value.status_code == 403
@@ -2557,7 +2557,7 @@ async def test_user_update_rejects_silent_create_for_non_proxy_admin(mocker):
 
     from litellm.proxy._types import UpdateUserRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = mocker.MagicMock()
@@ -2578,7 +2578,7 @@ async def test_user_update_rejects_silent_create_for_non_proxy_admin(mocker):
     )
 
     with pytest.raises(HTTPException) as exc:
-        await _update_single_user_helper(
+        await update_single_user(
             user_request=user_request, user_api_key_dict=org_admin
         )
     assert exc.value.status_code == 404
@@ -2589,8 +2589,32 @@ async def test_user_update_rejects_silent_create_for_non_proxy_admin(mocker):
 # =====================================================================
 
 
+@pytest.fixture
+def user_rows(mocker):
+    """Seed the user table `/v2/user/info` reads, keyed by user_id, and return nothing for the rest.
+
+    One seam for the whole `user_info_v2` group, so a test says which rows exist and nothing else.
+    """
+
+    def _seed(**rows):
+        prisma_client = mocker.MagicMock()
+
+        async def find_unique(*args, **kwargs):
+            row = rows.get(kwargs.get("where", {}).get("user_id"))
+            if row is None:
+                return None
+            stub = mocker.MagicMock()
+            stub.model_dump.return_value = row
+            return stub
+
+        prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=find_unique)
+        mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+
+    return _seed
+
+
 @pytest.mark.asyncio
-async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
+async def test_user_info_v2_proxy_admin_can_query_any_user(mocker, user_rows):
     """
     Test that proxy admin can query any user via /v2/user/info.
     """
@@ -2599,36 +2623,26 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
     from litellm.proxy._types import UserInfoV2Response
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
-    mock_prisma_client = mocker.MagicMock()
-
-    mock_user_row = mocker.MagicMock()
-    mock_user_row.model_dump.return_value = {
-        "user_id": "target-user-123",
-        "user_email": "target@example.com",
-        "user_alias": "Target User",
-        "user_role": "internal_user",
-        "spend": 42.5,
-        "max_budget": 100.0,
-        "models": ["gpt-4"],
-        "budget_duration": "30d",
-        "budget_reset_at": None,
-        "metadata": {"team": "engineering"},
-        "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
-        "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
-        "sso_user_id": "sso-abc",
-        "teams": ["team-1", "team-2"],
-    }
-
-    async def mock_find_unique(*args, **kwargs):
-        if kwargs.get("where", {}).get("user_id") == "target-user-123":
-            return mock_user_row
-        return None
-
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
-        side_effect=mock_find_unique
+    user_rows(
+        **{
+            "target-user-123": {
+                "user_id": "target-user-123",
+                "user_email": "target@example.com",
+                "user_alias": "Target User",
+                "user_role": "internal_user",
+                "spend": 42.5,
+                "max_budget": 100.0,
+                "models": ["gpt-4"],
+                "budget_duration": "30d",
+                "budget_reset_at": None,
+                "metadata": {"team": "engineering"},
+                "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
+                "sso_user_id": "sso-abc",
+                "teams": ["team-1", "team-2"],
+            }
+        }
     )
-
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
 
@@ -2744,7 +2758,7 @@ def test_build_user_info_response_redacts_scim_enterprise_metadata():
 
 
 @pytest.mark.asyncio
-async def test_user_info_v2_internal_user_can_query_self(mocker):
+async def test_user_info_v2_internal_user_can_query_self(mocker, user_rows):
     """
     Test that an internal user can query their own info.
     """
@@ -2753,36 +2767,26 @@ async def test_user_info_v2_internal_user_can_query_self(mocker):
     from litellm.proxy._types import UserInfoV2Response
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
-    mock_prisma_client = mocker.MagicMock()
-
-    mock_user_row = mocker.MagicMock()
-    mock_user_row.model_dump.return_value = {
-        "user_id": "self-user",
-        "user_email": "self@example.com",
-        "user_alias": None,
-        "user_role": "internal_user",
-        "spend": 10.0,
-        "max_budget": None,
-        "models": [],
-        "budget_duration": None,
-        "budget_reset_at": None,
-        "metadata": None,
-        "created_at": None,
-        "updated_at": None,
-        "sso_user_id": None,
-        "teams": [],
-    }
-
-    async def mock_find_unique(*args, **kwargs):
-        if kwargs.get("where", {}).get("user_id") == "self-user":
-            return mock_user_row
-        return None
-
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
-        side_effect=mock_find_unique
+    user_rows(
+        **{
+            "self-user": {
+                "user_id": "self-user",
+                "user_email": "self@example.com",
+                "user_alias": None,
+                "user_role": "internal_user",
+                "spend": 10.0,
+                "max_budget": None,
+                "models": [],
+                "budget_duration": None,
+                "budget_reset_at": None,
+                "metadata": None,
+                "created_at": None,
+                "updated_at": None,
+                "sso_user_id": None,
+                "teams": [],
+            }
+        }
     )
-
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
 
@@ -3436,7 +3440,7 @@ async def test_ghsa_wvg4_non_admin_cannot_self_escalate_max_budget(mocker):
     from fastapi import HTTPException
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = mocker.MagicMock()
@@ -3461,7 +3465,7 @@ async def test_ghsa_wvg4_non_admin_cannot_self_escalate_max_budget(mocker):
     )
 
     with pytest.raises(HTTPException) as exc:
-        await _update_single_user_helper(
+        await update_single_user(
             user_request=user_request, user_api_key_dict=caller
         )
     assert exc.value.status_code == 403
@@ -3474,7 +3478,7 @@ async def test_ghsa_wvg4_non_admin_cannot_self_escalate_spend(mocker):
     from fastapi import HTTPException
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = mocker.MagicMock()
@@ -3499,7 +3503,7 @@ async def test_ghsa_wvg4_non_admin_cannot_self_escalate_spend(mocker):
     )
 
     with pytest.raises(HTTPException) as exc:
-        await _update_single_user_helper(
+        await update_single_user(
             user_request=user_request, user_api_key_dict=caller
         )
     assert exc.value.status_code == 403
@@ -3510,7 +3514,7 @@ async def test_ghsa_wvg4_non_admin_cannot_self_escalate_spend(mocker):
 async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
     """PROXY_ADMIN must still be able to modify another user's budget."""
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = mocker.MagicMock()
@@ -3539,7 +3543,7 @@ async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
 
-    result = await _update_single_user_helper(
+    result = await update_single_user(
         user_request=user_request, user_api_key_dict=admin_caller
     )
     assert result is not None
@@ -3550,7 +3554,7 @@ async def test_admin_user_update_spend_invalidates_counter(mocker):
     """A direct /user/update spend change must invalidate the cross-pod
     spend counter so enforcement re-reads the new DB value."""
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = mocker.MagicMock()
@@ -3581,7 +3585,7 @@ async def test_admin_user_update_spend_invalidates_counter(mocker):
         user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
     )
 
-    await _update_single_user_helper(
+    await update_single_user(
         user_request=user_request, user_api_key_dict=admin_caller
     )
     mock_invalidate.assert_awaited_once_with(counter_key="spend:user:target-user")
@@ -3593,7 +3597,7 @@ async def test_user_update_rejects_non_finite_spend(mocker):
     from fastapi import HTTPException
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = mocker.MagicMock()
@@ -3617,7 +3621,7 @@ async def test_user_update_rejects_non_finite_spend(mocker):
     )
 
     with pytest.raises(HTTPException) as exc:
-        await _update_single_user_helper(
+        await update_single_user(
             user_request=user_request, user_api_key_dict=admin_caller
         )
     assert exc.value.status_code == 400
@@ -3871,7 +3875,7 @@ async def test_user_update_persists_mcp_entitlement_and_links_it(mocker):
     would not even be a column.
     """
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = _object_permission_mocks(mocker)
@@ -3879,7 +3883,7 @@ async def test_user_update_persists_mcp_entitlement_and_links_it(mocker):
     cache.async_delete_cache = mocker.AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
-    await _update_single_user_helper(
+    await update_single_user(
         user_request=UpdateUserRequest(
             user_id="target-user",
             object_permission={
@@ -3910,7 +3914,7 @@ async def test_user_update_invalidates_the_cached_entitlement(mocker):
     (which carries a "no entitlement" sentinel), and the cached user row.
     """
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     _object_permission_mocks(mocker)
@@ -3918,7 +3922,7 @@ async def test_user_update_invalidates_the_cached_entitlement(mocker):
     cache.async_delete_cache = mocker.AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
-    await _update_single_user_helper(
+    await update_single_user(
         user_request=UpdateUserRequest(
             user_id="target-user",
             object_permission={"mcp_tool_permissions": {"github": []}},
@@ -3948,7 +3952,7 @@ async def test_admin_can_clear_a_users_mcp_entitlement(mocker):
     the gateway would keep enforcing the cleared grants until the cache expired.
     """
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = _object_permission_mocks(mocker, "perm-existing")
@@ -3956,7 +3960,7 @@ async def test_admin_can_clear_a_users_mcp_entitlement(mocker):
     cache.async_delete_cache = mocker.AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
-    await _update_single_user_helper(
+    await update_single_user(
         user_request=UpdateUserRequest(user_id="target-user", object_permission={}),
         user_api_key_dict=UserAPIKeyAuth(
             user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
@@ -3984,7 +3988,7 @@ async def test_user_update_invalidates_both_the_old_and_new_permission_rows(mock
     grants, so anything still resolving that id keeps reading them.
     """
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     _object_permission_mocks(mocker, "perm-existing")
@@ -3992,7 +3996,7 @@ async def test_user_update_invalidates_both_the_old_and_new_permission_rows(mock
     cache.async_delete_cache = mocker.AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
-    await _update_single_user_helper(
+    await update_single_user(
         user_request=UpdateUserRequest(
             user_id="target-user",
             object_permission={"mcp_tool_permissions": {"github": ["list_issues"]}},
@@ -4019,7 +4023,7 @@ async def test_non_admin_cannot_clear_their_own_mcp_entitlement(mocker):
     from fastapi import HTTPException
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = _object_permission_mocks(mocker, "perm-existing")
@@ -4028,7 +4032,7 @@ async def test_non_admin_cannot_clear_their_own_mcp_entitlement(mocker):
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
     with pytest.raises(HTTPException) as exc:
-        await _update_single_user_helper(
+        await update_single_user(
             user_request=UpdateUserRequest(user_id="target-user", object_permission={}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_id="target-user", user_role=LitellmUserRoles.INTERNAL_USER
@@ -4046,7 +4050,7 @@ async def test_non_admin_cannot_rewrite_their_own_mcp_entitlement(mocker):
     from fastapi import HTTPException
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_single_user_helper,
+        update_single_user,
     )
 
     mock_prisma_client = _object_permission_mocks(mocker, "perm-existing")
@@ -4055,7 +4059,7 @@ async def test_non_admin_cannot_rewrite_their_own_mcp_entitlement(mocker):
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
 
     with pytest.raises(HTTPException) as exc:
-        await _update_single_user_helper(
+        await update_single_user(
             user_request=UpdateUserRequest(
                 user_id="target-user",
                 object_permission={"mcp_servers": [], "mcp_tool_permissions": {}},

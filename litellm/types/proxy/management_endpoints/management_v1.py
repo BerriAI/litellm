@@ -71,3 +71,9 @@ class ListResponse(BaseModel, Generic[TOut]):
     data: list[TOut]
     meta: ListMeta
     links: ListLinks
+
+
+class ItemResponse(BaseModel, Generic[TOut]):
+    """Single-entity envelope. Shares `ListResponse`'s `data` key so a client unwraps both the same way."""
+
+    data: TOut
