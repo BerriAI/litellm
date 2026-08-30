@@ -329,7 +329,7 @@ describe("UsageTab", () => {
 
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices.map((d: { driver: string }) => d.driver)).toEqual(["Compression", "Prompt caching"]);
-    expect(getByTestId("donut-chart").getAttribute("data-label")).toBeNull();
+    expect(getByTestId("donut-chart")).not.toHaveAttribute("data-label");
   });
 
   it("carries auto-router savings into the summary card, donut slice, and cumulative series", () => {

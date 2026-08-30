@@ -404,16 +404,17 @@ describe("usd", () => {
 
 describe("savingsTotalsOf", () => {
   it("does not expose a summed total for non-additive caching and auto-router views", () => {
+    const overlappingDrivers: Partial<SpendMetrics> = {
+      spend: 6,
+      compression_savings_spend: 0,
+      prompt_caching_savings_spend: 4,
+      gateway_injected_caching_savings_spend: 4,
+      autorouter_savings_spend: 6,
+    };
     const results: DailyData[] = [
       {
         date: "2026-08-29",
-        metrics: metrics({
-          spend: 6,
-          compression_savings_spend: 0,
-          prompt_caching_savings_spend: 4,
-          gateway_injected_caching_savings_spend: 4,
-          autorouter_savings_spend: 6,
-        }),
+        metrics: metrics(overlappingDrivers),
         breakdown: {
           models: {},
           model_groups: {},
