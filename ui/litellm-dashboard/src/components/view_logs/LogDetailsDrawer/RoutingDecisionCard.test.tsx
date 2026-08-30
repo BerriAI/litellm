@@ -160,6 +160,32 @@ describe("RoutingDecisionCard", () => {
     expect(screen.getByText('Plan-mode floor: "Plan mode is active"')).toBeInTheDocument();
   });
 
+  it("names the housekeeping sentinel so an operator can extend the pattern list", () => {
+    // The sentinel is the string they would add to housekeeping_patterns to cover another
+    // client, so the row is only useful if it says which one matched.
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          cause: "housekeeping",
+          matched_keyword: "Write the title in the predominant language of the session",
+          score: undefined,
+        }}
+      />,
+    );
+    expect(
+      screen.getByText('Client housekeeping call: "Write the title in the predominant language of the session"'),
+    ).toBeInTheDocument();
+  });
+
+  it("still labels a housekeeping row when redaction dropped the sentinel", () => {
+    // matched_keyword is prompt-quoting, so message-log redaction removes it. The row must
+    // still read as a housekeeping decision rather than falling back to the raw cause.
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "housekeeping", score: undefined }} />);
+    expect(screen.getByText("Client housekeeping call, classifier skipped")).toBeInTheDocument();
+    expect(screen.queryByText("housekeeping")).not.toBeInTheDocument();
+  });
+
   it("shows the escalation keyword", () => {
     render(
       <RoutingDecisionCard decision={{ ...heuristic, escalated: true, escalation_keyword: "LITELLM ESCALATE" }} />,

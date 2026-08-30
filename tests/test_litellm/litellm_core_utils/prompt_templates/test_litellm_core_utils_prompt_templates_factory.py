@@ -3578,3 +3578,52 @@ async def test_bedrock_converse_pdf_only_user_message_gets_text_block_async():
     assert len(result) == 1
     assert any("document" in block for block in result[0]["content"])
     assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+def test_convert_to_anthropic_tool_result_keeps_tool_reference_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_result
+
+    result = convert_to_anthropic_tool_result(
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [
+                {"type": "text", "text": "loaded"},
+                {"type": "tool_reference", "tool_name": "WebFetch"},
+            ],
+        }
+    )
+
+    assert result == {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01",
+        "content": [
+            {"type": "text", "text": "loaded"},
+            {"type": "tool_reference", "tool_name": "WebFetch"},
+        ],
+    }
+
+
+def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
+    """Every Gemini function call needs a function response, even when the tool result carries no text.
+    Fixes: https://github.com/BerriAI/litellm/issues/37462
+    """
+    result = convert_to_gemini_tool_call_result(
+        message=ChatCompletionToolMessage(
+            role="tool",
+            tool_call_id="toolu_01",
+            content=[{"type": "tool_reference", "tool_name": "WebFetch"}],
+        ),
+        last_message_with_tool_calls={
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "ToolSearch", "arguments": '{"query": "select:WebFetch"}'},
+                }
+            ],
+        },
+    )
+
+    assert result == {"function_response": {"name": "ToolSearch", "response": {"content": ""}}}

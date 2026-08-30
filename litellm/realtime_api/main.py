@@ -557,6 +557,34 @@ async def _arealtime(
         raise ValueError(f"Unsupported model: {model}")
 
 
+def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) -> bool:
+    try:
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
+        return False
+    if model_info.get("mode") == "audio_transcription":
+        return True
+    return "/v1/realtime/transcription_sessions" in (model_info.get("supported_endpoints") or ())
+
+
+_TRANSCRIPTION_QUERY_PARAMS: Final[RealtimeQueryParams] = {"intent": "transcription"}
+
+
+def _azure_realtime_health_protocol(
+    model: str, realtime_protocol: str | None, model_params: Mapping[str, Any]
+) -> tuple[str, RealtimeQueryParams | None]:
+    query_params: Final = _TRANSCRIPTION_QUERY_PARAMS if _is_transcription_only_realtime_model(model, "azure") else None
+    configured_raw: Final = (
+        realtime_protocol or model_params.get("realtime_protocol") or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
+    )
+    configured: Final = configured_raw if isinstance(configured_raw, str) else None
+    if configured is not None:
+        return configured, query_params
+    if query_params is not None:
+        return "GA", query_params
+    return "beta", None
+
+
 def _realtime_health_check_auth_headers(
     custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, Any]
 ) -> Mapping[str, str | None]:
@@ -586,7 +614,9 @@ async def _realtime_health_check(
         api_version: Optional[str] - api version
         api_key: str - api key
         custom_llm_provider: str - custom llm provider
-        realtime_protocol: Optional[str] - protocol version ("GA"/"v1" for GA path, "beta"/None for beta path)
+        realtime_protocol: Optional[str] - protocol version ("GA"/"v1" for GA path, "beta" for beta path);
+            None resolves it for Azure from model_params/env, with transcription-only models probing GA
+            plus intent=transcription the way real calls do
 
     Returns:
         bool - True if connection is successful, False otherwise
@@ -602,11 +632,17 @@ async def _realtime_health_check(
         model_params=model_params or _EMPTY_MODEL_PARAMS,
     )
     if custom_llm_provider == "azure":
+        resolved_protocol, azure_query_params = _azure_realtime_health_protocol(
+            model=model,
+            realtime_protocol=realtime_protocol,
+            model_params=model_params or _EMPTY_MODEL_PARAMS,
+        )
         url = azure_realtime._construct_url(
             api_base=api_base or "",
             model=model,
             api_version=api_version or "2024-10-01-preview",
-            realtime_protocol=realtime_protocol,
+            realtime_protocol=resolved_protocol,
+            query_params=azure_query_params,
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(

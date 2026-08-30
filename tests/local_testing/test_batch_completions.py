@@ -19,32 +19,32 @@ from litellm import (
 # litellm.set_verbose=True
 
 
+TOLERATED_UPSTREAM_FAILURES = (Timeout, litellm.InternalServerError)
+
+
 def test_batch_completions():
     messages = [[{"role": "user", "content": "write a short poem"}] for _ in range(3)]
     model = "gpt-3.5-turbo"
     litellm.set_verbose = True
-    try:
-        result = batch_completion(
-            model=model,
-            messages=messages,
-            max_tokens=10,
-            temperature=0.2,
-            request_timeout=1,
-        )
-        print(result)
-        print(len(result))
-        assert len(result) == 3
 
-        for response in result:
-            assert response.choices[0].message.content is not None
-    except Timeout as e:
-        print(f"IN TIMEOUT")
-        pass
-    except litellm.InternalServerError as e:
-        print(f"IN INTERNAL SERVER ERROR")
-        pass
-    except Exception as e:
-        pytest.fail(f"An error occurred: {e}")
+    result = batch_completion(
+        model=model,
+        messages=messages,
+        max_tokens=10,
+        temperature=0.2,
+        request_timeout=1,
+    )
+    print(result)
+
+    assert len(result) == 3
+
+    for response in result:
+        if isinstance(response, TOLERATED_UPSTREAM_FAILURES):
+            continue
+        assert not isinstance(
+            response, Exception
+        ), f"batch_completion returned {type(response).__name__}: {response}"
+        assert response.choices[0].message.content is not None
 
 
 # test_batch_completions()

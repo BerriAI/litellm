@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_tool_reference_parts_from_tool_messages,
     get_tool_call_names,
     hoist_images_from_tool_messages,
 )
@@ -53,6 +54,8 @@ from litellm.utils import convert_to_model_response_object
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.base_utils import BaseTokenCounter
     from litellm.types.llms.openai import ChatCompletionToolParam
@@ -336,7 +339,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
     ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
-        hoisted_messages: Final = hoist_images_from_tool_messages(messages)
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        hoisted_messages: Final = hoist_images_from_tool_messages(stripped_messages)
 
         async def _async_transform():
             for message in hoisted_messages:
@@ -593,7 +597,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

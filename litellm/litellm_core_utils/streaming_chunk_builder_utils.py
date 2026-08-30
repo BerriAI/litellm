@@ -173,6 +173,27 @@ def attach_cache_creation_token_details(
     return prompt_tokens_details.model_copy(update={"cache_creation_token_details": cache_creation_token_details})
 
 
+def apply_grounding_request_counts(
+    prompt_tokens_details: PromptTokensDetailsWrapper | None,
+    web_search_requests: int | None,
+    google_maps_grounding_requests: int | None,
+) -> PromptTokensDetailsWrapper | None:
+    updates: Final = MappingProxyType(
+        {
+            field: value
+            for field, value in (
+                ("web_search_requests", web_search_requests),
+                ("google_maps_grounding_requests", google_maps_grounding_requests),
+            )
+            if value is not None
+        }
+    )
+    if not updates:
+        return prompt_tokens_details
+    counted: Final = prompt_tokens_details if prompt_tokens_details is not None else PromptTokensDetailsWrapper()
+    return counted.model_copy(update=updates)
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: list | None = None):
         self.chunks = self._sort_chunks(chunks)
@@ -217,6 +238,22 @@ class ChunkProcessor:
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params = chunk.get("_hidden_params", {})
         return model_response
+
+    @staticmethod
+    def _get_provider_response_model(
+        chunks: Sequence["_BaseChunk"],
+        first_chunk_model: str,
+    ) -> str | None:
+        models: Final = tuple(
+            model
+            for chunk in chunks
+            if isinstance((hidden_params := chunk.get("_hidden_params")), Mapping)
+            if isinstance((model := hidden_params.get("provider_response_model")), str) and model
+        )
+        return next(
+            (model for model in models if model != first_chunk_model),
+            models[0] if models else None,
+        )
 
     @staticmethod
     def apply_provider_assembled_streaming_metadata(
@@ -339,6 +376,15 @@ class ChunkProcessor:
         )
 
         response = self.update_model_response_with_hidden_params(model_response=response, chunk=chunk)
+        provider_response_model: Final = self._get_provider_response_model(
+            chunks,
+            first_chunk_model,
+        )
+        if provider_response_model is not None:
+            response._hidden_params = dict(  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
+                response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params getter
+                provider_response_model=provider_response_model,
+            )
         return response
 
     @staticmethod
@@ -778,6 +824,7 @@ class ChunkProcessor:
 
         server_tool_use: ServerToolUse | None = None
         web_search_requests: int | None = None
+        google_maps_grounding_requests: int | None = None
         completion_tokens_details: CompletionTokensDetails | None = None
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         # Anthropic emits the cache-creation TTL breakdown (5m/1h split) only on
@@ -827,6 +874,13 @@ class ChunkProcessor:
                     )
                     if chunk_web_search_requests is not None:
                         web_search_requests = chunk_web_search_requests
+                    chunk_google_maps_grounding_requests: int | None = getattr(
+                        usage_chunk_dict["prompt_tokens_details"],
+                        "google_maps_grounding_requests",
+                        None,
+                    )
+                    if chunk_google_maps_grounding_requests is not None:
+                        google_maps_grounding_requests = chunk_google_maps_grounding_requests
 
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"] or prompt_tokens_details
 
@@ -852,6 +906,7 @@ class ChunkProcessor:
             cache_read_input_tokens=cache_read_input_tokens,
             server_tool_use=server_tool_use,
             web_search_requests=web_search_requests,
+            google_maps_grounding_requests=google_maps_grounding_requests,
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
@@ -939,6 +994,7 @@ class ChunkProcessor:
 
         server_tool_use: Final[ServerToolUse | None] = calculated_usage_per_chunk["server_tool_use"]
         web_search_requests: Final[int | None] = calculated_usage_per_chunk["web_search_requests"]
+        google_maps_grounding_requests: Final[int | None] = calculated_usage_per_chunk["google_maps_grounding_requests"]
         completion_tokens_details: Final[CompletionTokensDetails | None] = calculated_usage_per_chunk[
             "completion_tokens_details"
         ]
@@ -998,13 +1054,11 @@ class ChunkProcessor:
 
         if server_tool_use is not None:
             returned_usage.server_tool_use = server_tool_use
-        if web_search_requests is not None:
-            if returned_usage.prompt_tokens_details is None:
-                returned_usage.prompt_tokens_details = PromptTokensDetailsWrapper(
-                    web_search_requests=web_search_requests
-                )
-            else:
-                returned_usage.prompt_tokens_details.web_search_requests = web_search_requests
+        returned_usage.prompt_tokens_details = apply_grounding_request_counts(
+            returned_usage.prompt_tokens_details,
+            web_search_requests,
+            google_maps_grounding_requests,
+        )
 
         if cost is not None:
             setattr(returned_usage, "cost", cost)

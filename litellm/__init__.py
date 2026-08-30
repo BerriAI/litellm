@@ -274,7 +274,6 @@ databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
-autorouter_savings_baseline_model: Optional[str] = None
 replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
 gdc_key: Optional[str] = None
@@ -445,6 +444,7 @@ max_ui_session_budget: Optional[float] = (
     1.0  # USD budget for each dashboard login session (playground, test connection)
 )
 internal_user_budget_duration: Optional[str] = None
+budget_rollover: bool = False  # carry spend beyond max_budget into the next window instead of zeroing it
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
@@ -486,6 +486,7 @@ public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
+agent_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)

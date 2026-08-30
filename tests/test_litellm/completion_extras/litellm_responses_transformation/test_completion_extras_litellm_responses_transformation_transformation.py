@@ -3903,3 +3903,39 @@ def test_stored_reasoning_items_win_over_thinking_blocks():
     reasoning_items = [item for item in input_items if item.get("type") == "reasoning"]
     assert len(reasoning_items) == 1
     assert reasoning_items[0]["id"] == "rs_real"
+
+
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool_reference():
+    """Tool-search tool_reference blocks have no Responses API equivalent: skip them, never stringify them."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {"name": "ToolSearch", "arguments": '{"query": "web"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": [
+                {"type": "tool_reference", "tool_name": "WebFetch"},
+                {"type": "text", "text": "1 tool found"},
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    function_call_output = next(item for item in response if item.get("type") == "function_call_output")
+    assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]

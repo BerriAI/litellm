@@ -145,8 +145,8 @@ class UpstreamCredentialProvider:
                 return await self._token_exchange(subject, server, config)
             case IdJagConfig() as config:
                 return await self._id_jag(subject, server, config)
-            case AuthorizationCodeConfig():
-                return await self._authorization_code(subject, server)
+            case AuthorizationCodeConfig() as config:
+                return await self._authorization_code(subject, server, config)
             case AwsSigV4Config():
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
@@ -284,15 +284,19 @@ class UpstreamCredentialProvider:
 
         match await self._exchanged_tokens.get_or_compute(slot, _exchange, fingerprint=fingerprint):
             case Ok(access_token):
-                return Ok(StaticHeaderAuth(f"Bearer {access_token}"))
+                header_name, header_value = config.header(access_token)
+                return Ok(StaticHeaderAuth(header_value, header_name=header_name))
             case Error(err):
                 return Error(err)
 
-    async def _authorization_code(self, subject: Subject, server: ServerSpec) -> Result[StaticHeaderAuth, CredError]:
+    async def _authorization_code(
+        self, subject: Subject, server: ServerSpec, config: AuthorizationCodeConfig
+    ) -> Result[StaticHeaderAuth, CredError]:
         token: Final = await self._authz_token(subject, server)
         if token is None:
             return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
-        return Ok(StaticHeaderAuth(f"Bearer {token.access_token}", header_name="Authorization"))
+        header_name, header_value = config.header(token.access_token)
+        return Ok(StaticHeaderAuth(header_value, header_name=header_name))
 
     async def _client_credentials(
         self, server_id: str, config: ClientCredentialsConfig
@@ -307,7 +311,7 @@ class UpstreamCredentialProvider:
         match await self._client_credentials_source.get(server_id, config):
             case Ok(token):
                 refetch: Final = partial(self._client_credentials_source.refetch, server_id, config)
-                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch))
+                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch, config))
             case Error(err):
                 return Error(err)
 
@@ -332,7 +336,8 @@ class UpstreamCredentialProvider:
             inbound.get_secret_value(), server, config, tenant_id=subject.tenant_id
         ):
             case Ok(token):
-                return Ok(StaticHeaderAuth(f"Bearer {token.access_token}", header_name="Authorization"))
+                header_name, header_value = config.header(token.access_token)
+                return Ok(StaticHeaderAuth(header_value, header_name=header_name))
             case Error(err):
                 return Error(err)
 

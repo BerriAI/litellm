@@ -7,7 +7,7 @@ import json
 import time
 import types
 from collections.abc import Mapping
-from typing import Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
 
@@ -65,6 +65,7 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionMessageToolCall,
     CompletionTokensDetailsWrapper,
     Function,
@@ -92,6 +93,9 @@ from ..common_utils import (
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
 )
+
+if TYPE_CHECKING:
+    import tiktoken
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS: Final = [
@@ -920,7 +924,7 @@ class AmazonConverseConfig(BaseConfig):
                         custom_llm_provider="bedrock",
                     )
                     capped = (
-                        AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
                         if legacy_thinking is not None
                         else None
                     )
@@ -1542,6 +1546,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues] | None = None,
         headers: dict | None = None,
         drop_params: bool = False,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> CommonRequestObject:
         ## VALIDATE REQUEST
         """
@@ -1604,6 +1609,16 @@ class AmazonConverseConfig(BaseConfig):
                 if point.get("location") == "tool_config":
                     cache_point = self._build_cache_point_block(point.get("control"), model)
                     bedrock_tools.append(ToolBlock(cachePoint=cache_point))
+                    # Spend attribution credits the gateway only for breakpoints it placed, and
+                    # this is the one place a tool_config point becomes one. The hook that reads
+                    # the configuration cannot record it: whether a cachePoint lands depends on
+                    # this provider and on the request carrying tools, neither of which it sees.
+                    if litellm_params is not None:
+                        from litellm.integrations.anthropic_cache_control_hook import (
+                            AnthropicCacheControlHook,
+                        )
+
+                        AnthropicCacheControlHook.record_gateway_injection(litellm_params, 1)
                     break
 
         bedrock_tool_config: ToolConfigBlock | None = None
@@ -1666,6 +1681,7 @@ class AmazonConverseConfig(BaseConfig):
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
+            litellm_params=litellm_params,
         )
 
         bedrock_messages: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -1725,6 +1741,7 @@ class AmazonConverseConfig(BaseConfig):
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
+            litellm_params=litellm_params,
         )
 
         ## TRANSFORMATION ##
@@ -1756,7 +1773,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -1806,6 +1823,26 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
+
+    @staticmethod
+    def _parse_cache_details(usage: ConverseTokenUsageBlock) -> "CacheCreationTokenDetails | None":
+        """Split ``cacheDetails`` into 5m/1h buckets, or ``None`` unless the split fully
+        accounts for ``cacheWriteInputTokens``, since a partial or unrecognized-ttl
+        breakdown would understate the cache-write cost.
+
+        https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html
+        """
+        cache_details: Final = usage.get("cacheDetails")
+        if not cache_details:
+            return None
+        tokens_5m: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "5m")
+        tokens_1h: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "1h")
+        if tokens_5m + tokens_1h != usage.get("cacheWriteInputTokens", 0):
+            return None
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=tokens_5m,
+            ephemeral_1h_input_tokens=tokens_1h,
+        )
 
     @staticmethod
     def thinking_tokens_from_additional_fields(additional_fields: object) -> int | None:
@@ -1878,6 +1915,7 @@ class AmazonConverseConfig(BaseConfig):
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
+            cache_creation_token_details=self._parse_cache_details(usage),
             text_tokens=raw_input_tokens,
         )
         estimated_reasoning_tokens: Final = (

@@ -1,9 +1,11 @@
 #### What this does ####
 #    On success, logs events to Langfuse
+import inspect
 import os
 import traceback
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
+from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
@@ -20,6 +22,9 @@ from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
     reconstruct_model_name,
     safe_deep_copy,
+)
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_langfuse_environment_value,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -133,6 +138,16 @@ def resolve_langfuse_credentials(
     return public_key, secret_key, resolved_host
 
 
+@lru_cache(maxsize=8)
+def _warn_invalid_deployment_environment(raw_value: str, error: str) -> None:
+    verbose_logger.warning(
+        "Ignoring invalid LANGFUSE_TRACING_ENVIRONMENT=%r for the langfuse callback: %s. "
+        "Traces will be sent to Langfuse's default environment.",
+        raw_value,
+        error,
+    )
+
+
 class LangFuseLogger:
     # Class variables or attributes
     def __init__(
@@ -140,6 +155,7 @@ class LangFuseLogger:
         langfuse_public_key=None,
         langfuse_secret=None,
         langfuse_host=None,
+        langfuse_environment: str | None = None,
         flush_interval=1,
         allow_env_credentials: bool = True,
     ):
@@ -159,6 +175,12 @@ class LangFuseLogger:
         if not (self.langfuse_host.startswith("http://") or self.langfuse_host.startswith("https://")):
             # add http:// if unset, assume communicating over private network - e.g. render
             self.langfuse_host = "http://" + self.langfuse_host
+        _env_override: Final = str(langfuse_environment).strip() if langfuse_environment is not None else None
+        if _env_override:
+            validate_langfuse_environment_value(_env_override)
+            self.langfuse_environment: str | None = _env_override
+        else:
+            self.langfuse_environment = self.resolve_deployment_environment()
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(flush_interval)
@@ -182,6 +204,8 @@ class LangFuseLogger:
         }
         self.langfuse_sdk_version: str = langfuse.version.__version__
 
+        if "environment" in inspect.signature(Langfuse.__init__).parameters:
+            parameters["environment"] = self.langfuse_environment
         if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
             parameters["sdk_integration"] = "litellm"
         self.Langfuse: Langfuse = self.safe_init_langfuse_client(parameters)
@@ -941,6 +965,20 @@ class LangFuseLogger:
         except Exception as e:
             verbose_logger.warning("Failed to apply masking function: %s. Returning original data.", e)
             return data
+
+    @staticmethod
+    def resolve_deployment_environment() -> str | None:
+        """Resolve LANGFUSE_TRACING_ENVIRONMENT: stripped value, "default" plus a warning when invalid, None when unset."""
+        raw: Final = os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
+        if not raw:
+            return None
+        value: Final = raw.strip()
+        try:
+            validate_langfuse_environment_value(value)
+        except ValueError as e:
+            _warn_invalid_deployment_environment(raw, str(e))
+            return "default"
+        return value
 
     @staticmethod
     def _get_langfuse_flush_interval(flush_interval: int) -> int:

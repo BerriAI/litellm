@@ -1412,7 +1412,7 @@ def convert_to_gemini_tool_call_result(
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process image in tool response: %s", e)
-                elif content_type in ("file", "input_file"):
+                elif content_type in ("file", "input_file"):  # pyright: ignore[reportUnnecessaryContains]  # loose runtime dict
                     # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
                     file_data = content.get("file_data", "")
                     if not file_data:
@@ -1564,14 +1564,23 @@ def convert_to_anthropic_tool_result(
     }
     """
     anthropic_content: (
-        str | list[AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam]
+        str
+        | list[
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
+        ]
     ) = ""
     if isinstance(message["content"], str):
         anthropic_content = message["content"]
     elif isinstance(message["content"], list):
         content_list: Final = message["content"]
         anthropic_content_list: list[
-            AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
         ] = []
         for content in content_list:
             if content["type"] == "text":
@@ -1614,6 +1623,8 @@ def convert_to_anthropic_tool_result(
                         original_content_element=content,
                     )
                     anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
+            elif content["type"] == "tool_reference":
+                anthropic_content_list.append(ToolReference(type="tool_reference", tool_name=content["tool_name"]))
             elif content["type"] == "file":
                 file_content = cast(ChatCompletionFileObject, content)
                 _file_block = anthropic_process_openai_file_message(file_content)

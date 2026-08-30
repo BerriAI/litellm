@@ -8,6 +8,14 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponse
 
 
+def _completion_response_cost(model_response: "ModelResponse") -> float | None:
+    hidden_params: Final = getattr(model_response, "_hidden_params", None)
+    if not isinstance(hidden_params, dict):
+        return None
+    response_cost: Final = hidden_params.get("response_cost")
+    return response_cost if isinstance(response_cost, float) else None
+
+
 class SpeechToCompletionBridgeTransformationHandler:
     def transform_request(
         self,
@@ -123,4 +131,6 @@ class SpeechToCompletionBridgeTransformationHandler:
 
         # Create an httpx.Response object
         response: Final = httpx.Response(status_code=200, content=binary_data, headers=headers)
-        return HttpxBinaryResponseContent(response)
+        binary_response: Final = HttpxBinaryResponseContent(response)
+        binary_response.set_response_cost(_completion_response_cost(model_response))
+        return binary_response

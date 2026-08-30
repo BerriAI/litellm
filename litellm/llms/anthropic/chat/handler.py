@@ -712,11 +712,14 @@ class ModelResponseIterator:
 
     def _handle_usage(self, anthropic_usage_chunk: dict | UsageDelta) -> Usage:
         reasoning_content: Final = "".join(self.reasoning_content_chunks) if self.reasoning_content_chunks else None
-        return AnthropicConfig().calculate_usage(
+        usage: Final = AnthropicConfig().calculate_usage(
             usage_object=cast(dict, anthropic_usage_chunk),
             reasoning_content=reasoning_content,
             speed=self.speed,
         )
+        if usage.speed is not None:
+            self.speed = usage.speed
+        return usage
 
     def _content_block_delta_helper(
         self, chunk: dict

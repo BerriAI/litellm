@@ -14,6 +14,7 @@ import json
 import math
 import traceback
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, NoReturn, Protocol, TypeVar, cast
@@ -494,8 +495,13 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        explicitly_set_fields: AbstractSet[str] = frozenset(),
     ) -> dict:
-        """Create team member budget table with provided limits"""
+        """Create team member budget table with provided limits.
+
+        The team's own reset period is only inherited when the caller left the
+        member duration out, so an explicit null means "never resets".
+        """
         from litellm.proxy._types import BudgetNewRequest
         from litellm.proxy.management_endpoints.budget_management_endpoints import (
             new_budget,
@@ -509,7 +515,11 @@ class TeamMemberBudgetHandler:
         # Create budget request with all provided limits
         budget_request: Final = BudgetNewRequest(
             budget_id=budget_id,
-            budget_duration=data.budget_duration or team_member_budget_duration,
+            budget_duration=(
+                team_member_budget_duration
+                if "team_member_budget_duration" in explicitly_set_fields
+                else data.budget_duration or team_member_budget_duration
+            ),
         )
 
         if team_member_budget is not None:
@@ -545,8 +555,13 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        explicitly_set_fields: AbstractSet[str] = frozenset(),
     ) -> dict:
-        """Upsert team member budget table with provided limits"""
+        """Upsert team member budget table with provided limits.
+
+        A field the caller explicitly sent as null is written as null, so a
+        team can keep a member budget while dropping its reset period.
+        """
         from litellm.proxy._types import BudgetNewRequest
         from litellm.proxy.management_endpoints.budget_management_endpoints import (
             update_budget,
@@ -560,14 +575,16 @@ class TeamMemberBudgetHandler:
             # Budget exists - create update request with only provided values
             budget_request: Final = BudgetNewRequest(budget_id=team_member_budget_id)
 
-            if team_member_budget is not None:
+            if team_member_budget is not None or "team_member_budget" in explicitly_set_fields:
                 budget_request.max_budget = team_member_budget
-            if team_member_rpm_limit is not None:
+            if team_member_rpm_limit is not None or "team_member_rpm_limit" in explicitly_set_fields:
                 budget_request.rpm_limit = team_member_rpm_limit
-            if team_member_tpm_limit is not None:
+            if team_member_tpm_limit is not None or "team_member_tpm_limit" in explicitly_set_fields:
                 budget_request.tpm_limit = team_member_tpm_limit
-            if team_member_budget_duration is not None:
+            if team_member_budget_duration is not None or "team_member_budget_duration" in explicitly_set_fields:
                 budget_request.budget_duration = team_member_budget_duration
+                if team_member_budget_duration is None:
+                    budget_request.budget_reset_at = None
 
             budget_row: Final = await _as_budget_write(update_budget)(
                 budget_obj=budget_request,
@@ -593,6 +610,7 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
                 team_member_budget_duration=team_member_budget_duration,
+                explicitly_set_fields=explicitly_set_fields,
             )
 
         # Remove team member fields from updated_kv
@@ -1479,6 +1497,7 @@ async def new_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                explicitly_set_fields=data.model_fields_set,
             )
 
         ## ADD TO TEAM TABLE
@@ -2184,6 +2203,7 @@ async def update_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                explicitly_set_fields=_team_member_fields_in_request,
             )
             # Backfill team_memberships for members who joined before the
             # budget was configured — they won't have a membership row yet.

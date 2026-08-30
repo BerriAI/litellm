@@ -1029,6 +1029,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     @staticmethod
     def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
+        from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
+
         choice: Final = chunk.choices[0]
         if choice.finish_reason is not None:
             return False
@@ -1039,7 +1041,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             return False
         if getattr(delta, "reasoning_content", None):
             return False
-        if getattr(delta, "thinking_blocks", None):
+        # thinking_blocks whose entries are all empty AND unsigned must not
+        # open a block: the emitted {"type": "thinking", "thinking": ""} gets
+        # replayed as history and Anthropic rejects it (LIT-6357). A signed
+        # entry opens the block so the client receives the replay signature.
+        thinking_blocks: Final = getattr(delta, "thinking_blocks", None)
+        if thinking_blocks and any(
+            isinstance(b, dict) and not is_empty_unsigned_thinking_block(b) for b in thinking_blocks
+        ):
             return False
         return True
 
