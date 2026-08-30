@@ -131,3 +131,30 @@ async def test_async_passthrough_wrapper_200_yields_chunks():
     assert len(chunks) == 1
     assert b"response.created" in chunks[0]
     mock_logging_obj.async_flush_passthrough_collected_chunks.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_error_body_readable_after_failed_await():
+    """The upstream error body must stay readable so the proxy can map the real status and message."""
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+
+    error_body = b'{"message":"model not found"}'
+
+    async def byte_stream():
+        yield error_body
+
+    request = httpx.Request("POST", "https://bedrock.example.com/model/x/converse-stream")
+    response = httpx.Response(400, content=byte_stream(), request=request)
+
+    async def response_coro():
+        return response
+
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await AsyncPassthroughStreamingResponse(
+            response=response_coro(),
+            litellm_logging_obj=_make_mock_logging_obj(),
+            provider_config=MagicMock(),
+        )
+
+    assert exc_info.value.response.status_code == 400
+    assert await exc_info.value.response.aread() == error_body
