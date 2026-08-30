@@ -7,7 +7,14 @@
 
 import json
 import os
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from collections.abc import Mapping
+from typing import (
+    TYPE_CHECKING,
+    Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__; see ruff-strict.toml
+    Final,
+    Literal,
+    Optional,
+)
 
 import httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -58,10 +65,10 @@ class AliceVerdict(TypedDict):
     """Body returned by Alice's LiteLLM evaluate endpoint."""
 
     verdict: ReadOnly[NotRequired[str]]
-    categories: ReadOnly[NotRequired["list[str]"]]
+    categories: ReadOnly[NotRequired["tuple[str, ...]"]]
     correlation_id: ReadOnly[NotRequired[str]]
     message: ReadOnly[NotRequired[str]]
-    replacements: ReadOnly[NotRequired["list[AliceReplacement]"]]
+    replacements: ReadOnly[NotRequired["tuple[AliceReplacement, ...]"]]
 
 
 class AliceGuardrailMissingSecrets(Exception):
@@ -104,8 +111,8 @@ class AliceGuardrail(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
-        **kwargs: Any,
-    ):
+        **kwargs: Any,  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__, whose param list is wide and evolving
+    ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         alice_api_key: Final = api_key or os.environ.get("ALICE_API_KEY")
@@ -121,7 +128,7 @@ class AliceGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
 
         if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [
+            kwargs["supported_event_hooks"] = [  # mutable-ok: CustomGuardrail.__init__ requires a list here
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.during_call,
                 GuardrailEventHooks.post_call,
@@ -133,7 +140,7 @@ class AliceGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: overrides CustomGuardrail.apply_guardrail, whose contract is a plain dict
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -161,17 +168,17 @@ class AliceGuardrail(CustomGuardrail):
     async def _evaluate(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: str,
     ) -> AliceVerdict:
         response: Final = await self.async_handler.post(
             url=self.api_base,
-            json={
+            json={  # mutable-ok: one-shot HTTP request body, never mutated after construction
                 "input_type": input_type,
                 "inputs": _json_safe(inputs),
                 "request_data": _json_safe(request_data),
             },
-            headers={
+            headers={  # mutable-ok: one-shot HTTP headers, never mutated after construction
                 "Content-Type": "application/json",
                 "af-api-key": self.alice_api_key,
             },
@@ -179,7 +186,7 @@ class AliceGuardrail(CustomGuardrail):
         response.raise_for_status()
         body = response.json()
         if not isinstance(body, dict):
-            raise ValueError("Alice returned a non-object body")
+            raise TypeError("Alice returned a non-object body")
         return body
 
     def _enforce(self, verdict: AliceVerdict, inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
@@ -219,9 +226,9 @@ class AliceGuardrail(CustomGuardrail):
         the request positionally, but takes a different branch entirely when `structured_messages`
         comes back as a new object — which would drop these edits.
         """
-        texts: Final = inputs.get("texts") or []
+        texts: Final = inputs.get("texts") or []  # mutable-ok: empty-list fallback, replaced wholesale below
         applied = 0
-        for replacement in verdict.get("replacements") or []:
+        for replacement in verdict.get("replacements") or []:  # mutable-ok: empty-list fallback for iteration only
             index = replacement.get("index")
             text = replacement.get("text")
             if isinstance(index, int) and isinstance(text, str) and 0 <= index < len(texts):
@@ -262,7 +269,7 @@ class AliceGuardrail(CustomGuardrail):
         return AliceGuardrailConfigModel
 
 
-def _json_safe(value: Any, depth: int = 0, seen: frozenset[int] = frozenset()) -> Any:
+def _json_safe(value: object, depth: int = 0, seen: frozenset[int] = frozenset()) -> object:
     """
     Copy `value` into something `json.dumps` accepts, dropping only what cannot cross.
 
@@ -276,17 +283,20 @@ def _json_safe(value: Any, depth: int = 0, seen: frozenset[int] = frozenset()) -
     if depth >= _MAX_DEPTH or id(value) in seen:
         return None
 
-    nested: Final = seen | {id(value)}
+    nested: Final = seen | {id(value)}  # mutable-ok: one-shot set literal, unioned into a frozenset immediately
 
     if isinstance(value, dict):
-        out: dict[str, Any] = {}
-        for key, item in list(value.items())[:_MAX_ITEMS]:
+        out: dict[str, object] = {}  # mutable-ok: bounded accumulator local to this call, never escapes as-is
+        for key, item in list(value.items())[:_MAX_ITEMS]:  # mutable-ok: list() only to slice an unordered view
             if isinstance(key, str):
                 out[key] = _json_safe(item, depth + 1, nested)
         return out
 
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [_json_safe(item, depth + 1, nested) for item in list(value)[:_MAX_ITEMS]]
+        return [  # mutable-ok: return value is a one-shot list, discarded by the caller after use
+            _json_safe(item, depth + 1, nested)
+            for item in list(value)[:_MAX_ITEMS]  # mutable-ok: list() only to slice an unordered view
+        ]
 
     dump: Final = getattr(value, "model_dump", None)
     if callable(dump):
