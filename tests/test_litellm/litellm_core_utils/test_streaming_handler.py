@@ -4692,3 +4692,40 @@ async def test_async_stream_assembled_response_keeps_vertex_traffic_type(logging
     assembled = litellm.stream_chunk_builder(chunks=received, messages=[{"role": "user", "content": "hi"}])
     assert assembled is not None
     assert assembled._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND_FLEX"
+
+
+@pytest.mark.asyncio
+async def test_async_fake_stream_final_chunk_carries_hidden_usage(logging_obj: Logging):
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+    from litellm.types.utils import ModelResponse
+
+    model_response = ModelResponse(
+        id="chatcmpl-fake-stream",
+        model="my-random-model",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello world"},
+                "finish_reason": "stop",
+            }
+        ],
+    )
+    model_response.usage = Usage(prompt_tokens=1234, completion_tokens=7, total_tokens=1241)
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=model_response),
+        model="my-random-model",
+        custom_llm_provider="anthropic",
+        logging_obj=logging_obj,
+    )
+
+    final_chunk = None
+    async for chunk in wrapper:
+        final_chunk = chunk
+
+    assert final_chunk is not None
+    hidden_usage = final_chunk._hidden_params.get("usage")
+    assert hidden_usage is not None
+    assert hidden_usage.prompt_tokens == 1234
+    assert hidden_usage.completion_tokens == 7
+    assert hidden_usage.total_tokens == 1241
