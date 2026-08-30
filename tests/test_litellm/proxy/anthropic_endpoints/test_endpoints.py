@@ -164,6 +164,49 @@ class TestProxyExceptionPassthrough:
         mock_logging.post_call_failure_hook.assert_awaited_once()
 
 
+class TestHttpExceptionDictDetail:
+    @pytest.mark.asyncio
+    async def test_anthropic_response_serializes_dict_detail_http_exception(self):
+        """LIT-6466: a post_call guardrail's HTTPException(detail=<dict>) must
+        surface with a clean message plus provider_specific_fields, matching
+        /v1/chat/completions and /v1/responses, not the str() of the exception."""
+        from fastapi import HTTPException
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        detail = {
+            "error": "Content blocked: keyword 'kumquat' detected",
+            "keyword": "kumquat",
+            "guardrail": "keyword-block",
+        }
+        exc = HTTPException(status_code=400, detail=detail)
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(  # test-quality-ok: the guardrail raise happens deep inside this call; the test targets the endpoint's except block
+                ep.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            with pytest.raises(ProxyException) as exc_info:
+                await ep.anthropic_response(
+                    fastapi_response=MagicMock(),
+                    request=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        assert exc_info.value.message == "Content blocked: keyword 'kumquat' detected"
+        assert "{'error'" not in exc_info.value.message
+        assert exc_info.value.provider_specific_fields == detail
+        assert exc_info.value.code == "400"
+        mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
 class TestFailureHookRequestData:
     @pytest.mark.asyncio
     async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):

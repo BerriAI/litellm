@@ -50,6 +50,11 @@ const typedInsertion = (previous: string, next: string): string => {
   return next.slice(start, next.length - end);
 };
 
+const editedQuery = (label: string, next: string): string => {
+  const inserted = typedInsertion(label, next);
+  return inserted === "" && next !== label ? next : inserted;
+};
+
 export function PaginatedSearchSelect({
   options,
   value,
@@ -101,7 +106,7 @@ export function PaginatedSearchSelect({
     const replacedWholeInput = wholeSelectionRef.current;
     wholeSelectionRef.current = false;
     handleInputValueChange(
-      typedQuery === null && !replacedWholeInput ? typedInsertion(selected?.label ?? "", next) : next,
+      typedQuery === null && !replacedWholeInput ? editedQuery(selected?.label ?? "", next) : next,
       reason,
     );
   };

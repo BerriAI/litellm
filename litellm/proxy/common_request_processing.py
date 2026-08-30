@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -531,6 +531,21 @@ def _serialize_http_exception_detail(
             return msg, detail
         return json.dumps(detail), detail
     return str(detail), None
+
+
+def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
+    raw_detail: Final = _getattr_object(exc, "detail", str(exc))
+    message, structured_fields = _serialize_http_exception_detail(raw_detail)
+    existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
+    merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
+    return ProxyException(
+        message=message,
+        type=getattr(exc, "type", "None"),
+        param=getattr(exc, "param", "None"),
+        code=getattr(exc, "status_code", status.HTTP_400_BAD_REQUEST),
+        provider_specific_fields=merged_fields,
+        headers=headers,
+    )
 
 
 def _collect_response_file_search_vector_store_ids(data: Mapping[str, object]) -> set[str]:
@@ -1362,6 +1377,8 @@ def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None
     routes and in `metadata` on chat-style routes, so both buckets are consulted, in the same
     precedence `get_or_create_metadata_bucket` writes them.
     """
+    from litellm.proxy.spend_tracking.savings import classifier_cost_from_decision
+
     data: Final = request_data or {}
     for metadata_key in ("litellm_metadata", "metadata"):
         metadata = data.get(metadata_key)
@@ -1370,10 +1387,10 @@ def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None
         decision = metadata.get("routing_decision")
         if not isinstance(decision, dict):
             continue
-        cost = decision.get("classifier_cost")
-        if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        cost = classifier_cost_from_decision(decision)
+        if cost is None:
             continue
-        return float(cost)
+        return cost
     return None
 
 
@@ -1458,6 +1475,22 @@ async def _await_llm_call_cancelling_on_disconnect(
         monitor.cancel()
 
 
+def _timing_values(
+    *,
+    hidden_params: Mapping[str, object],
+    logging_obj: LiteLLMLoggingObj | None,
+    use_logging_obj: bool,
+) -> Mapping[str, object]:
+    """Both timing values from one source, so the two headers always describe the same window.
+
+    /v1/messages returns a plain dict and the Anthropic / Responses bridge stream wrappers carry no
+    ``_hidden_params``, so ``update_response_metadata`` leaves their timing on the logging object.
+    """
+    if hidden_params.get("_response_ms") is not None or not use_logging_obj or logging_obj is None:
+        return hidden_params
+    return getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -1478,10 +1511,16 @@ class ProxyBaseLLMRequestProcessing:
         request_data: dict | None = {},
         timeout: float | httpx.Timeout | None = None,
         litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        read_timing_from_logging_obj: bool = True,
         **kwargs,
     ) -> dict:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
+        timing_values: Final = _timing_values(
+            hidden_params=hidden_params,
+            logging_obj=litellm_logging_obj,
+            use_logging_obj=read_timing_from_logging_obj,
+        )
 
         cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
@@ -1549,8 +1588,8 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
             "x-litellm-key-spend": str(updated_spend),
-            "x-litellm-response-duration-ms": str(hidden_params.get("_response_ms", None)),
-            "x-litellm-overhead-duration-ms": str(hidden_params.get("litellm_overhead_time_ms", None)),
+            "x-litellm-response-duration-ms": str(timing_values.get("_response_ms")),
+            "x-litellm-overhead-duration-ms": str(timing_values.get("litellm_overhead_time_ms")),
             "x-litellm-callback-duration-ms": str(hidden_params.get("callback_duration_ms", None)),
             **(
                 {
@@ -2372,6 +2411,21 @@ class ProxyBaseLLMRequestProcessing:
                         )
 
                     logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
+                elif (
+                    _post_call_guardrails_active
+                    and route_type == "anthropic_messages"
+                    and self._is_streaming_response(response)
+                ):
+                    from litellm.litellm_core_utils.logging_worker import (
+                        GLOBAL_LOGGING_WORKER,
+                    )
+
+                    async def _on_deferred_native_stream_complete(
+                        logging_coroutine: Coroutine[object, object, object],
+                    ) -> None:
+                        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+
+                    logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
 
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
@@ -2551,16 +2605,6 @@ class ProxyBaseLLMRequestProcessing:
                     except Exception as e:
                         verbose_proxy_logger.exception("Error in orphaned streaming async logging: %s", e)
 
-        # Always return the client-requested model name (not provider-prefixed internal identifiers)
-        # for OpenAI-compatible responses.
-        if requested_model_from_client:
-            _override_openai_response_model(
-                response_obj=response,
-                requested_model=requested_model_from_client,
-                log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
-                return_raw_model_name=_should_return_raw_model_name(self.data),
-            )
-
         hidden_params = get_hidden_params_dict(response)  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
@@ -2585,6 +2629,16 @@ class ProxyBaseLLMRequestProcessing:
             if guardrail_cost_for_headers > 0
             else llm_cost_for_headers
         )
+
+        # Always return the client-requested model name (not provider-prefixed internal identifiers)
+        # for OpenAI-compatible responses.
+        if requested_model_from_client:
+            _override_openai_response_model(
+                response_obj=response,
+                requested_model=requested_model_from_client,
+                log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+                return_raw_model_name=_should_return_raw_model_name(self.data),
+            )
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -3192,6 +3246,8 @@ class ProxyBaseLLMRequestProcessing:
             request_data=self.data,
             timeout=timeout,
             litellm_logging_obj=_litellm_logging_obj,
+            # a failed request reports no timing, matching /v1/chat/completions
+            read_timing_from_logging_obj=False,
         )
         # Extract headers from exception - check both e.headers and e.response.headers
         headers = getattr(e, "headers", None) or {}
@@ -3229,21 +3285,7 @@ class ProxyBaseLLMRequestProcessing:
             raise e
 
         if isinstance(e, HTTPException):
-            raw_detail: Final = _getattr_object(e, "detail", str(e))
-            message, structured_fields = _serialize_http_exception_detail(raw_detail)
-            existing_fields: Final = getattr(e, "provider_specific_fields", None) or {}
-            if structured_fields:
-                merged_fields: dict | None = {**existing_fields, **structured_fields}
-            else:
-                merged_fields = existing_fields or None
-            raise ProxyException(
-                message=message,
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                provider_specific_fields=merged_fields,
-                headers=safe_headers,
-            )
+            raise proxy_exception_from_http_exception(e, safe_headers)
         elif isinstance(e, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
             # This matches the original behavior before the refactor in commit 511d435f6f

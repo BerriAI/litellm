@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     _request_blocked_callback_params,
     iter_client_callback_metadata_dicts,
 )
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     is_url_destination_allowed_by_host,
@@ -253,6 +254,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "_code_interpreter_interception_converted_stream",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
+    "_headroom_interception_converted_stream",
     "max_agentic_loops",
     # Recomputed below from the actual caller-controlled timeout sources (headers and
     # body fields); a client-forged value here would let a request either dodge cooldown
@@ -313,6 +315,10 @@ _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.mod
 # into response_cost and spend; a client seeding it forges (even negative)
 # guardrail cost.
 _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
+# ``attempted_fallbacks`` and ``original_model_group`` are written by the router
+# and read by spend logs as fact; a client value has no legitimate meaning and no
+# key or team setting keeps it, so the strip is never gated.
+_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset({"attempted_fallbacks", "original_model_group"})
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
 
 # Request fields whose value, when URL-valued, becomes the outbound destination
@@ -536,6 +542,20 @@ def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
             "metadata to keep these values.",
             ", ".join(stripped),
         )
+
+
+def _strip_router_reserved_metadata(
+    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    """Drop the router-owned fallback stamps from any client-supplied metadata bucket."""
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if not isinstance(metadata := data.get(metadata_key), dict):
+            continue
+        for field in _ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
+            metadata.pop(field)
+            verbose_proxy_logger.debug(
+                "Stripped router-reserved metadata field from request body: %s.%s", metadata_key, field
+            )
 
 
 def _get_metadata_variable_name(request: Request) -> str:
@@ -1359,6 +1379,10 @@ class LiteLLMProxyRequestSetup:
         )
         if user_api_key_dict.budget_reservation is not None:
             data[_metadata_variable_name]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        if user_api_key_dict.matched_model_access_groups:
+            data[_metadata_variable_name][MODEL_ACCESS_GROUP_METADATA_KEY] = (
+                user_api_key_dict.matched_model_access_groups
+            )
         # UserAPIKeyAuth object for MCP server access control
         data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
             update={
@@ -1882,6 +1906,7 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
+    _strip_router_reserved_metadata(data)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
@@ -1929,6 +1954,13 @@ async def add_litellm_data_to_request(
         for key, value in data["litellm_metadata"].items():
             if key not in data[_metadata_variable_name]:
                 data[_metadata_variable_name][key] = value
+        if _metadata_variable_name == "metadata":
+            data["metadata"]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # pyright: ignore[reportPrivateUsage]  # same-module helper, budget blocks the unsuppressed idiom sibling call sites use
+                request_tags=data["metadata"].get("tags"),
+                tags_to_add=data["litellm_metadata"].get("tags"),
+            )
+    if _metadata_variable_name == "metadata":
+        data.pop("litellm_metadata", None)
 
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,

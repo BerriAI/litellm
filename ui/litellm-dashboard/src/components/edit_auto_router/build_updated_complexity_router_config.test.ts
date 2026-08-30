@@ -7,6 +7,19 @@ import {
   type KeywordMatchingState,
 } from "./edit_auto_router_modal";
 
+// The custom-tier router these cases round-trip, so a variant differs only by what it overrides.
+const storedCustomConfig = (overrides: Record<string, unknown> = {}) => ({
+  tiers: { CASUAL: ["gpt-4o-mini"], AUDIT: ["o1"] },
+  tier_definitions: [
+    { name: "CASUAL", description: "small talk" },
+    { name: "AUDIT", description: "security review" },
+  ],
+  fallback_tier: "CASUAL",
+  classifier_type: "llm",
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  ...overrides,
+});
+
 const STORED = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
   classifier_type: "heuristic",
@@ -476,12 +489,68 @@ describe("managed keys survive an untouched open-and-save", () => {
     reasoning_override_min_score: 0.3,
   };
 
-  it("carries every managed key through hydrate then save", () => {
+  // tier_definitions, fallback_tier and classification_prompt cannot sit beside heuristic_first, which
+  // this fixture uses, so no single stored config can hold every managed key. They get their own round
+  // trip below.
+  const CUSTOM_TIER_ONLY_KEYS = new Set(["tier_definitions", "fallback_tier", "classification_prompt"]);
+
+  it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
 
-    const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS].filter((key) => saved[key] === undefined);
+    const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
+      .filter((key) => !CUSTOM_TIER_ONLY_KEYS.has(key))
+      .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
+  });
+
+  it("drops a stored local-scorer threshold when the operator converts the router to custom tiers", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
+    const converted = {
+      ...hydrated,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    };
+    const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, converted);
+
+    expect(saved.heuristic_first_max_tier).toBeUndefined();
+    expect(saved.classifier_type).toBe("llm");
+    expect(saved.tier_definitions).toHaveLength(2);
+  });
+
+  it("carries the custom-tier keys through their own round trip", () => {
+    const storedCustom = storedCustomConfig();
+    const hydrated = hydrateComplexityRouterConfig(storedCustom, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(storedCustom, hydrated);
+
+    expect(saved.tier_definitions).toEqual(storedCustom.tier_definitions);
+    expect(saved.fallback_tier).toBe("CASUAL");
+    expect(saved.tiers).toEqual(storedCustom.tiers);
+  });
+
+  it("clears a stored classification_prompt when the operator resets it, rather than preserving it as an unowned key", () => {
+    const storedCustom = storedCustomConfig({ classification_prompt: "Route for a payments team." });
+    const hydrated = hydrateComplexityRouterConfig(storedCustom, undefined);
+    const reset = { ...hydrated, classification_prompt: undefined };
+
+    expect(buildUpdatedComplexityRouterConfig(storedCustom, reset)).not.toHaveProperty("classification_prompt");
+  });
+
+  it("round-trips a stored classification_prompt, which an untouched open-and-save must not clear", () => {
+    const storedCustom = storedCustomConfig({
+      classification_prompt: "Route for a payments team.\n\nExamples:\n- refund status -> CASUAL",
+    });
+    const hydrated = hydrateComplexityRouterConfig(storedCustom, undefined);
+
+    expect(hydrated.classification_prompt).toBe(storedCustom.classification_prompt);
+    expect(buildUpdatedComplexityRouterConfig(storedCustom, hydrated).classification_prompt).toBe(
+      storedCustom.classification_prompt,
+    );
   });
 
   it("round-trips the heuristic_first threshold, which save requires and the backend rejects without", () => {

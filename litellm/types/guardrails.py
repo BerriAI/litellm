@@ -563,9 +563,15 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
-    on_flagged: Literal["block", "monitor"] | None = Field(
+    on_flagged: Literal["block", "monitor", "inject_system_message"] | None = Field(
         default="block",
-        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+        description="Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), "
+        "or 'inject_system_message' (append an advisory system message and let the LLM decide)",
+    )
+    advisory_system_message: str | None = Field(
+        default=None,
+        description="Custom advisory message template used when on_flagged='inject_system_message'. "
+        "Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
     )
 
 
@@ -951,6 +957,17 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    scan_raw_request: bool | None = Field(
+        default=None,
+        description=(
+            "When True, this pre_call guardrail always evaluates the request as it was before any "
+            "guardrail in this hook ran, regardless of its position in the guardrails list -- so the "
+            "YAML order of guardrails can never change whether this one blocks. Use only for "
+            "block-only guardrails: any data this guardrail returns is discarded, same contract as "
+            "run_in_parallel, since an earlier guardrail's masking must not be undone by this one."
+        ),
+    )
+
     @field_validator(
         "mode",
         "default_action",
@@ -983,7 +1000,7 @@ class Mode(BaseModel):
     default: str | list[str] | None = Field(default=None, description="Default mode when no tags match")
 
 
-class LitellmParams(
+class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # on_flagged literal diverges across mixins
     CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,

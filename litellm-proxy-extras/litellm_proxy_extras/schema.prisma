@@ -29,6 +29,7 @@ model LiteLLM_BudgetTable {
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   tags LiteLLM_TagTable[] // multiple tags can have the same budget
+  model_access_groups LiteLLM_ModelAccessGroupBudgetTable[] // multiple model access groups can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
   organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
 }
@@ -585,6 +586,20 @@ model LiteLLM_EndUserTable {
   blocked Boolean @default(false)
 }
 
+// Budget and shared spend for a model access group. The groups themselves are not rows anywhere:
+// they are free-text strings in LiteLLM_ProxyModelTable.model_info.access_groups, so a row here
+// exists only once someone gives that group a budget.
+model LiteLLM_ModelAccessGroupBudgetTable {
+  access_group_name String @id
+  spend Float @default(0.0)
+  budget_id String?
+  litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
+  created_at DateTime @default(now()) @map("created_at")
+  created_by String?
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String?
+}
+
 // Track tags with budgets and spend
 model LiteLLM_TagTable {
   tag_name String @id
@@ -647,6 +662,18 @@ model LiteLLM_SpendLogs {
   @@index([startTime, request_id])
   @@index([end_user])
   @@index([session_id])
+}
+
+model LiteLLM_BudgetWindowSpend {
+  entity_type     String
+  entity_id       String
+  window_duration String
+  window_start    DateTime
+  spend           Float    @default(0.0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@id([entity_type, entity_id, window_duration])
 }
 
 // View spend, model, api_key per request
@@ -1533,10 +1560,25 @@ model LiteLLM_ShadowEvalAttempt {
   confidence   Float?
   judge_cost   Float    @default(0)
   shadow_cost  Float    @default(0)
+  real_cost    Float?   // NULL = row predates cost measurement; comparisons read only measured rows
+  real_classifier_cost   Float @default(0)
+  shadow_classifier_cost Float @default(0)
+  real_cache_hit Boolean @default(false)
   error        String?
   created_at   DateTime @default(now())
 
   @@index([job_id])
+}
+
+// Per-leg sampling funnel counters the attempt rows cannot derive: requests an
+// admitting job saw but did not judge. attempted = the leg's attempt rows; the
+// leg's eligible traffic = not_sampled + unjudgeable + shed + withheld + attempted.
+model LiteLLM_ShadowEvalFunnel {
+  job_id      String @id
+  not_sampled Int    @default(0)
+  unjudgeable Int    @default(0)
+  shed        Int    @default(0)
+  withheld    Int    @default(0)
 }
 
 // ---------------------------------------------------------------------------

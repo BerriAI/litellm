@@ -362,6 +362,27 @@ class ShadowEvalSlice(BaseModel):
     )
     tie_rate_pct: float
     avg_judge_confidence: float
+    real_spend: float = Field(
+        default=0.0,
+        description=(
+            "USD the real arm billed on this slice's judged turns, completion plus its own routing "
+            "classifier when it routed, excluding turns litellm's response cache served for free"
+        ),
+    )
+    shadow_spend: float = Field(
+        default=0.0,
+        description=(
+            "USD the shadow arm billed on the same turns, completion plus its own routing classifier, "
+            "excluding the judge and the same cache-served turns, so the two spends compare like for like"
+        ),
+    )
+    cache_hit_turns: int = Field(
+        default=0,
+        description=(
+            "Judged turns litellm's response cache served, excluded from both spends: an adopted router "
+            "would be served by the same cache, so those turns cost the same either way"
+        ),
+    )
 
 
 class ShadowEvalResult(BaseModel):
@@ -382,6 +403,37 @@ class ShadowEvalResult(BaseModel):
     )
     overall_shadow_win_rate_pct: float
     overall_tie_rate_pct: float
+    sampled_real_spend: float = Field(
+        default=0.0,
+        description="USD the real arm billed across all judged turns, cache-served turns excluded",
+    )
+    sampled_shadow_spend: float = Field(
+        default=0.0,
+        description="USD the shadow arm billed across the same turns, judge excluded, like for like",
+    )
+    not_sampled_count: int | None = Field(
+        default=None,
+        description=(
+            "Eligible requests the sampling dice skipped, summed over legs: the judged rows stand for "
+            "judged + this many requests. None for jobs from before the funnel existed"
+        ),
+    )
+    unjudgeable_count: int | None = Field(
+        default=None,
+        description="Sampled requests whose shape could not be judged (tool-final turn, empty text)",
+    )
+    shed_count: int | None = Field(
+        default=None,
+        description="Sampled requests dropped by the per-pod concurrency cap, so quiet periods are overweighted",
+    )
+    withheld_count: int | None = Field(
+        default=None,
+        description=(
+            "Sampled requests the pipeline declined to spend on: no database to record into, an over-budget "
+            "key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job "
+            "crosses max_budget lands here rather than vanishing from coverage)"
+        ),
+    )
 
 
 class ShadowEvalJobKeyResponse(BaseModel):
