@@ -3,9 +3,9 @@ import pytest
 from litellm.router import Router
 from litellm.router_strategy.savings_baseline import (
     Baseline,
-    canonical_model,
     _models_in,
     _most_expensive,
+    canonical_model,
     resolve_baseline,
 )
 
@@ -96,6 +96,35 @@ class TestMostExpensive:
 
     def test_returns_none_for_an_empty_candidate_set(self, parent):
         assert _most_expensive(parent, []) is None
+
+    def test_missing_cache_rates_fall_back_to_input_pricing_for_reference_ranking(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "missing-cache-rates",
+                    "litellm_params": {
+                        "model": "openai/missing-cache-rates",
+                        "input_cost_per_token": 0.001,
+                        "output_cost_per_token": 0.000001,
+                    },
+                },
+                {
+                    "model_name": "priced-cache-rates",
+                    "litellm_params": {
+                        "model": "openai/priced-cache-rates",
+                        "input_cost_per_token": 0.00001,
+                        "output_cost_per_token": 0.00001,
+                        "cache_read_input_token_cost": 0.00001,
+                        "cache_creation_input_token_cost": 0.00001,
+                    },
+                },
+            ]
+        )
+
+        assert (
+            resolve_baseline(router, ["missing-cache-rates", "priced-cache-rates"]).model
+            == "openai/missing-cache-rates"
+        )
 
 
 class TestResolveBaseline:

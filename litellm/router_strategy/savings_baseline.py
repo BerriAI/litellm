@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_router_logger
+from litellm.litellm_core_utils.cache_pricing import fallback_missing_cache_rates_to_input
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 if TYPE_CHECKING:
@@ -120,7 +121,7 @@ def _priced(router: "Router", candidate: Baseline) -> tuple[float, Baseline] | N
             return None
         prompt_cost, completion_cost = generic_cost_per_token(
             model=model_name or candidate.model,
-            usage=_REFERENCE_REQUEST,
+            usage=fallback_missing_cache_rates_to_input(_REFERENCE_REQUEST, info),
             custom_llm_provider=provider,
             model_info=info,
         )
