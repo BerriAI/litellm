@@ -269,6 +269,7 @@ manifest-path = "litellm-rust/crates/python-bridge/Cargo.toml"
 module-name = "litellm.rust_bridge._native"
 python-source = "."
 bindings = "pyo3"
+strip = true
 include = ["litellm/proxy/_experimental/out/**"]
 exclude = [
     "litellm/proxy/enterprise",

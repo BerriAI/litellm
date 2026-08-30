@@ -94,18 +94,18 @@ def file_bytes(root: Path) -> int:
     return sum(path.stat().st_size for path in root.rglob("*") if path.is_file() and not path.is_symlink())
 
 
-def git_metadata(source: Path) -> dict[str, object]:
-    if not source.is_dir():
+def git_metadata(source: Path, executable: str | None = shutil.which("git")) -> dict[str, object]:
+    if not source.is_dir() or executable is None:
         return {"path": str(source), "commit": None, "dirty": None}
     head: Final = subprocess.run(
-        ("git", "-C", str(source), "rev-parse", "HEAD"),
+        (executable, "-C", str(source), "rev-parse", "HEAD"),
         capture_output=True,
         text=True,
     )
     if head.returncode:
         return {"path": str(source), "commit": None, "dirty": None}
     status: Final = subprocess.run(
-        ("git", "-C", str(source), "status", "--porcelain"),
+        (executable, "-C", str(source), "status", "--porcelain"),
         capture_output=True,
         text=True,
         check=True,

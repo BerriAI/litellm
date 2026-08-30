@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 
-from bench_sdk import file_bytes, lock_text, snapshot, wheel_info
+from bench_sdk import file_bytes, git_metadata, lock_text, snapshot, wheel_info
 from bench_sdk_runtime import PROBE, probe, provider, runtime_environment, summary
 
 FAKE_SDK: Final = """
@@ -67,6 +67,14 @@ def make_target(directory: Path, code: str = FAKE_SDK) -> Path:
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_git_metadata_tolerates_missing_git(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root: Final = Path(temporary)
+            self.assertEqual(
+                git_metadata(root, executable=None),
+                {"path": str(root), "commit": None, "dirty": None},
+            )
+
     def test_parallel_runs_use_distinct_environments_and_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root: Final = Path(temporary)
