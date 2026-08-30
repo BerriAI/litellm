@@ -13,10 +13,55 @@ Generated files are returned directly in the response - no separate storage need
 
 import base64
 import json
+from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Final
+from typing import Any, Final, Protocol
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+
+
+class _ToolCallFunction(Protocol):
+    """Function payload of an assistant tool call."""
+
+    name: str | None
+    arguments: str
+
+
+class _ToolCall(Protocol):
+    """Tool call requested by the assistant on a chat completion choice."""
+
+    id: str
+    function: _ToolCallFunction
+
+
+class _AssistantMessage(Protocol):
+    """Assistant message carried by a chat completion choice."""
+
+    content: str | None
+    tool_calls: Sequence[_ToolCall] | None
+
+
+class _CompletionChoice(Protocol):
+    """Single choice of a chat completion response."""
+
+    finish_reason: str
+    message: _AssistantMessage
+
+
+class _SandboxFile(TypedDict):
+    """File generated inside the sandbox during a code execution run."""
+
+    name: ReadOnly[str]
+    mime_type: ReadOnly[str]
+    content_base64: ReadOnly[str]
+
+
+class _CodeExecutionArguments(TypedDict):
+    """Arguments the model passes to the `litellm_code_execution` tool."""
+
+    code: NotRequired[ReadOnly[str]]
 
 
 class LiteLLMInternalTools(str, Enum):
@@ -30,7 +75,7 @@ class LiteLLMInternalTools(str, Enum):
     CODE_EXECUTION = "litellm_code_execution"
 
 
-def get_litellm_code_execution_tool() -> dict[str, Any]:
+def get_litellm_code_execution_tool() -> dict[str, object]:
     """
     Returns the litellm_code_execution tool definition in OpenAI format.
 
@@ -51,7 +96,7 @@ def get_litellm_code_execution_tool() -> dict[str, Any]:
     }
 
 
-def get_litellm_code_execution_tool_anthropic() -> dict[str, Any]:
+def get_litellm_code_execution_tool_anthropic() -> dict[str, object]:
     """
     Returns the litellm_code_execution tool definition in Anthropic/messages API format.
 
@@ -103,7 +148,7 @@ class CodeExecutionHandler:
         skill_files: dict[str, bytes],
         skill_id: str | None = None,
         **kwargs,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Execute an LLM call with automatic code execution handling.
 
@@ -134,8 +179,8 @@ class CodeExecutionHandler:
         )
 
         current_messages: Final = list(messages)
-        generated_files: Final[list[dict[str, Any]]] = []  # Files returned directly
-        execution_results: Final[list[dict]] = []
+        generated_files: Final[list[dict[str, object]]] = []  # Files returned directly
+        execution_results: Final[list[dict[str, object]]] = []
 
         executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
         response: Any = None  # Initialize to avoid possibly unbound error
@@ -151,11 +196,12 @@ class CodeExecutionHandler:
                 **kwargs,
             )
 
-            assistant_message = response.choices[0].message
-            stop_reason = response.choices[0].finish_reason
+            choice: _CompletionChoice = response.choices[0]
+            assistant_message = choice.message
+            stop_reason: str = choice.finish_reason
 
             # Build assistant message for conversation history
-            assistant_msg_dict: dict[str, Any] = {
+            assistant_msg_dict: dict[str, object] = {
                 "role": "assistant",
                 "content": assistant_message.content,
             }
@@ -190,8 +236,8 @@ class CodeExecutionHandler:
                 if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value:
                     # Execute code in sandbox
                     try:
-                        args = json.loads(tool_call.function.arguments)
-                        code = args.get("code", "")
+                        args: _CodeExecutionArguments = json.loads(tool_call.function.arguments)
+                        code: str = args.get("code", "")
 
                         verbose_logger.debug("CodeExecutionHandler: Executing code (%s chars)", len(code))
 
@@ -202,13 +248,15 @@ class CodeExecutionHandler:
 
                         verbose_logger.debug("CodeExecutionHandler: Execution result: %s", exec_result)
 
+                        sandbox_files: Sequence[_SandboxFile] = exec_result["files"]
+
                         execution_results.append(
                             {
                                 "iteration": iteration,
                                 "success": exec_result["success"],
                                 "output": exec_result["output"],
                                 "error": exec_result["error"],
-                                "files": [f["name"] for f in exec_result["files"]],
+                                "files": [f["name"] for f in sandbox_files],
                             }
                         )
 
@@ -216,9 +264,9 @@ class CodeExecutionHandler:
                         tool_result = exec_result["output"] or ""
 
                         # Collect generated files (returned directly, no storage)
-                        if exec_result["files"]:
+                        if sandbox_files:
                             tool_result += "\n\nGenerated files:"
-                            for f in exec_result["files"]:
+                            for f in sandbox_files:
                                 file_content = base64.b64decode(f["content_base64"])
                                 # Add to generated files list (returned in response)
                                 generated_files.append(

@@ -38,6 +38,7 @@ export const useModelsInfo = (
   sortBy?: string,
   sortOrder?: string,
   excludeAutoRouters: boolean = false,
+  modelName?: string,
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -48,6 +49,7 @@ export const useModelsInfo = (
         page,
         size,
         ...(search && { search }),
+        ...(modelName && { modelName }),
         ...(modelId && { modelId }),
         ...(teamId && { teamId }),
         ...(sortBy && { sortBy }),
@@ -70,6 +72,7 @@ export const useModelsInfo = (
         sortBy,
         sortOrder,
         excludeAutoRouters,
+        modelName,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });

@@ -33,6 +33,7 @@ vi.mock("../networking", async () => {
         { model_group: "gpt-3.5-turbo", mode: "chat" },
       ],
     }),
+    testConnectionRequest: vi.fn().mockResolvedValue({ status: "success" }),
     getProviderCreateMetadata: vi.fn().mockResolvedValue([
       {
         provider: "OpenAI",
@@ -309,6 +310,20 @@ describe("AddModelForm", () => {
     expect(await screen.findByText("Provider")).toBeInTheDocument();
     expect((await screen.findAllByRole("button", { name: "Test Connect" })).length).toBeGreaterThan(0);
     expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
+  });
+
+  it("shows only the Close button in the connection test dialog footer", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+
+    renderWithProviders(<AddModelForm {...createTestProps()} />);
+
+    await userEvent.click(await screen.findByTestId("test-connect-btn"));
+
+    const dialog = await screen.findByRole("dialog");
+    const footer = dialog.querySelector('[data-slot="dialog-footer"]');
+    expect(footer).not.toBeNull();
+    expect(footer!.textContent?.trim()).toBe("Close");
   });
 
   describe("the enterprise gate on the Team-BYOK switch", () => {

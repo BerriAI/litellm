@@ -4476,3 +4476,82 @@ def test_scoped_list_files_still_resolves_deployment_credentials(
     provider_list.assert_awaited_once()
     assert provider_list.await_args.kwargs["custom_llm_provider"] == "openai"
     assert provider_list.await_args.kwargs["api_key"] == "openai_api_key"
+
+
+def _post_user_data_file() -> httpx.Response:
+    return client.post(
+        "/v1/files",
+        files={"file": ("labels.jsonl", b'{"label": "restricted"}', "application/json")},
+        data={"purpose": "user_data"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+
+def _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, hook):
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.files_config",
+        [{"custom_llm_provider": "openai", "api_key": "sk-test"}],
+    )
+    return respx.post("https://api.openai.com/v1/files").mock(
+        return_value=respx.MockResponse(
+            status_code=200,
+            json={
+                "id": "file-hooked",
+                "object": "file",
+                "bytes": 23,
+                "created_at": 1234567890,
+                "filename": "labels.jsonl",
+                "purpose": "user_data",
+                "status": "uploaded",
+            },
+        )
+    )
+
+
+@respx.mock
+def test_create_file_triggers_async_pre_call_hook(monkeypatch, llm_router: Router):
+    """`POST /v1/files` must run `async_pre_call_hook` so a hook can inspect the upload
+    before it reaches the provider (LIT-5916)."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    recorded: dict = {}
+
+    class RecordingHook(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            recorded["call_type"] = call_type
+            recorded["purpose"] = data.get("purpose")
+            recorded["file"] = data.get("file")
+
+    provider_route = _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, RecordingHook())
+
+    response = _post_user_data_file()
+
+    assert response.status_code == 200, response.text
+    assert recorded["call_type"] == "acreate_file"
+    assert recorded["purpose"] == "user_data"
+    assert recorded["file"]["filename"] == "labels.jsonl"
+    assert provider_route.call_count == 1
+    forwarded_body = provider_route.calls.last.request.content
+    assert b"user_data" in forwarded_body
+    assert b"labels.jsonl" in forwarded_body
+
+
+@respx.mock
+def test_create_file_async_pre_call_hook_rejection_blocks_upload(monkeypatch, llm_router: Router):
+    """A hook rejecting the upload must 400 before the file reaches the provider."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class RejectingHook(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            return "file upload not allowed"
+
+    provider_route = _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, RejectingHook())
+
+    response = _post_user_data_file()
+
+    assert response.status_code == 400, response.text
+    assert "file upload not allowed" in response.text
+    assert provider_route.call_count == 0
