@@ -411,7 +411,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if not isinstance(tools, list):
             return
 
-        deduplicated: Final[list] = []
+        deduplicated: Final[list] = []  # mutable-ok: request payload requires an ordered list
         for tool in tools:
             if tool not in deduplicated:
                 deduplicated.append(tool)
