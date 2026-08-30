@@ -48,6 +48,7 @@ from .config import (
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
+    HOUSEKEEPING_ASK_SENTINELS,
     PLAN_MODE_SYSTEM_SENTINELS,
     PLAN_MODE_TAIL_SENTINELS,
     PLAN_MODE_TOOL_NAME,
@@ -55,6 +56,7 @@ from .config import (
     ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
+    TierDefinition,
 )
 
 if TYPE_CHECKING:
@@ -194,6 +196,26 @@ def _custom_tier_prompt(entries: Sequence[tuple[str, str]], preamble: str | None
         f"{preamble or _CLASSIFICATION_RUBRIC_PREAMBLE_BODY}\n\nTiers:\n{bullets}\n\n"
         f"{_CLASSIFICATION_RUBRIC_TRUST_BOUNDARY}\n\n{closing}"
     )
+
+
+def custom_tier_classification_prompt(
+    definitions: Sequence[TierDefinition],
+    classification_prompt: str | None,
+    context_window_size: int,
+) -> str:
+    """The classifier's system role for an operator-defined tier set.
+
+    The single owner of the built-in-criteria substitution, so the dashboard's preview resolves a
+    blank description exactly as the live classifier does.
+    """
+    entries: Final = tuple(
+        (
+            definition.name,
+            definition.description or _CLASSIFICATION_TIER_CRITERIA[ComplexityTier[definition.name.upper()]],
+        )
+        for definition in definitions
+    )
+    return _custom_tier_prompt(entries, classification_prompt, _closing_line(context_window_size))
 
 
 def classification_system_prompt(
@@ -679,8 +701,17 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
     on the floor's premium model after the user exits plan mode; leaving it unpinned means the
     floor re-detects while plan mode lasts and the first ordinary turn classifies and pins as
     if plan mode had never happened.
+
+    A housekeeping call is transient in the same way, and pinning it is the most expensive mistake
+    of the three: an agent names the conversation on its first turn, so the cheapest tier would be
+    the pin every session starts with, and the real work that follows would run there for the whole
+    TTL. It describes what that one call is, never what the session's traffic looks like.
     """
-    return decision is None or decision.get("cause") not in ("default_model_fallback", "plan_mode")
+    return decision is None or decision.get("cause") not in (
+        "default_model_fallback",
+        "plan_mode",
+        "housekeeping",
+    )
 
 
 class DimensionScore:
@@ -720,6 +751,7 @@ class ClassificationOutcome(NamedTuple):
         "reasoning_override",
         "llm_classifier",
         "heuristic_first_short_circuit",
+        "housekeeping",
         "classifier_plugin",
         "classifier_fallback",
         "default_model_fallback",
@@ -881,17 +913,10 @@ class ComplexityRouter(CustomLogger):
             raise ValueError("classifier_llm_config is not set")
         definitions: Final = self.config.tier_definitions
         if definitions is not None:
-            entries: Final = tuple(
-                (
-                    definition.name,
-                    definition.description or _CLASSIFICATION_TIER_CRITERIA[ComplexityTier[definition.name.upper()]],
-                )
-                for definition in definitions
-            )
-            return _custom_tier_prompt(
-                entries,
+            return custom_tier_classification_prompt(
+                definitions,
                 self.config.classification_prompt,
-                _closing_line(self.config.classifier_context_window_size),
+                self.config.classifier_context_window_size,
             )
         return classification_system_prompt(
             self.config.classifier_context_window_size,
@@ -922,17 +947,15 @@ class ComplexityRouter(CustomLogger):
     def savings_baseline(self) -> Baseline | None:
         """The derived counterfactual this router's savings are measured against.
 
-        ``None`` when `litellm_settings.autorouter_savings_baseline_model` is set (the
-        spend writer reads that setting directly and it wins) or when this router was
-        built with ``derive_savings_baseline=False``. Derived once on first use and
-        pinned for the instance's lifetime: creating or editing the router rebuilds
-        the instance, which re-derives. Deferred past ``__init__`` because during a
-        config load this router can be constructed before its tier deployments are.
+        ``None`` when this router was built with ``derive_savings_baseline=False``.
+        Derived once on first use and pinned for the instance's lifetime: creating or
+        editing the router rebuilds the instance, which re-derives. Deferred past
+        ``__init__`` because during a config load this router can be constructed
+        before its tier deployments are.
         """
-        import litellm
         from litellm.router_strategy.savings_baseline import resolve_baseline
 
-        if not self._derive_savings_baseline or litellm.autorouter_savings_baseline_model is not None:
+        if not self._derive_savings_baseline:
             return None
         if not self._savings_baseline_derived:
             self._savings_baseline = resolve_baseline(self.litellm_router_instance, self._hardest_tier_models())
@@ -1738,12 +1761,20 @@ class ComplexityRouter(CustomLogger):
         user_message: str,
         request_kwargs: dict[str, Any] | None = None,
         hard_floor: ComplexityTier | str | None = None,
+        hard_ceiling: ComplexityTier | str | None = None,
     ) -> str:
         """hard_floor excludes every candidate whose tiers all sit below it, turning this pick's
         soft floors (a distance penalty a high-scoring cheap model can outweigh) into a hard
         minimum for requests that carry one, e.g. the plan-mode floor. classified_tier arrives
         already clamped to the floor, so the cold-start pool and the classified_tier eligibility
-        mode satisfy it by construction; only the "all" eligibility mode can reach below."""
+        mode satisfy it by construction; only the "all" eligibility mode can reach below.
+
+        hard_ceiling is the same bound in the other direction, for a request whose tier was decided
+        by what it IS rather than by how hard it is: a housekeeping call is placed at the cheapest
+        tier because that is all it is worth, so a bandit trading cost for quality has nothing to
+        win and must not reach above it. Without it the distance penalty is the only thing holding
+        the tier, and a deployment that lowers tier_distance_penalty silently gets the expensive
+        model back while the routing decision still reads as the cheapest tier."""
         from litellm.router_strategy.adaptive_router.bandit import (
             normalized_cost,
             thompson_sample,
@@ -1799,12 +1830,18 @@ class ComplexityRouter(CustomLogger):
         penalty_weight: Final = self.config.tier_distance_penalty
 
         floor_severity: Final = self._active_tier_severity(hard_floor) if hard_floor is not None else None
+        ceiling_severity: Final = self._active_tier_severity(hard_ceiling) if hard_ceiling is not None else None
         best_model: str | None = None
         best_score = float("-inf")
         candidate_scores: Final[list[dict[str, Any]]] = []
         for model in candidates:
             if floor_severity is not None and all(
                 self._active_tier_severity(model_tier) < floor_severity
+                for model_tier in self._model_tiers.get(model, (classified_tier,))
+            ):
+                continue
+            if ceiling_severity is not None and all(
+                self._active_tier_severity(model_tier) > ceiling_severity
                 for model_tier in self._model_tiers.get(model, (classified_tier,))
             ):
                 continue
@@ -1880,6 +1917,44 @@ class ComplexityRouter(CustomLogger):
             tuple(self.config.plan_mode_patterns or ()),
             self._reminder_markers,
         )
+
+    def _matched_housekeeping_sentinel(self, newest_ask: str | None) -> str | None:
+        """The client housekeeping sentinel on this request's newest ask, or None.
+
+        Read from the newest ask alone, never the whole history, for the reason `_newest_turn_ask`
+        exists: a title request quoted into a later turn's context would otherwise keep matching and
+        route real work to the cheapest tier for the rest of the session.
+
+        Declines whenever an operator's classifier plugin owns the decision. The sentinels are
+        caller-controlled text, and displacing the built-in classifier with them only ever spends
+        less; displacing a plugin is different in kind, because a plugin is where an operator
+        encodes policy the tier ladder does not express, so a caller pasting a title prompt could
+        route a request past a sensitivity or identity rule to a pool that rule would have refused.
+        """
+        if self.config.classifier_type == "custom" or not self.config.route_housekeeping_to_cheapest_tier:
+            return None
+        if not newest_ask:
+            return None
+        return next(
+            (
+                sentinel
+                for sentinel in (*HOUSEKEEPING_ASK_SENTINELS, *(self.config.housekeeping_patterns or ()))
+                if sentinel in newest_ask
+            ),
+            None,
+        )
+
+    def _cheapest_configured_tier(self) -> ComplexityTier | str | None:
+        """The least severe tier that has models, or None when none does.
+
+        Tiers can be declared without a pool, so this cannot assume the first name in the severity
+        order is routable; routing to an empty pool is what `default_fallback` exists to catch.
+        """
+        pools: Final = self._tier_pools()
+        name: Final = next((name for name in self.config.tier_names() if pools.get(name)), None)
+        if name is None:
+            return None
+        return name if self.config.has_custom_tiers else ComplexityTier(name)
 
     def _apply_plan_mode_floor(self, tier: ComplexityTier | str) -> ComplexityTier | str:
         """The higher of the decided tier and the plan-mode floor; identity when the floor is unset."""
@@ -2476,8 +2551,14 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
 
-        outcome: Final = await self.aclassify(
-            user_message, system_prompt, request_kwargs, resolved_messages, raw_messages=messages
+        housekeeping_sentinel: Final = self._matched_housekeeping_sentinel(newest_ask)
+        housekeeping_tier: Final = self._cheapest_configured_tier() if housekeeping_sentinel is not None else None
+        outcome: Final = (
+            ClassificationOutcome(tier=housekeeping_tier, score=None, signals=("housekeeping",), cause="housekeeping")
+            if housekeeping_tier is not None
+            else await self.aclassify(
+                user_message, system_prompt, request_kwargs, resolved_messages, raw_messages=messages
+            )
         )
         tier, score, signals = outcome.tier, outcome.score, outcome.signals
         classified_tier: Final = tier
@@ -2533,7 +2614,14 @@ class ComplexityRouter(CustomLogger):
             # has plan_floored False, yet adaptive_eligible="all" scores every model and only
             # penalizes tier distance, so without the floor the bandit could still route below
             # it -- and a floor a bandit can slide under is not a floor.
-            routed_model = self._soft_floor_pick(tier, user_message, request_kwargs, hard_floor=plan_floor)
+            # The ceiling tracks the tier as raised, never the placement it started from: escalation
+            # and the plan-mode floor both move a housekeeping call up, and a ceiling still naming
+            # the cheapest tier would then contradict the floor and bound the pick below the tier
+            # the decision reports.
+            housekeeping_ceiling: Final = tier if outcome.cause == "housekeeping" else None
+            routed_model = self._soft_floor_pick(
+                tier, user_message, request_kwargs, hard_floor=plan_floor, hard_ceiling=housekeeping_ceiling
+            )
             adaptive: Final = self._ensure_adaptive_router()
             if adaptive is not None:
                 kwargs_metadata: Final = request_kwargs.setdefault("metadata", {})
@@ -2582,6 +2670,9 @@ class ComplexityRouter(CustomLogger):
             else signals
         )
         decision_cause: Final[RoutingDecisionCause] = "plan_mode" if plan_floored else outcome.cause
+        decision_keyword: Final = (
+            plan_mode_sentinel if plan_floored else (housekeeping_sentinel if outcome.cause == "housekeeping" else None)
+        )
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages if has_original_messages else None,
@@ -2593,7 +2684,7 @@ class ComplexityRouter(CustomLogger):
                 tier=classified_pool_tier,
                 score=score,
                 signals=decision_signals,
-                matched_keyword=plan_mode_sentinel if plan_floored else None,
+                matched_keyword=decision_keyword,
                 escalation_keyword=escalation_keyword,
                 escalated=escalated,
                 classifier_model=classifier_model,
