@@ -17443,6 +17443,21 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "elevenlabs/scribe_v2": {
+        "input_cost_per_second": 6.11e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.22/hour = $0.00366/minute = $0.0000611 per second",
+            "notes": "ElevenLabs Scribe v2 - current recommended batch speech-to-text model. Scribe v2 Realtime is a separate, dearer tier ($0.39/hour) and is not covered by this entry. Entity detection and keyterm prompting are billed as surcharges on top of this rate.",
+            "original_pricing_per_hour": 0.22
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "elevenlabs/scribe_v1_experimental": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
