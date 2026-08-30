@@ -13,9 +13,8 @@ FIXTURE_DIR_ENV: Final = "LITELLM_OCR_FIXTURE_DIR"
 
 def _fixture_id(fixture: OcrParityCase) -> str:
     case_input: Final = fixture.litellm_input
-    model_id: Final = case_input.model.replace("/", "-")
     provider: Final = case_input.custom_llm_provider
-    prefix: Final = f"{provider}-{model_id}" if provider and not model_id.startswith(f"{provider}-") else model_id
+    prefix: Final = f"{provider}/{case_input.model}" if provider else case_input.model
     return fixture_id(case_input, prefix)
 
 
