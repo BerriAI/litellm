@@ -87,7 +87,7 @@ class ResponsesStreamChunk(TypedDict, total=False):
 def _next_stream_sequence_number(responses_so_far: Sequence[Any] | None) -> int:
     sequence_numbers: Final = (
         item.get("sequence_number") if isinstance(item, dict) else getattr(item, "sequence_number", None)
-        for item in reversed(responses_so_far or [])
+        for item in reversed(responses_so_far or ())
     )
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
@@ -642,7 +642,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
 
         message, _ = serialize_http_exception_detail(exc.detail)
-        return [
+        return (
             ErrorEvent(
                 type=ResponsesAPIStreamEvents.ERROR,
                 sequence_number=_next_stream_sequence_number(responses_so_far),
@@ -652,8 +652,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                     message=message,
                     param=None,
                 ),
-            )
-        ]
+            ),
+        )
 
     def get_streaming_string_so_far(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> str:
         """

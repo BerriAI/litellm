@@ -18,6 +18,7 @@ import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, cast
 
 import httpx
@@ -234,11 +235,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self._set_streaming_params(
             BedrockGuardrailStreamingParams.from_extras(
-                {
-                    "streaming_buffer_until_moderated": streaming_buffer_until_moderated,
-                    "streaming_sampling_rate": streaming_sampling_rate,
-                    "streaming_end_of_stream_only": streaming_end_of_stream_only,
-                }
+                MappingProxyType(
+                    {
+                        "streaming_buffer_until_moderated": streaming_buffer_until_moderated,
+                        "streaming_sampling_rate": streaming_sampling_rate,
+                        "streaming_end_of_stream_only": streaming_end_of_stream_only,
+                    }
+                )
             )
         )
         self.guardrailIdentifier = guardrailIdentifier
