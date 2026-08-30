@@ -432,7 +432,8 @@ export interface paths {
          * List Access Groups
          * @description List all access groups.
          *
-         *     Returns a list of all access groups with their model names and deployment counts.
+         *     Returns a list of all access groups with their model names, deployment counts, shared budget
+         *     and the spend drawn against it.
          *
          *     Example:
          *     ```bash
