@@ -194,7 +194,7 @@ def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
         # The conventional name is only recognized for the name-only shape.
         # A user-defined function may also be named ``web_search``; preserving
         # any additional definition fields lets that tool pass through intact.
-        if function_name == "web_search" and set(function_def) == {"name"}:
+        if function_name == "web_search" and len(function_def) == 1 and "name" in function_def:
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
@@ -284,7 +284,7 @@ def is_web_search_tool(tool: dict[str, Any]) -> bool:
             return True
         # Do not hijack a user-defined function that happens to use the
         # conventional name and carries its own schema or description.
-        if function_name == "web_search" and set(function_def) == {"name"}:
+        if function_name == "web_search" and len(function_def) == 1 and "name" in function_def:
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
