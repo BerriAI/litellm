@@ -1,3 +1,6 @@
+import subprocess
+import sys
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -65,3 +68,16 @@ async def test_execute_code_loop_dispatches_litellm_skill_tool():
     mock_exec.assert_awaited_once()
     assert mock_exec.await_args.args[0] == SKILL_TOOL_NAME
     assert result is final_response
+
+
+def test_importing_proxy_hooks_does_not_mutate_litellm_callbacks():
+    script: Final = (
+        "import litellm; "
+        "litellm.callbacks = []; "
+        "import litellm.proxy.hooks; "
+        "assert len(litellm.callbacks) == 0, f'mutated: {litellm.callbacks}'"
+    )
+    result: Final = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
