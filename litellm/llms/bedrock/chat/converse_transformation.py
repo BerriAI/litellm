@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Final, Literal, cast, overload
 import httpx
 
 import litellm
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm._logging import verbose_logger
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -1382,6 +1383,12 @@ class AmazonConverseConfig(BaseConfig):
         if headers:
             user_betas: Final = get_anthropic_beta_from_headers(headers)
             anthropic_beta_list.extend(user_betas)
+            if anthropic_beta_list:
+                # Bedrock Converse has stricter beta-header support than raw Anthropic APIs.
+                # Filter/mapping ensures unsupported beta flags do not get forwarded.
+                anthropic_beta_list = filter_and_transform_beta_headers(
+                    beta_headers=anthropic_beta_list, provider="bedrock_converse"
+                )
 
         # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
         # from OpenAI-format tools that need transformation via _bedrock_tools_pt
