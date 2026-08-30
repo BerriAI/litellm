@@ -157,6 +157,15 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         )
 
     @classmethod
+    def is_reasoning_effort_unsupported(cls, model: str, level: str | None) -> bool:
+        """Return whether GPT-5 capability metadata rejects this effort level."""
+        if level == "xhigh":
+            return not cls._supports_reasoning_effort_level(model, level)
+        if level in ("minimal", "low"):
+            return cls._is_reasoning_effort_level_explicitly_disabled(model, level)
+        return False
+
+    @classmethod
     def effort_resolves_to_none(cls, model: str, effective_effort: str | None) -> bool:
         """Whether this request's reasoning effort ends up as "none", which is the single
         condition under which the provider accepts a non-default temperature or the

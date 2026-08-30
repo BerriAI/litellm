@@ -84,17 +84,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @staticmethod
     def _is_unsupported_reasoning_effort(model: str, effort: str | None) -> bool:
         """Apply the GPT-5 reasoning-effort capability flags used by chat completions."""
-        from litellm.router_utils.reasoning_effort_capability import (
-            declared_reasoning_efforts_for_model,
-        )
+        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 
-        lookup_model: Final = model.removeprefix("openai/")
-        declared: Final = declared_reasoning_efforts_for_model(lookup_model, "openai")
-        if effort == "xhigh":
-            return declared is None or effort not in declared
-        if effort in ("minimal", "low"):
-            return declared is not None and effort not in declared
-        return False
+        return OpenAIGPT5Config.is_reasoning_effort_unsupported(model, effort)
 
     @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
