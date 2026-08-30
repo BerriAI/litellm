@@ -1142,6 +1142,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         return {}
 
     # Embedding
+    # embeddings.create() kwargs that configure the HTTP request rather than the JSON
+    # body. On the direct-post path they must be translated to their FinalRequestOptions
+    # fields (extra_headers -> headers, extra_body -> extra_json, extra_query -> params)
+    # instead of being serialized into the body.
+    _EMBEDDING_REQUEST_KWARG_TO_OPTION: Final = {
+        "extra_headers": "headers",
+        "extra_body": "extra_json",
+        "extra_query": "params",
+    }
+
     @track_llm_api_timing()
     async def make_openai_embedding_request(
         self,
@@ -1164,11 +1174,22 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 # proxy forwarding to a provider with zero supported embedding params
                 # (e.g. Bedrock titan) then rejects the request (#38661). Post the body
                 # directly so an absent field stays absent.
+                request_body: Final = {
+                    k: v for k, v in data.items() if k not in self._EMBEDDING_REQUEST_KWARG_TO_OPTION
+                }
+                request_options: Final = {
+                    "timeout": timeout,
+                    **{
+                        option: data[kwarg]
+                        for kwarg, option in self._EMBEDDING_REQUEST_KWARG_TO_OPTION.items()
+                        if kwarg in data
+                    },
+                }
                 response: Final = await openai_aclient.post(
                     "/embeddings",
-                    body=data,
+                    body=request_body,
                     cast_to=CreateEmbeddingResponse,
-                    options={"timeout": timeout},
+                    options=request_options,
                 )
                 return {}, response
             raw_response = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)
@@ -1195,12 +1216,24 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if "encoding_format" not in data:
                 # See make_openai_embedding_request: keep a deliberately-omitted
                 # encoding_format off the wire instead of letting the SDK
-                # re-inject its "base64" default (#38661).
+                # re-inject its "base64" default (#38661). Request kwargs such as
+                # extra_headers must be translated into request options, not the body.
+                sync_request_body: Final = {
+                    k: v for k, v in data.items() if k not in self._EMBEDDING_REQUEST_KWARG_TO_OPTION
+                }
+                sync_request_options: Final = {
+                    "timeout": timeout,
+                    **{
+                        option: data[kwarg]
+                        for kwarg, option in self._EMBEDDING_REQUEST_KWARG_TO_OPTION.items()
+                        if kwarg in data
+                    },
+                }
                 sync_response: Final = openai_client.post(
                     "/embeddings",
-                    body=data,
+                    body=sync_request_body,
                     cast_to=CreateEmbeddingResponse,
-                    options={"timeout": timeout},
+                    options=sync_request_options,
                 )
                 return {}, sync_response
             raw_response = openai_client.embeddings.with_raw_response.create(**data, timeout=timeout)
