@@ -1838,7 +1838,9 @@ class ProxyLogging:
         payload (already sent upstream) must stay untouched; a replacement
         response carried in ``modified_data`` is adopted by the caller, and
         metadata-bucket writes (applied guardrails, guardrail logging info)
-        are merged back so headers and spend logs still see them. On the
+        are merged back so headers and spend logs still see them, on block
+        and modify_response too, so failure spend records keep guardrail
+        cost and status. On the
         streaming path it is the buffered chunk list, carried into
         ``ModifyResponseException.original_response`` for usage reporting.
         """
@@ -1849,6 +1851,9 @@ class ProxyLogging:
                 else:
                     _merge_pipeline_metadata_writes(data, result.modified_data)
             return data
+
+        if result.modified_data is not None:
+            _merge_pipeline_metadata_writes(data, result.modified_data)
 
         if result.terminal_action == "block":
             original_exception: Final = result.original_exception

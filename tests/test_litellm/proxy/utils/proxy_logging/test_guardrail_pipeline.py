@@ -1198,6 +1198,44 @@ async def test_post_call_pipeline_guardrail_metadata_writes_reach_request_data(
 
 
 @pytest.mark.asyncio
+async def test_post_call_pipeline_block_keeps_guardrail_metadata_writes(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    class BlockingWriterGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name="gr-post")
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={"verdict": "fail"},
+                request_data=data,
+                guardrail_status="guardrail_intervened",
+            )
+            raise HTTPException(status_code=400, detail={"error": "output blocked"})
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            BlockingWriterGuardrail(
+                guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False
+            )
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data()
+
+    with pytest.raises(HTTPException):
+        await proxy_logging.post_call_success_hook(
+            data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+        )
+
+    assert data["metadata"]["applied_guardrails"] == ["gr-post"]
+    slg_entries = data["metadata"]["standard_logging_guardrail_information"]
+    assert len(slg_entries) == 1
+    assert slg_entries[0]["guardrail_name"] == "gr-post"
+    assert slg_entries[0]["guardrail_status"] == "guardrail_intervened"
+
+
+@pytest.mark.asyncio
 async def test_post_call_pipeline_managed_parallel_guardrail_runs_exactly_once(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
