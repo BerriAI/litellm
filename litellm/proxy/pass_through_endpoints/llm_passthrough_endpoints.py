@@ -2839,10 +2839,11 @@ async def gigachat_proxy_route(
     )
 
     ## check for streaming
-    request_body: Final = await get_request_body(request)  # pyright: ignore[reportUnknownVariableType]  # get_request_body returns Unknown
+    request_body: Final[dict[str, object]] = await get_request_body(request)
     is_router_model = False  # rebind-ok: conditionally set to True when model uses router
 
-    model: Final = request_body.get("model")  # pyright: ignore[reportUnknownVariableType]  # get_request_body returns Unknown
+    raw_model: Final = request_body.get("model")
+    model: Final = raw_model if isinstance(raw_model, str) else None
     if model:
         is_router_model = is_passthrough_request_using_router_model(
             request_body, llm_router
@@ -2995,7 +2996,6 @@ async def handle_gigachat_passthrough_router_model(
         llm_provider=LlmProviders.GIGACHAT,
         params={  # mutable-ok: httpx client params
             "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
-            "ssl_verify": False,
         },
     )
 
