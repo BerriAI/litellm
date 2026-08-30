@@ -134,6 +134,13 @@ const menuGroups: MenuGroup[] = [
         roles: rolesAllowedToViewWriteScopedPages,
       },
       {
+        key: "router-settings",
+        page: "router-settings",
+        label: "Routing",
+        icon: <Route {...ICON} />,
+        roles: all_admin_roles,
+      },
+      {
         key: "agentic",
         page: "agentic",
         label: "Agentic",
@@ -323,13 +330,6 @@ const menuGroups: MenuGroup[] = [
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles,
         children: [
-          {
-            key: "router-settings",
-            page: "router-settings",
-            label: "Router Settings",
-            icon: <Route {...ICON} />,
-            roles: all_admin_roles,
-          },
           {
             key: "logging-and-alerts",
             page: "logging-and-alerts",

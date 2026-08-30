@@ -177,6 +177,7 @@ describe("Sidebar (leftnav)", () => {
       "Virtual Keys",
       "Playground",
       "Models + Endpoints",
+      "Routing",
       "Agentic",
       "MCP Servers",
       "Guardrails",
@@ -213,11 +214,11 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
   });
-  it("keeps Router Settings as a single Settings child", () => {
-    // Router Settings is admin-only, so getAvailablePages() filters it out entirely and the
+  it("keeps Routing as a single top-level AI Gateway item", () => {
+    // Routing is admin-only, so getAvailablePages() filters it out entirely and the
     // page_utils duplicate-key guard cannot see it. Walk menuGroups directly, otherwise a
-    // stray duplicate placement ships silently.
-    expect(placementsOf("router-settings")).toEqual(["SETTINGS > settings"]);
+    // stray duplicate placement (e.g. left behind under Settings) ships silently.
+    expect(placementsOf("router-settings")).toEqual(["AI GATEWAY"]);
   });
 
   it("has no duplicate keys among all menu items and their children", () => {
@@ -545,8 +546,8 @@ describe("getBreadcrumb", () => {
     expect(getBreadcrumb("search-tools")).toEqual({ section: "AI Gateway", title: "Search Tools" });
   });
 
-  it("resolves router-settings under the Settings section", () => {
-    expect(getBreadcrumb("router-settings")).toEqual({ section: "Settings", title: "Router Settings" });
+  it("resolves router-settings as a top-level AI Gateway page", () => {
+    expect(getBreadcrumb("router-settings")).toEqual({ section: "AI Gateway", title: "Routing" });
   });
 
   it("falls back to a prettified title with no section for unknown pages", () => {
