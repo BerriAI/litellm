@@ -10,8 +10,8 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Final, TypedDict, cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final, TypedDict
 
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
@@ -36,6 +36,36 @@ class _StreamContentPart(TypedDict, total=False):
 class _StreamOutputItem(TypedDict, total=False):
     id: ReadOnly[str]
     content: ReadOnly[Sequence[_StreamContentPart | None]]
+
+
+class _StreamTerminalResponse(TypedDict, total=False):
+    """Fields of the ``response`` payload carried by a terminal streaming event."""
+
+    status: ReadOnly[ResponsesAPIStatus]
+    tool_choice: ReadOnly[object]
+    model: ReadOnly[str]
+    instructions: ReadOnly[str]
+    temperature: ReadOnly[float]
+    top_p: ReadOnly[float]
+    max_output_tokens: ReadOnly[int]
+    previous_response_id: ReadOnly[str]
+    truncation: ReadOnly[str]
+    parallel_tool_calls: ReadOnly[bool]
+    user: ReadOnly[str]
+    store: ReadOnly[bool]
+    output: ReadOnly[Sequence[_StreamOutputItem]]
+
+
+class _StreamEvent(TypedDict, total=False):
+    """One decoded ``data:`` frame of an OpenAI Responses streaming body."""
+
+    type: ReadOnly[str]
+    item: ReadOnly[_StreamOutputItem]
+    item_id: ReadOnly[str]
+    part: ReadOnly[_StreamContentPart]
+    content_index: ReadOnly[int]
+    delta: ReadOnly[str]
+    response: ReadOnly[_StreamTerminalResponse]
 
 
 async def background_streaming_task(
@@ -139,7 +169,7 @@ async def background_streaming_task(
             None  # Will be set by response.completed/failed/incomplete/cancelled
         )
         terminal_error = None
-        _event_to_status: Final = {
+        _event_to_status: Final[Mapping[str, ResponsesAPIStatus]] = {
             "response.completed": "completed",
             "response.failed": "failed",
             "response.incomplete": "incomplete",
@@ -180,7 +210,7 @@ async def background_streaming_task(
                         break
 
                     try:
-                        event = json.loads(chunk_data)
+                        event: _StreamEvent = json.loads(chunk_data)
                         event_type = event.get("type", "")
 
                         # Process different event types based on OpenAI streaming spec
@@ -288,12 +318,9 @@ async def background_streaming_task(
                             # Terminal event - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming
                             response_data = event.get("response", {})
-                            terminal_status = cast(
-                                ResponsesAPIStatus,
-                                response_data.get(
-                                    "status",
-                                    _event_to_status.get(event_type, "completed"),
-                                ),
+                            terminal_status = response_data.get(
+                                "status",
+                                _event_to_status.get(event_type, "completed"),
                             )
 
                             # Extract error for failed and incomplete responses

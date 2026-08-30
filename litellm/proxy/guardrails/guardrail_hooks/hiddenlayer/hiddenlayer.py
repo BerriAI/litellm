@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -11,7 +11,7 @@ import requests
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from requests.auth import HTTPBasicAuth
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -37,14 +37,24 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
+_AUTH_TIMEOUT_SECONDS: Final[float] = 30.0
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options carried by this guardrail's forwarded keyword arguments."""
+
+    guardrail_name: ReadOnly[str | None]
+    supported_event_hooks: list[GuardrailEventHooks] | None
+
+
 class _HiddenlayerEvaluation(TypedDict, total=False):
-    action: str
-    threat_level: str
+    action: ReadOnly[str]
+    threat_level: ReadOnly[str]
 
 
 class _HiddenlayerAnalysisEntry(TypedDict, total=False):
-    name: str
-    detected: bool
+    name: ReadOnly[str]
+    detected: ReadOnly[bool]
 
 
 class _HiddenlayerModifiedMessage(TypedDict):
@@ -56,9 +66,9 @@ class _HiddenlayerModifiedSide(TypedDict):
 
 
 class _HiddenlayerResponse(TypedDict, total=False):
-    evaluation: _HiddenlayerEvaluation
-    analysis: Sequence[_HiddenlayerAnalysisEntry]
-    modified_data: Mapping[str, _HiddenlayerModifiedSide]
+    evaluation: ReadOnly[_HiddenlayerEvaluation]
+    analysis: ReadOnly[Sequence[_HiddenlayerAnalysisEntry]]
+    modified_data: ReadOnly[Mapping[str, _HiddenlayerModifiedSide]]
 
 
 class _ProxyServerRequest(TypedDict, total=False):
@@ -157,10 +167,10 @@ def is_saas(host: str) -> bool:
     return False
 
 
-def _get_jwt(auth_url, api_id, api_key) -> str:
+def _get_jwt(auth_url, api_id, api_key, timeout: float = _AUTH_TIMEOUT_SECONDS) -> str:
     token_url: Final = f"{auth_url}/oauth2/token?grant_type=client_credentials"
 
-    resp: Final = requests.post(token_url, auth=HTTPBasicAuth(api_id, api_key))
+    resp: Final = requests.post(token_url, auth=HTTPBasicAuth(api_id, api_key), timeout=timeout)
 
     if not resp.ok:
         raise RuntimeError(
@@ -191,7 +201,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         auth_url: str | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
@@ -396,7 +406,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         auth_url: str | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
         self.hiddenlayer_client_secret = api_key or os.getenv("HIDDENLAYER_CLIENT_SECRET")
@@ -527,7 +537,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         self,
         payload: _HiddenlayerV2Payload,
         input_type: Literal["request", "response"],
-        hl_headers: dict[str, str],
+        hl_headers: Mapping[str, str],
     ) -> httpx.Response:
         if input_type == "request":
             path = "detection/v2/request-evaluations"

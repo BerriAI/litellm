@@ -33,6 +33,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     check_if_token_is_service_account,
     clean_headers,
 )
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -1073,6 +1075,7 @@ async def test_key_metadata_enable_prompt_caching_promoted_to_request_root(key_v
         "_code_interpreter_interception_active",
         "_code_interpreter_interception_converted_stream",
         "_code_interpreter_interception_sandbox_key",
+        "_headroom_interception_converted_stream",
         "max_agentic_loops",
     ],
 )
@@ -1107,6 +1110,7 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
         "_code_interpreter_interception_active": True,
         "_code_interpreter_interception_converted_stream": True,
         "_code_interpreter_interception_sandbox_key": "forged-key",
+        "_headroom_interception_converted_stream": True,
         "max_agentic_loops": 9999,
     }
     sample_value = sample_values[control_field]
@@ -7681,3 +7685,37 @@ async def test_add_litellm_data_to_request_keeps_litellm_metadata_on_litellm_met
     )
 
     assert updated["litellm_metadata"]["trace_id"] == "abc"
+
+
+def _stamp_model_access_groups(matched_model_access_groups, metadata_variable_name="metadata"):
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key")
+    user_api_key_dict.matched_model_access_groups = matched_model_access_groups
+    return LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data={metadata_variable_name: {}},
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name=metadata_variable_name,
+    )[metadata_variable_name]
+
+
+def test_matched_model_access_groups_are_stamped_into_request_metadata():
+    """The post-call spend writer reads the groups off request metadata, not off UserAPIKeyAuth."""
+    stamped = _stamp_model_access_groups(["tier-a", "tier-b"])
+
+    assert stamped[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a", "tier-b"]
+    assert MODEL_ACCESS_GROUP_METADATA_KEY not in _stamp_model_access_groups(None)
+
+
+def test_stamped_model_access_groups_survive_the_litellm_metadata_merge():
+    """
+    The key must keep its ``user_api_key`` prefix: when a request carries both metadata dicts,
+    get_litellm_metadata_from_kwargs returns litellm_metadata and copies a key over from metadata
+    only when that substring is in its name, so an unprefixed key is silently dropped.
+    """
+    kwargs = {
+        "litellm_params": {
+            "metadata": _stamp_model_access_groups(["tier-a"]),
+            "litellm_metadata": {"trace_id": "abc"},
+        }
+    }
+
+    assert get_litellm_metadata_from_kwargs(kwargs)[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a"]
