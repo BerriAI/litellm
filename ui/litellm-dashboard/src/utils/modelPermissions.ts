@@ -15,7 +15,16 @@ import { isProxyAdminRole, isUserTeamAdminForAnyTeam, isUserTeamAdminForSingleTe
 export interface ModelActor {
   userRole: string | null;
   userID: string | null;
+  /**
+   * From useAuthorized(). A proxy_admin_viewer session masquerades as "Admin" in userRole
+   * (effectiveSessionRole, for read parity), yet every management write 403s it, so the role
+   * alone cannot answer a write question.
+   */
+  isViewOnly: boolean;
 }
+
+const isWritableProxyAdmin = ({ userRole, isViewOnly }: ModelActor): boolean =>
+  !isViewOnly && userRole != null && isProxyAdminRole(userRole);
 
 /** How this actor must scope a deployment they create, or that they may not create one. */
 export type ModelWriteScope = "forbidden" | "unscoped-ok" | "team-required";
@@ -37,16 +46,16 @@ const isTeamAdminOf = (teams: Team[] | null, userID: string, teamId: string): bo
  * pair of booleans keeps "may not create" and "may create unscoped" from being confused.
  */
 export const modelCreationScope = (
-  { userRole, userID }: ModelActor,
+  actor: ModelActor,
   { teams, disabledForInternalUsers }: ModelCreationLimits,
 ): ModelWriteScope => {
-  if (userRole != null && isProxyAdminRole(userRole)) {
+  if (isWritableProxyAdmin(actor)) {
     return "unscoped-ok";
   }
   if (disabledForInternalUsers) {
     return "forbidden";
   }
-  if (userID != null && isUserTeamAdminForAnyTeam(teams, userID)) {
+  if (actor.userID != null && isUserTeamAdminForAnyTeam(teams, actor.userID)) {
     return "team-required";
   }
   return "forbidden";
@@ -63,18 +72,18 @@ export interface ModelRowOrigin {
 
 /** May this actor edit or delete this specific deployment? */
 export const canModifyModel = (
-  { userRole, userID }: ModelActor,
+  actor: ModelActor,
   teams: Team[] | null,
   { teamId, isDbModel }: ModelRowOrigin,
 ): boolean => {
   if (!isDbModel) {
     return false;
   }
-  if (userRole != null && isProxyAdminRole(userRole)) {
+  if (isWritableProxyAdmin(actor)) {
     return true;
   }
-  if (userID == null || teamId == null) {
+  if (actor.userID == null || teamId == null) {
     return false;
   }
-  return isTeamAdminOf(teams, userID, teamId);
+  return isTeamAdminOf(teams, actor.userID, teamId);
 };
