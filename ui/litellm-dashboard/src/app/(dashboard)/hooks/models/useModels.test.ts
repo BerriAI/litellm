@@ -118,6 +118,7 @@ describe("useModelsInfo", () => {
       // exclude_auto_routers defaults off: only the Models + Endpoints table opts in, so
       // every other consumer of this hook keeps seeing auto-routers.
       false,
+      undefined,
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -145,6 +146,7 @@ describe("useModelsInfo", () => {
       // exclude_auto_routers defaults off: only the Models + Endpoints table opts in, so
       // every other consumer of this hook keeps seeing auto-routers.
       false,
+      undefined,
     );
   });
 
