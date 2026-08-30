@@ -11,11 +11,11 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypedDict
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -29,49 +29,49 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-class _StreamContentPart(TypedDict, total=False):
-    text: ReadOnly[str]
+_JsonDict: TypeAlias = dict[str, object]
+_JsonList: TypeAlias = list[object]
 
 
-class _StreamOutputItem(TypedDict, total=False):
+class _OutputItem(TypedDict, total=False):
     id: ReadOnly[str]
-    content: ReadOnly[Sequence[_StreamContentPart | None]]
+    content: ReadOnly[Sequence[object]]
 
 
-class _StreamResponsePayload(TypedDict, total=False):
+class _TerminalResponse(TypedDict, total=False):
     status: ReadOnly[ResponsesAPIStatus]
-    error: ReadOnly[dict[str, object] | None]
-    usage: ReadOnly[dict[str, object] | None]
-    reasoning: ReadOnly[dict[str, object] | None]
+    error: ReadOnly[_JsonDict]
+    usage: ReadOnly[_JsonDict]
+    reasoning: ReadOnly[_JsonDict]
     tool_choice: ReadOnly[object]
-    tools: ReadOnly[list[object] | None]
-    model: ReadOnly[str | None]
-    instructions: ReadOnly[str | None]
-    temperature: ReadOnly[float | None]
-    top_p: ReadOnly[float | None]
-    max_output_tokens: ReadOnly[int | None]
-    previous_response_id: ReadOnly[str | None]
-    text: ReadOnly[dict[str, object] | None]
-    truncation: ReadOnly[str | None]
-    parallel_tool_calls: ReadOnly[bool | None]
-    user: ReadOnly[str | None]
-    store: ReadOnly[bool | None]
-    incomplete_details: ReadOnly[dict[str, object] | None]
-    output: ReadOnly[Sequence[_StreamOutputItem]]
+    tools: ReadOnly[_JsonList]
+    model: ReadOnly[str]
+    instructions: ReadOnly[str]
+    temperature: ReadOnly[float]
+    top_p: ReadOnly[float]
+    max_output_tokens: ReadOnly[int]
+    previous_response_id: ReadOnly[str]
+    text: ReadOnly[_JsonDict]
+    truncation: ReadOnly[str]
+    parallel_tool_calls: ReadOnly[bool]
+    user: ReadOnly[str]
+    store: ReadOnly[bool]
+    incomplete_details: ReadOnly[_JsonDict]
+    output: ReadOnly[Sequence[_OutputItem]]
 
 
 class _StreamEvent(TypedDict, total=False):
     type: ReadOnly[str]
-    item: ReadOnly[_StreamOutputItem]
+    item: ReadOnly[_OutputItem]
     item_id: ReadOnly[str]
-    part: ReadOnly[_StreamContentPart]
     content_index: ReadOnly[int]
     delta: ReadOnly[str]
-    response: ReadOnly[_StreamResponsePayload]
+    part: ReadOnly[object]
+    response: ReadOnly[_TerminalResponse]
 
 
-def _parse_stream_event(serialized_event: str) -> _StreamEvent:
-    return json.loads(serialized_event)
+class _StreamEventParser:
+    parse: Callable[[str], _StreamEvent] = staticmethod(json.loads)
 
 
 async def background_streaming_task(
@@ -144,9 +144,10 @@ async def background_streaming_task(
 
         # Process streaming response following OpenAI events format
         # https://platform.openai.com/docs/api-reference/responses-streaming
-        output_items: Final[dict[str, _StreamOutputItem]] = {}  # Track output items by ID
-        # Track accumulated text deltas by (item_id, content_index)
-        accumulated_text: Final[dict[tuple[str, int], str]] = {}
+        output_items: Final = dict[str, _OutputItem]()  # Track output items by ID
+        accumulated_text: Final = dict[
+            tuple[str, int], str
+        ]()  # Track accumulated text deltas by (item_id, content_index)
 
         # ResponsesAPIResponse fields to extract from response.completed
         usage_data = None
@@ -216,7 +217,7 @@ async def background_streaming_task(
                         break
 
                     try:
-                        event = _parse_stream_event(chunk_data)
+                        event: _StreamEvent = _StreamEventParser.parse(chunk_data)
                         event_type = event.get("type", "")
 
                         # Process different event types based on OpenAI streaming spec
@@ -235,19 +236,18 @@ async def background_streaming_task(
 
                             if item_id and item_id in output_items:
                                 # Update the output item with new content
-                                current_item = output_items[item_id]
-                                appended_item: _StreamOutputItem = {
-                                    **current_item,
-                                    "content": (*current_item.get("content", ()), content_part),
+                                added_item = output_items[item_id]
+                                output_items[item_id] = {
+                                    **added_item,
+                                    "content": (*added_item.get("content", ()), content_part),
                                 }
-                                output_items[item_id] = appended_item
                                 state_dirty = True
 
                         elif event_type == "response.output_text.delta":
                             # Text delta - accumulate text content
                             # https://platform.openai.com/docs/api-reference/responses-streaming/response-text-delta
                             item_id = event.get("item_id")
-                            content_index: int = event.get("content_index", 0)
+                            content_index = event.get("content_index", 0)
                             delta = event.get("delta", "")
 
                             if item_id and item_id in output_items:
@@ -258,24 +258,14 @@ async def background_streaming_task(
                                 accumulated_text[key] += delta
 
                                 # Update the content in output_items
-                                current_item = output_items[item_id]
-                                content_list: Sequence[_StreamContentPart | None] = current_item.get("content", ())
-                                if content_index < len(content_list):
-                                    # Update existing content part with accumulated text
-                                    content_entry = content_list[content_index]
-                                    if isinstance(content_entry, dict):
-                                        delta_part: _StreamContentPart = {
-                                            **content_entry,
-                                            "text": accumulated_text[key],
-                                        }
-                                        delta_item: _StreamOutputItem = {
-                                            **current_item,
-                                            "content": tuple(
-                                                delta_part if index == content_index else entry
-                                                for index, entry in enumerate(content_list)
-                                            ),
-                                        }
-                                        output_items[item_id] = delta_item
+                                delta_item = output_items[item_id]
+                                if "content" in delta_item:
+                                    content_list = delta_item["content"]
+                                    if content_index < len(content_list):
+                                        # Update existing content part with accumulated text
+                                        content_entry = content_list[content_index]
+                                        if isinstance(content_entry, dict):
+                                            content_entry["text"] = accumulated_text[key]
                                 state_dirty = True
 
                         elif event_type == "response.content_part.done":
@@ -286,17 +276,17 @@ async def background_streaming_task(
 
                             if item_id and item_id in output_items:
                                 # Update with final content from event
-                                current_item = output_items[item_id]
-                                content_list = current_item.get("content", ())
-                                if content_index < len(content_list):
-                                    finalized_item: _StreamOutputItem = {
-                                        **current_item,
-                                        "content": tuple(
-                                            content_part if index == content_index else entry
-                                            for index, entry in enumerate(content_list)
-                                        ),
-                                    }
-                                    output_items[item_id] = finalized_item
+                                done_item = output_items[item_id]
+                                if "content" in done_item:
+                                    content_list = done_item["content"]
+                                    if content_index < len(content_list):
+                                        output_items[item_id] = {
+                                            **done_item,
+                                            "content": tuple(
+                                                content_part if part_index == content_index else existing_part
+                                                for part_index, existing_part in enumerate(content_list)
+                                            ),
+                                        }
                                 state_dirty = True
 
                         elif event_type == "response.output_item.done":

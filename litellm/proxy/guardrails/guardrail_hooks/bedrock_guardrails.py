@@ -18,6 +18,7 @@ import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, cast
 
 import httpx
@@ -42,7 +43,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_request_processing import _serialize_http_exception_detail
+from litellm.proxy.common_request_processing import serialize_http_exception_detail
 from litellm.proxy.common_utils.sse_keepalive import keepalive_ping_has_fired
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
@@ -52,7 +53,12 @@ from litellm.proxy.guardrails.anthropic_sse import (
     model_response_text,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import BedrockChecksConfigModel, GuardrailEventHooks
+from litellm.types.guardrails import (
+    BedrockChecksConfigModel,
+    BedrockGuardrailStreamingParams,
+    GuardrailEventHooks,
+    LitellmParams,
+)
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockChecksMessage,
@@ -221,9 +227,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         prompt_attack_threshold: float | None = 0.5,
         pii_confidence_threshold: float | None = 0.5,
         chunk_budget_chars: int = BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
+        streaming_buffer_until_moderated: bool | None = None,
+        streaming_sampling_rate: int | None = None,
+        streaming_end_of_stream_only: bool | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self._set_streaming_params(
+            BedrockGuardrailStreamingParams.from_extras(
+                MappingProxyType(
+                    {
+                        "streaming_buffer_until_moderated": streaming_buffer_until_moderated,
+                        "streaming_sampling_rate": streaming_sampling_rate,
+                        "streaming_end_of_stream_only": streaming_end_of_stream_only,
+                    }
+                )
+            )
+        )
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
         self.guardrail_provider = "bedrock"
@@ -277,6 +297,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.guardrailVersion,
             list(self.checks.keys()) if self.checks else None,
         )
+
+    def _set_streaming_params(self, streaming_params: BedrockGuardrailStreamingParams) -> None:
+        self.streaming_buffer_until_moderated = streaming_params.streaming_buffer_until_moderated
+        self.streaming_sampling_rate = streaming_params.streaming_sampling_rate
+        self.streaming_end_of_stream_only = streaming_params.streaming_end_of_stream_only
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        super().update_in_memory_litellm_params(litellm_params)
+        self._set_streaming_params(BedrockGuardrailStreamingParams.from_extras(litellm_params.model_extra))
+
+    def _streams_incrementally(self) -> bool:
+        return not self.streaming_buffer_until_moderated and not self.mask_response_content
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -2658,6 +2690,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Collect content from the stream and run the bedrock OUTPUT scan
         (post_call only validates the response).
         """
+        if self._streams_incrementally():
+            from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+                UnifiedLLMGuardrails,
+            )
+
+            async for streamed_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_data=request_data,
+                guardrail_to_apply=self,
+                buffer_until_moderated_default=False,
+            ):
+                yield streamed_chunk
+            return
+
         # Import here to avoid circular imports
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
@@ -2714,7 +2761,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
                 if not raw_sse or (not is_block and not headers_flushed):
                     raise
-                block_message, _ = _serialize_http_exception_detail(block_detail)
+                block_message, _ = serialize_http_exception_detail(block_detail)
                 for error_frame in anthropic_sse_error_frames(
                     block_message if is_block else f"{block_exc.status_code}: {block_message}"
                 ):
