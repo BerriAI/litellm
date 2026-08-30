@@ -2228,6 +2228,7 @@ class TestGigachatProxyRoute:
         assert isinstance(result, Response)
         assert result.status_code == 200
         assert captured_kwargs["target"] == "https://gigachat.devices.sberbank.ru/api/v1/models"
+        assert captured_kwargs["custom_headers"] == {"Authorization": "Bearer gigachat-test-token"}
 
     @pytest.mark.asyncio
     async def test_allm_passthrough_streaming_preserves_upstream_headers(self):
