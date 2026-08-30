@@ -1183,7 +1183,7 @@
     "paths": {
       "/access_group/list": {
         "get": {
-          "description": "List all access groups.\n\nReturns a list of all access groups with their model names and deployment counts.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
+          "description": "List all access groups.\n\nReturns a list of all access groups with their model names, deployment counts, shared budget\nand the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
           "operationId": "list_access_groups_access_group_list_get",
           "responses": {
             "200": {
