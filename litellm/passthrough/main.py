@@ -87,6 +87,10 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
                     self._iterator = _as_async_generator(self._response.aiter_bytes())
                 except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                     try:
+                        await self._response.aread()
+                    except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                        pass
+                    try:
                         await self._response.aclose()
                     except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
                         pass
