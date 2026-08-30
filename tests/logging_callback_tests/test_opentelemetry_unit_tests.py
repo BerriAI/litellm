@@ -47,11 +47,26 @@ class TestOpentelemetryRedaction:
 
     @pytest.mark.asyncio
     async def test_otel_redacts_user_api_key_metadata_when_flag_enabled(self):
-        """When redact_user_api_key_info is True, metadata.user_api_key_* span
-        attributes must not be emitted."""
-        litellm.logging_callback_manager._reset_all_callbacks()
+        """When redact_user_api_key_info is True the OTEL callback must not
+        emit metadata.user_api_key_* span attributes.  Validates the live
+        integration path by monkey-patching safe_set_attribute on the
+        OpenTelemetry class and inspecting the attribute keys it receives
+        during a real acompletion call."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
 
-        with temporary_litellm_redaction(True), temporary_litellm_callbacks(["otel"]):
+        litellm.logging_callback_manager._reset_all_callbacks()
+        recorded_keys: list[str] = []
+        original_set = OpenTelemetry.safe_set_attribute
+
+        def recording_set(self_inner, span, key, value):
+            recorded_keys.append(key)
+            return original_set(self_inner, span=span, key=key, value=value)
+
+        with (
+            temporary_litellm_redaction(True),
+            temporary_litellm_callbacks(["otel"]),
+            patch.object(OpenTelemetry, "safe_set_attribute", recording_set),
+        ):
             await litellm.acompletion(
                 model="gpt-5-mini",
                 messages=[{"role": "user", "content": "test"}],
@@ -66,29 +81,12 @@ class TestOpentelemetryRedaction:
             )
             await asyncio.sleep(1)
 
-            from litellm.integrations.opentelemetry import OpenTelemetry
-
-            assert any(isinstance(cb, OpenTelemetry) for cb in litellm._async_success_callback), (
-                "OpenTelemetry logger not found"
-            )
-
-            from litellm.litellm_core_utils.redact_messages import (
-                redact_user_api_key_info,
-            )
-
-            test_metadata = {
-                "user_api_key_hash": "hashed-secret",
-                "user_api_key_user_id": "uid-123",
-                "user_api_key_user_email": "user@example.com",
-                "user_api_key_team_id": "team-456",
-                "generation_name": "test-gen",
-            }
-            redacted = redact_user_api_key_info(metadata=test_metadata)
-            assert "user_api_key_hash" not in redacted
-            assert "user_api_key_user_id" not in redacted
-            assert "user_api_key_user_email" not in redacted
-            assert "user_api_key_team_id" not in redacted
-            assert "generation_name" in redacted
+        metadata_keys = [k for k in recorded_keys if k.startswith("metadata.")]
+        assert len(metadata_keys) > 0, "no metadata attributes were emitted at all"
+        assert "metadata.user_api_key_hash" not in recorded_keys
+        assert "metadata.user_api_key_user_id" not in recorded_keys
+        assert "metadata.user_api_key_user_email" not in recorded_keys
+        assert "metadata.user_api_key_team_id" not in recorded_keys
 
     def test_redact_user_api_key_info_filters_correctly(self):
         """Direct unit test for the redaction function used by the OTEL path."""
