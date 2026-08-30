@@ -945,7 +945,7 @@ def test_titan_image_embedding_cost_uses_per_image_rate():
     "encoding_format,expected_embedding_types",
     [
         ("float", ["float"]),
-        ("base64", ["base64"]),
+        ("base64", ["float"]),
         (["float", "int8"], ["float", "int8"]),
     ],
 )

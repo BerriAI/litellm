@@ -3736,8 +3736,8 @@ class BaseLLMHTTPHandler:
             provider_config,
             headers=headers,
             model="",
-            messages=[],
-            optional_params={},
+            messages=[],  # mutable-ok: fresh per call; the legacy files/batches contract types this mutable and may mutate it
+            optional_params={},  # mutable-ok: fresh per call; the legacy files/batches contract types this mutable and may mutate it
             litellm_params=litellm_params,
             api_key=api_key,
         )
@@ -3745,7 +3745,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             model="",
-            optional_params={},
+            optional_params={},  # mutable-ok: fresh per call; the legacy files/batches contract types this mutable and may mutate it
             litellm_params=litellm_params,
             data=create_file_data,
         )
@@ -3756,7 +3756,7 @@ class BaseLLMHTTPHandler:
                 model="",
                 create_file_data=create_file_data,
                 litellm_params=litellm_params,
-                optional_params={},
+                optional_params={},  # mutable-ok: fresh per call; the legacy files/batches contract types this mutable and may mutate it
             ),
             litellm_params=litellm_params,
             provider_config=provider_config,
@@ -4213,8 +4213,8 @@ class BaseLLMHTTPHandler:
             provider_config,
             headers=headers,
             model=model,
-            messages=[],
-            optional_params={},
+            messages=[],  # mutable-ok: fresh per call; the legacy files/batches contract types this mutable and may mutate it
+            optional_params={},  # mutable-ok: fresh per call; the legacy files/batches contract types this mutable and may mutate it
             litellm_params=litellm_params,
             api_key=api_key,
         )
@@ -4222,7 +4222,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             model=model,
-            optional_params={},
+            optional_params={},  # mutable-ok: fresh per call; the legacy files/batches contract types this mutable and may mutate it
             litellm_params=litellm_params,
             data=create_batch_data,
         )
@@ -4233,7 +4233,7 @@ class BaseLLMHTTPHandler:
                 model=model,
                 create_batch_data=create_batch_data,
                 litellm_params=litellm_params,
-                optional_params={},
+                optional_params={},  # mutable-ok: fresh per call; the legacy files/batches contract types this mutable and may mutate it
             ),
             litellm_params=litellm_params,
             provider_config=provider_config,

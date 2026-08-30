@@ -982,12 +982,15 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     assert result[1]["data"] == "REDACTED"
 
 
-def test_translate_openai_content_to_anthropic_drops_empty_thinking_blocks():
-    """LIT-6357 non-streaming producer half: a bridged reasoning model whose
-    thinking_blocks entry has empty or whitespace-only text (signed or not)
-    must not surface as {"type": "thinking", "thinking": ""} — clients replay
-    it as history and Anthropic 400s with "each thinking block must contain
-    thinking". Non-empty thinking and redacted_thinking pass through."""
+def test_translate_openai_content_to_anthropic_drops_empty_unsigned_thinking_blocks():
+    """LIT-6357 non-streaming producer half, narrowed to unsigned blocks: a
+    bridged reasoning model whose thinking_blocks entry has empty or
+    whitespace-only text and no signature must not surface as
+    {"type": "thinking", "thinking": ""}. A signature-only block (Bedrock
+    Converse adaptive thinking) must be emitted so the client keeps the
+    signature for tool-use replay; the inbound strip self-heals it if the
+    client loops it back. Non-empty thinking and redacted_thinking pass
+    through."""
     openai_choices = [
         Choices(
             message=Message(
@@ -1006,9 +1009,11 @@ def test_translate_openai_content_to_anthropic_drops_empty_thinking_blocks():
     adapter = LiteLLMAnthropicMessagesAdapter()
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
-    assert [b["type"] for b in result] == ["thinking", "redacted_thinking", "text"]
-    assert result[0]["thinking"] == "real plan"
-    assert result[1]["data"] == "REDACTED"
+    assert [b["type"] for b in result] == ["thinking", "thinking", "redacted_thinking", "text"]
+    assert result[0]["thinking"] == ""
+    assert result[0]["signature"] == "sig_abc"
+    assert result[1]["thinking"] == "real plan"
+    assert result[2]["data"] == "REDACTED"
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_thinking_delta():

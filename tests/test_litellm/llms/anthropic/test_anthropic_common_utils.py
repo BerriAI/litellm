@@ -1377,6 +1377,23 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert is_empty_thinking_block({"type": "text", "text": ""}) is False
         assert is_empty_thinking_block("not a dict") is False
 
+    def test_is_empty_unsigned_thinking_block(self):
+        """Emit-side predicate: a signature-only block must be kept (Bedrock
+        Converse adaptive thinking emits empty text with only a signature, and
+        the client needs it to replay reasoning in tool-use turns); only an
+        empty block with nothing to preserve is droppable."""
+        from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
+
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": ""}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": " \n\t "}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking"}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": "", "signature": ""}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": "", "signature": "sig_abc"}) is False
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": " ", "signature": "sig_abc"}) is False
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": "plan"}) is False
+        assert is_empty_unsigned_thinking_block({"type": "redacted_thinking", "data": "opaque"}) is False
+        assert is_empty_unsigned_thinking_block("not a dict") is False
+
     def test_strip_empty_content_blocks_drops_empty_thinking_blocks(self):
         """LIT-6357 ingestion half: an assistant tool-loop turn carrying an
         empty (even signed) thinking block keeps its tool_use blocks and loses

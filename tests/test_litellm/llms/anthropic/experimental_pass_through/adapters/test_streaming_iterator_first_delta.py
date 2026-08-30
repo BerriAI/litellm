@@ -1040,19 +1040,20 @@ def _empty_thinking_then_tool_chunks(thinking: str = "", signature: str = "") ->
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize(
     "thinking,signature",
-    [("", ""), (" \n\t ", ""), ("", "sig_abc")],
-    ids=["empty", "whitespace-only", "empty-but-signed"],
+    [("", ""), (" \n\t ", "")],
+    ids=["empty", "whitespace-only"],
 )
 @pytest.mark.asyncio
 async def test_contentless_thinking_chunk_opens_no_thinking_block(is_async: bool, thinking: str, signature: str):
     """LIT-6357 producer half: a reasoning model that goes straight to tool
-    calls streams a ``thinking_blocks`` entry with no real thinking text; the
-    wrapper used to open ``{"type": "thinking", "thinking": ""}`` for it and
-    close the block with no delta. Clients (Claude Code) replay that block as
-    history and Anthropic rejects the next tool-loop request with
-    "each thinking block must contain thinking" — empty-but-signed included.
-    The contentless chunk must open nothing; the tool_use block must be
-    unaffected."""
+    calls streams a ``thinking_blocks`` entry with no real thinking text and
+    no signature; the wrapper used to open ``{"type": "thinking",
+    "thinking": ""}`` for it and close the block with no delta. Clients
+    (Claude Code) replay that block as history and Anthropic rejects the next
+    tool-loop request with "each thinking block must contain thinking".
+    The contentless unsigned chunk must open nothing; the tool_use block must
+    be unaffected. A SIGNED contentless chunk is different: see
+    test_signature_only_thinking_chunk_opens_signed_block."""
     chunks = _empty_thinking_then_tool_chunks(thinking, signature)
     if is_async:
         wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
@@ -1130,11 +1131,38 @@ async def test_early_signature_on_blank_thinking_chunk_is_carried_to_the_opened_
 
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
-async def test_early_signature_discarded_when_first_block_is_not_thinking(is_async: bool):
-    """An early signature from a skipped blank thinking chunk must not leak
-    into a text or tool_use first block, and must not resurrect an empty
-    thinking block on its own (an empty-but-signed block is exactly what
-    Anthropic rejects)."""
+async def test_signature_only_thinking_chunk_opens_signed_block(is_async: bool):
+    """Bedrock Converse under adaptive thinking emits a reasoning delta with
+    empty text and only a signature. The signed chunk must open a thinking
+    block that carries the signature to the client (needed to replay reasoning
+    across tool-use turns); the tool_use block must be unaffected. Dropping it
+    like the unsigned case regressed the claude_code thinking e2e cells."""
+    chunks = _empty_thinking_then_tool_chunks("", "sig_bedrock")
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    starts = _thinking_block_starts(events)
+    assert len(starts) == 1
+    assert starts[0].get("signature") == "sig_bedrock" or _signature_deltas(events) == ["sig_bedrock"]
+    assert _thinking_deltas(events) == []
+    tool_starts = [
+        e["content_block"]
+        for e in events
+        if e.get("type") == "content_block_start" and e["content_block"].get("type") == "tool_use"
+    ]
+    assert [b["name"] for b in tool_starts] == ["get_weather"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_signature_only_thinking_chunk_before_text_leaks_no_signature(is_async: bool):
+    """The signed thinking block a signature-only chunk opens must stay its
+    own block: the text block that follows carries no signature."""
     chunks = [
         _thinking_chunk("", signature="sig_early"),
         _make_chunk(Delta(content="Hello")),
@@ -1147,7 +1175,9 @@ async def test_early_signature_discarded_when_first_block_is_not_thinking(is_asy
         wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
         events = _drain_sync(wrapper)
 
-    assert _thinking_block_starts(events) == []
+    starts = _thinking_block_starts(events)
+    assert len(starts) == 1
+    assert starts[0].get("signature") == "sig_early" or _signature_deltas(events) == ["sig_early"]
     text_starts = [
         e["content_block"]
         for e in events

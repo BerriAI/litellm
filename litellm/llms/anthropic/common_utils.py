@@ -82,14 +82,16 @@ _SERVER_OWNED_AUTH_HEADERS: Final = SpecialHeaders.litellm_credential_header_nam
 _WIF_ELIGIBILITY_ATTR: Final = "_workload_identity_eligible"
 
 
-def without_caller_credential_headers(headers: Mapping[str, str]) -> dict[str, str]:
+def without_caller_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     """``headers`` minus every header that authenticates the caller to litellm.
 
     The deployment's own credential is applied on top of the result, so a caller-supplied
     credential must not survive into the upstream request: without this a minted federation
     Bearer travels beside the caller's own ``x-api-key``, and Anthropic sees two credentials.
     """
-    return {name: value for name, value in headers.items() if name.lower() not in _SERVER_OWNED_AUTH_HEADERS}
+    return MappingProxyType(
+        {name: value for name, value in headers.items() if name.lower() not in _SERVER_OWNED_AUTH_HEADERS}
+    )
 
 
 def config_allows_workload_identity(config: object) -> bool:
@@ -121,7 +123,7 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
         for entry in ((side,) if isinstance(side, str) else side)
         if isinstance(entry, str)
     )
-    betas: Final = {b.strip() for value in values for b in value.split(",") if b.strip()}
+    betas: Final = frozenset(b.strip() for value in values for b in value.split(",") if b.strip())
     return ",".join(sorted(betas))
 
 
@@ -1321,6 +1323,25 @@ def is_empty_thinking_block(block: object) -> bool:
         return False
     thinking: Final = block.get("thinking")
     return not isinstance(thinking, str) or not thinking.strip()
+
+
+def is_empty_unsigned_thinking_block(block: object) -> bool:
+    """
+    True for an empty ``{"type": "thinking"}`` block carrying no signature.
+
+    The emit-side predicate: response paths drop a thinking block only when it
+    holds nothing the client could need.  A signature-only block is a real
+    provider response (Bedrock Converse under adaptive thinking emits a
+    reasoning block with empty text and only a signature) and the client needs
+    the signature to replay reasoning across tool-use turns, so it must be
+    emitted.  Request paths keep using :func:`is_empty_thinking_block`:
+    Anthropic rejects empty thinking blocks in request history regardless of
+    signature, and the inbound strip self-heals a replayed signature-only
+    block.
+    """
+    if not isinstance(block, dict) or not is_empty_thinking_block(block):
+        return False
+    return not block.get("signature")
 
 
 def normalize_anthropic_tool_use_id(raw_id: str) -> str:

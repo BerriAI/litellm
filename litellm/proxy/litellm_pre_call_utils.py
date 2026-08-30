@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     _request_blocked_callback_params,
     iter_client_callback_metadata_dicts,
 )
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     is_url_destination_allowed_by_host,
@@ -253,6 +254,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "_code_interpreter_interception_converted_stream",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
+    "_headroom_interception_converted_stream",
     "max_agentic_loops",
     # Recomputed below from the actual caller-controlled timeout sources (headers and
     # body fields); a client-forged value here would let a request either dodge cooldown
@@ -1377,6 +1379,10 @@ class LiteLLMProxyRequestSetup:
         )
         if user_api_key_dict.budget_reservation is not None:
             data[_metadata_variable_name]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        if user_api_key_dict.matched_model_access_groups:
+            data[_metadata_variable_name][MODEL_ACCESS_GROUP_METADATA_KEY] = (
+                user_api_key_dict.matched_model_access_groups
+            )
         # UserAPIKeyAuth object for MCP server access control
         data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
             update={
