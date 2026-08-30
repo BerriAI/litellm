@@ -151,7 +151,6 @@ describe("provider_info_helpers", () => {
         Providers.Cognition,
         Providers.COMPACTIFAI,
         Providers.DATAROBOT,
-        Providers.DOCKER_MODEL_RUNNER,
         Providers.DOTPROMPT,
         Providers.EMPOWER,
         Providers.GALADRIEL,

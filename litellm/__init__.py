@@ -2056,6 +2056,18 @@ if TYPE_CHECKING:
     from .llms.docker_model_runner.chat.transformation import (
         DockerModelRunnerChatConfig as DockerModelRunnerChatConfig,
     )
+    from .llms.docker_model_runner.completion.transformation import (
+        DockerModelRunnerCompletionConfig as DockerModelRunnerCompletionConfig,
+    )
+    from .llms.docker_model_runner.embedding.transformation import (
+        DockerModelRunnerEmbeddingConfig as DockerModelRunnerEmbeddingConfig,
+    )
+    from .llms.docker_model_runner.images.transformation import (
+        DockerModelRunnerImageGenerationConfig as DockerModelRunnerImageGenerationConfig,
+    )
+    from .llms.docker_model_runner.rerank.transformation import (
+        DockerModelRunnerRerankConfig as DockerModelRunnerRerankConfig,
+    )
     from .llms.v0.chat.transformation import V0ChatConfig as V0ChatConfig
     from .llms.oci.chat.transformation import OCIChatConfig as OCIChatConfig
     from .llms.oci.embed.transformation import OCIEmbeddingConfig as OCIEmbeddingConfig
