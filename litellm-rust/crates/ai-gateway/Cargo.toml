@@ -36,6 +36,10 @@ tower = { version = "0.5.3", features = ["limit"] }
 tower-http = { version = "0.6", features = ["timeout"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 notify = "7"
+parking_lot.workspace = true
+smallvec.workspace = true
+regex = "1.10"
+uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = []
@@ -44,3 +48,10 @@ server = ["dep:axum", "dep:subtle", "dep:sha2", "dep:sqlx"]
 [dev-dependencies]
 futures-channel = "0.3"
 tower = { version = "0.5.3", features = ["util"] }
+tempfile = "3.10"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "gateway_benchmarks"
+harness = false
+required-features = ["server"]
