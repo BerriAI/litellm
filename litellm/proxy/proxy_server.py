@@ -905,6 +905,14 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
 async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    
+    # Shutdown Rust gateway if running
+    try:
+        from litellm.proxy.rust_gateway_integration import shutdown_rust_gateway
+        shutdown_rust_gateway()
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error shutting down Rust gateway: {e}")
+    
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
     if prisma_client:
@@ -1093,6 +1101,18 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
         )
+
+    # Initialize Rust gateway if enabled
+    try:
+        from litellm.proxy.rust_gateway_integration import init_rust_gateway
+        rust_gateway = init_rust_gateway(
+            master_key=master_key,
+            config_path=env_config_yaml or worker_config if isinstance(worker_config, str) else None,
+        )
+        if rust_gateway:
+            verbose_proxy_logger.info("Rust gateway integration enabled")
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Rust gateway initialization skipped: {e}")
 
     if prisma_client is not None:
 
