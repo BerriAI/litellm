@@ -903,8 +903,9 @@ class MCPRequestHandler:
             NotSessionBearer,
             SessionBearerAdmitted,
             SessionBearerInvalid,
+            SessionSigningConfigError,
+            active_session_signing_keys,
             resolve_session_bearer,
-            session_keys_from_master_key,
         )
         from litellm.proxy.proxy_server import master_key
 
@@ -913,7 +914,10 @@ class MCPRequestHandler:
 
         await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
 
-        keys: Final = session_keys_from_master_key(master_key)
+        keys: Final = active_session_signing_keys(master_key)
+        if isinstance(keys, SessionSigningConfigError):
+            verbose_logger.error("mcp gateway session admission rejected: %s", keys.detail)
+            raise HTTPException(status_code=500, detail="Server misconfigured: mcp_session_token_signing is invalid")
         result: Final = resolve_session_bearer(authorization_value, keys, datetime.now(timezone.utc))
         match result:
             case SessionBearerAdmitted():
