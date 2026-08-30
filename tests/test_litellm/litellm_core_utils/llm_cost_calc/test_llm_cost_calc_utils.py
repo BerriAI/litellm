@@ -3946,3 +3946,70 @@ def test_route_image_generation_cost_falls_back_to_requested_size(monkeypatch, r
     )
 
     assert cost == expected_cost
+
+
+def test_generic_cost_per_token_realtime_uses_cached_modality_split(_local_model_cost_map):
+    """
+    Regression for LIT-6513: with a realtime GA cached_tokens_details split, uncached
+    tokens must be billed per the reported modalities. The previous audio-first
+    allocation billed uncached text tokens at the audio rate whenever the modality
+    details overlapped the cached count.
+    """
+    from litellm.types.utils import CachedTokensDetails
+
+    usage = Usage(
+        prompt_tokens=3400,
+        completion_tokens=1100,
+        total_tokens=4500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=2000,
+            text_tokens=1400,
+            audio_tokens=2000,
+            cached_tokens_details=CachedTokensDetails(text_tokens=500, audio_tokens=1500),
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-realtime",
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+
+    model_cost_map = litellm.model_cost["gpt-realtime"]
+    uncached_audio = 2000 - 1500
+    uncached_text = 3400 - 2000 - uncached_audio
+    expected_prompt_cost = (
+        uncached_text * model_cost_map["input_cost_per_token"]
+        + uncached_audio * model_cost_map["input_cost_per_audio_token"]
+        + 2000 * model_cost_map["cache_read_input_token_cost"]
+    )
+    assert round(prompt_cost, 10) == round(expected_prompt_cost, 10)
+
+
+def test_generic_cost_per_token_realtime_without_cached_split_clamps_to_uncached_budget(_local_model_cost_map):
+    """Without a cached_tokens_details split, overlapping modality details must still be
+    clamped so cached tokens are never also billed at the full modality rate."""
+    usage = Usage(
+        prompt_tokens=3400,
+        completion_tokens=1100,
+        total_tokens=4500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=2000,
+            text_tokens=1400,
+            audio_tokens=2000,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-realtime",
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+
+    model_cost_map = litellm.model_cost["gpt-realtime"]
+    uncached_budget = 3400 - 2000
+    expected_prompt_cost = (
+        uncached_budget * model_cost_map["input_cost_per_audio_token"]
+        + 2000 * model_cost_map["cache_read_input_token_cost"]
+    )
+    assert round(prompt_cost, 10) == round(expected_prompt_cost, 10)

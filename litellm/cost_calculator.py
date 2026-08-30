@@ -2275,6 +2275,28 @@ def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]
     return [attr for attr in field_names if attr != "cache_creation_tokens"]
 
 
+def _accumulate_cached_tokens_details(
+    combined_details: "PromptTokensDetailsWrapper",
+    usage_details: "PromptTokensDetailsWrapper",
+) -> None:
+    from litellm.types.utils import CachedTokensDetails
+
+    cached_details: Final = getattr(usage_details, "cached_tokens_details", None)
+    if not isinstance(cached_details, CachedTokensDetails):
+        return
+    if combined_details.cached_tokens_details is None:
+        combined_details.cached_tokens_details = CachedTokensDetails()
+    combined_cached_details: Final = combined_details.cached_tokens_details
+    for attr in CachedTokensDetails.model_fields:
+        new_cached_val = getattr(cached_details, attr, None)
+        if isinstance(new_cached_val, int):
+            setattr(
+                combined_cached_details,
+                attr,
+                (getattr(combined_cached_details, attr, 0) or 0) + new_cached_val,
+            )
+
+
 class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: list[Usage]) -> Usage:
@@ -2323,6 +2345,8 @@ class BaseTokenUsageProcessor:
                                 attr,
                                 current_val + new_val,
                             )
+
+                _accumulate_cached_tokens_details(combined.prompt_tokens_details, usage.prompt_tokens_details)
 
             # Handle nested completion_tokens_details
             if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:

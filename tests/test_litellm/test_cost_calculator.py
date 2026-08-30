@@ -3952,6 +3952,44 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
 
 
+def test_combine_usage_objects_sums_cached_tokens_details():
+    """
+    Realtime GA usage reports a per-modality cached-token split in
+    input_token_details.cached_tokens_details. Combining per-response usage
+    across a session must sum that split, or the cost path loses which
+    modalities the cache covered and misallocates uncached tokens.
+    """
+    from litellm.types.utils import CachedTokensDetails
+
+    first = Usage(
+        prompt_tokens=1000,
+        completion_tokens=100,
+        total_tokens=1100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=400,
+            cached_tokens_details=CachedTokensDetails(text_tokens=100, audio_tokens=300),
+        ),
+    )
+    second = Usage(
+        prompt_tokens=2000,
+        completion_tokens=200,
+        total_tokens=2200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=900,
+            cached_tokens_details=CachedTokensDetails(text_tokens=200, audio_tokens=700),
+        ),
+    )
+
+    combined = BaseTokenUsageProcessor.combine_usage_objects([first, second])
+
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.cached_tokens == 1300
+    cached_details = combined.prompt_tokens_details.cached_tokens_details
+    assert cached_details is not None
+    assert cached_details.text_tokens == 300
+    assert cached_details.audio_tokens == 1000
+
+
 def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_cost_map):
     """Regression: an Anthropic /v1/messages response reports cache reads as top-level
     cache_read_input_tokens with input_tokens excluding them. Reading that usage as

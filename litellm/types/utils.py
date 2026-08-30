@@ -1603,6 +1603,12 @@ class CacheCreationTokenDetails(BaseModel):
     ephemeral_1h_input_tokens: int | None = None
 
 
+class CachedTokensDetails(BaseModel):
+    text_tokens: int | None = None
+    audio_tokens: int | None = None
+    image_tokens: int | None = None
+
+
 class PromptTokensDetailsWrapper(
     SafeAttributeModel, PromptTokensDetails
 ):  # extends with image generation fields (text_tokens, image_tokens)
@@ -1644,6 +1650,9 @@ class PromptTokensDetailsWrapper(
 
     cache_creation_token_details: CacheCreationTokenDetails | None = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
+
+    cached_tokens_details: CachedTokensDetails | None = None
+    """Per-modality breakdown of cached input tokens. OpenAI Realtime API naming (input_token_details.cached_tokens_details)."""
 
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)

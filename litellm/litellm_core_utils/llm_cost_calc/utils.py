@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypedDict, cast
 
+from typing_extensions import ReadOnly
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
@@ -15,6 +17,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
 )
 from litellm.types.utils import (
     CacheCreationTokenDetails,
+    CachedTokensDetails,
     CallTypes,
     CompletionTokensDetailsWrapper,
     DataResidency,
@@ -543,10 +546,38 @@ def calculate_cache_writing_cost(
     return total_cost
 
 
+def _allocate_uncached_modalities(
+    uncached_budget: int,
+    audio_tokens: int,
+    image_tokens: int,
+    video_tokens: int,
+    cached_details: "CachedTokensDetails | None",
+) -> tuple[int, int, int, int]:
+    """Split an uncached prompt-token budget across modalities. When the provider reports
+    which modalities the cache covered (cached_tokens_details), subtract the cache from each
+    modality directly; otherwise fall back to filling audio, then image, then video."""
+    cached_audio: Final = (cached_details.audio_tokens or 0) if cached_details is not None else 0
+    cached_image: Final = (cached_details.image_tokens or 0) if cached_details is not None else 0
+    billable_audio: Final = (
+        min(max(audio_tokens - cached_audio, 0), uncached_budget)
+        if cached_details is not None
+        else min(audio_tokens, uncached_budget)
+    )
+    billable_image: Final = (
+        min(max(image_tokens - cached_image, 0), uncached_budget - billable_audio)
+        if cached_details is not None
+        else min(image_tokens, uncached_budget - billable_audio)
+    )
+    billable_video: Final = min(video_tokens, uncached_budget - billable_audio - billable_image)
+    billable_text: Final = uncached_budget - billable_audio - billable_image - billable_video
+    return billable_audio, billable_image, billable_video, billable_text
+
+
 class PromptTokensDetailsResult(TypedDict):
     cache_hit_tokens: int
     cache_creation_tokens: int
     cache_creation_token_details: CacheCreationTokenDetails | None
+    cached_tokens_details: ReadOnly[CachedTokensDetails | None]
     text_tokens: int
     audio_tokens: int
     image_tokens: int
@@ -573,6 +604,10 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
             getattr(usage.prompt_tokens_details, "cache_creation_token_details", None),
         )
         or None
+    )
+    raw_cached_tokens_details: Final = getattr(usage.prompt_tokens_details, "cached_tokens_details", None)
+    cached_tokens_details: Final = (
+        raw_cached_tokens_details if isinstance(raw_cached_tokens_details, CachedTokensDetails) else None
     )
     text_tokens: Final = (
         cast(int | None, getattr(usage.prompt_tokens_details, "text_tokens", None))
@@ -608,6 +643,7 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         cache_hit_tokens=cache_hit_tokens,
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_token_details,
+        cached_tokens_details=cached_tokens_details,
         text_tokens=text_tokens,
         audio_tokens=audio_tokens,
         image_tokens=image_tokens,
@@ -885,6 +921,7 @@ def generic_cost_per_token(
         cache_hit_tokens=0,
         cache_creation_tokens=0,
         cache_creation_token_details=None,
+        cached_tokens_details=None,
         text_tokens=usage.prompt_tokens,
         audio_tokens=0,
         image_tokens=0,
@@ -917,13 +954,17 @@ def generic_cost_per_token(
         # cached and per-modality counts are both subsets of prompt_tokens and may overlap, so a
         # modality can only bill what the cache did not already cover or the overlap is billed twice
         uncached_budget: Final = max(usage.prompt_tokens - cache_hit - cache_creation, 0)
-        billable_audio: Final = min(audio_tokens, uncached_budget)
-        billable_image: Final = min(image_tokens, uncached_budget - billable_audio)
-        billable_video: Final = min(video_tokens, uncached_budget - billable_audio - billable_image)
+        billable_audio, billable_image, billable_video, billable_text = _allocate_uncached_modalities(
+            uncached_budget=uncached_budget,
+            audio_tokens=audio_tokens,
+            image_tokens=image_tokens,
+            video_tokens=video_tokens,
+            cached_details=prompt_tokens_details["cached_tokens_details"],
+        )
         prompt_tokens_details["audio_tokens"] = billable_audio
         prompt_tokens_details["image_tokens"] = billable_image
         prompt_tokens_details["video_tokens"] = billable_video
-        prompt_tokens_details["text_tokens"] = uncached_budget - billable_audio - billable_image - billable_video
+        prompt_tokens_details["text_tokens"] = billable_text
     elif text_tokens == 0 and prompt_tokens_details["image_count"] == 0:
         # Clamp to zero: inconsistent streaming usage
         prompt_tokens_details["text_tokens"] = max(
