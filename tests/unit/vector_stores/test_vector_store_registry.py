@@ -343,3 +343,36 @@ async def test_vector_store_index_row_without_optional_columns_gets_empty_defaul
 async def test_malformed_vector_store_index_row_from_the_db_raises_a_validation_error(row: object) -> None:
     with pytest.raises(ValidationError):
         await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(_database_listing_index_rows([row]))
+
+
+class TestRegistriesDoNotShareDefaultState:
+    """#38874: a mutable default argument made every default-constructed registry share
+    one list, so upserting into one polluted every other instance and the class default."""
+
+    def test_vector_store_registries_do_not_share_a_list(self):
+        first = VectorStoreRegistry()
+        second = VectorStoreRegistry()
+        assert first.vector_stores is not second.vector_stores
+
+    def test_index_registries_do_not_share_a_list(self):
+        first = VectorStoreIndexRegistry()
+        second = VectorStoreIndexRegistry()
+        assert first.vector_store_indexes is not second.vector_store_indexes
+
+    def test_mutating_one_registry_leaves_the_next_one_empty(self):
+        first = VectorStoreRegistry()
+        first.vector_stores.append(LiteLLM_ManagedVectorStore(vector_store_id="vs-leak", custom_llm_provider="bedrock"))
+        assert VectorStoreRegistry().vector_stores == []
+
+    def test_mutating_one_index_registry_leaves_the_next_one_empty(self):
+        first = VectorStoreIndexRegistry()
+        first.vector_store_indexes.append({"index_name": "leak"})
+        assert VectorStoreIndexRegistry().get_vector_store_indexes() == []
+
+    def test_a_supplied_list_is_still_used_as_given(self):
+        supplied = [LiteLLM_ManagedVectorStore(vector_store_id="vs-1", custom_llm_provider="bedrock")]
+        assert VectorStoreRegistry(vector_stores=supplied).vector_stores is supplied
+
+    def test_a_supplied_empty_list_is_still_used_as_given(self):
+        supplied: list = []
+        assert VectorStoreRegistry(vector_stores=supplied).vector_stores is supplied

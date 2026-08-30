@@ -36,8 +36,10 @@ _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True
 
 
 class VectorStoreIndexRegistry:
-    def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = []):
-        self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = vector_store_indexes
+    def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] | None = None):
+        self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = (
+            vector_store_indexes if vector_store_indexes is not None else []
+        )
 
     def get_vector_store_indexes(self) -> list[LiteLLM_ManagedVectorStoreIndex]:
         """
@@ -109,8 +111,8 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] = []):
-        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores
+    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):
+        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores if vector_stores is not None else []
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
