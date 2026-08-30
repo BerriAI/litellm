@@ -84,20 +84,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @staticmethod
     def _is_unsupported_reasoning_effort(model: str, effort: str | None) -> bool:
         """Apply the GPT-5 reasoning-effort capability flags used by chat completions."""
-        from litellm.utils import _is_explicitly_disabled_factory, _supports_factory
+        from litellm.router_utils.reasoning_effort_capability import (
+            declared_reasoning_efforts_for_model,
+        )
 
+        lookup_model: Final = model.removeprefix("openai/")
+        declared: Final = declared_reasoning_efforts_for_model(lookup_model, "openai")
         if effort == "xhigh":
-            return not _supports_factory(
-                model=model,
-                custom_llm_provider=None,
-                key="supports_xhigh_reasoning_effort",
-            )
+            return declared is None or effort not in declared
         if effort in ("minimal", "low"):
-            return _is_explicitly_disabled_factory(
-                model=model,
-                custom_llm_provider=None,
-                key=f"supports_{effort}_reasoning_effort",
-            )
+            return declared is not None and effort not in declared
         return False
 
     @staticmethod
