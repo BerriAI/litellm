@@ -63,7 +63,7 @@ export const unfurlWildcardModelsInList = (teamModels: string[], allModels: stri
 
       // Find all models that start with this provider
       const matchingModels = allModels.filter((model) => model.startsWith(provider + "/"));
-      expandedModels.push(...matchingModels);
+      matchingModels.forEach((model) => expandedModels.push(model));
       wildcardDisplayNames.push(teamModel);
     } else {
       expandedModels.push(teamModel);
@@ -71,5 +71,5 @@ export const unfurlWildcardModelsInList = (teamModels: string[], allModels: stri
   });
 
   // Combine arrays with wildcard display names first, then remove duplicates
-  return [...wildcardDisplayNames, ...expandedModels].filter((item, index, array) => array.indexOf(item) === index);
+  return Array.from(new Set([...wildcardDisplayNames, ...expandedModels]));
 };
