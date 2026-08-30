@@ -10,7 +10,7 @@ import asyncio
 import math
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, TypedDict, TypeVar, cast
 
 from typing_extensions import ReadOnly
 
@@ -76,6 +76,10 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_b
 # Key on ``AgenticLoopPlan.metadata`` carrying the list of pre-built
 # ``web_search_tool_result`` blocks to inject into the final response.
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
+
+_RESPONSE_CONTENT_FIELD: Final = "content"
+
+_ResponseT: Final = TypeVar("_ResponseT")
 
 
 class _PlanMetadataView(TypedDict):
@@ -948,17 +952,17 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _inject_native_blocks(response: Any, native_blocks: Sequence[Mapping[str, object]]) -> Any:
+    def _inject_native_blocks(response: _ResponseT, native_blocks: Sequence[Mapping[str, object]]) -> _ResponseT:
         """Prepend native blocks to response content, dict or object form."""
         if not native_blocks:
             return response
         if isinstance(response, dict):
-            existing = response.get("content") or []
-            response["content"] = list(native_blocks) + list(existing)
+            existing = response.get(_RESPONSE_CONTENT_FIELD) or []
+            response[_RESPONSE_CONTENT_FIELD] = list(native_blocks) + list(existing)
             return response
-        existing = getattr(response, "content", None) or []
+        existing = getattr(response, _RESPONSE_CONTENT_FIELD, None) or []
         try:
-            response.content = list(native_blocks) + list(existing)
+            setattr(response, _RESPONSE_CONTENT_FIELD, list(native_blocks) + list(existing))
         except (AttributeError, TypeError):
             # Object refused write — fall through and leave the response
             # untouched rather than crash the request.

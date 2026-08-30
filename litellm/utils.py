@@ -8574,6 +8574,13 @@ class ProviderConfigManager:
 
             return SonioxAudioTranscriptionConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
+            bare_vertex_model: Final = model.removeprefix("vertex_ai/")
+            if bare_vertex_model.startswith("gemini") and "transcribe" in bare_vertex_model:
+                from litellm.llms.vertex_ai.audio_transcription.gemini_transcribe_transformation import (
+                    VertexGeminiAudioTranscriptionConfig,
+                )
+
+                return VertexGeminiAudioTranscriptionConfig()
             from litellm.llms.vertex_ai.audio_transcription.transformation import (
                 VertexAIAudioTranscriptionConfig,
             )

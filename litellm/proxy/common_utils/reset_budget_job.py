@@ -4,7 +4,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeVar, assert_never
@@ -20,10 +20,12 @@ from litellm.constants import (
     RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN,
     RESET_BUDGET_JOB_NAME,
 )
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
+    Litellm_EntityType,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
@@ -38,6 +40,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_spend_counter_key,
     tag_cache_key,
 )
+from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -347,6 +350,7 @@ class _WindowSource:
 
     table: str
     id_column: str
+    entity_type: Litellm_EntityType
     counter_prefix: str
     log_subject: str
     retry_subject: str
@@ -371,6 +375,7 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
     _WindowSource(
         table="LiteLLM_VerificationToken",
         id_column="token",
+        entity_type=Litellm_EntityType.KEY,
         counter_prefix="spend:key",
         log_subject="keys",
         retry_subject="key",
@@ -379,6 +384,7 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
     _WindowSource(
         table="LiteLLM_TeamTable",
         id_column="team_id",
+        entity_type=Litellm_EntityType.TEAM,
         counter_prefix="spend:team",
         log_subject="teams",
         retry_subject="team",
@@ -1241,6 +1247,9 @@ class ResetBudgetJob:
         spend_counter_cache: DualCache,
         now: datetime,
         reset_settings: BudgetResetSettings,
+        prisma_client: PrismaClient,
+        entity_type: Litellm_EntityType,
+        entity_id: str,
     ) -> bool:
         """Reset a single budget window if expired. Returns True if the window was reset."""
         reset_at_str: Final = window.get("reset_at")
@@ -1256,10 +1265,55 @@ class ResetBudgetJob:
                 await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_value)
             except Exception as redis_err:
                 verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
-        window["reset_at"] = compute_budget_reset_at(
-            budget_duration=window["budget_duration"], settings=reset_settings
-        ).isoformat()
+        budget_duration: Final = window["budget_duration"]
+        next_reset_at: Final = compute_budget_reset_at(budget_duration=budget_duration, settings=reset_settings)
+        window["reset_at"] = next_reset_at.isoformat()
+        await ResetBudgetJob._roll_window_spend_row(
+            prisma_client=prisma_client,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            budget_duration=budget_duration,
+            next_reset_at=next_reset_at,
+        )
         return True
+
+    @staticmethod
+    async def _roll_window_spend_row(
+        prisma_client: PrismaClient,
+        entity_type: Litellm_EntityType,
+        entity_id: str,
+        budget_duration: str,
+        next_reset_at: datetime,
+    ) -> None:
+        """Move this window's LiteLLM_BudgetWindowSpend row onto the window
+        that just started, so the maintained total the read path uses starts
+        from zero alongside the counter.
+
+        Best effort: the row is an optimization over aggregating
+        LiteLLM_SpendLogs, so a failure here must not stop the remaining
+        windows from having their counters reset.
+        """
+        try:
+            window_start: Final = next_reset_at - timedelta(seconds=duration_in_seconds(budget_duration))
+        except Exception as e:  # noqa: BLE001  # duration_in_seconds raises bare exceptions on bad input
+            verbose_proxy_logger.warning("Unparseable budget_duration %s: %s", budget_duration, e)
+            return
+        try:
+            await roll_window_spend_row(
+                prisma_client=prisma_client,
+                entity_type=entity_type.value,
+                entity_id=entity_id,
+                window_duration=budget_duration,
+                new_window_start=window_start,
+            )
+        except Exception as e:  # noqa: BLE001  # the row is best effort; counter resets must still land
+            verbose_proxy_logger.warning(
+                "Failed to roll budget window spend row for %s=%s window=%s: %s",
+                entity_type.value,
+                entity_id,
+                budget_duration,
+                e,
+            )
 
     @staticmethod
     async def _window_carried_spend(
@@ -1356,6 +1410,9 @@ class ResetBudgetJob:
                     spend_counter_cache,
                     now,
                     self.reset_settings,
+                    prisma_client=self.prisma_client,
+                    entity_type=source.entity_type,
+                    entity_id=row_id,
                 ):
                     changed = True
             if changed:
