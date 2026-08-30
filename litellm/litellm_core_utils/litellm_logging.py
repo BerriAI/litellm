@@ -64,7 +64,10 @@ from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import is_expected_client_error, reconstruct_model_name
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+from litellm.litellm_core_utils.internal_call_metadata import (
+    MODEL_ACCESS_GROUP_METADATA_KEY,
+    is_unbilled_non_inference_call,
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     cost_breakdown_with_guardrail,
     guardrail_information_cost,
@@ -2872,6 +2875,8 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_cost: Final = kwargs.get("batch_cost", None)
             batch_usage = kwargs.get("batch_usage", None)
             batch_models = kwargs.get("batch_models", None)
+            batch_successful_requests: Final = kwargs.get("batch_successful_requests", None)
+            batch_failed_requests: Final = kwargs.get("batch_failed_requests", None)
             has_explicit_batch_data: Final = all(x is not None for x in (batch_cost, batch_usage, batch_models))
 
             should_compute_batch_data: Final = (
@@ -2880,14 +2885,12 @@ class Logging(LiteLLMLoggingBaseClass):
             if has_explicit_batch_data:
                 result._hidden_params["response_cost"] = batch_cost
                 result._hidden_params["batch_models"] = batch_models
+                result._hidden_params["batch_successful_requests"] = batch_successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same result._hidden_params pattern as response_cost/batch_models above
+                result._hidden_params["batch_failed_requests"] = batch_failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_usage
 
             elif should_compute_batch_data:
-                (
-                    response_cost,
-                    batch_usage,
-                    batch_models,
-                ) = await _handle_completed_batch(
+                batch_result: Final = await _handle_completed_batch(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
                     model_name=self.get_deployment_model_for_cost(),
@@ -2895,9 +2898,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_info=self.get_router_deployment_model_info(),
                 )
 
-                result._hidden_params["response_cost"] = response_cost
-                result._hidden_params["batch_models"] = batch_models
-                result.usage = batch_usage
+                result._hidden_params["response_cost"] = batch_result.cost
+                result._hidden_params["batch_models"] = batch_result.models
+                result._hidden_params["batch_successful_requests"] = batch_result.successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
+                result._hidden_params["batch_failed_requests"] = batch_result.failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
+                result.usage = batch_result.usage
 
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
@@ -5049,6 +5054,42 @@ def is_valid_sha256_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
 
 
+def coerce_model_access_groups(value: object) -> tuple[str, ...]:
+    """Model access group names out of untrusted request metadata, deduped and order preserving."""
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(dict.fromkeys(group for group in value if isinstance(group, str) and group))
+
+
+def _model_access_groups_on_auth_object(user_api_key_auth: object) -> object:
+    if isinstance(user_api_key_auth, Mapping):
+        return user_api_key_auth.get("matched_model_access_groups")
+    return getattr(user_api_key_auth, "matched_model_access_groups", None)
+
+
+def _model_access_groups_from_metadata(metadata: Mapping[str, object]) -> tuple[str, ...]:
+    stamped: Final = coerce_model_access_groups(metadata.get(MODEL_ACCESS_GROUP_METADATA_KEY))
+    if stamped:
+        return stamped
+    return coerce_model_access_groups(_model_access_groups_on_auth_object(metadata.get("user_api_key_auth")))
+
+
+def request_model_access_groups_from_litellm_params(litellm_params: Mapping[str, object]) -> tuple[str, ...]:
+    """Access groups the auth layer stamped onto this request, from whichever metadata field carries them.
+
+    Detached internal sub-calls only inherit the identity keys, so the auth object is the
+    fallback there, exactly as _get_budget_reservation_from_metadata does for reservations.
+    """
+    for metadata_variable_name in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_variable_name)
+        if not isinstance(metadata, Mapping):
+            continue
+        model_access_groups = _model_access_groups_from_metadata(metadata)
+        if model_access_groups:
+            return model_access_groups
+    return ()
+
+
 class StandardLoggingPayloadSetup:
     @staticmethod
     def cleanup_timestamps(
@@ -5422,6 +5463,8 @@ class StandardLoggingPayloadSetup:
             additional_headers=None,
             litellm_overhead_time_ms=None,
             batch_models=None,
+            batch_successful_requests=None,
+            batch_failed_requests=None,
             litellm_model_name=None,
             usage_object=None,
         )
@@ -5812,6 +5855,8 @@ def _extract_response_obj_and_hidden_params(
                     response_cost=None,
                     litellm_overhead_time_ms=None,
                     batch_models=None,
+                    batch_successful_requests=None,
+                    batch_failed_requests=None,
                     litellm_model_name=None,
                     usage_object=None,
                 )
@@ -5896,6 +5941,7 @@ def get_standard_logging_object_payload(
         request_tags: Final = StandardLoggingPayloadSetup._get_request_tags(
             litellm_params=litellm_params, proxy_server_request=proxy_server_request
         )
+        request_model_access_groups: Final = request_model_access_groups_from_litellm_params(litellm_params)
 
         # cleanup timestamps
         (
@@ -6058,6 +6104,7 @@ def get_standard_logging_object_payload(
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
             request_tags=request_tags,
+            request_model_access_groups=request_model_access_groups,
             end_user=end_user_id,
             api_base=StandardLoggingPayloadSetup.strip_trailing_slash(litellm_params.get("api_base", "")) or "",
             model_group=_model_group,
@@ -6228,6 +6275,8 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         additional_headers=None,
         litellm_overhead_time_ms=None,
         batch_models=None,
+        batch_successful_requests=None,
+        batch_failed_requests=None,
         litellm_model_name=None,
         usage_object=None,
     )
@@ -6269,6 +6318,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         cache_key=None,
         saved_cache_cost=saved_cache_cost,
         request_tags=[],
+        request_model_access_groups=(),
         end_user=None,
         requester_ip_address="127.0.0.1",
         messages=messages,
