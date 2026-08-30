@@ -10996,7 +10996,15 @@ async def audio_speech(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.audio_speech(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        raise e
+        if isinstance(e, (ProxyException, HTTPException)):
+            raise e
+        raise ProxyException(
+            message=getattr(e, "message", f"{e}"),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            openai_code=getattr(e, "code", None),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 @router.post(
