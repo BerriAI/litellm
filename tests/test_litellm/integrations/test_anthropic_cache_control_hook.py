@@ -1611,6 +1611,20 @@ class TestEnableAnthropicPromptCaching:
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         assert self._points(model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
 
+    @pytest.mark.parametrize("model", ["us.xai.grok-4.6", "global.xai.grok-4.6"])
+    def test_bedrock_grok_not_injected(self, monkeypatch, local_model_cost_map, model):
+        """Bedrock supports only implicit prompt caching for Grok: explicit cachePoint
+        breakpoints make it reject the whole request ("You invoked an unsupported model
+        or your request did not allow prompt caching"), so supports_prompt_caching stays
+        false, while implicit cache hits still bill at the cache-read rate."""
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert supports_prompt_caching(model=model, custom_llm_provider="bedrock") is False
+        assert self._points(model=model, provider="bedrock") == []
+        entry = litellm.model_cost[model]
+        assert 0 < entry["cache_read_input_token_cost"] < entry["input_cost_per_token"]
+
     def test_stands_down_when_client_sent_cache_control(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         messages = [
