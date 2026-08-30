@@ -14,6 +14,7 @@ vi.mock("./panels/HealthStatusPanel", () => ({ default: () => <div data-testid="
 vi.mock("./panels/ModelRetrySettingsPanel", () => ({ default: () => <div data-testid="panel-retry" /> }));
 vi.mock("./panels/ModelGroupAliasPanel", () => ({ default: () => <div data-testid="panel-alias" /> }));
 vi.mock("./panels/PriceDataPanel", () => ({ default: () => <div data-testid="panel-price" /> }));
+vi.mock("./panels/AccessGroupBudgetsPanel", () => ({ default: () => <div data-testid="panel-budgets" /> }));
 
 const detailState = { modelId: null as string | null, teamId: null as string | null };
 vi.mock("./detailNavigation", () => ({
@@ -38,8 +39,18 @@ vi.mock("./useModelDashboardData", () => ({
   useModelDashboardData: () => ({ availableModelAccessGroups: [], allModelsOnProxy: [], availableModelGroups: [] }),
 }));
 
-const ADMIN = { accessToken: "at", token: "t", userRole: "Admin", userId: "u1", premiumUser: false };
-const NON_ADMIN = { accessToken: "at", token: "t", userRole: "Internal User", userId: "u1", premiumUser: false };
+const ADMIN = { accessToken: "at", token: "t", userRole: "Admin", userId: "u1", premiumUser: false, isViewOnly: false };
+const NON_ADMIN = {
+  accessToken: "at",
+  token: "t",
+  userRole: "Internal User",
+  userId: "u1",
+  premiumUser: false,
+  isViewOnly: false,
+};
+// What useAuthorized returns for a proxy_admin_viewer session: effectiveSessionRole masquerades
+// the role as "Admin" for read parity, and only isViewOnly tells the page it may not write.
+const VIEW_ONLY_ADMIN = { ...ADMIN, isViewOnly: true };
 
 const renderPage = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -97,6 +108,35 @@ describe("ModelsAndEndpointsPage", () => {
     const { queryByRole } = renderPage();
     expect(queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
     expect(queryByRole("tab", { name: "Health Status" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the full admin tab order for a real admin", () => {
+    const { getAllByRole } = renderPage();
+    expect(getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "All Models",
+      "Add Model",
+      "Auto-Routers Beta",
+      "LLM Credentials",
+      "Pass-Through Endpoints",
+      "Health Status",
+      "Model Retry Settings",
+      "Model Group Alias",
+      "Model Access Group Budgets Beta",
+      "Price Data Reload",
+    ]);
+  });
+
+  it("hides the admin write-form tabs from a view-only admin, keeping the read views", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    const { getByRole, queryByRole } = renderPage();
+    expect(getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+    expect(getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
+    expect(queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
+    expect(queryByRole("tab", { name: "Pass-Through Endpoints" })).not.toBeInTheDocument();
+    expect(queryByRole("tab", { name: "Model Retry Settings" })).not.toBeInTheDocument();
+    expect(queryByRole("tab", { name: "Model Group Alias" })).not.toBeInTheDocument();
+    expect(queryByRole("tab", { name: /Model Access Group Budgets/ })).not.toBeInTheDocument();
+    expect(queryByRole("tab", { name: "Price Data Reload" })).not.toBeInTheDocument();
   });
 
   // Auto-routers are excluded from the All Models table, so this tab is their home: the only

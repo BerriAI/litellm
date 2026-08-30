@@ -80,7 +80,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
-  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+  const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
   const queryClient = useQueryClient();
@@ -106,19 +106,16 @@ export default function ModelsAndEndpointsPage() {
       "",
       ...(canCreate ? (["add"] as const) : []),
       ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
-      ...(isAdmin
-        ? ([
-            "llm-credentials",
-            "pass-through",
-            "health",
-            "retry-settings",
-            "model-group-alias",
-            "access-group-budgets",
-            "price-data",
-          ] as const)
+      // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show a
+      // viewer these write-only panels; only the raw-role isViewOnly separates them. Health Status
+      // stays: it is the bucket's one read view, and viewers keep read parity with admins.
+      ...(isAdmin && !isViewOnly ? (["llm-credentials", "pass-through"] as const) : []),
+      ...(isAdmin ? (["health"] as const) : []),
+      ...(isAdmin && !isViewOnly
+        ? (["retry-settings", "model-group-alias", "access-group-budgets", "price-data"] as const)
         : []),
     ],
-    [canCreate, isAdmin],
+    [canCreate, isAdmin, isViewOnly],
   );
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
