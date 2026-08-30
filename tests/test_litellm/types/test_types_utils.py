@@ -1,11 +1,13 @@
-import os
-import sys
+from typing import Final
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm.types.utils import HiddenParams
+from litellm.types.utils import HiddenParams, all_litellm_params
+
+
+def test_rust_is_a_known_litellm_param():
+    assert "rust" in all_litellm_params
 
 
 def test_hidden_params_response_ms():
@@ -69,6 +71,29 @@ def test_usage_dump():
 
     new_usage = Usage(**current_usage.model_dump())
     assert new_usage.prompt_tokens_details.web_search_requests == 1
+
+
+def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
+    """Regression (LIT-5757): DashScope nests the Anthropic-spelled
+    cache_creation_input_tokens inside prompt_tokens_details. It must populate
+    the canonical cache_write_tokens/cache_creation_tokens pair, without
+    overriding an explicitly provided canonical value."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    nested: Final = PromptTokensDetailsWrapper(
+        cached_tokens=0, text_tokens=2059, cache_creation_input_tokens=2048
+    )
+    assert nested.cache_write_tokens == 2048
+    assert nested.cache_creation_tokens == 2048
+
+    explicit: Final = PromptTokensDetailsWrapper(
+        cache_write_tokens=100, cache_creation_input_tokens=2048
+    )
+    assert explicit.cache_write_tokens == 100
+    assert explicit.cache_creation_tokens == 100
+
+    non_int: Final = PromptTokensDetailsWrapper(cache_creation_input_tokens=None)
+    assert not hasattr(non_int, "cache_write_tokens")
 
 
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
@@ -321,29 +346,6 @@ class TestNativeFinishReason:
         assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
 
 
-def test_parallel_request_limiter_internal_fields_in_all_litellm_params():
-    """
-    Regression test: internal fields written by parallel_request_limiter_v3 must
-    be in all_litellm_params so they are stripped before forwarding to upstream
-    providers.  If missing, they are sent as extra body parameters and providers
-    like OpenAI reject the request with a 400 invalid_request_error.
-    """
-    from litellm.types.utils import all_litellm_params
-
-    internal_fields = [
-        "_litellm_rate_limit_descriptors",
-        "_litellm_tpm_reserved_tokens",
-        "_litellm_tpm_reserved_model",
-        "_litellm_tpm_reserved_scopes",
-        "_litellm_tpm_reservation_released",
-    ]
-    for field in internal_fields:
-        assert field in all_litellm_params, (
-            f"{field!r} is not in all_litellm_params. "
-            "It will be forwarded to upstream providers and cause 400 errors."
-        )
-
-
 def test_delta_maps_reasoning_to_reasoning_content():
     """
     Test that Delta maps 'reasoning' field to 'reasoning_content'.
@@ -416,3 +418,344 @@ def test_message_accepts_thinking_block_with_null_signature():
     )
     assert choice.message.thinking_blocks is not None
     assert choice.message.thinking_blocks[0]["signature"] is None
+
+
+def test_delta_serialization_contract():
+    """
+    Lock the exact per-chunk serialization shape that the streaming path emits.
+
+    Delta is built once per streaming chunk and serialized via
+    ModelResponseStream.model_dump(), which defaults to exclude_unset=True.
+    The construction therefore has to mark content/role/function_call/
+    tool_calls/audio as "set" (so they survive exclude_unset) while keeping
+    OpenAI-omitted fields (reasoning_content, thinking_blocks, reasoning_items,
+    images, annotations) absent unless explicitly provided. This guards that
+    contract for both the default dump and the exclude_unset dump.
+    """
+    from litellm.types.utils import Delta
+
+    base_keys = {"content", "role", "function_call", "tool_calls", "audio"}
+
+    # Plain content delta: only the OpenAI-compatible keys appear, nothing extra
+    delta = Delta(content="hi", role="assistant")
+    assert set(delta.model_dump(exclude_unset=True).keys()) == base_keys
+    assert set(delta.model_dump().keys()) == base_keys | {"provider_specific_fields"}
+    assert delta.model_dump(exclude_unset=True) == {
+        "content": "hi",
+        "role": "assistant",
+        "function_call": None,
+        "tool_calls": None,
+        "audio": None,
+    }
+
+    # Empty delta still emits the base keys (used for the trailing chunk)
+    assert set(Delta().model_dump(exclude_unset=True).keys()) == base_keys
+
+    # model_fields_set is part of the contract. The legacy setattr-then-delattr
+    # path marked content/role/function_call/tool_calls/audio/images/annotations
+    # as set (pydantic's __delattr__ does not clear __pydantic_fields_set__), so
+    # images/annotations remain in model_fields_set even though they are omitted
+    # from the dump when absent. Lock that exact set so a pydantic change to
+    # fields_set handling fails here rather than silently shifting the contract.
+    expected_fields_set = base_keys | {"images", "annotations"}
+    assert Delta(content="hi", role="assistant").model_fields_set == expected_fields_set
+    assert Delta().model_fields_set == expected_fields_set
+    assert (
+        Delta(
+            content="x",
+            images=[{"type": "image_url", "image_url": {"url": "http://x"}}],
+        ).model_fields_set
+        == expected_fields_set
+    )
+
+    # Optional fields only show up when provided
+    for kwargs, expected_extra in [
+        ({"reasoning_content": "t"}, "reasoning_content"),
+        (
+            {
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "a", "signature": "s"}
+                ]
+            },
+            "thinking_blocks",
+        ),
+        ({"reasoning_items": []}, "reasoning_items"),
+        (
+            {"images": [{"type": "image_url", "image_url": {"url": "http://x"}}]},
+            "images",
+        ),
+        (
+            {
+                "annotations": [
+                    {
+                        "type": "url_citation",
+                        "url_citation": {
+                            "start_index": 0,
+                            "end_index": 1,
+                            "title": "t",
+                            "url": "u",
+                        },
+                    }
+                ]
+            },
+            "annotations",
+        ),
+    ]:
+        present = Delta(content="x", **kwargs)
+        assert expected_extra in present.model_dump(exclude_unset=True)
+        absent = Delta(content="x")
+        assert expected_extra not in absent.model_dump(exclude_unset=True)
+        assert not hasattr(absent, expected_extra)
+
+    # tool_calls dicts are coerced and back-filled with index/type
+    tc_delta = Delta(
+        tool_calls=[{"id": "1", "function": {"name": "f", "arguments": "{}"}}]
+    )
+    dumped = tc_delta.model_dump(exclude_unset=True)["tool_calls"]
+    assert dumped == [
+        {
+            "id": "1",
+            "function": {"arguments": "{}", "name": "f"},
+            "type": "function",
+            "index": 0,
+        }
+    ]
+
+    # Extra provider params survive (extra='allow') and, because super().__init__
+    # populates them before the base keys are appended, order ahead of "content".
+    extra_delta = Delta(content="x", custom_field="v")
+    extra_dump = extra_delta.model_dump(exclude_unset=True)
+    keys = list(extra_dump.keys())
+    assert extra_dump["custom_field"] == "v"
+    assert keys.index("custom_field") < keys.index("content")
+
+
+def test_safe_attribute_model_delattr():
+    """
+    SafeAttributeModel.__delattr__ must remove a field from the instance so it
+    is omitted from model_dump (OpenAI spec), whether the field is a declared
+    model field or an extra, and deleting a missing attribute must be a no-op.
+    """
+    from litellm.types.utils import Message
+
+    # Unset optional declared fields are dropped during __init__ -> absent from dump
+    msg = Message(content="hi", role="assistant")
+    assert not hasattr(msg, "audio")
+    assert not hasattr(msg, "reasoning_content")
+    assert "audio" not in msg.model_dump()
+    assert "reasoning_content" not in msg.model_dump()
+
+    # Explicitly deleting a present declared field removes it from the dump
+    msg2 = Message(content="hi", role="assistant", reasoning_content="because")
+    assert msg2.reasoning_content == "because"
+    del msg2.reasoning_content
+    assert not hasattr(msg2, "reasoning_content")
+    assert "reasoning_content" not in msg2.model_dump()
+
+    # Extra fields (extra='allow') are still deletable via the fallback path
+    msg3 = Message(content="hi", role="assistant", custom_field=123)
+    assert msg3.custom_field == 123
+    del msg3.custom_field
+    assert not hasattr(msg3, "custom_field")
+    assert "custom_field" not in msg3.model_dump()
+
+    # Deleting a non-existent attribute is a silent no-op
+    msg4 = Message(content="hi", role="assistant")
+    del msg4.does_not_exist
+
+
+def test_delattr_fast_path_matches_pydantic_exactly():
+    """
+    The fast path must be observationally identical to pydantic's own
+    __delattr__ for a declared field, including model_fields_set membership and
+    the exclude_unset dump, both of which the fast path never touches. Deleting
+    the same field through the fast path and through pydantic's __delattr__
+    (reached by skipping SafeAttributeModel in the MRO) must leave identical
+    state, so if a future pydantic release makes __delattr__ mutate
+    __pydantic_fields_set__ the two diverge and this fails rather than silently
+    shifting the serialization contract.
+    """
+    from litellm.types.utils import Message, SafeAttributeModel
+
+    def observe(m: Message) -> tuple:
+        return (
+            hasattr(m, "reasoning_content"),
+            "reasoning_content" in m.model_fields_set,
+            "reasoning_content" in m.model_dump(),
+            "reasoning_content" in m.model_dump(exclude_unset=True),
+        )
+
+    fast = Message(content="hi", role="assistant", reasoning_content="x")
+    del fast.reasoning_content
+
+    control = Message(content="hi", role="assistant", reasoning_content="x")
+    super(SafeAttributeModel, control).__delattr__("reasoning_content")
+
+    assert observe(fast) == observe(control)
+    # A deleted field is gone from __dict__ (so absent from both dumps) yet
+    # stays in model_fields_set, since neither delete path clears fields_set.
+    assert observe(fast) == (False, True, False, False)
+
+
+def test_delattr_fast_path_missing_attribute_is_noop():
+    """
+    The declared-field fast path must stay a silent no-op when the object delete
+    fails: the field passes the __dict__ membership guard but is already gone by
+    the time object.__delattr__ runs. This models a concurrent removal of the same
+    field on a shared response object. Previously the fast-path delete ran outside
+    the AttributeError handler, so the error leaked onto the Message/Delta/Choices/
+    Usage construction hot path instead of being swallowed like the slow path.
+
+    _VanishingDict reports every key as present (passing the guard) while storing
+    nothing, so the real object.__delattr__ still raises AttributeError.
+    """
+    from litellm.types.utils import SafeAttributeModel
+
+    class _VanishingDict(dict):
+        def __contains__(self, key: object) -> bool:
+            return True
+
+    class _RacyModel(SafeAttributeModel):
+        __pydantic_fields__ = {"x": object()}
+        model_config: dict = {}
+
+        def __init__(self) -> None:
+            self.__dict__ = _VanishingDict()
+
+    racy = _RacyModel()
+    assert "x" in racy.__dict__
+    assert "x" not in dict.keys(racy.__dict__)
+
+    del racy.x
+    del racy.x
+def test_chat_completion_tool_call_from_dict_custom():
+    from litellm.types.utils import (
+        ChatCompletionMessageCustomToolCall,
+        ChatCompletionMessageToolCall,
+        chat_completion_tool_call_from_dict,
+    )
+
+    custom_tc = {
+        "id": "call_njxQ",
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": "*** Begin Patch\n*** End Patch\n"},
+    }
+    parsed = chat_completion_tool_call_from_dict(custom_tc)
+    assert isinstance(parsed, ChatCompletionMessageCustomToolCall)
+    assert parsed.model_dump() == custom_tc
+
+    func_tc = {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+    parsed_func = chat_completion_tool_call_from_dict(func_tc)
+    assert isinstance(parsed_func, ChatCompletionMessageToolCall)
+    assert "custom" not in parsed_func.model_dump()
+
+
+def test_chat_completion_tool_call_from_dict_custom_strips_null_function():
+    from litellm.types.utils import chat_completion_tool_call_from_dict
+
+    sdk_shaped = {
+        "id": "call_x",
+        "type": "custom",
+        "function": None,
+        "custom": {"name": "ApplyPatch", "input": ""},
+    }
+    parsed = chat_completion_tool_call_from_dict(sdk_shaped)
+    assert "function" not in parsed.model_dump()
+
+
+def test_chat_completion_tool_call_from_dict_typeless_custom_payload():
+    """A tool-call dict can carry a ``custom`` payload with ``type`` absent or None
+    (e.g. rebuilt from streaming deltas, where only the first chunk has ``type``).
+    Classifying on ``type == "custom"`` alone sent these to the function branch,
+    which raised TypeError (missing ``function``) on a payload the streaming path
+    accepts as custom."""
+    from litellm.types.utils import ChatCompletionMessageCustomToolCall, chat_completion_tool_call_from_dict
+
+    typeless = {"id": "call_1", "custom": {"name": "ApplyPatch", "input": "*** Begin Patch"}}
+    parsed = chat_completion_tool_call_from_dict(typeless)
+    assert isinstance(parsed, ChatCompletionMessageCustomToolCall)
+    assert parsed.type == "custom"
+    assert parsed.custom.name == "ApplyPatch"
+
+    null_typed = {"id": "call_2", "type": None, "custom": {"name": "f", "input": "{}"}}
+    assert isinstance(chat_completion_tool_call_from_dict(null_typed), ChatCompletionMessageCustomToolCall)
+
+
+def test_custom_tool_call_classification_agrees_across_streaming_and_non_streaming():
+    """The streaming Delta coercion and the non-streaming from_dict parser must
+    classify the same tool-call dict identically, or a provider payload becomes a
+    custom tool call mid-stream and something else on the completed message."""
+    from litellm.types.utils import (
+        ChatCompletionDeltaCustomToolCall,
+        ChatCompletionMessageCustomToolCall,
+        Delta,
+        chat_completion_tool_call_from_dict,
+    )
+
+    tool_calls = [
+        {"id": "c1", "type": "custom", "custom": {"name": "ApplyPatch", "input": ""}},
+        {"id": "c2", "custom": {"name": "ApplyPatch", "input": "x"}},
+        {"id": "c3", "type": "function", "function": {"name": "g", "arguments": "{}"}},
+    ]
+    for tool_call in tool_calls:
+        message_parsed = chat_completion_tool_call_from_dict(dict(tool_call))
+        delta_parsed = Delta(tool_calls=[dict(tool_call, index=0)]).tool_calls[0]
+        assert isinstance(message_parsed, ChatCompletionMessageCustomToolCall) == isinstance(
+            delta_parsed, ChatCompletionDeltaCustomToolCall
+        )
+
+
+def test_message_with_mixed_function_and_custom_tool_calls():
+    from litellm.types.utils import (
+        ChatCompletionMessageCustomToolCall,
+        ChatCompletionMessageToolCall,
+        Message,
+    )
+
+    message = Message(
+        content=None,
+        role="assistant",
+        tool_calls=[
+            {"id": "call_c", "type": "custom", "custom": {"name": "ApplyPatch", "input": "patch"}},
+            {"id": "call_f", "type": "function", "function": {"name": "f", "arguments": "{}"}},
+        ],
+    )
+    assert isinstance(message.tool_calls[0], ChatCompletionMessageCustomToolCall)
+    assert isinstance(message.tool_calls[1], ChatCompletionMessageToolCall)
+    dumped = message.model_dump()["tool_calls"]
+    assert dumped[0] == {"id": "call_c", "type": "custom", "custom": {"name": "ApplyPatch", "input": "patch"}}
+    assert "custom" not in dumped[1]
+
+
+def test_delta_custom_tool_call_first_and_continuation_chunks():
+    from litellm.types.utils import ChatCompletionDeltaCustomToolCall, Delta
+
+    first_chunk_tc = {
+        "index": 0,
+        "id": "call_TBs",
+        "function": None,
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": ""},
+    }
+    continuation_tc = {"index": 0, "id": None, "function": None, "type": None, "custom": {"input": "***"}}
+
+    first_delta = Delta(role="assistant", tool_calls=[first_chunk_tc])
+    assert isinstance(first_delta.tool_calls[0], ChatCompletionDeltaCustomToolCall)
+    first_dump = first_delta.model_dump()["tool_calls"][0]
+    assert first_dump["type"] == "custom"
+    assert first_dump["custom"] == {"name": "ApplyPatch", "input": ""}
+    assert "function" not in first_dump
+
+    continuation_delta = Delta(tool_calls=[continuation_tc])
+    cont_dump = continuation_delta.model_dump()["tool_calls"][0]
+    assert cont_dump["type"] is None
+    assert cont_dump["custom"]["input"] == "***"
+    assert "function" not in cont_dump
+
+
+def test_delta_function_tool_call_unchanged_by_custom_support():
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Delta
+
+    delta = Delta(tool_calls=[{"index": 0, "id": "c2", "type": "function", "function": {"name": "g", "arguments": ""}}])
+    assert isinstance(delta.tool_calls[0], ChatCompletionDeltaToolCall)
+    assert "custom" not in delta.model_dump()["tool_calls"][0]

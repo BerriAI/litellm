@@ -22,23 +22,21 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
-import os
 from typing import Any, Mapping, Optional
 
 import pytest
 
+from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
     run_claude_models_parallel,
 )
 
-PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
-PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 ANTHROPIC_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-opus-4-7",
 ]
 
@@ -56,24 +54,11 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
         return 0
 
 
+@pytest.mark.covers("llm.messages.anthropic.prompt_cache_5m.nonstream.works")
 def test_prompt_caching_5m_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     upstream usage block surfaces a non-zero cache token count."""
-    base_url = os.environ.get(PROXY_BASE_URL_ENV)
-    api_key = os.environ.get(PROXY_API_KEY_ENV)
-    if not base_url or not api_key:
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": (
-                    f"missing required env: set {PROXY_BASE_URL_ENV} and "
-                    f"{PROXY_API_KEY_ENV} to point at a running LiteLLM proxy"
-                ),
-            }
-        )
-        pytest.fail(
-            f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured", pytrace=False
-        )
+    base_url, api_key = require_proxy(compat_result)
 
     outcomes = run_claude_models_parallel(
         models=ANTHROPIC_MODELS,

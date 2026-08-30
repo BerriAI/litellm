@@ -5,16 +5,15 @@ Covers actual execution of redaction in:
 - WebSocket close reasons in realtime handlers (openai, azure, bedrock)
 - Gemini RAG ingestion x-goog-api-key header usage
 - Traceback redaction pattern used in proxy streaming
+- Router fallback-failure traceback redaction
 """
 
-import os
-import sys
+import logging
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string
 
@@ -188,6 +187,79 @@ class TestProxyStreamingDataGeneratorRedaction:
         assert "sk-1234567890abcdefghij" not in redacted_tb
         assert "Traceback" in redacted_tb
         assert "RuntimeError" in redacted_tb
+
+
+class TestRouterFallbackFailureTracebackRedaction:
+    """Test the fallback-failure logs in router.py's
+    async_function_with_fallbacks_common_utils. Both call sites must redact the
+    traceback at the call site with redact_string() rather than hand a live
+    exception to exc_info=True. SecretRedactionFilter rewrites record.exc_text,
+    but record.exc_info stays an exception object no filter can rewrite, so any
+    handler that renders exc_info itself (Datadog and OTel log bridges do) would
+    receive the unredacted secret."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_failure_does_not_leak_secret_via_exc_info(self, caplog):
+        """The helper is driven from inside an `except` block because that is the only
+        way production reaches it, and the entry-point debug log takes its traceback
+        from the active exception. With no exception in flight sys.exc_info() is empty,
+        so an exc_info=True regression there would degrade to (None, None, None) and
+        this test would pass against it.
+        """
+        import litellm
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+                },
+                {
+                    "model_name": "claude-3-haiku",
+                    "litellm_params": {"model": "anthropic/claude-3-haiku-20240307", "api_key": "fake-key"},
+                },
+            ],
+        )
+
+        secret = "sk-testsecretvalue1234567890abcdef"
+
+        with patch(
+            "litellm.router.run_async_fallback",
+            new=AsyncMock(side_effect=RuntimeError(f"boom api_key={secret}")),
+        ):
+            try:
+                raise ValueError(f"primary deployment failed api_key={secret}")
+            except ValueError as original_exception:
+                with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+                    with pytest.raises(ValueError, match='primary deployment failed api_key=sk-testsecretvalu'):
+                        await router.async_function_with_fallbacks_common_utils(
+                            e=original_exception,
+                            disable_fallbacks=False,
+                            fallbacks=[{"gpt-3.5-turbo": ["claude-3-haiku"]}],
+                            context_window_fallbacks=None,
+                            content_policy_fallbacks=None,
+                            model_group="gpt-3.5-turbo",
+                            args=(),
+                            kwargs={"model": "gpt-3.5-turbo"},
+                        )
+
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert debug_records, "expected the entry-point debug log, which carries the active traceback"
+
+        error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert error_records, "expected an error log for the fallback failure"
+        assert any(
+            "Cooldown Deployments" in r.getMessage() for r in error_records
+        ), "expected the fallback-failure log, not an unrelated error"
+
+        for record in caplog.records:
+            assert secret not in record.getMessage()
+            assert secret not in (record.exc_text or "")
+            rendered_exc_info = "".join(traceback.format_exception(*record.exc_info)) if record.exc_info else ""
+            assert secret not in rendered_exc_info, (
+                f"{record.levelname} record passed a live exception to exc_info; "
+                "no logging filter can redact record.exc_info"
+            )
 
 
 def _make_mock_ingest_options():

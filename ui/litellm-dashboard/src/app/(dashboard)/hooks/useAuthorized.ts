@@ -3,14 +3,12 @@
 import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
-import { buildLoginUrlWithReturn, storeReturnUrl } from "@/utils/returnUrlUtils";
-import { useRouter } from "next/navigation";
+import { buildLoginUrlWithReturn, getLoginUrl, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { useCallback, useEffect, useMemo } from "react";
-import { formatUserRole } from "@/utils/roles";
+import { effectiveSessionRole, formatUserRole, isViewOnlySessionRole } from "@/utils/roles";
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
 const useAuthorized = () => {
-  const router = useRouter();
   const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
@@ -23,10 +21,10 @@ const useAuthorized = () => {
   // Helper function to redirect to login while preserving the current URL
   const redirectToLogin = useCallback(() => {
     storeReturnUrl();
-    const baseLoginUrl = `${getProxyBaseUrl()}/ui/login`;
+    const baseLoginUrl = getLoginUrl(getProxyBaseUrl());
     const loginUrlWithReturn = buildLoginUrlWithReturn(baseLoginUrl);
-    router.replace(loginUrlWithReturn);
-  }, [router]);
+    window.location.replace(loginUrlWithReturn);
+  }, []);
 
   // Single useEffect for all redirect logic
   useEffect(() => {
@@ -47,7 +45,9 @@ const useAuthorized = () => {
     accessToken: decoded?.key ?? null,
     userId: decoded?.user_id ?? null,
     userEmail: decoded?.user_email ?? null,
-    userRole: formatUserRole(decoded?.user_role),
+    userRole: effectiveSessionRole(decoded?.user_role),
+    userRoleLabel: formatUserRole(decoded?.user_role),
+    isViewOnly: isViewOnlySessionRole(decoded?.user_role),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
     showSSOBanner: decoded?.login_method === "username_password",

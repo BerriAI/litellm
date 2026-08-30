@@ -1,6 +1,6 @@
+use crate::CoreResult;
 use crate::realtime::transformation::RealtimeProviderConfig;
 use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
-use crate::CoreResult;
 
 /// Default OpenAI API base, used when the caller does not override `api_base`.
 pub const OPENAI_REALTIME_DEFAULT_API_BASE: &str = "https://api.openai.com";

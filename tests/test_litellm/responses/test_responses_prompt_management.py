@@ -14,13 +14,19 @@ Covers:
 """
 
 import asyncio
-from typing import List
+from typing import List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ResponseInputParam,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,12 +52,19 @@ def _make_logging_obj(
     return logging_obj
 
 
+def _provider_by_model(model: str, **_: object) -> tuple[str, str, None, None]:
+    provider, _, bare_model = model.partition("/")
+    if not bare_model:
+        return (model, "anthropic" if "claude" in model else "openai", None, None)
+    return (bare_model, provider, None, None)
+
+
 def _patch_responses_dispatch():
     """Patch everything after the prompt management block so tests stay unit-level."""
     return [
         patch(
             "litellm.responses.main.litellm.get_llm_provider",
-            return_value=("gpt-4o", "openai", None, None),
+            side_effect=_provider_by_model,
         ),
         patch(
             "litellm.responses.mcp.litellm_proxy_mcp_handler."
@@ -69,6 +82,56 @@ def _patch_responses_dispatch():
             return_value=MagicMock(),
         ),
     ]
+
+
+def _make_cache_control_case() -> tuple[
+    ResponseInputParam,
+    list[AllMessageValues],
+    dict[str, object],
+]:
+    system_message = cast(
+        AllMessageValues,
+        {"role": "system", "content": "Analyze the request"},
+    )
+    assistant_message = cast(
+        AllMessageValues,
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "The code has a bug",
+                    "annotations": [],
+                }
+            ],
+        },
+    )
+    user_message = cast(
+        AllMessageValues,
+        {"role": "user", "content": "Check for security issues"},
+    )
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [],
+        "encrypted_content": "encrypted",
+    }
+    original_input = cast(
+        ResponseInputParam,
+        [system_message, reasoning_item, assistant_message, user_message],
+    )
+    _, merged_messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="azure/gpt-5-codex",
+        messages=[system_message, assistant_message, user_message],
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+    return original_input, merged_messages, reasoning_item
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +285,7 @@ class TestResponsesAPIPromptManagement:
 
         # The model passed to the downstream handler should be the overridden one
         handler_call_kwargs = mock_handler.call_args.kwargs
-        assert handler_call_kwargs.get("model") == "openai/gpt-4o-mini"
+        assert handler_call_kwargs.get("model") == "gpt-4o-mini"
 
     def test_non_message_input_items_filtered(self):
         """[F] Non-message items in ResponseInputParam (e.g. function_call_output) are
@@ -256,6 +319,66 @@ class TestResponsesAPIPromptManagement:
         assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
         assert len(passed_messages) == 1
 
+    def test_cache_control_hook_preserves_reasoning_items(self):
+        original_input, merged_messages, reasoning_item = _make_cache_control_case()
+        logging_obj = _make_logging_obj(
+            merged_model="azure/gpt-5-codex",
+            merged_messages=merged_messages,
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=original_input,
+                model="azure/gpt-5-codex",
+                litellm_logging_obj=logging_obj,
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert [item.get("type") for item in sent_input] == [
+            None,
+            "reasoning",
+            "message",
+            None,
+        ]
+        assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
+        assert sent_input[1] == reasoning_item
+        assert sent_input[2]["id"] == "msg_1"
+
+    def test_all_non_message_input_items_remain_unchanged(self):
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "encrypted",
+        }
+        original_input = cast(ResponseInputParam, [reasoning_item])
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=[
+                cast(
+                    AllMessageValues,
+                    {"role": "system", "content": "Analyze the request"},
+                )
+            ],
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=original_input,
+                model="gpt-4o",
+                prompt_id="all-non-message",
+                litellm_logging_obj=logging_obj,
+            )
+
+        assert mock_handler.call_args.kwargs["input"] == original_input
+
     def test_model_override_re_resolves_provider(self):
         """[G] When the prompt template overrides the model to a different provider,
         custom_llm_provider is re-resolved so downstream routing uses the correct provider.
@@ -272,10 +395,7 @@ class TestResponsesAPIPromptManagement:
         with (
             patch(
                 "litellm.responses.main.litellm.get_llm_provider",
-                side_effect=[
-                    ("gpt-4o", "openai", None, None),
-                    ("claude-3-5-sonnet", "anthropic", None, None),
-                ],
+                side_effect=_provider_by_model,
             ),
             patches[1],
             patches[2],
@@ -393,3 +513,132 @@ class TestAsyncResponsesAPIPromptManagement:
         passed_messages = call_kwargs["messages"]
         assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
         assert len(passed_messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_async_cache_control_hook_preserves_reasoning_items(self):
+        original_input, merged_messages, reasoning_item = _make_cache_control_case()
+        logging_obj = _make_logging_obj(
+            merged_model="azure/gpt-5-codex",
+            merged_messages=merged_messages,
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            await litellm.aresponses(
+                input=original_input,
+                model="azure/gpt-5-codex",
+                litellm_logging_obj=logging_obj,
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert [item.get("type") for item in sent_input] == [
+            None,
+            "reasoning",
+            "message",
+            None,
+        ]
+        assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
+        assert sent_input[1] == reasoning_item
+        assert sent_input[2]["id"] == "msg_1"
+
+
+# ---------------------------------------------------------------------------
+# Cross-provider model swap guard (prompt swaps model after credential resolution)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_prompt_swapped_provider_raises_cross_provider_with_credentials():
+    import litellm
+    from litellm.responses.main import _resolve_prompt_swapped_provider
+
+    with pytest.raises(litellm.BadRequestError, match="Refusing to send"):
+        _resolve_prompt_swapped_provider(
+            original_model="anthropic/claude-haiku-4-5",
+            swapped_model="gpt-4o-mini",
+            custom_llm_provider="anthropic",
+            kwargs={"api_key": "sk-ant-test"},
+            prompt_id="p1",
+        )
+
+
+def test_resolve_prompt_swapped_provider_allows_swap_without_credentials():
+    from litellm.responses.main import _resolve_prompt_swapped_provider
+
+    assert (
+        _resolve_prompt_swapped_provider(
+            original_model="anthropic/claude-haiku-4-5",
+            swapped_model="gpt-4o-mini",
+            custom_llm_provider="anthropic",
+            kwargs={},
+            prompt_id="p1",
+        )
+        == "openai"
+    )
+
+
+def test_resolve_prompt_swapped_provider_allows_same_provider_swap_with_credentials():
+    from litellm.responses.main import _resolve_prompt_swapped_provider
+
+    assert (
+        _resolve_prompt_swapped_provider(
+            original_model="openai/gpt-4o",
+            swapped_model="gpt-4o-mini",
+            custom_llm_provider="openai",
+            kwargs={"api_key": "sk-test", "api_base": "https://api.openai.com/v1"},
+            prompt_id="p1",
+        )
+        == "openai"
+    )
+
+
+def test_sync_prompt_swap_resolves_credentials_for_swapped_provider(monkeypatch: pytest.MonkeyPatch):
+    import litellm
+
+    monkeypatch.setenv("XAI_API_KEY", "sk-xai-test")
+    logging_obj = _make_logging_obj("gpt-4o-mini", [{"role": "user", "content": "hi"}])
+    with patch(  # test-quality-ok: handler boundary stub proves creds resolve for the swapped provider without network
+        "litellm.responses.main.base_llm_http_handler.response_api_handler", return_value=MagicMock()
+    ) as mock_handler:
+        litellm.responses(input="hi", model="xai/grok-4", prompt_id="p1", litellm_logging_obj=logging_obj)
+
+    handler_kwargs = mock_handler.call_args.kwargs
+    assert handler_kwargs["model"] == "gpt-4o-mini"
+    assert handler_kwargs["custom_llm_provider"] == "openai"
+    assert handler_kwargs["litellm_params"].api_base is None
+    assert handler_kwargs["litellm_params"].api_key != "sk-xai-test"
+
+
+def test_sync_prompt_swap_cross_provider_with_credentials_raises():
+    import litellm
+    from litellm.responses.main import _apply_prompt_management_to_responses_call
+
+    logging_obj = _make_logging_obj("gpt-4o-mini", [{"role": "user", "content": "hi"}])
+    with pytest.raises(litellm.BadRequestError, match="Refusing to send"):
+        _apply_prompt_management_to_responses_call(
+            input="hi",
+            model="anthropic/claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            litellm_logging_obj=logging_obj,
+            kwargs={"prompt_id": "p1", "api_key": "sk-ant-test"},
+            local_vars={},
+            use_chat_completions_api=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_aresponses_prompt_swap_cross_provider_with_credentials_raises():
+    import litellm
+
+    logging_obj = _make_logging_obj("gpt-4o-mini", [{"role": "user", "content": "hi"}])
+    logging_obj.async_failure_handler = AsyncMock()
+    with pytest.raises(litellm.BadRequestError, match="Refusing to send"):
+        await litellm.aresponses(
+            input="hi",
+            model="anthropic/claude-haiku-4-5",
+            litellm_logging_obj=logging_obj,
+            prompt_id="p1",
+            api_key="sk-ant-test",
+        )

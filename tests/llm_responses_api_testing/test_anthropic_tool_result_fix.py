@@ -5,13 +5,10 @@ This test verifies that when using previous_response_id with tool_result,
 the fix ensures tool_calls are added to the previous assistant message.
 """
 
-import os
-import sys
 import pytest
 import json
 from unittest.mock import patch, AsyncMock
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,

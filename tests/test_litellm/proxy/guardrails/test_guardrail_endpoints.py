@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from datetime import datetime
 from typing import Dict, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
 
@@ -340,6 +335,109 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_config_guardrails(mock
 
 
 @pytest.mark.asyncio
+async def test_list_guardrails_v2_admin_viewer_sees_guardrails_of_teams_they_are_not_in(
+    mocker,
+):
+    """
+    proxy_admin_viewer reads the same unscoped list as proxy_admin: a team-owned
+    guardrail must surface even though the viewer belongs to no teams.
+    """
+    other_team_guardrail = {
+        "guardrail_id": "other-team-guardrail",
+        "guardrail_name": "Other Team Guardrail",
+        "litellm_params": {"guardrail": "bedrock", "mode": "pre_call"},
+        "guardrail_info": {"description": "owned by a team the viewer is not in"},
+        "team_id": "team-viewer-is-not-in",
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }
+
+    mock_prisma_client = mocker.Mock()
+    mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[other_team_guardrail]
+    )
+
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = []
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    mock_get_user_team_ids = mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=[]),
+    )
+
+    viewer_auth = UserAPIKeyAuth(
+        user_id="viewer-1", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+    response = await list_guardrails_v2(user_api_key_dict=viewer_auth)
+
+    assert [g.guardrail_id for g in response.guardrails] == ["other-team-guardrail"]
+    mock_get_user_team_ids.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_masks_sensitive_data_for_admin_viewer(mocker):
+    """
+    Read parity for proxy_admin_viewer must not also hand out unmasked secrets.
+    The guardrail is team-owned so it only reaches the viewer via the admin path.
+    """
+    other_team_guardrail_with_secrets = {
+        "guardrail_id": "other-team-secret-guardrail",
+        "guardrail_name": "Other Team Guardrail with Secrets",
+        "litellm_params": {
+            "guardrail": "azure/text_moderations",
+            "mode": "pre_call",
+            "api_key": "sk-viewer-must-not-see-this",
+        },
+        "guardrail_info": {},
+        "team_id": "team-viewer-is-not-in",
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }
+
+    mock_prisma_client = mocker.Mock()
+    mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[other_team_guardrail_with_secrets]
+    )
+
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = []
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=[]),
+    )
+
+    viewer_auth = UserAPIKeyAuth(
+        user_id="viewer-1", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+    response = await list_guardrails_v2(user_api_key_dict=viewer_auth)
+
+    guardrail = next(
+        g
+        for g in response.guardrails
+        if g.guardrail_id == "other-team-secret-guardrail"
+    )
+    params = guardrail.litellm_params.model_dump()
+    assert params["api_key"] != "sk-viewer-must-not-see-this"
+    assert "****" in str(params["api_key"])
+    assert params["guardrail"] == "azure/text_moderations"
+
+
+@pytest.mark.asyncio
 async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
     """Test getting guardrail info from DB"""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -398,6 +496,114 @@ async def test_get_guardrail_info_not_found(
 
     assert exc_info.value.status_code == 404
     assert "not found" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_without_prisma_returns_config_guardrails(
+    mocker, mock_in_memory_handler
+):
+    """
+    A proxy without a DB must still list config-defined guardrails instead of
+    raising 500 'Prisma client not initialized'.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await list_guardrails_v2(user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert len(response.guardrails) == 1
+    config_guardrail = response.guardrails[0]
+    assert config_guardrail.guardrail_id == "test-config-guardrail"
+    assert config_guardrail.guardrail_name == "Test Config Guardrail"
+    assert config_guardrail.guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_without_prisma_non_admin_sees_unrestricted_config_guardrails(
+    mocker, mock_in_memory_handler
+):
+    """
+    A non-admin caller on a no-DB proxy must see config guardrails that carry
+    no team_id restriction; the team lookup must not blow up without a DB.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    non_admin_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal-user-1"
+    )
+    response = await list_guardrails_v2(user_api_key_dict=non_admin_auth)
+
+    assert [g.guardrail_id for g in response.guardrails] == ["test-config-guardrail"]
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_without_prisma_returns_config_guardrail(
+    mocker, mock_in_memory_handler
+):
+    """
+    The info endpoint must serve config-defined guardrails from the in-memory
+    registry when no DB is attached instead of raising 500.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await get_guardrail_info("test-config-guardrail")
+
+    assert response.guardrail_id == "test-config-guardrail"
+    assert response.guardrail_name == "Test Config Guardrail"
+    assert response.guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_without_prisma_404s_unknown_id(
+    mocker, mock_in_memory_handler
+):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    mock_in_memory_handler.get_guardrail_by_id.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_guardrail_info("non-existent-guardrail")
+
+    assert exc_info.value.status_code == 404
+
+
+def test_get_guardrails_list_response_includes_guardrail_id():
+    """
+    The v1 list response is the UI's fallback when v2 fails; without ids every
+    row click requests /guardrails/undefined/info.
+    """
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_guardrails_list_response,
+    )
+
+    response = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_id": "stable-config-id",
+                "guardrail_name": "tooling",
+                "litellm_params": {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "pre_call",
+                },
+            }
+        ]
+    )
+
+    assert response.guardrails[0].guardrail_id == "stable-config-id"
 
 
 def test_get_provider_specific_params():
@@ -701,7 +907,7 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
     ):
 
         mock_load_creds.return_value = (Mock(), "us-east-1")
-        mock_convert.return_value = {"source": "INPUT", "content": []}
+        mock_convert.return_value = {"source": "INPUT", "content": [{"text": {"text": "test"}}]}
         mock_get_params.return_value = {}
 
         mock_request_instance = Mock()
@@ -951,13 +1157,15 @@ async def test_update_guardrail_endpoint(
     "scenario,expected_result,expected_exception",
     [
         ("success_with_sync", "test-db-guardrail", None),
-        ("success_sync_fails", "test-db-guardrail", None),
+        ("success_sync_fails_unexpected_error", "test-db-guardrail", None),
+        ("sync_fails_invalid_config", None, HTTPException),
         ("database_failure", None, HTTPException),
         ("no_prisma_client", None, HTTPException),
     ],
     ids=[
         "success_with_immediate_sync",
-        "success_but_sync_fails",
+        "success_but_sync_fails_with_unexpected_error",
+        "sync_rejects_invalid_config",
         "database_error",
         "missing_prisma_client",
     ],
@@ -988,7 +1196,10 @@ async def test_patch_guardrail_endpoint(
             mock_in_memory_handler,
         )
 
-    elif scenario == "success_sync_fails":
+    elif scenario == "success_sync_fails_unexpected_error":
+        # A non-ValueError/TypeError failure (e.g. a transient bug) is not a
+        # config-rejection signal, so it keeps the pre-existing swallow-and-warn
+        # behavior rather than rolling back the DB write.
         mock_prisma_client = mocker.Mock()
         mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(
             side_effect=Exception("Sync failed")
@@ -1003,6 +1214,25 @@ async def test_patch_guardrail_endpoint(
             mock_guardrail_registry,
         )
         mocker.patch(
+            "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+            mock_in_memory_handler,
+        )
+
+    elif scenario == "sync_fails_invalid_config":
+        # Maintainer finding on BerriAI/litellm#34940: a ValueError from
+        # sync_guardrail_from_db (e.g. an invalid on_flagged combination) must
+        # roll back the DB write and surface a 422, not persist the rejected
+        # config with a 200.
+        mock_prisma_client = mocker.Mock()
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(
+            side_effect=ValueError("on_flagged='inject_system_message' requires payload=True and breakdown=True")
+        )
+        mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)  # test-quality-ok: reused pattern
+        mocker.patch(  # test-quality-ok: reused pattern
+            "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
+            mock_guardrail_registry,
+        )
+        mocker.patch(  # test-quality-ok: reused pattern
             "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
             mock_in_memory_handler,
         )
@@ -1035,6 +1265,12 @@ async def test_patch_guardrail_endpoint(
             assert "Database error" in str(exc_info.value.detail)
         elif scenario == "no_prisma_client":
             assert "Prisma client not initialized" in str(exc_info.value.detail)
+        elif scenario == "sync_fails_invalid_config":
+            assert exc_info.value.status_code == 422
+            assert "update rejected" in str(exc_info.value.detail)
+            # Rolled back: update_guardrail_in_db is called once for the
+            # rejected write and once more to restore the previous config.
+            assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
 
     else:
         result = await patch_guardrail(
@@ -1050,7 +1286,7 @@ async def test_patch_guardrail_endpoint(
             guardrail=mocker.ANY
         )
 
-        if scenario == "success_sync_fails":
+        if scenario == "success_sync_fails_unexpected_error":
             assert mock_logger is not None
             mock_logger.warning.assert_called_once()
             assert "Failed to update" in str(mock_logger.warning.call_args)
@@ -1930,6 +2166,39 @@ async def test_get_guardrail_submission_non_admin_other_team_forbidden(mocker):
 
 
 @pytest.mark.asyncio
+async def test_get_guardrail_submission_admin_viewer_other_team_allowed(mocker):
+    """proxy_admin_viewer reads any team's submission without the membership check."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="sub-1",
+        guardrail_name="team-guard",
+        status="pending_review",
+        team_id="team-other",
+        litellm_params={},
+        guardrail_info={},
+        submitted_at=None,
+        reviewed_at=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mock_get_user_team_ids = mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=[]),
+    )
+    user = UserAPIKeyAuth(
+        user_id="viewer-1", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+
+    result = await get_guardrail_submission("sub-1", user)
+
+    assert result.guardrail_id == "sub-1"
+    assert result.team_id == "team-other"
+    mock_get_user_team_ids.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_approve_guardrail_submission_success(mocker):
     """Approve sets status to active and initializes guardrail in memory."""
     mock_prisma = mocker.Mock()
@@ -2342,3 +2611,16 @@ def test_strict_guardrail_modes_flag_controls_raise_vs_warn(monkeypatch, caplog)
         )
     assert instance is not None
     assert any("not in the supported event hooks" in rec.message for rec in caplog.records)
+
+
+def test_field_type_inference_handles_pep604_unions():
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_field_type_from_annotation,
+        _unwrap_optional_type,
+    )
+
+    assert _get_field_type_from_annotation(Optional[int]) == "number"
+    assert _get_field_type_from_annotation(int | None) == "number"
+    assert _get_field_type_from_annotation(list[str] | None) == "array"
+    assert _get_field_type_from_annotation(bool | None) == "boolean"
+    assert _unwrap_optional_type(str | None) is str

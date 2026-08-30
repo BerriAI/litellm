@@ -10,6 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 import click
 import requests
@@ -17,10 +18,10 @@ from pydantic import TypeAdapter, ValidationError
 
 from ..up import UpError, secure_create
 
-AUTOROUTE_DIR = Path.home() / ".litellm" / "autorouter"
-CONFIG_PATH = AUTOROUTE_DIR / "config.yaml"
-LOG_PATH = AUTOROUTE_DIR / "proxy.log"
-PID_RECORD_PATH = AUTOROUTE_DIR / "proxy.pid.json"
+AUTOROUTE_DIR: Final = Path.home() / ".litellm" / "autorouter"
+CONFIG_PATH: Final = AUTOROUTE_DIR / "config.yaml"
+LOG_PATH: Final = AUTOROUTE_DIR / "proxy.log"
+PID_RECORD_PATH: Final = AUTOROUTE_DIR / "proxy.pid.json"
 
 
 class ProcessLaunchError(Exception):
@@ -35,7 +36,7 @@ class PidRecord:
     log_path: str
 
 
-_PID_RECORD_ADAPTER = TypeAdapter(PidRecord)
+_PID_RECORD_ADAPTER: Final = TypeAdapter(PidRecord)
 
 
 _PROXY_RUNTIME_MODULES: tuple[str, ...] = ("fastapi", "uvicorn", "backoff", "orjson", "websockets", "apscheduler")
@@ -52,10 +53,17 @@ def missing_proxy_runtime_modules() -> tuple[str, ...]:
     return tuple(name for name in _PROXY_RUNTIME_MODULES if importlib.util.find_spec(name) is None)
 
 
-def allocate_free_port() -> int:
+DEFAULT_AUTOROUTE_PORT: Final = 5483
+
+
+def is_port_available(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+        return True
 
 
 def launch_proxy(config_path: Path, port: int, log_path: Path) -> "subprocess.Popen[bytes]":
@@ -86,8 +94,8 @@ def _tail(log_path: Path, lines: int = 40) -> str:
 
 def poll_liveliness(base_url: str, log_path: Path, process: "subprocess.Popen[bytes]", timeout: float = 30.0) -> None:
     """Poll /health/liveliness until it responds, the process dies, or timeout elapses."""
-    deadline = time.monotonic() + timeout
-    url = base_url.rstrip("/") + "/health/liveliness"
+    deadline: Final = time.monotonic() + timeout
+    url: Final = base_url.rstrip("/") + "/health/liveliness"
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise ProcessLaunchError(
@@ -103,7 +111,7 @@ def poll_liveliness(base_url: str, log_path: Path, process: "subprocess.Popen[by
 
 
 def write_pid_record(record: PidRecord, path: Path | None = None) -> None:
-    resolved_path = path if path is not None else PID_RECORD_PATH
+    resolved_path: Final = path if path is not None else PID_RECORD_PATH
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     with open(resolved_path, "w") as f:
         json.dump(
@@ -114,11 +122,11 @@ def write_pid_record(record: PidRecord, path: Path | None = None) -> None:
 
 
 def read_pid_record(path: Path | None = None) -> PidRecord | None:
-    resolved_path = path if path is not None else PID_RECORD_PATH
+    resolved_path: Final = path if path is not None else PID_RECORD_PATH
     if not resolved_path.exists():
         return None
     with open(resolved_path, "r") as f:
-        content = f.read()
+        content: Final = f.read()
     try:
         return _PID_RECORD_ADAPTER.validate_json(content)
     except ValidationError:
@@ -126,7 +134,7 @@ def read_pid_record(path: Path | None = None) -> PidRecord | None:
 
 
 def clear_pid_record(path: Path | None = None) -> None:
-    resolved_path = path if path is not None else PID_RECORD_PATH
+    resolved_path: Final = path if path is not None else PID_RECORD_PATH
     resolved_path.unlink(missing_ok=True)
 
 
@@ -146,7 +154,7 @@ def terminate(pid: int, grace_period: float = 5.0) -> None:
         return
     with contextlib.suppress(ProcessLookupError):
         os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + grace_period
+    deadline: Final = time.monotonic() + grace_period
     while time.monotonic() < deadline and is_running(pid):
         time.sleep(0.2)
     if is_running(pid):
@@ -172,12 +180,13 @@ def stream_log(log_path: Path, stop_event: threading.Event) -> None:
 __all__ = [
     "AUTOROUTE_DIR",
     "CONFIG_PATH",
+    "DEFAULT_AUTOROUTE_PORT",
     "LOG_PATH",
     "PID_RECORD_PATH",
     "PidRecord",
     "ProcessLaunchError",
-    "allocate_free_port",
     "clear_pid_record",
+    "is_port_available",
     "is_running",
     "launch_proxy",
     "missing_proxy_runtime_modules",

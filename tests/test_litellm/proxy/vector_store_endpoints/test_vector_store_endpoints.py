@@ -1,14 +1,9 @@
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
 
@@ -16,10 +11,11 @@ import litellm
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
     index_create,
+    index_list,
 )
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_model_routing_hint,
@@ -37,7 +33,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
     is_allowed_to_call_vector_store_files_endpoint,
 )
-from litellm.types.vector_stores import IndexCreateRequest
+from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.types.utils import LlmProviders
 
 
@@ -210,7 +206,7 @@ async def test_vector_store_file_list_resolves_single_openai_team_deployment():
     assert result["model"] == "openai/gpt-4o-mini"
     assert "custom_llm_provider" not in result
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
-        model_id="team-openai"
+        model_id="team-openai", team_id=None
     )
 
 
@@ -1314,6 +1310,93 @@ class TestIndexCreate:
 
         assert result["index_name"] == "test-index"
         mock_prisma.db.litellm_managedvectorstoreindextable.create.assert_awaited_once()
+
+
+class TestIndexList:
+    def _admin(self) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            token="sk-test",
+            key_name="sk-...test",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin-user",
+        )
+
+    def _index_row(self, index_id: str, index_name: str) -> dict:
+        return {
+            "id": index_id,
+            "index_name": index_name,
+            "litellm_params": {
+                "vector_store_index": f"real-{index_name}",
+                "vector_store_name": "azure-ai-search",
+            },
+            "index_info": None,
+            "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+            "created_by": "admin-user",
+            "updated_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+            "updated_by": "admin-user",
+        }
+
+    @pytest.mark.asyncio
+    async def test_index_list_requires_admin(self):
+        """Index topology must never reach non-admins, not even via a DB read."""
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_many = AsyncMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            with pytest.raises(HTTPException) as exc_info:
+                await index_list(
+                    user_api_key_dict=UserAPIKeyAuth(
+                        token="sk-test",
+                        key_name="sk-...test",
+                        user_role=LitellmUserRoles.INTERNAL_USER,
+                    )
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can list" in exc_info.value.detail
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_many.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_index_list_requires_db_connection(self):
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            with pytest.raises(HTTPException) as exc_info:
+                await index_list(user_api_key_dict=self._admin())
+
+        assert exc_info.value.status_code == 500
+        assert CommonProxyErrors.db_not_connected_error.value in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_index_list_returns_db_rows_newest_first(self):
+        """Rows round-trip into typed models and DB ordering (created_at desc) is requested."""
+        rows = [
+            self._index_row("idx-2", "index-b"),
+            self._index_row("idx-1", "index-a"),
+        ]
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_many = AsyncMock(return_value=rows)
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            result = await index_list(user_api_key_dict=self._admin())
+
+        assert isinstance(result, IndexListResponse)
+        assert result.object == "list"
+        assert [index.index_name for index in result.data] == ["index-b", "index-a"]
+        assert result.data[0].litellm_params.vector_store_index == "real-index-b"
+        assert result.data[0].litellm_params.vector_store_name == "azure-ai-search"
+        assert result.data[1].litellm_params.vector_store_index == "real-index-a"
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_many.assert_awaited_once_with(
+            order={"created_at": "desc"}
+        )
+
+    def test_get_v1_indexes_route_registered(self):
+        from litellm.proxy.vector_store_endpoints.endpoints import router
+
+        routes = [
+            (method, getattr(route, "path", None))
+            for route in router.routes
+            for method in (getattr(route, "methods", None) or ())
+        ]
+        assert ("GET", "/v1/indexes") in routes
 
 
 class TestIsAllowedToCallVectorStoreFilesEndpoint:
@@ -2840,3 +2923,238 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         params = response["vector_store"]["litellm_params"]
         assert params["api_key"] == REDACTED_BY_LITELM_STRING
         assert params["api_base"] == "https://api.openai.com/v1"
+
+    @pytest.mark.asyncio
+    async def test_update_row_deleted_mid_update_returns_404(self):
+        """A concurrent delete between the authorization read and the write makes Prisma's
+        ``update`` return None. That must reuse the not-found 404 contract instead of
+        turning an AttributeError into an opaque 500."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            update_vector_store,
+        )
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump = MagicMock(
+            return_value={"vector_store_id": "vs_owned", "team_id": "team-A"}
+        )
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
+            return_value=None
+        )
+
+        with (
+            patch(  # test-quality-ok: stubs the auth gate so the test exercises the not-found branch under test
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: stubs the auth gate so the test exercises the not-found branch under test
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            patch("litellm.vector_store_registry", None),  # test-quality-ok: litellm module global is the only injection point for the registry
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await update_vector_store(
+                    data=VectorStoreUpdateRequest(
+                        vector_store_id="vs_owned",
+                        vector_store_description="new desc",
+                    ),
+                    user_api_key_dict=UserAPIKeyAuth(user_id="owner", team_id="team-A"),
+                )
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Vector store with ID vs_owned not found"
+
+
+class TestAzureAIDocumentWritePassthroughPermission:
+    """Regression tests for the Azure AI Search passthrough write mapping.
+
+    Azure's batch document write/merge/delete endpoint is
+    ``POST /indexes/{name}/docs/index``. A non-admin team holding a ``write``
+    grant on the index must be allowed to call it, while index lifecycle
+    (create / update / delete the index itself) stays proxy-admin only.
+
+    These exercise the real ``AzureAIVectorStoreConfig`` endpoint map on
+    purpose (no mocked provider config), so reverting the map to the old
+    ``("PUT", "/docs")`` entry makes ``test_team_with_write_grant_can_upload``
+    fail.
+    """
+
+    INDEX = "my-index"
+
+    READ_ROUTES = [
+        ("GET", f"/azure_ai/indexes/{INDEX}/stats"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs/$count"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs/seed-doc-1"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs/suggest"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs/autocomplete"),
+        ("POST", f"/azure_ai/indexes/{INDEX}/docs/suggest"),
+        ("POST", f"/azure_ai/indexes/{INDEX}/docs/autocomplete"),
+        ("POST", f"/azure_ai/indexes/{INDEX}/analyze"),
+    ]
+
+    def _request(self, method: str, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.url.path = path
+        return request
+
+    def _team_member(self, permissions: list) -> MagicMock:
+        user = MagicMock(spec=UserAPIKeyAuth)
+        user.user_role = None
+        user.metadata = {"allowed_vector_store_indexes": [{"index_name": self.INDEX, "index_permissions": permissions}]}
+        user.team_metadata = None
+        return user
+
+    def test_team_with_write_grant_can_upload(self):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=self.INDEX,
+            request=self._request("POST", f"/azure_ai/indexes/{self.INDEX}/docs/index"),
+            user_api_key_dict=self._team_member(["read", "write"]),
+        )
+        assert result is True
+
+    def test_team_without_write_grant_cannot_upload(self):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=self.INDEX,
+                request=self._request("POST", f"/azure_ai/indexes/{self.INDEX}/docs/index"),
+                user_api_key_dict=self._team_member(["read"]),
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_team_with_read_grant_can_search(self):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=self.INDEX,
+            request=self._request("POST", f"/azure_ai/indexes/{self.INDEX}/docs/search"),
+            user_api_key_dict=self._team_member(["read"]),
+        )
+        assert result is True
+
+    def test_team_with_read_grant_can_get_index_details(self):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=self.INDEX,
+            request=self._request("GET", f"/azure_ai/indexes/{self.INDEX}"),
+            user_api_key_dict=self._team_member(["read"]),
+        )
+        assert result is True
+
+    def test_team_without_read_grant_cannot_get_index_details(self):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=self.INDEX,
+                request=self._request("GET", f"/azure_ai/indexes/{self.INDEX}"),
+                user_api_key_dict=self._team_member(["write"]),
+            )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.parametrize("method, path", READ_ROUTES)
+    def test_team_with_read_grant_can_call_every_read_route(self, method, path):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=self.INDEX,
+            request=self._request(method, path),
+            user_api_key_dict=self._team_member(["read"]),
+        )
+        assert result is True
+
+    @pytest.mark.parametrize("method, path", READ_ROUTES)
+    def test_team_without_read_grant_cannot_call_read_routes(self, method, path):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=self.INDEX,
+                request=self._request(method, path),
+                user_api_key_dict=self._team_member(["write"]),
+            )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.parametrize(
+        "method, operation, path",
+        [
+            ("PUT", "update", f"/azure_ai/indexes/{INDEX}?api-version=2024-07-01"),
+            ("DELETE", "delete", f"/azure_ai/indexes/{INDEX}?api-version=2024-07-01"),
+            ("POST", "create", "/azure_ai/indexes?api-version=2024-07-01"),
+        ],
+    )
+    def test_team_cannot_manage_index_lifecycle_even_with_write_grant(self, method, operation, path):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=self.INDEX,
+                request=self._request(method, path),
+                user_api_key_dict=self._team_member(["read", "write"]),
+            )
+        assert exc_info.value.status_code == 403
+        assert f"Only proxy admins can {operation}" in exc_info.value.detail
+
+
+class TestAzureAIAnalyzeNamedIndexClassification:
+    """Regression tests for write-before-read endpoint classification.
+
+    The endpoint matcher is substring-based, so the batch-write path of an
+    index named ``analyze*`` contains the ``("POST", "/analyze")`` read
+    fragment. Reads-first classification labeled that write a read, letting a
+    read-only grant upload, merge, and delete documents (and refusing
+    legitimate write-only grants). Writes are classified first now, so an
+    ambiguous path demands the stronger grant.
+    """
+
+    def _request(self, method: str, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.url.path = path
+        return request
+
+    def _team_member(self, index: str, permissions: list) -> MagicMock:
+        user = MagicMock(spec=UserAPIKeyAuth)
+        user.user_role = None
+        user.metadata = {"allowed_vector_store_indexes": [{"index_name": index, "index_permissions": permissions}]}
+        user.team_metadata = None
+        return user
+
+    @pytest.mark.parametrize("index", ["analyze", "analyzer-reports"])
+    def test_read_only_grant_cannot_upload_to_analyze_named_index(self, index):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=index,
+                request=self._request("POST", f"/azure_ai/indexes/{index}/docs/index"),
+                user_api_key_dict=self._team_member(index, ["read"]),
+            )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.parametrize("index", ["analyze", "analyzer-reports"])
+    def test_write_grant_can_upload_to_analyze_named_index(self, index):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=index,
+            request=self._request("POST", f"/azure_ai/indexes/{index}/docs/index"),
+            user_api_key_dict=self._team_member(index, ["write"]),
+        )
+        assert result is True
+
+    def test_read_only_grant_can_still_analyze_on_analyze_named_index(self):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name="analyze",
+            request=self._request("POST", "/azure_ai/indexes/analyze/analyze"),
+            user_api_key_dict=self._team_member("analyze", ["read"]),
+        )
+        assert result is True

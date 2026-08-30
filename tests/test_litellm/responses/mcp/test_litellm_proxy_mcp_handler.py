@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 import importlib
 
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
@@ -27,6 +28,7 @@ def _setup_mcp_call_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
 
     fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
         call_tool=AsyncMock(return_value=_DummyMCPResult()),
         # Newer logging path calls this to enrich spend logs metadata
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
@@ -372,6 +374,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
     post_call_failure_hook = _setup_proxy_logging(monkeypatch)
 
     fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
         call_tool=AsyncMock(side_effect=HTTPException(status_code=500, detail="boom"))
     )
     monkeypatch.setattr(
@@ -450,12 +453,48 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_threads_logging_obj_into_call_tool(monkeypatch):
+    """The Responses-API MCP path must hand the request's litellm_logging_obj to
+    global_mcp_server_manager.call_tool, otherwise pre_call_tool_check /
+    _create_during_hook_task get None and no guardrail evaluation is bridged onto
+    the request logger, so MCP tool calls made through the Responses API report zero
+    guardrail evaluations in the monitor. Drop the litellm_logging_obj kwarg on the
+    call_tool invocation and this fails."""
+    _setup_proxy_logging(monkeypatch)
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+
+    sentinel_logging_obj = MagicMock()
+    sentinel_logging_obj.async_post_mcp_tool_call_hook = AsyncMock()
+    sentinel_logging_obj.async_success_handler = AsyncMock()
+
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(
+        handler_module,
+        "function_setup",
+        lambda *_args, **_kwargs: (sentinel_logging_obj, None),
+    )
+
+    tool_name = "deepwiki-read_wiki_structure"
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_args is not None
+    assert call_tool_mock.await_args.kwargs["litellm_logging_obj"] is sentinel_logging_obj
+
+
+@pytest.mark.asyncio
 async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch):
     """
     Regression test for 872e5b98...:
     Ensure responses-side tool discovery enables list-tools SpendLogs logging flags.
     """
-    mock_get_tools = AsyncMock(return_value=[])
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
@@ -463,6 +502,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
 
     # Patch manager methods used by _get_mcp_tools_from_manager to avoid needing full UserAPIKeyAuth fields.
     fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
         get_mcp_servers_from_ids=MagicMock(return_value=[]),
         get_mcp_server_by_name=MagicMock(return_value=None),
@@ -509,12 +549,13 @@ def test_get_parent_request_tags_from_nested_litellm_params():
 
 @pytest.mark.asyncio
 async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
-    mock_get_tools = AsyncMock(return_value=[])
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
     )
     fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
         get_mcp_servers_from_ids=MagicMock(return_value=[]),
         get_mcp_server_by_name=MagicMock(return_value=None),
@@ -533,6 +574,37 @@ async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
     )
 
     assert mock_get_tools.await_args.kwargs["request_tags"] == ["team-a"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_exposes_sanitized_client_headers_to_logging(monkeypatch):
+    """The Responses API MCP bridge used to log an empty header dict, hiding the caller's
+    headers from logging callbacks and hooks."""
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    tool_name = "deepwiki-read_wiki_structure"
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+        raw_headers={"x-nuid": "nuid-1", "x-litellm-api-key": "sk-proxy", "cookie": "s=1"},
+    )
+
+    expected = {"x-nuid": "nuid-1", "cookie": "***REDACTED***"}
+    assert captured["metadata"]["headers"] == expected
+    assert captured["proxy_server_request"]["headers"] == expected
 
 
 @pytest.mark.asyncio
@@ -605,3 +677,45 @@ def test_completion_with_function_tools_works_without_fastapi_installed():
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_extract_tool_call_details_reads_anthropic_tool_use_input():
+    """
+    Regression test (LIT-4517): an Anthropic tool_use block carries its arguments
+    under `input`, not `arguments`.
+
+    Given: A tool_use content block as /v1/messages returns it
+    When:  The shared extractor reads it
+    Then:  The arguments come back, so the MCP tool is called with them
+
+    Reading only `arguments` fails silently rather than loudly: _parse_tool_arguments
+    turns the resulting None into {}, so the tool still executes, just with every
+    argument dropped.
+    """
+    tool_use_block = {
+        "type": "tool_use",
+        "id": "toolu_01ABC",
+        "name": "read_wiki_structure",
+        "input": {"repoName": "BerriAI/litellm"},
+    }
+
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_use_block)
+
+    assert name == "read_wiki_structure"
+    assert call_id == "toolu_01ABC"
+    assert arguments == {"repoName": "BerriAI/litellm"}
+    assert LiteLLM_Proxy_MCP_Handler._parse_tool_arguments(arguments) == {"repoName": "BerriAI/litellm"}
+
+
+def test_extract_tool_call_details_still_prefers_openai_arguments():
+    """The OpenAI chat shape must keep winning; `input` is only the fallback."""
+    openai_tool_call = {
+        "id": "call_123",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
+
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(openai_tool_call)
+
+    assert name == "get_weather"
+    assert call_id == "call_123"
+    assert arguments == '{"city": "Paris"}'

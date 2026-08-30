@@ -9,10 +9,23 @@ repository.workspace = true
 name = "_native"
 crate-type = ["cdylib"]
 
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
-litellm-core.workspace = true
+litellm-core = { workspace = true, features = ["bedrock-auth"] }
 litellm-ai-gateway = { workspace = true, default-features = false }
-pyo3 = { workspace = true, features = ["extension-module"] }
+pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
+pythonize.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "serialization"
+harness = false

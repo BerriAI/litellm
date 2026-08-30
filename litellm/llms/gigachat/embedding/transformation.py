@@ -6,27 +6,25 @@ API Documentation: https://developers.sber.ru/docs/ru/gigachat/api/reference/res
 """
 
 import types
-from typing import List, Optional, Tuple, Union
+from typing import Final
 
 import httpx
 
 from litellm import LlmProviders
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..authenticator import get_access_token
 
 # GigaChat API endpoint
-GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
+GIGACHAT_BASE_URL: Final = "https://gigachat.devices.sberbank.ru/api/v1"
 
 
 class GigaChatEmbeddingError(BaseLLMException):
     """GigaChat Embedding API error."""
-
-    pass
 
 
 class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
@@ -57,7 +55,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             and v is not None
         }
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """GigaChat embeddings don't support additional parameters."""
         return []
 
@@ -73,9 +71,9 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
 
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-    ) -> Tuple[str, Optional[str], Optional[str]]:
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str | None, str | None]:
         """
         Returns provider info for GigaChat.
 
@@ -87,15 +85,15 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """Get the complete URL for embeddings endpoint."""
-        base = api_base or GIGACHAT_BASE_URL
+        base: Final = api_base or GIGACHAT_BASE_URL
         return f"{base}/embeddings"
 
     def transform_embedding_request(
@@ -123,8 +121,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             input_list = [input]
 
         # Remove gigachat/ prefix from model if present
-        if model.startswith("gigachat/"):
-            model = model[9:]
+        model = model.removeprefix("gigachat/")
 
         return {
             "model": model,
@@ -137,7 +134,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -152,7 +149,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             "model": "Embeddings"
         }
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Log response
         logging_obj.post_call(
@@ -184,27 +181,25 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Set up headers with OAuth token for GigaChat.
         """
         # Get access token via OAuth
-        access_token = get_access_token(api_key)
+        access_token: Final = get_access_token(api_key)
 
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
         }
         return {**default_headers, **headers}
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """Return GigaChat-specific error class."""
         return GigaChatEmbeddingError(
             status_code=status_code,

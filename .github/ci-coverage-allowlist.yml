@@ -1,0 +1,107 @@
+description: >-
+  Paths deliberately outside CI coverage, each with the reason it is exempt.
+  assert_ci_coverage.py fails when a test file or Dockerfile is neither invoked
+  by a job nor listed here, so every entry below is a decision on the record.
+
+test_paths:
+  - reason: >-
+      What is left of the caching suite in tests/local_testing that runs nowhere. Every job that
+      globs that directory either deselects it (local_testing_part1 and part2 carry `-k "... and
+      not caching and not cache"`) or keeps only another keyword (langfuse, router, assistants),
+      and no job names these files the way redis_caching_unit_tests names test_dual_cache.py.
+      The gap was eight files and 118 tests when measured 2026-08-20; the five keyless ones now
+      run in the caching-local shard, leaving these three. Measured 2026-08-21 with no provider
+      credentials and no Redis: test_caching.py needs both (37 of 65 fail without them),
+      test_disk_cache_unit_tests.py needs OPENAI_API_KEY for 2 of its 4, and
+      test_gcs_cache_unit_tests.py needs GCS credentials for all 4. They want the keyless/live
+      split that porting tests/local_testing off CircleCI will force, not a job that is red by
+      construction
+    paths:
+      - tests/local_testing/test_caching.py
+      - tests/local_testing/test_disk_cache_unit_tests.py
+      - tests/local_testing/test_gcs_cache_unit_tests.py
+  - reason: >-
+      The end-to-end suite runs against a deployed proxy from its own in-cluster rig rather than
+      from a pull request; it needs a live gateway and provider credentials no PR job holds
+    paths:
+      - tests/e2e
+  - reason: >-
+      The documentation and code-quality workflows execute four files in this directory by name as
+      scripts and pytest never collects the directory, so these six run nowhere; listed individually
+      so a seventh cannot inherit the exemption
+    paths:
+      - tests/documentation_tests/test_exception_types.py
+      - tests/documentation_tests/test_general_setting_keys.py
+      - tests/documentation_tests/test_optional_params.py
+      - tests/documentation_tests/test_readme_providers.py
+      - tests/documentation_tests/test_requests_lib_usage.py
+      - tests/documentation_tests/test_standard_logging_payload.py
+  - reason: >-
+      Named like a test but shaped like a benchmark: it fetches live image URLs, times aiohttp
+      against httpx, prints the ratio, and asserts nothing, so pytest cannot collect it (its
+      functions take arguments, not fixtures) and running it beside its siblings in the
+      code-quality workflow would add a network dependency for a number nothing reads. Exempt
+      as a script rather than as an unresolved gap; revisit by deleting it once the aiohttp
+      choice it informed is settled
+    paths:
+      - tests/code_coverage_tests/test_aio_http_image_conversion.py
+  - reason: >-
+      No job invokes this suite and its files mix pure transformation tests with ones driving live
+      vendor vector stores, so assigning them needs a per-file decision
+    paths:
+      - tests/vector_store_tests/rag/test_rag_bedrock.py
+      - tests/vector_store_tests/rag/test_rag_openai.py
+      - tests/vector_store_tests/rag/test_rag_s3_vectors.py
+      - tests/vector_store_tests/rag/test_rag_vertex_ai.py
+      - tests/vector_store_tests/test_azure_ai_vector_store.py
+      - tests/vector_store_tests/test_azure_vector_store.py
+      - tests/vector_store_tests/test_bedrock_vector_store.py
+      - tests/vector_store_tests/test_gemini_vector_store.py
+      - tests/vector_store_tests/test_milvus_vector_store.py
+      - tests/vector_store_tests/test_openai_vector_store.py
+      - tests/vector_store_tests/test_ragflow_vector_store.py
+      - tests/vector_store_tests/test_s3_vectors_vector_store.py
+      - tests/vector_store_tests/test_vertex_ai_search_api_vector_store.py
+      - tests/vector_store_tests/test_vertex_ai_vector_store.py
+  - reason: >-
+      Throughput and memory-growth measurements whose runtime and variance make them unsuitable for
+      a per-pull-request job
+    paths:
+      - tests/load_tests/test_datadog_load_test.py
+      - tests/load_tests/test_langsmith_load_test.py
+      - tests/load_tests/test_linear_memory_growth.py
+      - tests/load_tests/test_memory_usage.py
+      - tests/load_tests/test_otel_load_test.py
+      - tests/load_tests/test_vertex_embeddings_load_test.py
+      - tests/load_tests/test_vertex_load_tests.py
+  - reason: >-
+      A local-only agent rig: test_a2a_completion_bridge.py needs a LangGraph server on
+      localhost:2024 and test_a2a.py drives a live A2A endpoint, so neither can run in a
+      pull request job. Until 2026-08-20 the CircleCI agent job hid them behind a grep -v
+      that this census could not see; the glob now excludes them structurally and this entry
+      is the decision on the record. Revisit when the A2A bridge gets a recorded-wire fixture
+    paths:
+      - tests/agent_tests/local_only_agent_tests
+  - reason: >-
+      Third-party integration tests that skip themselves without OCI configuration or sandbox
+      credentials, neither of which a pull request job holds
+    paths:
+      - tests/integration/sandbox/test_e2b_sandbox.py
+      - tests/integration/test_oci_integration.py
+      - tests/integration/test_oci_proxy_integration.py
+
+dockerfiles:
+  - reason: >-
+      The dashboard container is a static Next.js export served by nginx, and the dashboard build
+      and lint workflows already exercise that output, so building the image adds no signal about it
+    paths:
+      - ui/Dockerfile
+  - reason: >-
+      The Rust gateway ships as its own chart and package with a separate release pipeline, so its
+      image is not part of this repo's Python image set
+    paths:
+      - litellm-rust/crates/ai-gateway/Dockerfile
+  - reason: >-
+      An example image under cookbook/ that is documentation rather than a shipped artifact
+    paths:
+      - cookbook/litellm-ollama-docker-image/Dockerfile

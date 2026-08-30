@@ -19,12 +19,23 @@ pub enum CoreError {
     InvalidRequest(String),
     #[error("{0}")]
     Auth(String),
-    #[error("OCR request failed with status {status}: {body}")]
+    #[error("upstream request failed with status {status}: {body}")]
     Http { status: u16, body: String },
-    #[error("OCR network error: {0}")]
+    #[error("upstream network error: {0}")]
     Network(String),
+    /// The provider was never reached: DNS, TCP, TLS or proxy setup failed
+    /// before any byte of the request went out. Nothing was billed, so a host
+    /// that keeps a reference implementation can serve the request itself.
+    /// A timeout is deliberately not this, since the provider may have received
+    /// and answered the request already.
+    #[error("could not reach the provider: {0}")]
+    Connect(String),
     #[error("routing error: {0}")]
     Routing(String),
+    /// The request is outside the surface this route covers in Rust. Hosts that
+    /// keep a reference implementation treat this as "fall back", not "fail".
+    #[error("unsupported by the rust path: {0}")]
+    Unsupported(&'static str),
 }
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {

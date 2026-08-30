@@ -9,12 +9,12 @@
 
 use std::time::Duration;
 
-use crate::io::realtime_pool::{upstream_key, RealtimePool};
+use crate::io::realtime_pool::{RealtimePool, upstream_key};
 use futures_util::{Sink, Stream};
+use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router;
-use litellm_core::CoreResult;
 
 /// Select a deployment for `model` and splice the client stream to the provider.
 ///

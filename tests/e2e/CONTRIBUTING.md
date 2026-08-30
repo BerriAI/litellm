@@ -9,26 +9,33 @@ When contributing to this directory, please first discuss the change you wish to
 
 ## Setup
 
-The suites run against a live proxy, so bring one up first. `docker-compose.yml` here starts that proxy with a throwaway Postgres and Redis; `docker compose down -v` resets everything, so no state leaks between runs. The proxy config is inlined in the compose file under `configs`, prewired with example models (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) whose keys come from your `.env`. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that inline config and read it back in the test rather than hardcoding values
+The suites run against a live proxy, so bring one up first by running the litellm proxy locally. Point it at a config that prewires the example models the suites use (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) with keys from your `.env`, and enables prompt storage, a redis cache, and the fast budget rescheduler the quota suites rely on. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that config and read it back in the test rather than hardcoding values
 
 ## Running the tests locally
 
-1. Create a `.env` file in this directory with the provider keys the example models use:
+1. Create a `.env` file in this directory with the provider keys the example models use, plus the master key and the Postgres/Redis coordinates your config reads back:
 
    ```bash
+   LITELLM_MASTER_KEY="sk-1234"
+   DATABASE_URL="postgresql://llmproxy:dbpassword9090@localhost:5432/litellm"
+   REDIS_HOST="localhost"
+   REDIS_PORT="6379"
    OPENAI_API_KEY="sk-..."
    ANTHROPIC_API_KEY="sk-..."
    GEMINI_API_KEY="..."
    ```
 
-2. Bring the stack up from this directory:
+2. Bring up a Postgres and a Redis for the proxy to use. The repo-root `docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run. Tests that read Redis directly default to the deployed shape (TLS + cluster mode) whenever `REDIS_HOST` is set, so for a local standalone Redis also set `REDIS_CLUSTER=false` and `REDIS_SSL=false` (plus `REDIS_PASSWORD` when your Redis requires auth)
+
+3. Start the litellm proxy locally against your config and confirm it is live:
 
    ```bash
-   docker compose up -d
+   set -a && source .env && set +a
+   litellm --config <your-e2e-config>.yml --port 4000
    curl -fs http://localhost:4000/health/liveliness
    ```
 
-3. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`):
+4. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`):
 
    ```bash
    uv run pytest tests/e2e/llm_translation/ -v
@@ -41,20 +48,30 @@ The suites run against a live proxy, so bring one up first. `docker-compose.yml`
    uv run playwright install chromium
    ```
 
-   They also need a proxy whose bundled UI contains the change under test. The published `main-latest` image ships the UI from the last release; to test local UI changes, build the image from your branch and point the compose stack at it:
+   They also need a proxy whose bundled UI contains the change under test, so run the proxy from your branch (an editable install serves the UI your checkout builds)
 
-   ```bash
-   docker build -t litellm-local .
-   LITELLM_E2E_IMAGE=litellm-local docker compose up -d
-   ```
+Some suites need extra services the bare proxy does not start. The `logging/` OTEL trace-completeness tests read spans back from a jaeger query API at `http://localhost:16686` (override with `E2E_OTEL_QUERY_URL`); run a `jaegertracing/all-in-one` and point `PHOENIX_COLLECTOR_HTTP_ENDPOINT` at its OTLP ingest. The `mcp/` suite needs the deterministic upstream MCP server in `mcp_tests/mcp_e2e_upstream_server.py` reachable by the proxy
 
-4. Tear it down when you're done:
+### Record and replay
 
-   ```bash
-   docker compose down -v
-   ```
+Record/replay scopes to the proxy's provider-bound traffic only. In `E2E_FIXTURE_MODE=record` the harness boots a local provider-edge server, edge-wired tests register their deployments with an `api_base` pointing at it, and every provider call the proxy makes is forwarded verbatim and written to a fixture bundle (default `tests/e2e/.fixtures`, override with `E2E_FIXTURE_DIR`). `E2E_FIXTURE_MODE=replay` runs the same tests against the same live proxy and database, but the edge answers the proxy's provider calls from the bundle instead of the provider, so the run makes zero provider calls and spends nothing while key auth, routing, cost calculation, and spend-log writes all still execute for real. Unset (or `live`) behaves exactly as before the knob existed. Both record and replay need the proxy up; only the provider is taken out of the loop
 
-Tests marked `@pytest.mark.e2e` skip when no proxy answers `/health/liveliness`, so a run that reports everything skipped means the stack isn't up, not that anything passed
+```bash
+E2E_FIXTURE_MODE=record E2E_FIXTURE_DIR=/tmp/e2e-fixtures uv run pytest tests/e2e/quota_management/spend_tracking/test_provider_edge_spend_e2e.py -v
+E2E_FIXTURE_MODE=replay E2E_FIXTURE_DIR=/tmp/e2e-fixtures uv run pytest tests/e2e/quota_management/spend_tracking/test_provider_edge_spend_e2e.py -v
+```
+
+Bundles stay local. `tests/e2e/.fixtures` is gitignored because a bundle holds verbatim provider response bodies and expires seven days after it was recorded, so record the suite you want before you replay it and never commit the result. CI keeps its bundle out of git too, as a private GitHub Actions artifact rather than a committed file, for the same reason
+
+In CI the `.github/workflows/e2e_record_replay.yml` lane runs record and replay on a schedule. A Saturday cron records the `replayable` marker's tests against the real providers and publishes the bundle as a private `e2e-fixtures-bundle` artifact carrying a SHA-256 sidecar; weekday crons pull that artifact by its pinned digest, verify the checksum before extracting, and replay it with provider credentials deliberately set to bogus values, so a run that ever reached a real provider would fail instead of passing. An egress sentinel (`.github/scripts/e2e_egress_sentinel.py`) pins the provider hostnames to a local sink for the whole replay job and counts every connection that reaches them, and the job asserts that count is zero, so hermeticity is proven by measurement rather than by an absent bill. A red Saturday publishes no bundle, so the next weekday finds nothing fresh and fails loudly rather than replaying a week-old recording, and the seven-day freshness gate hard-fails any bundle that has drifted too far from the live providers. Run the lane on demand from the Actions tab with the `mode` input: `record` re-records and republishes, `replay` replays the current bundle. A test joins the lane by carrying `@pytest.mark.replayable` on top of its edge wiring, so add that marker only to a test whose provider traffic actually replays with zero egress
+
+One sharp edge: a replayed response reuses the recorded provider response id, and that id is the primary key of `LiteLLM_SpendLogs`, so replaying against a database that still holds the record run's rows silently dedupes the spend writes and a spend assertion fails with zero rows. Run both commands above with `E2E_RESET_SPEND_LOGS=1` (and `DATABASE_URL` set in the pytest env) so each session truncates the spend log table after itself, or point replay at a fresh database
+
+Another sharp edge, same root: record and replay derive every per-test token deterministically (the model name included, so a replay regenerates the exact requests the record run sent), which means an edge-wired deployment left in the database by an interrupted earlier run carries the same model name as the fresh one the current run registers. The proxy then holds two deployments under one model group and load-balances across both, and because the leftover's `api_base` points at the earlier run's edge process, which is gone, the calls that land on it fail with a connection error that reads like a transport bug rather than the stale row it is. Give each record or replay run a fresh database, or let a run finish so its own teardown deletes what it registered, and never reuse one long-lived proxy across back-to-back record/replay sessions. CI hands every job its own empty database and its own proxy, so it never sees this
+
+Replay answers any provider call that drifted from the recording with an HTTP 599 whose body names the computed and closest recorded keys, so the test fails loudly instead of silently going live, and a bundle older than seven days fails at collection time naming its age; either way the fix is to re-record. Only tests that register edge-wired deployments participate: everything else hits its provider live in every mode, so record exactly the suite you replay. If the proxy runs in a container, set `E2E_PROVIDER_EDGE_ADVERTISE_HOST` (e.g. `host.docker.internal`) so the api_base the proxy stores can reach the edge on the pytest host, and `E2E_PROVIDER_EDGE_BIND_HOST=0.0.0.0` so the edge accepts it. The suites wired to the edge today are `quota_management/spend_tracking/test_provider_edge_spend_e2e.py`, `llm_translation/test_chat_completions_contract_e2e.py`, the OpenAI registrations in `llm_translation/test_embeddings_endpoint_e2e.py`, the Anthropic tests in `llm_translation/test_messages_e2e.py`, streamed and not, and the OpenAI batch deployment behind `batches/`. A streamed response replays as the chunk sequence the provider sent rather than one buffered body. See `CLAUDE.md` in this directory for the bundle format, the edge design, and the current limits (Bedrock). The scheduled CI record/replay lane is described above
+
+Tests marked `@pytest.mark.e2e` hard-fail when no proxy answers `/health/liveliness`, so a run that goes red with `No live proxy` at setup means the proxy isn't up; they never skip for a missing proxy, so an absent proxy can't be mistaken for a pass
 
 ## What a complete test looks like
 
@@ -113,7 +130,7 @@ class TestPromptCompression:
 
     def test_prompt_compression_accumulate_spend(self, key_id, user_id):
         for _ in range(10):
-            response = self.resources.gateway.post("gemini-2.5-flash", key_id, user_id)
+            response = self.resources.proxy.post("gemini-2.5-flash", key_id, user_id)
         compressed_value = ...
         assert response.cost == compressed_value  # the cost was actually reduced
 ```
@@ -128,11 +145,11 @@ The shape is layered so tests stay declarative
 
 `transport.py` exposes a `Transport` Protocol with `post`, `get`, `delete`, `send`, `stream`, `probe`, plus `bearer(key)` and the `master` header. `HttpTransport` fulfils it, and `SplitTransport` routes each call by path to the data plane or the control plane so a split control-plane/data-plane deployment works without any change in the test
 
-`e2e_gateway.py` holds `Gateway`, a frozen dataclass that wraps a `Transport` and adds the operations tests reuse: `generate_key` / `delete_key` / `key_info`, `model_info`, the LLM calls `chat` / `chat_stream` / `embed` / `ocr`, the spend read-back `spend_logs`, and the poll helpers `poll_logs_for_key` / `poll_logs_for_request_id` that loop to `poll_timeout` instead of sleeping once. Add a new route as a method here so other suites get it for free
+`proxy_client.py` holds `ProxyClient`, a frozen dataclass that wraps a `Transport` and adds the operations tests reuse: `generate_key` / `delete_key` / `key_info`, `model_info`, the LLM calls `chat` / `chat_stream` / `embed` / `ocr`, the spend read-back `spend_logs`, and the poll helpers `poll_logs_for_key` / `poll_logs_for_request_id` that loop to `poll_timeout` instead of sleeping once. It is exposed as the session-scoped `proxy` fixture (see tests/e2e/conftest.py), which each suite's `client` fixture depends on and injects. Add a new route as a method here so other suites get it for free
 
-Each suite provides its own `client` fixture (see `llm_translation/passthrough_client.py`), a frozen dataclass that holds the shared `Gateway` and adds suite-specific routes. Cleanup runs through that same `Gateway`, so whatever keys or customers your test creates get torn down by the `resources` fixture
+Each suite provides its own `client` fixture (see `llm_translation/passthrough_client.py`), a frozen dataclass that holds the shared `ProxyClient` (as `.proxy`) and adds suite-specific routes. Cleanup runs through that same `ProxyClient`, so whatever keys or customers your test creates get torn down by the `resources` fixture
 
-Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The skip-vs-fail split is deliberate: a test marked `e2e` skips when no proxy answers its liveness probe, but once a request reaches the proxy any wrong behavior is a hard failure, never a skip
+Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
 Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
@@ -140,14 +157,14 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 Before you push
 
-1. Run `make lint-e2e-basedpyright` (or `make pre-commit` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
+1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
 
-2. Add the models your test needs to the inline config in `docker-compose.yml`
+2. Add the models your test needs to the config your local proxy loads
 
-3. Bring the stack up and run your suite against it:
+3. Start the litellm proxy locally and run your suite against it:
 
    ```bash
-   docker compose up -d
+   litellm --config <your-e2e-config>.yml --port 4000
    uv run pytest tests/e2e/<your_suite>/ -v
    ```
 

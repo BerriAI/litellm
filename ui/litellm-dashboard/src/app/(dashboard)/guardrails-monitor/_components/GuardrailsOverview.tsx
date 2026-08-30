@@ -1,10 +1,13 @@
-import { DownloadOutlined, RiseOutlined, SafetyOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Col, Row, Spin, Table, Typography } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import type { ColumnDef, OnChangeFn, SortingState } from "@tanstack/react-table";
+import { Download, HeartPulse, Settings, TrendingUp, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
+import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { getGuardrailsUsageOverview } from "@/components/networking";
 import { type PerformanceRow } from "@/components/GuardrailsMonitor/mockData";
+import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
 import { ScoreChart } from "./ScoreChart";
@@ -14,15 +17,17 @@ interface GuardrailsOverviewProps {
   startDate: string;
   endDate: string;
   onSelectGuardrail: (id: string) => void;
+  dateRangeControl?: React.ReactNode;
 }
 
 type SortKey = "failRate" | "requestsEvaluated" | "avgLatency" | "falsePositiveRate" | "falseNegativeRate";
 
 const providerColors: Record<string, string> = {
-  Bedrock: "bg-orange-100 text-orange-700 border-orange-200",
-  "Google Cloud": "bg-sky-100 text-sky-700 border-sky-200",
-  LiteLLM: "bg-indigo-100 text-indigo-700 border-indigo-200",
-  Custom: "bg-gray-100 text-gray-600 border-gray-200",
+  Bedrock: "bg-warning/15 text-warning border-warning/20",
+  "Google Cloud": "bg-info/15 text-info border-info/20",
+  LiteLLM:
+    "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800",
+  Custom: "bg-muted text-muted-foreground border-border",
 };
 
 function computeMetricsFromRows(data: PerformanceRow[]) {
@@ -40,6 +45,7 @@ export function GuardrailsOverview({
   startDate,
   endDate,
   onSelectGuardrail,
+  dateRangeControl,
 }: GuardrailsOverviewProps) {
   const [sortBy, setSortBy] = useState<SortKey>("failRate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -82,194 +88,207 @@ export function GuardrailsOverview({
   const isLoading = guardrailsLoading;
   const error = guardrailsError;
 
-  const columns: ColumnsType<PerformanceRow> = [
+  const columns: ColumnDef<PerformanceRow>[] = [
     {
-      title: "Guardrail",
-      dataIndex: "name",
-      key: "name",
-      render: (name: string, row) => (
+      header: "Guardrail",
+      accessorKey: "name",
+      enableSorting: false,
+      cell: ({ row }) => (
         <button
           type="button"
-          className="text-sm font-medium text-gray-900 hover:text-indigo-600 text-left"
-          onClick={() => onSelectGuardrail(row.id)}
+          className="text-sm font-medium text-foreground hover:text-indigo-600 text-left"
+          onClick={() => onSelectGuardrail(row.original.id)}
         >
-          {name}
+          {row.original.name}
         </button>
       ),
     },
     {
-      title: "Provider",
-      dataIndex: "provider",
-      key: "provider",
-      render: (provider: string) => (
+      header: "Provider",
+      accessorKey: "provider",
+      enableSorting: false,
+      cell: ({ row }) => (
         <span
           className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border ${
-            providerColors[provider] ?? providerColors.Custom
+            providerColors[row.original.provider] ?? providerColors.Custom
           }`}
         >
-          {provider}
+          {row.original.provider}
         </span>
       ),
     },
     {
-      title: "Requests",
-      dataIndex: "requestsEvaluated",
-      key: "requestsEvaluated",
-      align: "right",
-      sorter: true,
-      sortOrder: sortBy === "requestsEvaluated" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v: number) => v.toLocaleString(),
+      header: ({ column }) => <DataTableSortHeader column={column} title="Requests" />,
+      accessorKey: "requestsEvaluated",
+      meta: { numeric: true },
+      sortDescFirst: false,
+      cell: ({ row }) => row.original.requestsEvaluated.toLocaleString(),
     },
     {
-      title: "Fail Rate",
-      dataIndex: "failRate",
-      key: "failRate",
-      align: "right",
-      sorter: true,
-      sortOrder: sortBy === "failRate" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v: number, row) => (
-        <span className={v > 15 ? "text-red-600" : v > 5 ? "text-amber-600" : "text-green-600"}>
-          {v}%{row.trend === "up" && <span className="ml-1 text-xs text-red-400">↑</span>}
-          {row.trend === "down" && <span className="ml-1 text-xs text-green-400">↓</span>}
-        </span>
-      ),
-    },
-    {
-      title: "Avg. latency added",
-      dataIndex: "avgLatency",
-      key: "avgLatency",
-      align: "right",
-      sorter: true,
-      sortOrder: sortBy === "avgLatency" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v?: number) => (
+      header: ({ column }) => <DataTableSortHeader column={column} title="Fail Rate" />,
+      accessorKey: "failRate",
+      meta: { numeric: true },
+      sortDescFirst: false,
+      cell: ({ row }) => (
         <span
           className={
-            v == null ? "text-gray-400" : v > 150 ? "text-red-600" : v > 50 ? "text-amber-600" : "text-green-600"
+            row.original.failRate > 15
+              ? "text-destructive"
+              : row.original.failRate > 5
+                ? "text-warning"
+                : "text-success"
           }
         >
-          {v != null ? `${v}ms` : "—"}
+          {row.original.failRate}%
+          {row.original.trend === "up" && <span className="ml-1 text-xs text-destructive">↑</span>}
+          {row.original.trend === "down" && <span className="ml-1 text-xs text-success">↓</span>}
         </span>
       ),
     },
     {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      align: "center",
-      render: (status: string) => (
+      header: ({ column }) => <DataTableSortHeader column={column} title="Avg. latency added" />,
+      accessorKey: "avgLatency",
+      meta: { numeric: true },
+      sortDescFirst: false,
+      cell: ({ row }) => (
+        <span
+          className={
+            row.original.avgLatency == null
+              ? "text-muted-foreground"
+              : row.original.avgLatency > 150
+                ? "text-destructive"
+                : row.original.avgLatency > 50
+                  ? "text-warning"
+                  : "text-success"
+          }
+        >
+          {row.original.avgLatency != null ? `${row.original.avgLatency}ms` : "—"}
+        </span>
+      ),
+    },
+    {
+      header: "Status",
+      accessorKey: "status",
+      enableSorting: false,
+      cell: ({ row }) => (
         <span className="inline-flex items-center gap-1.5">
           <span
             className={`w-2 h-2 rounded-full ${
-              status === "healthy" ? "bg-green-500" : status === "warning" ? "bg-amber-500" : "bg-red-500"
+              row.original.status === "healthy"
+                ? "bg-success"
+                : row.original.status === "warning"
+                  ? "bg-warning"
+                  : "bg-destructive"
             }`}
           />
-          <span className="text-xs text-gray-600 capitalize">{status}</span>
+          <span className="text-xs text-muted-foreground capitalize">{row.original.status}</span>
         </span>
       ),
     },
   ];
 
   const sortableKeys: SortKey[] = ["failRate", "requestsEvaluated", "avgLatency"];
-  const handleTableChange = (_pagination: unknown, _filters: unknown, sorter: unknown) => {
-    const s = sorter as { field?: keyof PerformanceRow; order?: string };
-    if (s?.field && sortableKeys.includes(s.field as SortKey)) {
-      setSortBy(s.field as SortKey);
-      setSortDir(s.order === "ascend" ? "asc" : "desc");
+  const sorting = useMemo<SortingState>(() => [{ id: sortBy, desc: sortDir === "desc" }], [sortBy, sortDir]);
+  const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
+    const nextSorting = typeof updater === "function" ? updater(sorting) : updater;
+    const primarySort = nextSorting[0];
+    if (primarySort && sortableKeys.includes(primarySort.id as SortKey)) {
+      setSortBy(primarySort.id as SortKey);
+      setSortDir(primarySort.desc ? "desc" : "asc");
     }
   };
 
   return (
     <div>
-      <div className="flex items-start justify-between mb-5">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <SafetyOutlined className="text-lg text-indigo-500" />
-            <h1 className="text-xl font-semibold text-gray-900">Guardrails Monitor</h1>
-          </div>
-          <p className="text-sm text-gray-500">Monitor guardrail performance across all requests</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button type="default" icon={<DownloadOutlined />} title="Coming soon">
-            Export Data
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={<HeartPulse />}
+        title="Guardrails Monitor"
+        subtitle="Monitor guardrail performance across all requests"
+        utilities={
+          <>
+            {dateRangeControl}
+            <Button variant="outline" title="Coming soon">
+              <Download className="size-4" />
+              Export Data
+            </Button>
+          </>
+        }
+      />
 
-      <Row gutter={[16, 16]} className="mb-6">
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard
-            label="Blocked Requests"
-            value={metrics.totalBlocked.toLocaleString()}
-            valueColor="text-red-600"
-            icon={<WarningOutlined className="text-red-400" />}
-          />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard
-            label="Pass Rate"
-            value={`${metrics.passRate}%`}
-            valueColor="text-green-600"
-            icon={<RiseOutlined className="text-green-400" />}
-          />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard
-            label="Avg. latency added"
-            value={`${metrics.avgLatency}ms`}
-            valueColor={
-              metrics.avgLatency > 150 ? "text-red-600" : metrics.avgLatency > 50 ? "text-amber-600" : "text-green-600"
-            }
-          />
-        </Col>
-        <Col xs={12} sm={12} md={8} flex="1 0 20%">
-          <MetricCard label="Active Guardrails" value={metrics.count} />
-        </Col>
-      </Row>
+      <div className="mt-6 mb-6 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
+        <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
+        <MetricCard
+          label="Blocked Requests"
+          value={metrics.totalBlocked.toLocaleString()}
+          valueColor="text-destructive"
+          icon={<TriangleAlert className="size-4 text-destructive" />}
+        />
+        <MetricCard
+          label="Pass Rate"
+          value={`${metrics.passRate}%`}
+          valueColor="text-success"
+          icon={<TrendingUp className="size-4 text-success" />}
+        />
+        <MetricCard
+          label="Avg. latency added"
+          value={`${metrics.avgLatency}ms`}
+          valueColor={
+            metrics.avgLatency > 150 ? "text-destructive" : metrics.avgLatency > 50 ? "text-warning" : "text-success"
+          }
+        />
+        <MetricCard label="Active Guardrails" value={metrics.count} />
+      </div>
 
       <div className="mb-6">
         <ScoreChart data={chartData} />
       </div>
 
-      <Card className="border border-gray-200 rounded-lg bg-white" styles={{ body: { padding: 0 } }}>
+      <div>
         {(isLoading || error) && (
-          <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
-            {isLoading && <Spin size="small" />}
-            {error && <span className="text-sm text-red-600">Failed to load data. Try again.</span>}
+          <div className="mb-2 flex items-center gap-2">
+            {isLoading && (
+              <span role="status" aria-busy="true" aria-label="Loading" className="inline-flex">
+                <UiLoadingSpinner className="size-4 text-primary" />
+              </span>
+            )}
+            {error && <span className="text-sm text-destructive">Failed to load data. Try again.</span>}
           </div>
         )}
-        <div className="px-6 py-4 border-b border-gray-200 flex items-start justify-between gap-4">
-          <div>
-            <Typography.Title level={5} className="mb-0! text-gray-900">
-              Guardrail Performance
-            </Typography.Title>
-            <p className="text-xs text-gray-500 mt-0.5">Click a guardrail to view details, logs, and configuration</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="default"
-              icon={<SettingOutlined />}
-              onClick={() => setEvaluationModalOpen(true)}
-              title="Evaluation settings"
-            />
-          </div>
-        </div>
-        <Table
+        <DataTable
           columns={columns}
-          dataSource={sorted}
-          rowKey="id"
-          pagination={false}
-          loading={isLoading}
-          onChange={handleTableChange}
-          locale={activeData.length === 0 && !isLoading ? { emptyText: "No data for this period" } : undefined}
-          onRow={(row) => ({
-            onClick: () => onSelectGuardrail(row.id),
-            style: { cursor: "pointer" },
-          })}
+          data={sorted}
+          getRowId={(row) => row.id}
+          isLoading={isLoading}
+          noDataMessage="No data for this period"
+          onRowClick={(row) => onSelectGuardrail(row.id)}
+          rowClassName={() => "cursor-pointer"}
+          sortingMode="server"
+          sorting={sorting}
+          onSortingChange={handleSortingChange}
+          enableSortingRemoval={false}
+          size="compact"
+          toolbar={() => (
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h5 className="mb-0 text-base font-semibold text-foreground">Guardrail Performance</h5>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Click a guardrail to view details, logs, and configuration
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setEvaluationModalOpen(true)}
+                  title="Evaluation settings"
+                >
+                  <Settings className="size-4" />
+                </Button>
+              </div>
+            </div>
+          )}
         />
-      </Card>
+      </div>
 
       <EvaluationSettingsModal
         open={evaluationModalOpen}

@@ -37,17 +37,17 @@ class TestServiceTier:
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model = f"e2e-service-tier-{unique_marker()}"
-        model_id = client.gateway.create_model(
+        model_id = client.proxy.create_model(
             model,
             LiteLLMParamsBody(
                 model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY"
             ),
         )
-        resources.defer(lambda: client.gateway.delete_model(model_id))
+        resources.defer(lambda: client.proxy.delete_model(model_id))
         key = resources.key()
 
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 key,
                 ChatBody(
                     model=model,

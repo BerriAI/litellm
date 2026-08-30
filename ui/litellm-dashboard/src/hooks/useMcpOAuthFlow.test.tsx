@@ -13,10 +13,6 @@ vi.mock("@/components/networking", () => ({
   serverRootPath: "",
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
-
 const FLOW_STATE_KEY = "litellm-mcp-oauth-flow-state";
 const RESULT_KEY = "litellm-mcp-oauth-result";
 

@@ -37,49 +37,32 @@ CLI rows isn't useful here.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
+from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_count_tokens_shape,
     probe_count_tokens,
 )
 
-PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
-PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
 BEDROCK_CONVERSE_MODELS = [
     "claude-haiku-4-5-bedrock-converse",
-    "claude-sonnet-4-6-bedrock-converse",
+    "claude-sonnet-4-5-bedrock-converse",
     "claude-opus-4-7-bedrock-converse",
 ]
 
 
+@pytest.mark.covers("llm.messages.bedrock_converse.count_tokens.nonstream.works")
 def test_count_tokens_bedrock_converse(compat_result):
     """Probe `/v1/messages/count_tokens` for each Bedrock (Converse) tier and
     assert the response shape."""
-    base_url = os.environ.get(PROXY_BASE_URL_ENV)
-    api_key = os.environ.get(PROXY_API_KEY_ENV)
-    if not base_url or not api_key:
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": (
-                    f"missing required env: set {PROXY_BASE_URL_ENV} and "
-                    f"{PROXY_API_KEY_ENV} to point at a running LiteLLM proxy"
-                ),
-            }
-        )
-        pytest.fail(
-            f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured",
-            pytrace=False,
-        )
+    client, api_key = require_proxy_client(compat_result)
 
     failures = []
     for model in BEDROCK_CONVERSE_MODELS:
         result = probe_count_tokens(
-            base_url=base_url, api_key=api_key, model=model
+            client=client, api_key=api_key, model=model
         )
         shape_error = assert_count_tokens_shape(result)
         if shape_error is not None:

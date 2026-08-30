@@ -4,13 +4,17 @@
 //! without pulling in the HTTP server:
 //!
 //! - Call-type modules such as [`ocr`]: provider transforms, lifecycle hooks,
-//!   and provider I/O. Always available — no feature required.
+//!   and provider I/O. Always available — no feature required. These predate the
+//!   rule that a route's entrypoint and handler live in `litellm-core` (see
+//!   `litellm_core::messages`) and move there as they are touched.
 //! - [`io`]: compatibility exports and realtime WebSocket splice helpers.
 //! - The server modules ([`auth`], [`routes`], [`state`]) and anything pulling
 //!   `axum` are gated behind the `server` feature, which the `litellm-ai-gateway`
 //!   binary turns on. The `python-config` feature additionally pulls in [`python`]
 //!   for the load-time config reader.
 
+pub mod audio_transcription;
+mod client;
 pub mod io;
 pub mod ocr;
 
@@ -25,9 +29,6 @@ pub mod routes;
 #[cfg(feature = "server")]
 pub mod state;
 
-// Realtime request logging. Only the server serves realtime, so these are
-// `server`-gated; `io::realtime` exposes the generic `observe` hook while the
-// collector and callback fan-out live here.
 mod constants;
 pub mod integrations;
 #[cfg(feature = "server")]

@@ -46,4 +46,9 @@ Reminders:
       - gateway.config.proxy_config                            (rendered into a ConfigMap and mounted at
                                                                 /app/config/config.yaml; gateway reads it via
                                                                 CONFIG_FILE_PATH)
+      - {component}.pdb.{enabled,minAvailable,maxUnavailable}  (per-component PodDisruptionBudget; disabled by
+                                                                default — with hpa.minReplicas of 1, minAvailable: 1
+                                                                would block node drains)
+      - {component}.topologySpreadConstraints                  (standard k8s list, e.g. spread replicas across
+                                                                topology.kubernetes.io/zone)
   - Enable ingress.enabled=true to dispatch / → ui, gateway data-plane prefixes → gateway, and the catch-all → backend.

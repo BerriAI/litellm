@@ -1,4 +1,4 @@
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useMemo, useState } from "react";
 import { formatDate } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
@@ -41,27 +41,32 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
     setView({ type: "overview" });
   };
 
+  const dateRangeControl = (
+    <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} label="" showTimeRange={false} />
+  );
+
   return (
-    <div className="p-6 w-full min-w-0 flex-1">
-      <div className="flex items-center justify-end mb-4">
-        <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} label="" showTimeRange={false} />
-      </div>
+    <main className="w-full min-w-0 flex-1 p-8">
       {view.type === "overview" ? (
         <GuardrailsOverview
           accessToken={accessToken}
           startDate={startDate}
           endDate={endDate}
           onSelectGuardrail={handleSelectGuardrail}
+          dateRangeControl={dateRangeControl}
         />
       ) : (
-        <GuardrailDetail
-          guardrailId={view.guardrailId}
-          onBack={handleBack}
-          accessToken={accessToken}
-          startDate={startDate}
-          endDate={endDate}
-        />
+        <>
+          <div className="mb-4 flex items-center justify-end">{dateRangeControl}</div>
+          <GuardrailDetail
+            guardrailId={view.guardrailId}
+            onBack={handleBack}
+            accessToken={accessToken}
+            startDate={startDate}
+            endDate={endDate}
+          />
+        </>
       )}
-    </div>
+    </main>
   );
 }

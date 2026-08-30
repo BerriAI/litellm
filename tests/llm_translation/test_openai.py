@@ -1,13 +1,8 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 import httpx
@@ -285,12 +280,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_prompt_caching(self):
-        """
-        Test that prompt caching works correctly.
-        Skip for now, as it's working locally but not in CI
-        """
-        pass
 
     def test_prompt_caching(self):
         """
@@ -428,7 +417,7 @@ def test_openai_web_search():
     """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
     litellm._turn_on_debug()
     response = litellm.completion(
-        model="openai/gpt-4o-search-preview",
+        model="openai/gpt-5-search-api",
         messages=[
             {
                 "role": "user",
@@ -448,7 +437,7 @@ def test_openai_web_search_streaming():
     # litellm._turn_on_debug()
     test_openai_web_search: Optional[ChatCompletionAnnotation] = None
     response = litellm.completion(
-        model="openai/gpt-4o-search-preview",
+        model="openai/gpt-5-search-api",
         messages=[
             {
                 "role": "user",
@@ -518,7 +507,7 @@ async def test_openai_codex_stream(sync_mode):
     from litellm.main import stream_chunk_builder
 
     kwargs = {
-        "model": "openai/gpt-5.2-codex",
+        "model": "openai/gpt-5.3-codex",
         "messages": [{"role": "user", "content": "Hey!"}],
         "stream": True,
     }
@@ -550,7 +539,7 @@ async def test_openai_codex(sync_mode):
             {
                 "model_name": "openai-codex-mini-latest",
                 "litellm_params": {
-                    "model": "openai/gpt-5.2-codex",
+                    "model": "openai/gpt-5.3-codex",
                 },
             }
         ]
@@ -613,13 +602,13 @@ async def test_openai_via_gemini_streaming_bridge():
     assert len(printed_chunks) > 0
 
 
-def test_openai_deepresearch_model_bridge():
+def test_openai_responses_only_model_bridge():
     """
-    Test that the deepresearch model bridge works correctly
+    Test that the responses-only model bridge works correctly
     """
     litellm._turn_on_debug()
     response = litellm.completion(
-        model="o3-deep-research-2025-06-26",
+        model="gpt-5.5-pro",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         tools=[
             {"type": "web_search_preview"},
@@ -838,7 +827,7 @@ def test_gpt_5_reasoning_streaming():
 def test_openai_gpt_5_codex_reasoning():
     litellm._turn_on_debug()
     completion_kwargs = {
-        "model": "gpt-5-codex",
+        "model": "gpt-5.3-codex",
         "messages": [
             {
                 "role": "system",
@@ -1464,7 +1453,7 @@ def test_responses_gpt54_with_xhigh_reasoning():
         # Stop execution right after request generation to avoid external API calls.
         mock_responses.side_effect = RuntimeError("stop_after_request_build")
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             litellm.completion(
                 model="openai/responses/gpt-5.4",
                 messages=[{"role": "user", "content": "What is 2+2?"}],
@@ -1475,7 +1464,6 @@ def test_responses_gpt54_with_xhigh_reasoning():
         mock_responses.assert_called_once()
         request_body = mock_responses.call_args.kwargs
 
-        # The responses prefix should be stripped before routing.
-        assert request_body["model"] == "gpt-5.4"
+        assert request_body["model"] == "openai/gpt-5.4"
         # chat-completions reasoning_effort must map to Responses API reasoning.
         assert request_body["reasoning"] == {"effort": "xhigh"}

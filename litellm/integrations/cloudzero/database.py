@@ -19,7 +19,7 @@
 """Database connection and data extraction for LiteLLM."""
 
 from datetime import datetime
-from typing import Any, Optional, List
+from typing import Any, Final
 
 import polars as pl
 
@@ -39,12 +39,12 @@ class LiteLLMDatabase:
 
     async def get_usage_data(
         self,
-        limit: Optional[int] = None,
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
+        limit: int | None = None,
+        start_time_utc: datetime | None = None,
+        end_time_utc: datetime | None = None,
     ) -> pl.DataFrame:
         """Retrieve usage data from LiteLLM daily user spend table."""
-        client = self._ensure_prisma_client()
+        client: Final = self._ensure_prisma_client()
 
         # Query to get user spend data with team information. Use parameter binding to
         # avoid SQL injection from user-supplied timestamps or limits.
@@ -80,7 +80,7 @@ class LiteLLMDatabase:
         ORDER BY dus.date DESC, dus.created_at DESC
         """
 
-        params: List[Any] = [
+        params: Final[list[Any]] = [
             start_time_utc,
             end_time_utc,
         ]
@@ -93,9 +93,9 @@ class LiteLLMDatabase:
             query += " LIMIT $3"
 
         try:
-            db_response = await client.db.query_raw(query, *params)
+            db_response: Final = await client.db.query_raw(query, *params)
             # Convert the response to polars DataFrame with full schema inference
             # This prevents schema mismatch errors when data types vary across rows
             return pl.DataFrame(db_response, infer_schema_length=None)
         except Exception as e:
-            raise Exception(f"Error retrieving usage data: {str(e)}")
+            raise Exception(f"Error retrieving usage data: {e}")

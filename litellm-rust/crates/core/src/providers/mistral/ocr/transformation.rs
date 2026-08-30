@@ -1,4 +1,4 @@
-use crate::error::{json_type_name, CoreError, CoreResult};
+use crate::error::{CoreError, CoreResult, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value};

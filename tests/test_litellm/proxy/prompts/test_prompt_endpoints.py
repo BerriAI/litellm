@@ -206,7 +206,7 @@ class TestPromptVersionsEndpoint:
         """
         Test that get_prompt_versions returns all versions of a prompt sorted by version number
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.prompts.prompt_endpoints import get_prompt_versions
@@ -319,3 +319,144 @@ class TestPromptVersionsEndpoint:
 
             assert exc_info.value.status_code == 404
             assert "No versions found" in exc_info.value.detail
+
+
+class TestAdminViewerReadAccess:
+    """
+    proxy_admin_viewer has READ parity with proxy_admin on the prompt read endpoints
+    """
+
+    @pytest.mark.asyncio
+    async def test_list_prompts_returns_all_prompts_for_admin_viewer(self):
+        """A role without admin view falls through to the empty-list branch here."""
+        from unittest.mock import patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.prompts.prompt_endpoints import list_prompts
+
+        viewer = UserAPIKeyAuth(
+            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        )
+
+        mock_prompts = {
+            "jack.v1": PromptSpec(
+                prompt_id="jack.v1",
+                litellm_params=PromptLiteLLMParams(
+                    prompt_id="jack",
+                    prompt_integration="dotprompt",
+                    dotprompt_content="v1",
+                ),
+                prompt_info=PromptInfo(prompt_type="db"),
+            ),
+            "jack.v2": PromptSpec(
+                prompt_id="jack.v2",
+                litellm_params=PromptLiteLLMParams(
+                    prompt_id="jack",
+                    prompt_integration="dotprompt",
+                    dotprompt_content="v2",
+                ),
+                prompt_info=PromptInfo(prompt_type="db"),
+            ),
+            "jane.v1": PromptSpec(
+                prompt_id="jane.v1",
+                litellm_params=PromptLiteLLMParams(
+                    prompt_id="jane",
+                    prompt_integration="dotprompt",
+                    dotprompt_content="jane",
+                ),
+                prompt_info=PromptInfo(prompt_type="db"),
+            ),
+        }
+
+        with patch(
+            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+        ) as mock_registry:
+            mock_registry.IN_MEMORY_PROMPTS = mock_prompts
+
+            response = await list_prompts(user_api_key_dict=viewer)
+
+        assert sorted(p.prompt_id for p in response.prompts) == ["jack", "jane"]
+        jack = next(p for p in response.prompts if p.prompt_id == "jack")
+        assert jack.litellm_params.dotprompt_content == "v2"
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_versions_allows_admin_viewer(self):
+        """Version history used to 403 anyone who was not exactly proxy_admin."""
+        from unittest.mock import patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.prompts.prompt_endpoints import get_prompt_versions
+
+        viewer = UserAPIKeyAuth(
+            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        )
+
+        mock_prompts = {
+            "jack.v1": PromptSpec(
+                prompt_id="jack.v1",
+                litellm_params=PromptLiteLLMParams(
+                    prompt_id="jack",
+                    prompt_integration="dotprompt",
+                    dotprompt_content="v1",
+                ),
+                prompt_info=PromptInfo(prompt_type="db"),
+            ),
+            "jack.v2": PromptSpec(
+                prompt_id="jack.v2",
+                litellm_params=PromptLiteLLMParams(
+                    prompt_id="jack",
+                    prompt_integration="dotprompt",
+                    dotprompt_content="v2",
+                ),
+                prompt_info=PromptInfo(prompt_type="db"),
+            ),
+        }
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch(
+                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+            ) as mock_registry,
+        ):
+            mock_registry.IN_MEMORY_PROMPTS = mock_prompts
+
+            response = await get_prompt_versions(
+                prompt_id="jack", user_api_key_dict=viewer
+            )
+
+        assert [p.version for p in response.prompts] == [2, 1]
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_info_allows_admin_viewer(self):
+        """Prompt info used to 403 anyone who was not exactly proxy_admin."""
+        from unittest.mock import patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.prompts.prompt_endpoints import get_prompt_info
+
+        viewer = UserAPIKeyAuth(
+            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch(
+                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+            ) as mock_registry,
+        ):
+            mock_registry.get_prompt_by_id.return_value = PromptSpec(
+                prompt_id="jack.v2",
+                litellm_params=PromptLiteLLMParams(
+                    prompt_id="jack",
+                    prompt_integration="dotprompt",
+                    dotprompt_content="v2",
+                ),
+                prompt_info=PromptInfo(prompt_type="db"),
+            )
+            mock_registry.IN_MEMORY_PROMPTS = {"jack.v1": {}, "jack.v2": {}}
+            mock_registry.get_prompt_callback_by_id.return_value = None
+
+            response = await get_prompt_info(prompt_id="jack", user_api_key_dict=viewer)
+
+        assert response.prompt_spec.prompt_id == "jack"
+        assert response.prompt_spec.version == 2

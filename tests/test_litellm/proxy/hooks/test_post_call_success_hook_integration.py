@@ -5,13 +5,10 @@ Tests verify that the success hook can transform responses sent to clients.
 This mirrors the behavior of CustomGuardrail hooks and streaming iterator hooks.
 """
 
-import os
-import sys
 import pytest
 from typing import Any
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger

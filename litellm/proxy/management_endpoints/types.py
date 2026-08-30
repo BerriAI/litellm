@@ -4,7 +4,7 @@ Types for the management endpoints
 Might include fastapi/proxy requirements.txt related imports
 """
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Final, cast
 
 from fastapi_sso.sso.base import OpenID
 
@@ -28,7 +28,7 @@ def is_valid_litellm_user_role(role_str: str) -> bool:
         return False
 
 
-def get_litellm_user_role(role_str) -> Optional[LitellmUserRoles]:
+def get_litellm_user_role(role_str) -> LitellmUserRoles | None:
     """
     Convert a string (or list of strings) to a LitellmUserRoles enum if valid (case-insensitive).
 
@@ -47,13 +47,13 @@ def get_litellm_user_role(role_str) -> Optional[LitellmUserRoles]:
                 return None
             role_str = role_str[0]
         # Use _value2member_map_ for O(1) lookup, case-insensitive
-        result = LitellmUserRoles._value2member_map_.get(role_str.lower())
-        return cast(Optional[LitellmUserRoles], result)
+        result: Final = LitellmUserRoles._value2member_map_.get(role_str.lower())
+        return cast(LitellmUserRoles | None, result)
     except Exception:
         return None
 
 
 class CustomOpenID(OpenID):
-    team_ids: List[str]
-    user_role: Optional[LitellmUserRoles] = None
-    extra_fields: Optional[Dict[str, Any]] = None
+    team_ids: list[str]
+    user_role: LitellmUserRoles | None = None
+    extra_fields: dict[str, Any] | None = None

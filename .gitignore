@@ -1,8 +1,13 @@
 .python-version
 .venv
+tests/e2e/.fixtures/
+.venv-typecheck
 .venv_policy_test
+.venv-mutmut
+mutants/
 .env
 .claude
+CLAUDE.local.md
 .newenv
 newenv/*
 litellm/proxy/myenv/*
@@ -14,6 +19,9 @@ __pycache__/
 litellm/rust_bridge/_native*.so
 litellm/rust_bridge/_native*.pyd
 litellm-rust/target/
+
+# Python package build output
+dist/
 
 bun.lockb
 **/.DS_Store
@@ -138,3 +146,4 @@ crash.*.log
 .coverage
 
 ui/litellm-dashboard/out/
+litellm.log

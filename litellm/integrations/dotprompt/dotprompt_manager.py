@@ -4,7 +4,7 @@ Builds on top of PromptManagementBase to provide .prompt file support.
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -42,10 +42,10 @@ class DotpromptManager(CustomPromptManagement):
 
     def __init__(
         self,
-        prompt_directory: Optional[str] = None,
-        prompt_file: Optional[str] = None,
-        prompt_data: Optional[Union[dict, str]] = None,
-        prompt_id: Optional[str] = None,
+        prompt_directory: str | None = None,
+        prompt_file: str | None = None,
+        prompt_data: dict | str | None = None,
+        prompt_id: str | None = None,
     ):
         import litellm
 
@@ -56,7 +56,7 @@ class DotpromptManager(CustomPromptManagement):
         else:
             self.prompt_data = prompt_data or {}
 
-        self._prompt_manager: Optional[PromptManager] = None
+        self._prompt_manager: PromptManager | None = None
         self.prompt_file = prompt_file
         self.prompt_id = prompt_id
 
@@ -84,8 +84,8 @@ class DotpromptManager(CustomPromptManagement):
 
     def should_run_prompt_management(
         self,
-        prompt_id: Optional[str],
-        prompt_spec: Optional[PromptSpec],
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         """
@@ -96,19 +96,19 @@ class DotpromptManager(CustomPromptManagement):
         if prompt_id is None:
             return False
         try:
-            return prompt_id in self.prompt_manager.list_prompts()
+            return self.prompt_manager.get_prompt(prompt_id) is not None
         except Exception:
             # If there's any error accessing prompts, don't run prompt management
             return False
 
     def _compile_prompt_helper(
         self,
-        prompt_id: Optional[str],
-        prompt_spec: Optional[PromptSpec],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> PromptManagementClient:
         """
         Compile a .prompt file into a PromptManagementClient structure.
@@ -125,26 +125,26 @@ class DotpromptManager(CustomPromptManagement):
 
         try:
             # Get the prompt template (versioned or base)
-            template = self.prompt_manager.get_prompt(prompt_id=prompt_id, version=prompt_version)
+            template: Final = self.prompt_manager.get_prompt(prompt_id=prompt_id, version=prompt_version)
             if template is None:
-                version_str = f" (version {prompt_version})" if prompt_version else ""
+                version_str: Final = f" (version {prompt_version})" if prompt_version else ""
                 raise ValueError(f"Prompt '{prompt_id}'{version_str} not found in prompt directory")
 
             # Render the template with variables (pass version for proper lookup)
-            rendered_content = self.prompt_manager.render(
+            rendered_content: Final = self.prompt_manager.render(
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 version=prompt_version,
             )
 
             # Convert rendered content to chat messages
-            messages = self._convert_to_messages(rendered_content)
+            messages: Final = self._convert_to_messages(rendered_content)
 
             # Extract model from metadata (if specified)
-            template_model = template.model
+            template_model: Final = template.model
 
             # Extract optional parameters from metadata
-            optional_params = self._extract_optional_params(template)
+            optional_params: Final = self._extract_optional_params(template)
 
             return PromptManagementClient(
                 prompt_id=prompt_id,
@@ -159,12 +159,12 @@ class DotpromptManager(CustomPromptManagement):
 
     async def async_compile_prompt_helper(
         self,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: Optional[PromptSpec] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> PromptManagementClient:
         """
         Async version of compile prompt helper. Since dotprompt operations are synchronous,
@@ -185,17 +185,17 @@ class DotpromptManager(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         non_default_params: dict,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: Optional[PromptSpec] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
-        ignore_prompt_manager_model: Optional[bool] = False,
-        ignore_prompt_manager_optional_params: Optional[bool] = False,
-    ) -> Tuple[str, List[AllMessageValues], dict]:
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.prompt_management_base import PromptManagementBase
 
         return PromptManagementBase.get_chat_completion_prompt(
@@ -209,24 +209,26 @@ class DotpromptManager(CustomPromptManagement):
             prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     async def async_get_chat_completion_prompt(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         non_default_params: dict,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
-        prompt_spec: Optional[PromptSpec] = None,
-        tools: Optional[List[Dict]] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
-        ignore_prompt_manager_model: Optional[bool] = False,
-        ignore_prompt_manager_optional_params: Optional[bool] = False,
-    ) -> Tuple[str, List[AllMessageValues], dict]:
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
         """
         Async version - delegates to PromptManagementBase async implementation.
         """
@@ -249,7 +251,7 @@ class DotpromptManager(CustomPromptManagement):
             ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
-    def _convert_to_messages(self, rendered_content: str) -> List[AllMessageValues]:
+    def _convert_to_messages(self, rendered_content: str) -> list[AllMessageValues]:
         """
         Convert rendered prompt content to chat messages.
 
@@ -259,14 +261,14 @@ class DotpromptManager(CustomPromptManagement):
         3. Already formatted as a single message
         """
         # Clean up the content
-        content = rendered_content.strip()
+        content: Final = rendered_content.strip()
 
         # Try to parse role-based format (System: ..., User: ..., etc.)
-        messages = []
+        messages: Final = []
         current_role = None
         current_content = []
 
-        lines = content.split("\n")
+        lines: Final = content.split("\n")
 
         for line in lines:
             line = line.strip()
@@ -298,7 +300,7 @@ class DotpromptManager(CustomPromptManagement):
 
         # Add the last message
         if current_role and current_content:
-            content_text = "\n".join(current_content).strip()
+            content_text: Final = "\n".join(current_content).strip()
             if content_text:  # Only add if there's actual content
                 messages.append(self._create_message(current_role, content_text))
 
@@ -311,7 +313,7 @@ class DotpromptManager(CustomPromptManagement):
     def _create_message(self, role: str, content: str) -> AllMessageValues:
         """Create a message with the specified role and content."""
         return {
-            "role": role,  # type: ignore
+            "role": role,
             "content": content,
         }
 
@@ -321,7 +323,7 @@ class DotpromptManager(CustomPromptManagement):
 
         Includes parameters like temperature, max_tokens, etc.
         """
-        optional_params = {}
+        optional_params: Final = {}
 
         # Extract common parameters from metadata
         if template.optional_params is not None:
@@ -339,20 +341,20 @@ class DotpromptManager(CustomPromptManagement):
         if self._prompt_manager:
             self._prompt_manager.reload_prompts()
 
-    def add_prompt_from_json(self, prompt_id: str, json_data: Dict[str, Any]) -> None:
+    def add_prompt_from_json(self, prompt_id: str, json_data: dict[str, Any]) -> None:
         """Add a prompt from JSON data."""
-        content = json_data.get("content", "")
-        metadata = json_data.get("metadata", {})
+        content: Final = json_data.get("content", "")
+        metadata: Final = json_data.get("metadata", {})
         self.prompt_manager.add_prompt(prompt_id, content, metadata)
 
-    def load_prompts_from_json(self, prompts_data: Dict[str, Dict[str, Any]]) -> None:
+    def load_prompts_from_json(self, prompts_data: dict[str, dict[str, Any]]) -> None:
         """Load multiple prompts from JSON data."""
         self.prompt_manager.load_prompts_from_json_data(prompts_data)
 
-    def get_prompts_as_json(self) -> Dict[str, Dict[str, Any]]:
+    def get_prompts_as_json(self) -> dict[str, dict[str, Any]]:
         """Get all prompts in JSON format."""
         return self.prompt_manager.get_all_prompts_as_json()
 
-    def convert_prompt_file_to_json(self, file_path: str) -> Dict[str, Any]:
+    def convert_prompt_file_to_json(self, file_path: str) -> dict[str, Any]:
         """Convert a .prompt file to JSON format."""
         return self.prompt_manager.prompt_file_to_json(file_path)

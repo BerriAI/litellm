@@ -1,5 +1,6 @@
 "use client";
 
+import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -16,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -47,7 +49,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const { data: fetchedTeams } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
-  const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
+  const [selectedKeyId, setSelectedKeyId] = useQueryState("key", parseAsString.withOptions({ history: "push" }));
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -103,9 +105,18 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }, []);
 
   const columns = useMemo(
-    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: setSelectedKey }),
-    [allTeams, organizations],
+    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: (key) => void setSelectedKeyId(key.token) }),
+    [allTeams, organizations, setSelectedKeyId],
   );
+
+  const selectedKeyFromList = useMemo(
+    () => keyList.find((key) => key.token === selectedKeyId),
+    [keyList, selectedKeyId],
+  );
+  const { data: fetchedSelectedKey, isError: selectedKeyLoadFailed } = useKeyInfo(selectedKeyId, {
+    enabled: !selectedKeyFromList,
+  });
+  const selectedKey = selectedKeyFromList ?? fetchedSelectedKey;
 
   const teamOptions = useMemo(
     () =>
@@ -128,6 +139,16 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     [organizations],
   );
 
+  const handleSelectedKeyDataUpdate = useCallback(
+    (updated: Partial<KeyResponse>) => {
+      const rotatedToken = updated.token ?? updated.token_id;
+      if (!rotatedToken || rotatedToken === selectedKeyId) return;
+      void setSelectedKeyId(rotatedToken);
+      void refetch();
+    },
+    [refetch, selectedKeyId, setSelectedKeyId],
+  );
+
   const formatFilterValue = useCallback(
     (columnId: string, value: unknown): string => {
       const raw = String(value);
@@ -142,28 +163,32 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     [allTeams, organizations],
   );
 
-  if (selectedKey) {
+  if (selectedKeyId) {
+    if (!selectedKey && !selectedKeyLoadFailed) {
+      return <div className="p-4 text-sm text-muted-foreground">Loading key...</div>;
+    }
     return (
       <div className="w-full h-full overflow-hidden">
         <KeyInfoView
-          keyId={selectedKey.token}
-          onClose={() => setSelectedKey(null)}
+          keyId={selectedKeyId}
+          onClose={() => void setSelectedKeyId(null)}
           keyData={selectedKey}
           teams={allTeams}
           onDelete={refetch}
+          onKeyDataUpdate={handleSelectedKeyDataUpdate}
         />
       </div>
     );
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-hidden py-2">
+    <div className="flex h-full flex-col gap-6 overflow-hidden">
       <PageHeader
-        icon={<KeyRound className="size-5" />}
+        icon={<KeyRound />}
         title="Virtual Keys"
         subtitle="Every key that authenticates requests to the gateway."
+        primaryAction={headerActions}
       />
-      {headerActions}
       <DataTable
         data={keyList}
         columns={columns}

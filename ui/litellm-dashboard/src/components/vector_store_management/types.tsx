@@ -18,6 +18,7 @@ export interface VectorStore {
   vector_store_name?: string;
   vector_store_description?: string;
   vector_store_metadata?: VectorStoreMetadata;
+  litellm_credential_name?: string;
   created_at: string;
   updated_at: string;
   created_by?: string;

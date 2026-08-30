@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
-use crate::error::{json_type_name, CoreError, CoreResult};
+use crate::error::{CoreError, CoreResult, json_type_name};
 use crate::ocr::transformation::{OcrAuthStrategy, OcrProviderConfig, OcrResponseHandling};
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
@@ -206,11 +206,11 @@ pub fn complete_document_intelligence_url(
         AZURE_DOCUMENT_INTELLIGENCE_API_VERSION
     );
 
-    if let Some(pages) = optional_params.get("pages") {
-        if let Some(normalized) = normalize_pages_param(pages)? {
-            url.push_str("&pages=");
-            url.push_str(&normalized);
-        }
+    if let Some(pages) = optional_params.get("pages")
+        && let Some(normalized) = normalize_pages_param(pages)?
+    {
+        url.push_str("&pages=");
+        url.push_str(&normalized);
     }
 
     Ok(url)
@@ -231,7 +231,7 @@ fn document_url_from_mistral_document(document: &Value) -> CoreResult<&str> {
         other => {
             return Err(CoreError::InvalidRequest(format!(
                 "Invalid document type: {other}. Must be 'document_url' or 'image_url'"
-            )))
+            )));
         }
     };
     object

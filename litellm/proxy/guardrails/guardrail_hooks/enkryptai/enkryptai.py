@@ -6,17 +6,9 @@
 # +-------------------------------------------------------------+
 
 import os
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import httpx
 
@@ -47,16 +39,16 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-GUARDRAIL_NAME = "enkryptai"
+GUARDRAIL_NAME: Final = "enkryptai"
 
 
 class EnkryptAIGuardrails(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str = "litellm_test",
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        policy_name: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        policy_name: str | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -93,7 +85,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
     async def _call_enkryptai_guardrails(
         self,
         prompt: str,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ) -> EnkryptAIResponse:
         """
         Call Enkrypt AI Guardrails API to detect potential issues in the given prompt.
@@ -105,11 +97,11 @@ class EnkryptAIGuardrails(CustomGuardrail):
         Returns:
             EnkryptAIResponse: Response from the Enkrypt AI Guardrails API
         """
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
 
-        payload = {"text": prompt}
+        payload: Final = {"text": prompt}
 
-        headers = {"Content-Type": "application/json", "apikey": self.api_key}
+        headers: Final = {"Content-Type": "application/json", "apikey": self.api_key}
 
         # Add policy header if policy_name is set
         if self.policy_name:
@@ -127,13 +119,13 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 self.api_url,
                 payload,
             )
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
                 headers=headers,
             )
             response.raise_for_status()
-            response_json = response.json()
+            response_json: Final = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
@@ -146,7 +138,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
 
             # Add guardrail information to request trace
             if request_data:
-                guardrail_status = self._determine_guardrail_status(response_json)
+                guardrail_status: Final = self._determine_guardrail_status(response_json)
                 self.add_standard_logging_guardrail_information_to_request_data(
                     guardrail_provider=self.guardrail_provider,
                     guardrail_json_response=response_json,
@@ -189,11 +181,11 @@ class EnkryptAIGuardrails(CustomGuardrail):
         Returns:
             EnkryptAIProcessedResult: Processed response with detected attacks and their details
         """
-        summary = response.get("summary", {})
-        details = response.get("details", {})
+        summary: Final = response.get("summary", {})
+        details: Final = response.get("details", {})
 
-        detected_attacks: List[str] = []
-        attack_details: Dict[str, Any] = {}
+        detected_attacks: Final[list[str]] = []
+        attack_details: Final[dict[str, Any]] = {}
 
         for key, value in summary.items():
             # Check if attack is detected
@@ -224,8 +216,8 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 return "guardrail_failed_to_respond"
 
             # Process the response to check for violations
-            processed_result = self._process_enkryptai_guardrails_response(response_json)
-            attacks_detected = processed_result["attacks_detected"]
+            processed_result: Final = self._process_enkryptai_guardrails_response(response_json)
+            attacks_detected: Final = processed_result["attacks_detected"]
 
             if attacks_detected:
                 return "guardrail_intervened"
@@ -246,8 +238,8 @@ class EnkryptAIGuardrails(CustomGuardrail):
         Returns:
             Formatted error message string
         """
-        attacks_detected = processed_result["attacks_detected"]
-        attack_details = processed_result["attack_details"]
+        attacks_detected: Final = processed_result["attacks_detected"]
+        attack_details: Final = processed_result["attack_details"]
 
         error_message = f"Guardrail failed: {len(attacks_detected)} violation(s) detected\n\n"
 
@@ -280,7 +272,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -292,11 +284,11 @@ class EnkryptAIGuardrails(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        _messages = data.get("messages")
+        _messages: Final = data.get("messages")
         if _messages:
             for message in _messages:
                 _content = message.get("content")
@@ -338,11 +330,11 @@ class EnkryptAIGuardrails(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        _messages = data.get("messages")
+        _messages: Final = data.get("messages")
         if _messages:
             for message in _messages:
                 _content = message.get("content")
@@ -451,7 +443,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         Raises:
             ValueError: If any attacks are detected
         """
-        texts = inputs.get("texts", [])
+        texts: Final = inputs.get("texts", [])
 
         # Check each text for attacks
         for text in texts:
@@ -497,7 +489,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         return EnkryptAIGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,

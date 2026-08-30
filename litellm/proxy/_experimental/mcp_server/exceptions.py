@@ -1,6 +1,6 @@
 """Exceptions raised by the LiteLLM MCP proxy."""
 
-from typing import Optional
+from typing import Final
 
 from fastapi import HTTPException
 
@@ -21,7 +21,7 @@ class MCPUpstreamAuthError(Exception):
     def __init__(
         self,
         status_code: int,
-        www_authenticate: Optional[str],
+        www_authenticate: str | None,
         server_name: str,
     ) -> None:
         self.status_code = status_code
@@ -31,8 +31,8 @@ class MCPUpstreamAuthError(Exception):
 
     def to_http_exception(
         self,
-        base_url: Optional[str] = None,
-        request_path: Optional[str] = None,
+        base_url: str | None = None,
+        request_path: str | None = None,
     ) -> HTTPException:
         """Convert this upstream-auth error into an ``HTTPException`` that
         preserves the upstream status code and any ``WWW-Authenticate``
@@ -57,22 +57,40 @@ class MCPUpstreamAuthError(Exception):
         ``/.well-known/oauth-protected-resource/mcp/{server_name}``. This
         keeps the ``resource_metadata`` URI aligned with the resource pattern
         the client originally targeted, matching the path-aware behaviour of
-        ``_get_passthrough_resource_metadata_url`` in ``server.py``.
+        ``get_passthrough_resource_metadata_url`` in ``oauth_utils.py``.
         """
-        challenge: Optional[str] = self.www_authenticate
+        challenge: str | None = self.www_authenticate
         if challenge is None and self.status_code == 401 and base_url:
-            prefix = base_url.rstrip("/")
+            prefix: Final = base_url.rstrip("/")
             if request_path and request_path.startswith(f"/{self.server_name}/mcp"):
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
             else:
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
-        detail = "Forbidden" if self.status_code == 403 else "Unauthorized"
+        detail: Final = "Forbidden" if self.status_code == 403 else "Unauthorized"
         return HTTPException(
             status_code=self.status_code,
             detail=detail,
             headers={"www-authenticate": challenge} if challenge else None,
         )
+
+
+class MCPOpenApiUpstreamError(Exception):
+    """An OpenAPI-backed MCP tool's upstream answered with a non-2xx that is not a 401.
+
+    Carries the status only. The upstream's response body is deliberately dropped rather than served
+    as tool content: it crosses a trust boundary and may hold prose, urls, or an error document that
+    reads as data, which is how these failures came to be reported as successful tool output. This
+    matches ``outcome_wire_value``'s contract for listing faults, category and status and nothing
+    else. A 401 is raised as ``MCPUpstreamAuthError`` instead, so the caller learns to
+    re-authenticate; every other status stays here, mirroring the regular MCP path where a 403
+    deliberately does not produce a challenge.
+    """
+
+    def __init__(self, status_code: int, server_name: str) -> None:
+        self.status_code = status_code
+        self.server_name = server_name
+        super().__init__(f"upstream returned HTTP {status_code}")
 
 
 class MCPToolResultError(Exception):
@@ -88,3 +106,19 @@ class MCPToolResultError(Exception):
     into two identities, breaking ``isinstance`` checks against instances
     created before the reload.
     """
+
+
+class MCPServerListError(Exception):
+    """Carrier for a classified per-server listing fault (``faults.list_outcomes.ServerListFault``).
+
+    Raised where a server fetch used to silently return an empty tool list, so each boundary can
+    apply its own policy: the aggregate listing absorbs it into that server's outcome, while
+    single-server routes relay a truthful HTTP status instead of empty-success. The fault value is
+    typed as ``object`` here only to avoid a circular import with the faults package; construction
+    sites always pass a ``ServerListFault``.
+    """
+
+    def __init__(self, fault: object, server_name: str) -> None:
+        self.fault = fault
+        self.server_name = server_name
+        super().__init__(f"Listing tools from MCP server {server_name!r} failed")

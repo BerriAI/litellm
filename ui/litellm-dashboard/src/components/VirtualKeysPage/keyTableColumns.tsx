@@ -1,10 +1,11 @@
 "use client";
 
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
-import { Popover, Typography } from "antd";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
+import { inheritedBudgetGates } from "@/components/shared/InheritedBudgetHint";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
@@ -46,7 +47,11 @@ const getKeyStatus = (key: KeyResponse): KeyStatus => {
   if (!Number.isNaN(expiresAt) && expiresAt < Date.now()) {
     return { tone: "warning", label: "Expired", tooltip: "This key has passed its expiry date." };
   }
-  return { tone: "success", label: "Active" };
+  return {
+    tone: "success",
+    label: "Active",
+    tooltip: "This key is not blocked and has not expired.",
+  };
 };
 
 const UserPopoverCell = ({
@@ -71,11 +76,9 @@ const UserPopoverCell = ({
         { label: "User ID", value: userId },
       ].map(({ label, value }) => (
         <div key={label} className="flex flex-col min-w-0">
-          <span className="text-gray-400">{label}</span>
+          <span className="text-muted-foreground">{label}</span>
           {value ? (
-            <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
-              {value}
-            </Typography.Text>
+            <IdCell value={value} variant="plain" copyable className="max-w-full" />
           ) : (
             <span className="font-mono">-</span>
           )}
@@ -86,29 +89,39 @@ const UserPopoverCell = ({
 
   if (isDefaultAdmin && !userAlias && !userEmail) {
     return (
-      <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-        <span className="cursor-default">
+      <HoverCard>
+        <HoverCardTrigger render={<span className="cursor-default" />}>
           <DefaultProxyAdminTag userId={userId} />
-        </span>
-      </Popover>
+        </HoverCardTrigger>
+        <HoverCardContent align="start">{popoverContent}</HoverCardContent>
+      </HoverCard>
     );
   }
 
   return (
-    <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-      <span className="font-mono text-xs truncate block cursor-default" style={{ maxWidth: width, overflow: "hidden" }}>
+    <HoverCard>
+      <HoverCardTrigger
+        render={
+          <span
+            className="font-mono text-xs truncate block cursor-default"
+            style={{ maxWidth: width, overflow: "hidden" }}
+          />
+        }
+      >
         {displayValue || "-"}
-      </span>
-    </Popover>
+      </HoverCardTrigger>
+      <HoverCardContent align="start">{popoverContent}</HoverCardContent>
+    </HoverCard>
   );
 };
 
 const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (
   <span className="flex items-center gap-1">
     {label}
-    <Popover content={tooltip} trigger="hover">
-      <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
-    </Popover>
+    <HoverCard>
+      <HoverCardTrigger render={<Info className="size-3 text-muted-foreground cursor-help" />} />
+      <HoverCardContent className="w-auto">{tooltip}</HoverCardContent>
+    </HoverCard>
   </span>
 );
 
@@ -300,13 +313,14 @@ export const getKeyTableColumns = ({
     size: 180,
     enableSorting: true,
     cell: ({ row }) => {
-      const teamId = row.original.team_id;
-      const team = allTeams.find((t) => t.team_id === teamId);
+      const team = allTeams.find((t) => t.team_id === row.original.team_id);
+      const orgId = row.original.organization_id || row.original.org_id || team?.organization_id;
+      const organization = organizations.find((o) => o.organization_id === orgId);
       return (
         <SpendBudgetCell
           spend={row.original.spend}
           maxBudget={row.original.max_budget}
-          teamMaxBudget={team?.max_budget ?? null}
+          inheritedGates={row.original.max_budget == null ? inheritedBudgetGates(team, organization) : []}
         />
       );
     },
@@ -359,6 +373,5 @@ export const KEY_TABLE_HIDDEN_COLUMNS: Record<string, boolean> = {
   created_by: false,
   updated_at: false,
   expires: false,
-  budget_reset_at: false,
   rate_limits: false,
 };

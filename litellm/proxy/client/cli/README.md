@@ -10,10 +10,42 @@ uv tool install 'litellm[proxy]'
 
 ## Configuration
 
-The CLI can be configured using environment variables or command-line options:
+The CLI can be configured using environment variables, command-line options, or a persistent config file:
 
 - `LITELLM_PROXY_URL`: Base URL of the LiteLLM proxy server (default: http://localhost:4000)
 - `LITELLM_PROXY_API_KEY`: API key for authentication
+
+To stop exporting `LITELLM_PROXY_URL` in every shell session, store the proxy URL once in `~/.litellm/config.json`:
+
+```bash
+lite config set base_url https://your-proxy.example.com
+```
+
+Manage the stored config with:
+
+```bash
+lite config get base_url    # print the stored value
+lite config get             # print all stored config
+lite config unset base_url  # remove the stored value
+```
+
+The base URL is resolved in this order of precedence:
+
+1. `--base-url` command-line option
+2. `LITELLM_PROXY_URL` environment variable
+3. `base_url` from `~/.litellm/config.json`
+4. `http://localhost:4000`
+
+### Hiding commands from the listings
+
+Deployments that hand `lite` to end users often want to advertise only part of it. Store the commands to keep out of the listings, comma separated:
+
+```bash
+lite config set hidden_commands codex,opencode
+lite config unset hidden_commands   # list everything again
+```
+
+Hidden commands drop out of both `lite --help` and the interactive shell's "Available commands" block, and stay runnable so existing scripts keep working
 
 ## Global Options
 
@@ -469,13 +501,13 @@ To pin the model, pass the agent's own model flag (for example `lite claude --mo
 
 The token minted by `lite login` is a short-lived, per-session agent credential, not a managed virtual key. It is scoped to the user and team you authenticated as, inherits that user's and team's models and budgets, and is enforced on the proxy exactly like a virtual key on the same team (guardrails, routing, logging, spend). Spend is tracked against the shared team and user budgets, so running several agents (or logging in more than once) does not hand each session its own separate budget; they all draw down the same team/user allowance. There is no separate per-session cap, so sustained agent use is not capped at a small chat-session limit.
 
-The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. `lite claude`, `lite codex`, and `lite opencode` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
+The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. `lite claude`, `lite codex`, and `lite opencode` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. `lite login --pkce` is the exception to the daily re-login: it signs in through your system browser with OAuth authorization code and PKCE and stores a refresh token next to the key, so every `lite` command and `lite auth print-token` renew the key on their own shortly before it expires, `lite whoami` shows when the current key expires, and `lite logout` revokes the refresh token on the proxy (it needs a proxy that serves `/.well-known/litellm-cli-auth`; see [Browser sign-in with PKCE](https://docs.litellm.ai/docs/proxy/cli_sso#browser-sign-in-with-pkce)). When a renewal is refused, for example after a `lite logout` run from another copy of the credential, the command prints why on stderr and, once the key has run out, tells you to run `lite login --pkce` again. Only the holder can end a `--pkce` session early, with `lite logout`; an admin has no button for it, but every renewal re-reads the user on the proxy, so deactivating the user or removing them from the team makes the next renewal fail and the key runs out within `LITELLM_CLI_JWT_EXPIRATION_HOURS`. On a proxy with more than one worker or replica, configure Redis (`litellm_settings.cache` with Redis `cache_params`, or `general_settings.coordination_redis`) so a refresh token stays single-use and `lite logout` holds on every worker; without Redis each worker keeps its own record. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
 
 ### Route Every Claude Code Session Through the Proxy
 
 `lite claude` wraps a single invocation, but `lite up` goes further: it patches `~/.claude/settings.json`, Claude Code's own config file, so that every Claude Code session started afterward -- from any terminal, launched normally with just `claude`, no wrapper needed -- routes through your LiteLLM proxy. It sets `env.ANTHROPIC_BASE_URL` to the proxy URL and `apiKeyHelper` to a `lite auth print-token` invocation, drops any stray static `ANTHROPIC_API_KEY` so the helper-issued token wins, and leaves every other setting in the file untouched. It backs up the original file before patching it.
 
-Two things need to already be true: you've run `lite login`, since the apiKeyHelper depends on that stored token, and the proxy is already reachable, since `lite up` does not start one for you.
+Two things need to already be true: you've run `lite login` (or `lite login --pkce`, whose key the helper renews on its own), since the apiKeyHelper depends on that stored token, and the proxy is already reachable, since `lite up` does not start one for you.
 
 ```bash
 lite login
@@ -488,6 +520,20 @@ lite up
 This is a one-time file patch and restore, not a live traffic interceptor. A Claude Code session already running before `lite up` started keeps whatever `ANTHROPIC_BASE_URL` and token it loaded at its own startup, and a session still running when `lite up` stops keeps routing through the proxy until it exits; only sessions *started* while the patch is in effect are affected, and only *new* sessions after a restore go back to Anthropic directly.
 
 Cursor is not supported: it has no equivalent file-based config to hot-patch this way, since its model routing lives in its own app storage and is configured through its GUI.
+
+#### Making It Permanent at Login
+
+`lite up` holds the patch only for as long as it runs. To wire Claude Code up once and leave it that way, pass `--config-claude` to `lite login`:
+
+```bash
+lite --base-url https://your-proxy.example.com login --config-claude
+```
+
+It writes the same two settings `lite up` does, `env.ANTHROPIC_BASE_URL` and `apiKeyHelper`, but persistently: there is no backup, nothing to restore, and no foreground process to keep alive. Every other key in `~/.claude/settings.json` is preserved, the file is created if it does not exist, and it is written atomically with owner-only permissions. Plain `lite login` is unchanged; nothing happens to your Claude Code config unless you pass the flag.
+
+Because the credential is reached through `apiKeyHelper` rather than copied into the file, a later `lite login` refreshes it with no further action: Claude Code re-runs the helper on every request and picks up whatever token the most recent login stored. Nothing secret is written to `settings.json`.
+
+Run it again to point Claude Code at a different proxy; the base URL and the helper are both rewritten. `lite up` and `--config-claude` manage the same file, so the flag refuses to run while a `lite up` session holds a backup, and tells you to run `lite down` first, rather than writing settings that `lite up` would silently revert when it stops.
 
 ### QA Complexity-Based Auto-Routing Against Your Real Proxy
 
@@ -523,7 +569,7 @@ export LITELLM_PROXY_API_KEY=sk-...
 lite model-groups list [--format table|json]
 ```
 
-Lists the model groups your key can reach on the proxy, via `/model_group/info`, along with each group's mode (`chat`, `embedding`, etc.) and per-token pricing. This is also what `lite autoroute configure` uses internally to discover what it can offer you.
+Lists the model groups your key can reach on the proxy, via `/model_group/info`, along with each group's mode (`chat`, `embedding`, etc.) and per-token pricing. Note this route needs management access; `lite autoroute configure` instead discovers models through `/v1/models`, so it works with a key scoped to just the AI API routes
 
 #### Configure the Auto-Router
 
@@ -545,7 +591,7 @@ You must run `configure` at least once before `up`; running `up` first fails wit
 lite autoroute up
 ```
 
-Starts a local, throwaway litellm proxy on a random free port, running the config `configure` generated, with a freshly-minted random API key baked in for this session only (your real proxy key never leaves the generated config -- it only appears there, forwarding to your real proxy). It waits for the ephemeral proxy to report healthy, then patches `~/.claude/settings.json` the same way `lite up` does, except with a static `ANTHROPIC_AUTH_TOKEN` env var instead of an `apiKeyHelper`, since this key is short-lived and self-issued rather than something needing SSO refresh. Any `claude` session started afterward, from any terminal, routes through the ephemeral proxy.
+Starts a local, throwaway litellm proxy on `127.0.0.1:5483` (override with `--port`), running the config `configure` generated, with a self-issued API key baked in (your real proxy key never leaves the generated config -- it only appears there, forwarding to your real proxy). Both the port and the key are stable across runs: the key is minted once, persisted inside the generated config, and reused by every later `up` (and carried forward when you re-run `configure`), so anything you configured against one session keeps working in the next. If the port is already taken, `up` refuses with a clear error instead of silently moving to another one. It waits for the ephemeral proxy to report healthy, then patches `~/.claude/settings.json` the same way `lite up` does, except with a static `ANTHROPIC_AUTH_TOKEN` env var instead of an `apiKeyHelper`, since this key is self-issued rather than something needing SSO refresh. Any `claude` session started afterward, from any terminal, routes through the ephemeral proxy.
 
 `lite autoroute up` runs in the foreground and streams the ephemeral proxy's own log file into your terminal, so you can watch its routing decisions -- which tier and model got picked for each request -- as you use Claude Code normally. Press Ctrl-C (or send SIGTERM) to stop it; this kills the child proxy process and restores your original Claude Code settings, in that order.
 
@@ -570,7 +616,7 @@ lite autoroute down   # only needed if `up` was killed uncleanly instead of Ctrl
 
 Adaptive mode's learned state does not persist across `lite autoroute up` sessions -- there is no local database, so every session starts adaptive selection cold. A Claude Code session already running before `up` started, or still running when it stops, keeps whatever settings it loaded at its own startup; like `lite up`, this is a one-time file patch and restore, not a live traffic interceptor. Only Claude Code is supported, for the same reason as `lite up`: no other supported agent (for example Cursor) has an equivalent hot-patchable config file.
 
-A session that outlives `up` (or is still running the moment you stop it) keeps sending requests, master key included, to that now-freed loopback port until you restart it. Once the ephemeral proxy process exits, nothing stops another local account on the same machine from binding that same port and receiving those requests instead -- unlike `lite up`'s `apiKeyHelper`, which is re-resolved per request, `autoroute`'s master key is a static value, so whoever receives them gets a live-looking token along with the prompt content. Restart any Claude Code session before you consider the machine clean, run `lite autoroute down` promptly rather than leaving a stopped session's settings patched, and do not run `lite autoroute up` on a shared or multi-tenant host.
+A session that outlives `up` (or is still running the moment you stop it) keeps sending requests, master key included, to that now-freed loopback port until you restart it. Once the ephemeral proxy process exits, nothing stops another local account on the same machine from binding that same port and receiving those requests instead -- and since the port is a fixed, predictable default and the master key is a static value that persists across sessions (unlike `lite up`'s `apiKeyHelper`, which is re-resolved per request), whoever receives them gets a live-looking token along with the prompt content. Restart any Claude Code session before you consider the machine clean, run `lite autoroute down` promptly rather than leaving a stopped session's settings patched, and do not run `lite autoroute up` on a shared or multi-tenant host. To rotate the persisted key, delete the `master_key` line from `~/.litellm/autorouter/config.yaml`; the next `up` mints a fresh one (deleting the whole file works too, but then `configure` must be re-run first).
 
 Do not run `lite up` and `lite autoroute up` at the same time. Each patches `~/.claude/settings.json` and keeps its own separate backup, with no coordination between them: whichever one you stop or crash out of last is the one whose backup gets restored, which can silently leave the *other* mode's settings (a static master key and a now-dead loopback URL, or a stale `apiKeyHelper`) active. Run `lite down` or `lite autoroute down` (whichever applies) before switching to the other mode.
 
@@ -580,6 +626,8 @@ The CLI respects the following environment variables:
 
 - `LITELLM_PROXY_URL`: Base URL of the proxy server
 - `LITELLM_PROXY_API_KEY`: API key for authentication
+
+`LITELLM_PROXY_URL` takes precedence over a `base_url` stored via `lite config set`, and the `--base-url` option overrides both. See the Configuration section for the full precedence order.
 
 ## Examples
 

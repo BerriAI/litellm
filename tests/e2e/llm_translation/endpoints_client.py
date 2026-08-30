@@ -10,39 +10,79 @@ so the assertion is on real content, not just a 200.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
+from e2e_config import SLOW_PROVIDER_TIMEOUT_SECONDS
+from e2e_http import BinaryStream, Result, StreamingResponse
+from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
+from proxy_client import ProxyClient
 from pydantic import BaseModel
 
-from e2e_gateway import Gateway, build_gateway
-from e2e_http import StreamingResponse
-from models import ChatMessage, LiteLLMParamsBody
+__all__ = [
+    "CacheControl",
+    "ImageEditForm",
+    "ImagesResult",
+    "RichMessage",
+    "TextBlock",
+    "TranscriptionForm",
+    "TranscriptionResult",
+]
+
+
+class FunctionParameterProperty(BaseModel):
+    type: str
+    description: str | None = None
+
+
+class FunctionParameters(BaseModel):
+    type: Literal["object"] = "object"
+    properties: dict[str, FunctionParameterProperty]
+    required: list[str] = []
+
+
+class ResponsesFunctionTool(BaseModel):
+    type: Literal["function"] = "function"
+    name: str
+    description: str | None = None
+    parameters: FunctionParameters
+
+
+class ResponsesInputTextPart(BaseModel):
+    type: Literal["input_text"] = "input_text"
+    text: str
+
+
+class ResponsesInputImagePart(BaseModel):
+    type: Literal["input_image"] = "input_image"
+    image_url: str
+
+
+ResponsesInputContentPart = ResponsesInputTextPart | ResponsesInputImagePart
+
+
+class ResponsesInputMessage(BaseModel):
+    role: Literal["user", "assistant", "system"] = "user"
+    content: list[ResponsesInputContentPart]
+
+
+ResponsesInput = str | list[ResponsesInputMessage]
 
 
 class ResponsesRequest(BaseModel):
     model: str
-    input: str
+    input: ResponsesInput
     instructions: str | None = None
+    stream: bool = False
+    tools: list[ResponsesFunctionTool] | None = None
+    guardrails: list[str] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class MessagesRequest(BaseModel):
     model: str
     max_tokens: int
     messages: list[ChatMessage]
-
-
-class CacheControl(BaseModel):
-    type: str = "ephemeral"
-
-
-class TextBlock(BaseModel):
-    type: str = "text"
-    text: str
-    cache_control: CacheControl | None = None
-
-
-class RichMessage(BaseModel):
-    role: str
-    content: list[TextBlock]
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RichMessagesRequest(BaseModel):
@@ -50,11 +90,20 @@ class RichMessagesRequest(BaseModel):
     max_tokens: int = 64
     system: list[TextBlock]
     messages: list[RichMessage]
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class CompletionsRequest(BaseModel):
+    model: str
+    prompt: str
+    max_tokens: int = 32
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class EmbeddingsRequest(BaseModel):
     model: str
     input: str
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RerankRequest(BaseModel):
@@ -62,6 +111,7 @@ class RerankRequest(BaseModel):
     query: str
     documents: list[str]
     top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class SpeechRequest(BaseModel):
@@ -77,6 +127,35 @@ class ImageRequest(BaseModel):
     size: str = "1024x1024"
 
 
+class ImageEditForm(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
+
+
+class TranscriptionForm(BaseModel):
+    model: str
+    response_format: str = "json"
+
+
+class ModerationRequest(BaseModel):
+    model: str
+    input: str
+
+
+class GenerateContentPart(BaseModel):
+    text: str
+
+
+class GenerateContentContent(BaseModel):
+    role: Literal["user"] = "user"
+    parts: tuple[GenerateContentPart, ...]
+
+
+class GenerateContentBody(BaseModel):
+    contents: tuple[GenerateContentContent, ...]
+
+
 class ResponsesOutputContent(BaseModel):
     type: str | None = None
     text: str | None = None
@@ -85,6 +164,9 @@ class ResponsesOutputContent(BaseModel):
 class ResponsesOutputItem(BaseModel):
     type: str | None = None
     content: list[ResponsesOutputContent] = []
+    name: str | None = None
+    arguments: str | None = None
+    call_id: str | None = None
 
 
 class ResponsesResult(BaseModel):
@@ -98,6 +180,29 @@ class ResponsesResult(BaseModel):
         return "".join(
             content.text or "" for item in self.output for content in item.content
         )
+
+    @property
+    def function_calls(self) -> tuple[ResponsesOutputItem, ...]:
+        return tuple(
+            item
+            for item in self.output
+            if item.type == "function_call"
+            and item.name is not None
+            and item.arguments is not None
+        )
+
+
+class ResponsesStreamEvent(BaseModel):
+    event_id: str | None = None
+
+
+class ResponsesStreamEventType(BaseModel):
+    type: str
+
+
+class ResponsesOutputTextDeltaEvent(ResponsesStreamEvent):
+    type: Literal["response.output_text.delta"]
+    delta: str
 
 
 class AnthropicContentBlock(BaseModel):
@@ -122,6 +227,14 @@ class MessagesResult(BaseModel):
     @property
     def text(self) -> str:
         return "".join(block.text or "" for block in self.content)
+
+
+class CompletionChoice(BaseModel):
+    text: str | None = None
+
+
+class CompletionsResult(BaseModel):
+    choices: list[CompletionChoice] = []
 
 
 class EmbeddingItem(BaseModel):
@@ -154,27 +267,100 @@ class ImagesResult(BaseModel):
     data: list[ImageItem] = []
 
 
+class TranscriptionResult(BaseModel):
+    text: str = ""
+
+
+class ModerationResultItem(BaseModel):
+    flagged: bool
+    categories: dict[str, bool] = {}
+
+    @property
+    def flagged_categories(self) -> tuple[str, ...]:
+        return tuple(name for name, hit in self.categories.items() if hit)
+
+
+class ModerationResult(BaseModel):
+    results: list[ModerationResultItem] = []
+
+    @property
+    def first(self) -> ModerationResultItem | None:
+        return self.results[0] if self.results else None
+
+
 @dataclass(frozen=True, slots=True)
 class EndpointsClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
-        return self.gateway.create_model(model_name, litellm_params)
+        return self.proxy.create_model(model_name, litellm_params)
 
     def delete_model(self, model_id: str) -> None:
-        self.gateway.delete_model(model_id)
+        self.proxy.delete_model(model_id)
 
-    def _send(self, path: str, key: str, body: BaseModel) -> StreamingResponse:
-        return self.gateway.transport.send(
-            path, headers=self.gateway.transport.bearer(key), json=body
+    def _send(
+        self, path: str, key: str, body: BaseModel, *, stream: bool = False
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            path,
+            headers=self.proxy.transport.bearer(key),
+            json=body,
+            stream=stream,
         )
 
-    def responses(self, key: str, model: str, text: str) -> StreamingResponse:
+    def responses(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        stream: bool = False,
+        guardrails: list[str] | None = None,
+    ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
             key,
             ResponsesRequest(
-                model=model, input=text, instructions="You are a helpful assistant"
+                model=model,
+                input=text,
+                instructions="You are a helpful assistant",
+                stream=stream,
+                guardrails=guardrails,
+            ),
+            stream=stream,
+        )
+
+    def responses_vision(
+        self, key: str, model: str, text: str, image_url: str
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/responses",
+            key,
+            ResponsesRequest(
+                model=model,
+                input=[
+                    ResponsesInputMessage(
+                        content=[
+                            ResponsesInputTextPart(text=text),
+                            ResponsesInputImagePart(image_url=image_url),
+                        ]
+                    )
+                ],
+                instructions="You are a helpful assistant",
+            ),
+        )
+
+    def responses_with_tools(
+        self, key: str, model: str, text: str, tools: list[ResponsesFunctionTool]
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/responses",
+            key,
+            ResponsesRequest(
+                model=model,
+                input=text,
+                instructions="You are a helpful assistant",
+                tools=tools,
             ),
         )
 
@@ -189,6 +375,15 @@ class EndpointsClient:
                 max_tokens=max_tokens,
                 messages=[ChatMessage(role="user", content=text)],
             ),
+        )
+
+    def text_completions(
+        self, key: str, model: str, prompt: str, *, max_tokens: int = 32
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/completions",
+            key,
+            CompletionsRequest(model=model, prompt=prompt, max_tokens=max_tokens),
         )
 
     def embeddings(self, key: str, model: str, text: str) -> StreamingResponse:
@@ -210,11 +405,69 @@ class EndpointsClient:
             "/v1/audio/speech", key, SpeechRequest(model=model, input=text, voice=voice)
         )
 
+    def audio_speech_stream(
+        self, key: str, model: str, text: str, *, voice: str = "alloy"
+    ) -> BinaryStream:
+        return self.proxy.transport.stream_binary(
+            "/v1/audio/speech",
+            headers=self.proxy.transport.bearer(key),
+            json=SpeechRequest(model=model, input=text, voice=voice),
+        )
+
+    def transcribe(
+        self, key: str, model: str, *, filename: str, content: bytes
+    ) -> Result[TranscriptionResult]:
+        return self.proxy.transport.upload(
+            "/v1/audio/transcriptions",
+            headers=self.proxy.transport.bearer(key),
+            form=TranscriptionForm(model=model),
+            filename=filename,
+            content=content,
+            file_content_type="audio/wav",
+            response_type=TranscriptionResult,
+        )
+
+    def moderations(self, key: str, model: str, text: str) -> Result[ModerationResult]:
+        return self.proxy.transport.post(
+            "/v1/moderations",
+            headers=self.proxy.transport.bearer(key),
+            json=ModerationRequest(model=model, input=text),
+            response_type=ModerationResult,
+        )
+
     def images(self, key: str, model: str, prompt: str) -> StreamingResponse:
         return self._send(
             "/v1/images/generations", key, ImageRequest(model=model, prompt=prompt)
         )
 
+    def image_edit(
+        self, key: str, model: str, prompt: str, image: bytes, *, filename: str = "image.png"
+    ) -> Result[ImagesResult]:
+        return self.proxy.transport.upload(
+            "/v1/images/edits",
+            headers=self.proxy.transport.bearer(key),
+            form=ImageEditForm(model=model, prompt=prompt),
+            filename=filename,
+            content=image,
+            file_content_type="image/png",
+            file_field="image",
+            response_type=ImagesResult,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
 
-def build_endpoints_client() -> EndpointsClient:
-    return EndpointsClient(gateway=build_gateway())
+    def generate_content(
+        self, key: str, model: str, text: str, *, stream: bool = False
+    ) -> StreamingResponse:
+        operation = "streamGenerateContent" if stream else "generateContent"
+        return self._send(
+            f"/v1beta/models/{model}:{operation}",
+            key,
+            GenerateContentBody(
+                contents=(GenerateContentContent(parts=(GenerateContentPart(text=text),)),)
+            ),
+            stream=stream,
+        )
+
+
+def build_endpoints_client(proxy: ProxyClient) -> EndpointsClient:
+    return EndpointsClient(proxy=proxy)

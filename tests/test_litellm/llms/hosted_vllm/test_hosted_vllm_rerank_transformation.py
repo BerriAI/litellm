@@ -109,7 +109,7 @@ class TestHostedVLLMRerankTransform:
         )
         assert url2 == "https://api.example.com/rerank"
         # Raises if api_base is None
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='api_base must be provided for Hosted VLLM rerank'):
             self.config.get_complete_url(None, self.model)
 
     def test_transform_response(self):

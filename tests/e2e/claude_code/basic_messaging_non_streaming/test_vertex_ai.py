@@ -20,6 +20,7 @@ the matrix builder still sees three rows for this (feature, provider).
 
 from __future__ import annotations
 
+import pytest
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 # Per-model aliases registered in the LiteLLM proxy's routing config to
@@ -28,11 +29,12 @@ from claude_code._basic_messaging import run_basic_messaging_cell
 # model id and the GCP region.
 VERTEX_AI_MODELS = [
     "claude-haiku-4-5-vertex",
-    "claude-sonnet-4-6-vertex",
+    "claude-sonnet-4-5-vertex",
     "claude-opus-4-7-vertex",
 ]
 
 
+@pytest.mark.covers("llm.messages.vertex.basic.nonstream.works")
 def test_basic_messaging_non_streaming_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a reply."""
     run_basic_messaging_cell(
