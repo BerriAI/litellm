@@ -13,21 +13,10 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 """
 
 import re
-from collections.abc import Mapping, Sequence
-from typing import (
-    TYPE_CHECKING,
-    Final,
-    Literal,
-    NotRequired,
-    Optional,
-    Protocol,
-    TypedDict,
-    Union,
-    cast,
-    runtime_checkable,
-)
+from collections.abc import Awaitable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, Union, cast
 
-from typing_extensions import ReadOnly
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
@@ -36,11 +25,11 @@ from litellm.types.llms.anthropic import (
     CompactionBlock,
     UsageIteration,
 )
-from litellm.types.llms.openai import AllMessageValues
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitDescriptor, RateLimitResponse
     from litellm.router import Router
     from litellm.types.llms.anthropic import (
         AllAnthropicPassThroughMessageValues,
@@ -95,6 +84,77 @@ _PROPAGATED_METADATA_KEYS: Final = (
 )
 
 _SUMMARY_TAG_RE: Final = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
+
+_MsgT: Final = TypeVar("_MsgT", bound=Mapping[str, object])
+
+
+def _as_object(value: object) -> object:
+    return value
+
+
+def _is_tool_result_block(block: object) -> bool:
+    return isinstance(block, dict) and block.get("type") in ("tool_result",)
+
+
+class _SummaryCallKwargs(TypedDict):
+    model: ReadOnly[str]
+    max_tokens: ReadOnly[int]
+    timeout: ReadOnly[float]
+    litellm_metadata: ReadOnly[Mapping[str, object]]
+    user: ReadOnly[NotRequired[str]]
+    allowed_model_region: ReadOnly[NotRequired[str]]
+
+
+class _SummaryOptionalKwargs(TypedDict, total=False):
+    user: ReadOnly[str]
+    allowed_model_region: ReadOnly[str]
+
+
+class _SummaryAcompletion(Protocol):
+    def __call__(
+        self,
+        *,
+        messages: Sequence[Mapping[str, object]],
+        **kwargs: Unpack[_SummaryCallKwargs],  # kwargs-ok: forwarded verbatim to acompletion, which owns them
+    ) -> "Awaitable[ModelResponse | CustomStreamWrapper]": ...
+
+
+class _CreateRateLimitDescriptors(Protocol):
+    def __call__(
+        self,
+        *,
+        user_api_key_dict: "UserAPIKeyAuth",
+        data: Mapping[str, str],
+        rpm_limit_type: object,
+        tpm_limit_type: object,
+        model_has_failures: bool,
+    ) -> "Sequence[RateLimitDescriptor]": ...
+
+
+class _AddModelRateLimitDescriptor(Protocol):
+    def __call__(
+        self,
+        *,
+        user_api_key_dict: "UserAPIKeyAuth",
+        requested_model: str,
+        descriptors: "Sequence[RateLimitDescriptor]",
+    ) -> None: ...
+
+
+class _CreateOrgRateLimitDescriptors(Protocol):
+    def __call__(
+        self, user_api_key_dict: "UserAPIKeyAuth", requested_model: str | None = None
+    ) -> "Sequence[RateLimitDescriptor]": ...
+
+
+class _ShouldRateLimit(Protocol):
+    def __call__(
+        self,
+        *,
+        descriptors: "Sequence[RateLimitDescriptor]",
+        parent_otel_span: object,
+        read_only: bool,
+    ) -> "Awaitable[RateLimitResponse]": ...
 
 
 def _read_summary_model_setting() -> str | None:
@@ -438,40 +498,57 @@ async def _check_summary_model_rate_limit(
     except Exception:
         return True
 
-    limiter: Final = getattr(proxy_logging_obj, "max_parallel_request_limiter", None)
+    limiter: Final[object] = getattr(proxy_logging_obj, "max_parallel_request_limiter", None)
+    should_rate_limit_check: Final[_ShouldRateLimit | None] = getattr(limiter, "should_rate_limit", None)
+    create_descriptors: Final[_CreateRateLimitDescriptors | None] = getattr(
+        limiter, "_create_rate_limit_descriptors", None
+    )
+    add_team_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
+        limiter, "_add_team_model_rate_limit_descriptor_from_metadata", None
+    )
+    add_project_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
+        limiter, "_add_project_model_rate_limit_descriptor_from_metadata", None
+    )
+    create_org_descriptors: Final[_CreateOrgRateLimitDescriptors | None] = getattr(
+        limiter, "create_organization_rate_limit_descriptor", None
+    )
     if (
         limiter is None
-        or not hasattr(limiter, "should_rate_limit")
-        or not hasattr(limiter, "_create_rate_limit_descriptors")
+        or should_rate_limit_check is None
+        or create_descriptors is None
+        or add_team_descriptor is None
+        or add_project_descriptor is None
+        or create_org_descriptors is None
     ):
         return True
 
     try:
-        metadata: Final = getattr(user_api_key_auth, "metadata", None) or {}
+        metadata: Final[Mapping[str, object]] = getattr(user_api_key_auth, "metadata", None) or {}
         data: Final = {"model": summary_model}
-        descriptors: Final = limiter._create_rate_limit_descriptors(
+        base_descriptors: Final = create_descriptors(
             user_api_key_dict=user_api_key_auth,
             data=data,
             rpm_limit_type=metadata.get("rpm_limit_type"),
             tpm_limit_type=metadata.get("tpm_limit_type"),
             model_has_failures=False,
         )
-        limiter._add_team_model_rate_limit_descriptor_from_metadata(
+        add_team_descriptor(
             user_api_key_dict=user_api_key_auth,
             requested_model=summary_model,
-            descriptors=descriptors,
+            descriptors=base_descriptors,
         )
-        limiter._add_project_model_rate_limit_descriptor_from_metadata(
+        add_project_descriptor(
             user_api_key_dict=user_api_key_auth,
             requested_model=summary_model,
-            descriptors=descriptors,
+            descriptors=base_descriptors,
         )
-        descriptors.extend(limiter.create_organization_rate_limit_descriptor(user_api_key_auth, summary_model))
+        descriptors: Final = (*base_descriptors, *create_org_descriptors(user_api_key_auth, summary_model))
         if not descriptors:
             return True
-        response: Final = await limiter.should_rate_limit(
+        parent_otel_span: Final[object] = getattr(user_api_key_auth, "parent_otel_span", None)
+        response: Final[RateLimitResponse] = await should_rate_limit_check(
             descriptors=descriptors,
-            parent_otel_span=getattr(user_api_key_auth, "parent_otel_span", None),
+            parent_otel_span=parent_otel_span,
             read_only=True,
         )
     except Exception as e:
@@ -485,7 +562,7 @@ async def _check_summary_model_rate_limit(
 
 
 def _find_latest_compaction_index(
-    messages: list[dict[str, object]],
+    messages: Sequence[Mapping[str, object]],
 ) -> tuple[int | None, int | None]:
     """Return (message_index, block_index) of the most recent compaction block.
 
@@ -504,8 +581,8 @@ def _find_latest_compaction_index(
 
 
 def _slice_around_compaction_block(
-    messages: list[dict[str, object]],
-) -> tuple[list[dict[str, object]], dict[str, object] | None]:
+    messages: Sequence[_MsgT],
+) -> tuple[Sequence[_MsgT | dict[str, object]], dict[str, object] | None]:
     """Apply Anthropic's "drop everything before the compaction block" rule.
 
     Returns ``(sliced_messages_with_compaction_block, compaction_block_dict)``
@@ -519,21 +596,22 @@ def _slice_around_compaction_block(
         return messages, None
 
     original_msg: Final = messages[msg_idx]
-    raw_content: Final = original_msg.get("content")
-    original_content: Final[list[object]] = raw_content if isinstance(raw_content, list) else []
-    compaction_block: Final = cast(dict[str, object], original_content[blk_idx])
+    original_content: Final = original_msg["content"]
+    if not isinstance(original_content, list):
+        return messages, None
+    original_blocks: Final = cast("Sequence[dict[str, object]]", original_content)
+    compaction_block: Final = original_blocks[blk_idx]
 
     # Per Anthropic's contract everything before the compaction block is
     # dropped, including earlier blocks within the same assistant message.
-    sliced_content: Final = list(original_content[blk_idx:])
+    sliced_content: Final = list(original_blocks[blk_idx:])
 
-    sliced_messages: Final[list[dict[str, object]]] = [{**original_msg, "content": sliced_content}]
-    sliced_messages.extend(messages[msg_idx + 1 :])
+    sliced_messages: Final = [{**original_msg, "content": sliced_content}, *messages[msg_idx + 1 :]]
     return sliced_messages, compaction_block
 
 
 def _strip_compaction_blocks(
-    messages: list[dict[str, object]],
+    messages: Sequence[dict[str, object]],
 ) -> list[dict[str, object]]:
     """Drop any ``compaction`` content blocks from messages.
 
@@ -640,7 +718,7 @@ def _propagate_metadata(
 
 def _count_effective_tokens(
     model: str,
-    effective_messages: list[dict[str, object]],
+    effective_messages: Sequence[dict[str, object]],
     compaction_block: CompactionBlock | None,
     tools: list[dict[str, object]] | None,
     system: str | list[dict[str, object]] | None = None,
@@ -719,17 +797,18 @@ def _system_to_text(
         return ""
     if isinstance(system, str):
         return system
-    parts: Final[list[str]] = []
-    for block in system:
-        if isinstance(block, dict) and block.get("type") == "text":
-            text = block.get("text")
-            if isinstance(text, str) and text:
-                parts.append(text)
-    return "\n".join(parts)
+    return "\n".join(
+        text
+        for block in system
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(text := block.get("text"), str)
+        and text
+    )
 
 
 def _select_last_user_question(
-    messages: list[dict[str, object]],
+    messages: Sequence[dict[str, object]],
 ) -> list[dict[str, object]]:
     """Pick the most recent ``user`` turn that is a real question.
 
@@ -744,16 +823,18 @@ def _select_last_user_question(
     turns, or contained no user turns at all). The downstream call always
     needs a non-empty user message.
     """
+    blocks: Sequence[object]
     for msg in reversed(messages):
         if msg.get("role") != "user":
             continue
         content = msg.get("content")
         if isinstance(content, list):
-            filtered = [blk for blk in content if not (isinstance(blk, dict) and blk.get("type") == "tool_result")]
+            blocks = [*map(_as_object, content)]
+            filtered = [blk for blk in blocks if not _is_tool_result_block(blk)]
             if not filtered:
                 # Purely tool_result — skip and look for an earlier turn.
                 continue
-            if len(filtered) < len(content):
+            if len(filtered) < len(blocks):
                 return [{**msg, "content": filtered}]
         return [msg]
     return [
@@ -796,10 +877,10 @@ def _system_to_openai_message(
 
 
 def _build_summary_messages(
-    effective_messages: list[dict[str, object]],
+    effective_messages: Sequence[dict[str, object]],
     prompt: str,
     system: str | list[dict[str, object]] | None = None,
-) -> list[dict[str, object]]:
+) -> Sequence[Mapping[str, object]]:
     """Build the OpenAI-shape message list for the summary call.
 
     The caller's ``system`` prompt is prepended (the default summarization
@@ -827,7 +908,7 @@ def _build_summary_messages(
         )
         openai_messages = stripped
 
-    summary_messages: Final[list[dict[str, object]]] = []
+    summary_messages: Final[list[Mapping[str, object]]] = []
     system_message: Final = _system_to_openai_message(system)
     if system_message is not None:
         summary_messages.append(system_message)
@@ -862,33 +943,15 @@ def _append_text_to_content(content: object, extra_text: str) -> object:
     if isinstance(content, str):
         return f"{content}\n\n{extra_text}"
     if isinstance(content, list):
-        appended: Final[list[object]] = [*content, {"type": "text", "text": extra_text}]
+        appended: Final[Sequence[object]] = [*map(_as_object, content), {"type": "text", "text": extra_text}]
         return appended
     return [content, {"type": "text", "text": extra_text}]
-
-
-class _SummaryCallUserKwarg(TypedDict, total=False):
-    user: ReadOnly[str]
-
-
-class _SummaryCallRegionKwarg(TypedDict, total=False):
-    allowed_model_region: ReadOnly[str]
-
-
-class _SummaryCallKwargs(TypedDict):
-    model: ReadOnly[str]
-    messages: ReadOnly[list[AllMessageValues]]
-    max_tokens: ReadOnly[int]
-    timeout: ReadOnly[float]
-    litellm_metadata: ReadOnly[Mapping[str, object]]
-    user: NotRequired[ReadOnly[str]]
-    allowed_model_region: NotRequired[ReadOnly[str]]
 
 
 async def _call_summary_model(
     *,
     summary_model: str,
-    summary_messages: list[dict[str, object]],
+    summary_messages: Sequence[Mapping[str, object]],
     metadata: Mapping[str, object],
     llm_router: Optional["Router"],
     allowed_model_region: str | None = None,
@@ -926,39 +989,38 @@ async def _call_summary_model(
     # than from ``litellm_metadata``, so without it the summary tokens would not
     # debit the caller's end-user counters.
     end_user_id: Final = metadata.get("user_api_key_end_user_id")
+    user_kwargs: Final = (
+        _SummaryOptionalKwargs(user=end_user_id)
+        if isinstance(end_user_id, str) and end_user_id
+        else _SummaryOptionalKwargs()
+    )
+    region_kwargs: Final = (
+        _SummaryOptionalKwargs(allowed_model_region=allowed_model_region)
+        if allowed_model_region is not None
+        else _SummaryOptionalKwargs()
+    )
     call_kwargs: Final[_SummaryCallKwargs] = {
         "model": summary_model,
-        "messages": cast("list[AllMessageValues]", summary_messages),  # cast-ok: built as OpenAI chat messages
         "max_tokens": max_tokens,
         "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
         "litellm_metadata": metadata,
-        **(
-            _SummaryCallUserKwarg(user=end_user_id)
-            if isinstance(end_user_id, str) and end_user_id
-            else _SummaryCallUserKwarg()
-        ),
-        **(
-            _SummaryCallRegionKwarg(allowed_model_region=allowed_model_region)
-            if allowed_model_region is not None
-            else _SummaryCallRegionKwarg()
-        ),
+        **user_kwargs,
+        **region_kwargs,
     }
-    if llm_router is not None and hasattr(llm_router, "acompletion"):
-        return await llm_router.acompletion(**call_kwargs)
-    return await litellm.acompletion(**call_kwargs)
-
-
-@runtime_checkable
-class _ResponseWithChoices(Protocol):
-    choices: Sequence[object]
+    router_acompletion: Final[_SummaryAcompletion | None] = getattr(llm_router, "acompletion", None)
+    if llm_router is not None and router_acompletion is not None:
+        return await router_acompletion(messages=summary_messages, **call_kwargs)
+    return await litellm.acompletion(messages=[*summary_messages], **call_kwargs)
 
 
 def _extract_response_text(response: object) -> str | None:
-    if not isinstance(response, _ResponseWithChoices) or not response.choices:
-        return None
     try:
-        message: Final[object] = getattr(response.choices[0], "message", None)
-        content: Final[object] = getattr(message, "content", None)
+        choices: Final[Sequence[object] | None] = getattr(response, "choices", None)
+        if choices is None:
+            return None
+        choice: Final = choices[0]
+        message: Final = getattr(choice, "message", None)
+        content: Final = getattr(message, "content", None)
         if isinstance(content, str):
             return content
         # Some providers return a list of content parts.
