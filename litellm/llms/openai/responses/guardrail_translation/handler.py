@@ -264,7 +264,7 @@ def _patched_request_fields(
     )
 
 
-def _written_back_request_fields(
+def _patch_or_convert_request_fields(
     raw_input: object,
     instructions: object,
     original_messages: Sequence[object],
@@ -408,7 +408,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrailed: Final = guardrailed_inputs.get("structured_messages")
         if guardrailed is None or guardrailed is structured_messages:
             return None
-        return _written_back_request_fields(
+        return _patch_or_convert_request_fields(
             data.get("input"),
             data.get("instructions"),
             structured_messages or (),
