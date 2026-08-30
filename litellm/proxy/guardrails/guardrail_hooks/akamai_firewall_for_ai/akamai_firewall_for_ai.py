@@ -1,0 +1,652 @@
+# +-------------------------------------------------------------+
+#
+#           Use Akamai Firewall for AI Guardrails for your LLM calls
+#                   https://www.akamai.com/products/firewall-for-ai
+#
+# +-------------------------------------------------------------+
+import asyncio
+import json
+import os
+import uuid
+from itertools import chain
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Iterator,
+    TypedDict,
+    cast,
+)
+
+from fastapi import HTTPException
+
+from litellm import DualCache
+from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import iter_message_text
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import (
+    CallTypesLiteral,
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+)
+
+if TYPE_CHECKING:
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+
+DEFAULT_API_BASE = "https://aisec.akamai.com"
+BLOCKING_ACTIONS = frozenset({"deny", "block"})
+DEFAULT_MAX_DETECT_CHARS = 20_000
+DEFAULT_CHUNK_OVERLAP_CHARS = 500
+ANTHROPIC_MESSAGES_CALL_TYPES = frozenset({"anthropic_messages", "aanthropic_messages"})
+
+
+def _item_get(item: Any, key: str) -> Any:
+    return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
+
+
+def _iter_function_fragments(function: Any) -> Iterator[str]:
+    name = _item_get(function, "name")
+    if isinstance(name, str) and name:
+        yield name
+    for key in ("arguments", "input"):
+        value = _item_get(function, key)
+        if isinstance(value, str) and value:
+            yield value
+
+
+def _iter_request_tool_call_text(data: dict) -> Iterator[str]:
+    """Yield tool-call and legacy function_call names + arguments from a request body.
+
+    ``iter_message_text`` only inspects message *content*, so tool-call
+    arguments carried in prior assistant turns (chat ``tool_calls`` /
+    ``function_call``) or in Responses-API ``input`` ``function_call`` items
+    would otherwise reach the model without being sent to Akamai.
+    """
+    messages = data.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            for tool_call in message.get("tool_calls") or []:
+                yield from _iter_function_fragments(_item_get(tool_call, "function"))
+            yield from _iter_function_fragments(message.get("function_call"))
+
+    input_value = data.get("input")
+    if isinstance(input_value, list):
+        for item in input_value:
+            if _item_get(item, "type") == "function_call":
+                yield from _iter_function_fragments(item)
+
+
+def _iter_request_prompt_text(data: dict) -> Iterator[str]:
+    """Yield the legacy Completions ``prompt`` and Responses-API ``instructions``.
+
+    ``iter_message_text`` only walks ``messages`` and ``input``; the
+    ``/completions`` ``prompt`` (string or list of strings) and the
+    Responses-API top-level ``instructions`` are forwarded to the model but
+    live in neither field, so without this they would reach the model
+    uninspected.
+    """
+    for key in ("prompt", "instructions"):
+        value = data.get(key)
+        if isinstance(value, str):
+            if value:
+                yield value
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item:
+                    yield item
+
+
+def _iter_request_tool_definition_text(data: dict) -> Iterator[str]:
+    """Yield names, descriptions and parameter schemas of request ``tools``.
+
+    A tool *definition* (Chat-Completions ``tools[].function`` or the flattened
+    Responses-API ``tools[]`` shape) is handed to the model as usable
+    instructions, so an injected description or JSON-schema field reaches the
+    model even though ``_iter_request_tool_call_text`` only inspects tool
+    *calls*.
+    """
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        return
+    for tool in tools:
+        function = _item_get(tool, "function")
+        definition = function if function is not None else tool
+        name = _item_get(definition, "name")
+        if isinstance(name, str) and name:
+            yield name
+        description = _item_get(definition, "description")
+        if isinstance(description, str) and description:
+            yield description
+        parameters = _item_get(definition, "parameters")
+        if isinstance(parameters, dict) and parameters:
+            yield json.dumps(parameters, sort_keys=True)
+
+
+def _translate_anthropic_to_openai_request(data: dict) -> dict:
+    """Translate an Anthropic ``/v1/messages`` request into Chat-Completions shape.
+
+    Hook-based guardrails receive the provider-native body, so the top-level
+    ``system`` prompt, ``tool_use`` / ``tool_result`` content blocks and tool
+    ``input_schema`` never match the OpenAI-shaped iterators. Reusing the shared
+    Anthropic adapter lifts ``system`` into a system message, ``tool_use`` /
+    ``tool_result`` into ``tool_calls`` / tool messages and ``input_schema`` into
+    ``tools[].function.parameters`` so the standard extraction inspects them all.
+    On a translation failure the raw body is returned so text content is still
+    inspected rather than the whole request being dropped.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    try:
+        body = cast("AnthropicMessagesRequest", data.copy())  # cast-ok: dict passed to adapter TypedDict param
+        openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+            anthropic_message_request=body
+        )
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "Akamai Firewall for AI: could not translate Anthropic /v1/messages request for inspection; "
+            "falling back to raw extraction: %s",
+            exc,
+        )
+        return data
+    return dict(openai_request)
+
+
+def _iter_responses_api_output_text(response: ResponsesAPIResponse) -> Iterator[str]:
+    """Yield text and function-call arguments from a Responses API result.
+
+    ``/v1/responses`` returns a ``ResponsesAPIResponse`` whose generated text
+    lives in ``output[].content[].text``, whose reasoning summaries live in
+    ``output[].summary[].text`` and whose tool-call payloads live in
+    ``output[].arguments`` / ``output[].input``; none of it is reachable via
+    the Chat-Completions ``choices`` shape.
+    """
+    for item in response.output or []:
+        content = _item_get(item, "content")
+        if isinstance(content, list):
+            for part in content:
+                text = _item_get(part, "text")
+                if isinstance(text, str) and text:
+                    yield text
+        summary = _item_get(item, "summary")
+        if isinstance(summary, list):
+            for part in summary:
+                text = _item_get(part, "text")
+                if isinstance(text, str) and text:
+                    yield text
+        yield from _iter_function_fragments(item)
+
+
+def _iter_anthropic_output_text(content: Any) -> Iterator[str]:
+    """Yield text and tool-call payloads from an Anthropic ``/v1/messages`` reply.
+
+    The non-streaming ``/v1/messages`` response reaches the hook as a native
+    dict whose generated text lives in ``content[].text``, whose extended
+    thinking lives in ``content[].thinking`` (``type == "thinking"``) and whose
+    tool calls live in ``content[].input`` (``type == "tool_use"``); none of it
+    is reachable via the Chat-Completions ``choices`` or Responses-API shapes.
+    """
+    if not isinstance(content, list):
+        return
+    for block in content:
+        block_type = _item_get(block, "type")
+        if block_type == "text":
+            text = _item_get(block, "text")
+            if isinstance(text, str) and text:
+                yield text
+        elif block_type == "thinking":
+            thinking = _item_get(block, "thinking")
+            if isinstance(thinking, str) and thinking:
+                yield thinking
+        elif block_type == "tool_use":
+            name = _item_get(block, "name")
+            if isinstance(name, str) and name:
+                yield name
+            tool_input = _item_get(block, "input")
+            if isinstance(tool_input, dict) and tool_input:
+                yield json.dumps(tool_input, sort_keys=True)
+
+
+def _iter_model_response_reasoning_text(response: ModelResponse) -> Iterator[str]:
+    """Yield reasoning text carried on a chat ``ModelResponse``.
+
+    Reasoning models return their chain of thought outside ``message.content``:
+    OpenAI-style ``message.reasoning_content`` and Anthropic-style
+    ``message.thinking_blocks[].thinking``. ``stream_chunk_builder`` preserves
+    both when assembling a stream, so inspecting them here covers the
+    non-streaming, chat-streaming and Anthropic-streaming paths at once.
+    Encrypted ``redacted_thinking`` blocks carry no readable text and are skipped.
+    """
+    for choice in response.choices:
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        reasoning = getattr(message, "reasoning_content", None)
+        if isinstance(reasoning, str) and reasoning:
+            yield reasoning
+        for block in getattr(message, "thinking_blocks", None) or []:
+            if _item_get(block, "type") == "thinking":
+                thinking = _item_get(block, "thinking")
+                if isinstance(thinking, str) and thinking:
+                    yield thinking
+
+
+class AkamaiRuleTriggered(TypedDict, total=False):
+    action: str
+    category: str
+    details: dict[str, Any]
+    message: str
+    riskScore: int
+    ruleId: str
+    selector: str
+    tags: list[str]
+    version: str
+
+
+class AkamaiDetectResponse(TypedDict, total=False):
+    clientRequestId: str
+    overallRiskScore: int
+    rulesTriggered: list[AkamaiRuleTriggered]
+    userApplicationId: str
+
+
+def _chunk_text(text: str, limit: int, overlap: int) -> tuple[str, ...]:
+    """Split ``text`` into overlapping chunks of at most ``limit`` characters.
+
+    Akamai answers a detect call whose ``llmInput`` / ``llmOutput`` exceeds
+    20,000 characters with an opaque HTTP 500, which the guardrail surfaces as
+    a failed request; a GitHub Copilot prompt (large system prompt plus dozens
+    of tool schemas) clears that cap on nearly every call. Truncating would
+    silently stop inspecting the tail of such a prompt, so the text is chunked
+    and every chunk is scanned. Consecutive chunks repeat ``overlap``
+    characters so a pattern straddling a boundary is still contained whole in
+    one chunk.
+    """
+    if len(text) <= limit:
+        return (text,)
+    stride = max(1, limit - overlap)
+    chunk_count = 1 + (len(text) - limit + stride - 1) // stride
+    return tuple(text[index * stride : index * stride + limit] for index in range(chunk_count))
+
+
+def _rule_identity(rule: AkamaiRuleTriggered) -> tuple[Any, ...]:
+    return (rule.get("ruleId"), rule.get("selector"), rule.get("action"), rule.get("message"))
+
+
+def _merge_detection_results(results: tuple[AkamaiDetectResponse, ...]) -> AkamaiDetectResponse:
+    """Fold per-chunk detect responses into the verdict for the whole scan.
+
+    A chunked scan must behave like a single scan: a rule triggered on any one
+    chunk applies to the request, so the rule lists are unioned (de-duplicated
+    on the fields the block payload reports) and the risk score is the highest
+    any chunk saw.
+    """
+    rules = {_rule_identity(rule): rule for result in results for rule in result.get("rulesTriggered") or []}
+    scores = tuple(
+        int(score) for result in results if isinstance(score := result.get("overallRiskScore"), (int, float))
+    )
+    return AkamaiDetectResponse(
+        overallRiskScore=max(scores, default=0),
+        rulesTriggered=list(rules.values()),
+    )
+
+
+class AkamaiFirewallForAIMissingSecrets(Exception):
+    pass
+
+
+class AkamaiFirewallForAIGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        fai_configuration_id: str | None = None,
+        user_application_id: str | None = None,
+        max_detect_chars: int | None = None,
+        **kwargs,
+    ):
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+
+        self.api_key = api_key or os.environ.get("AKAMAI_FIREWALL_API_KEY")
+        self.fai_configuration_id = fai_configuration_id or os.environ.get("AKAMAI_FIREWALL_CONFIGURATION_ID")
+        self.user_application_id = user_application_id or os.environ.get("AKAMAI_FIREWALL_USER_APPLICATION_ID")
+
+        missing = [
+            name
+            for name, value in (
+                ("AKAMAI_FIREWALL_API_KEY", self.api_key),
+                ("AKAMAI_FIREWALL_CONFIGURATION_ID", self.fai_configuration_id),
+                ("AKAMAI_FIREWALL_USER_APPLICATION_ID", self.user_application_id),
+            )
+            if not value
+        ]
+        if missing:
+            raise AkamaiFirewallForAIMissingSecrets(
+                "Couldn't configure the Akamai Firewall for AI guardrail. Missing "
+                + ", ".join(missing)
+                + ". Set them in the environment or pass api_key, fai_configuration_id and "
+                "user_application_id to the guardrail in the config file."
+            )
+
+        self.api_base = (api_base or os.environ.get("AKAMAI_FIREWALL_API_BASE") or DEFAULT_API_BASE).rstrip("/")
+        self.max_detect_chars = self._resolve_max_detect_chars(max_detect_chars)
+        self.chunk_overlap_chars = min(DEFAULT_CHUNK_OVERLAP_CHARS, self.max_detect_chars // 10)
+        super().__init__(**kwargs)
+
+    @staticmethod
+    def _resolve_max_detect_chars(max_detect_chars: int | None) -> int:
+        """Resolve the per-field character cap, falling back to the 20,000 the detect API accepts."""
+        raw = max_detect_chars if max_detect_chars is not None else os.environ.get("AKAMAI_FIREWALL_MAX_DETECT_CHARS")
+        if raw is None:
+            return DEFAULT_MAX_DETECT_CHARS
+        try:
+            resolved = int(raw)
+        except ValueError:
+            verbose_proxy_logger.warning(
+                "Akamai Firewall for AI: ignoring non-numeric max_detect_chars=%r; using %s",
+                raw,
+                DEFAULT_MAX_DETECT_CHARS,
+            )
+            return DEFAULT_MAX_DETECT_CHARS
+        if resolved <= 0:
+            verbose_proxy_logger.warning(
+                "Akamai Firewall for AI: ignoring non-positive max_detect_chars=%s; using %s",
+                raw,
+                DEFAULT_MAX_DETECT_CHARS,
+            )
+            return DEFAULT_MAX_DETECT_CHARS
+        return resolved
+
+    @property
+    def detect_url(self) -> str:
+        return f"{self.api_base}/fai/v1/fai-configurations/{self.fai_configuration_id}/detect"
+
+    @staticmethod
+    def _input_text(data: dict, call_type: str) -> str:
+        request = _translate_anthropic_to_openai_request(data) if call_type in ANTHROPIC_MESSAGES_CALL_TYPES else data
+        fragments = chain(
+            iter_message_text(request),
+            _iter_request_tool_call_text(request),
+            _iter_request_tool_definition_text(request),
+            _iter_request_prompt_text(request),
+        )
+        return "\n".join(fragment for fragment in fragments if fragment)
+
+    @staticmethod
+    def _output_text(response: ModelResponse | Any) -> str:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_content_from_model_response,
+        )
+
+        if isinstance(response, ModelResponse):
+            fragments = chain(
+                [get_content_from_model_response(response)],
+                _iter_model_response_reasoning_text(response),
+            )
+            return "\n".join(fragment for fragment in fragments if fragment)
+        if isinstance(response, ResponsesAPIResponse):
+            return "\n".join(_iter_responses_api_output_text(response))
+        if isinstance(response, dict) and response.get("type") == "message":
+            return "\n".join(_iter_anthropic_output_text(response.get("content")))
+        return ""
+
+    def _detect_payloads(
+        self,
+        client_request_id: str,
+        llm_input: str | None,
+        llm_output: str | None,
+    ) -> tuple[dict[str, str], ...]:
+        """Build the detect request bodies for this scan, one per text chunk.
+
+        Text that fits inside ``max_detect_chars`` produces the single payload
+        the guardrail has always sent. Oversized text is split across several
+        payloads, each tagged with an indexed ``clientRequestId`` so the chunks
+        stay traceable on the Akamai side.
+        """
+        fields = tuple((field, text) for field, text in (("llmInput", llm_input), ("llmOutput", llm_output)) if text)
+        if not fields:
+            return ()
+
+        chunked = tuple(
+            (field, chunk)
+            for field, text in fields
+            for chunk in _chunk_text(text, self.max_detect_chars, self.chunk_overlap_chars)
+        )
+        if len(chunked) > len(fields):
+            verbose_proxy_logger.info(
+                "Akamai Firewall for AI: scanning %s chunks (max %s chars each) for request %s",
+                len(chunked),
+                self.max_detect_chars,
+                client_request_id,
+            )
+
+        single = len(chunked) == 1
+        return tuple(
+            {
+                "clientRequestId": client_request_id if single else f"{client_request_id}-{index}",
+                "userApplicationId": self.user_application_id or "",
+                field: chunk,
+            }
+            for index, (field, chunk) in enumerate(chunked, start=1)
+        )
+
+    async def _post_detect(self, payload: dict[str, str]) -> AkamaiDetectResponse:
+        response = await self.async_handler.post(
+            self.detect_url,
+            headers={
+                "Fai-Api-Key": self.api_key or "",
+                "accept": "application/json",
+                "content-type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        return cast(AkamaiDetectResponse, response.json())  # cast-ok: untyped json() body of the detect API
+
+    async def _detect(
+        self,
+        client_request_id: str,
+        llm_input: str | None = None,
+        llm_output: str | None = None,
+    ) -> None:
+        payloads = self._detect_payloads(client_request_id, llm_input, llm_output)
+        if not payloads:
+            return
+
+        if len(payloads) == 1:
+            self._handle_detection(await self._post_detect(payloads[0]))
+            return
+
+        results = await asyncio.gather(*(self._post_detect(payload) for payload in payloads))
+        self._handle_detection(_merge_detection_results(tuple(results)))
+
+    def _handle_detection(self, result: AkamaiDetectResponse) -> None:
+        rules_triggered = result.get("rulesTriggered") or []
+        blocking_rules = [rule for rule in rules_triggered if str(rule.get("action", "")).lower() in BLOCKING_ACTIONS]
+        if not blocking_rules:
+            if rules_triggered:
+                verbose_proxy_logger.info(
+                    "Akamai Firewall for AI: non-blocking rules triggered: %s",
+                    [rule.get("ruleId") for rule in rules_triggered],
+                )
+            return
+
+        verbose_proxy_logger.warning(
+            "Akamai Firewall for AI: blocked request. overallRiskScore=%s rules=%s",
+            result.get("overallRiskScore"),
+            [rule.get("ruleId") for rule in blocking_rules],
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Blocked by Akamai Firewall for AI",
+                "overallRiskScore": result.get("overallRiskScore"),
+                "rulesTriggered": [
+                    {
+                        "ruleId": rule.get("ruleId"),
+                        "category": rule.get("category"),
+                        "message": rule.get("message"),
+                        "riskScore": rule.get("riskScore"),
+                        "selector": rule.get("selector"),
+                    }
+                    for rule in blocking_rules
+                ],
+            },
+        )
+
+    @staticmethod
+    def _client_request_id(data: dict) -> str:
+        return str(data.get("litellm_call_id") or uuid.uuid4())
+
+    @log_guardrail_information
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> Exception | str | dict | None:
+        if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is not True:
+            return data
+        await self._detect(
+            client_request_id=self._client_request_id(data),
+            llm_input=self._input_text(data, call_type),
+        )
+        return data
+
+    @log_guardrail_information
+    async def async_moderation_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> Exception | str | dict | None:
+        if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.during_call) is not True:
+            return data
+        await self._detect(
+            client_request_id=self._client_request_id(data),
+            llm_input=self._input_text(data, call_type),
+        )
+        return data
+
+    @log_guardrail_information
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any | ModelResponse | EmbeddingResponse | ImageResponse,
+    ) -> Any:
+        if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
+            return response
+        await self._detect(client_request_id=self._client_request_id(data), llm_output=self._output_text(response))
+        return response
+
+    @classmethod
+    def _streaming_output_text(cls, chunks: list, request_data: dict) -> str:
+        """Extract inspectable output text from a fully buffered stream.
+
+        Chat streams (``ModelResponse`` / ``ModelResponseStream`` chunks) are
+        assembled with ``stream_chunk_builder``. Responses-API streams instead
+        emit events, the terminal one of which carries the complete
+        ``ResponsesAPIResponse``; reuse ``_output_text`` on it so streamed
+        Responses output and tool calls are inspected as well. Anthropic
+        ``/v1/messages`` streams arrive as raw SSE ``bytes``; the shared
+        passthrough assembler rebuilds them into a ``ModelResponse`` so streamed
+        Anthropic text and tool calls are inspected through the same path.
+        """
+        if isinstance(chunks[0], (ModelResponse, ModelResponseStream)):
+            from litellm.main import stream_chunk_builder
+
+            assembled = stream_chunk_builder(chunks=chunks)
+            return cls._output_text(assembled) if isinstance(assembled, ModelResponse) else ""
+
+        if isinstance(chunks[0], (bytes, str)):
+            from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+                AnthropicPassthroughLoggingHandler,
+            )
+
+            assembled = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                all_chunks=chunks,
+                litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                model=str(request_data.get("model") or ""),
+            )
+            return cls._output_text(assembled) if isinstance(assembled, ModelResponse) else ""
+
+        for chunk in reversed(chunks):
+            candidate = _item_get(chunk, "response")
+            if isinstance(candidate, ResponsesAPIResponse):
+                return cls._output_text(candidate)
+        return ""
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[Any, None]:
+        if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
+            async for chunk in response:
+                yield chunk
+            return
+
+        chunks = [chunk async for chunk in response]
+        if not chunks:
+            return
+
+        try:
+            await self._detect(
+                client_request_id=self._client_request_id(request_data),
+                llm_output=self._streaming_output_text(chunks, request_data),
+            )
+        except HTTPException as exc:
+            error_obj = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+            error_obj["code"] = exc.status_code
+            yield f"data: {json.dumps({'error': error_obj})}\n\n"
+            return
+        except Exception as exc:
+            verbose_proxy_logger.exception("Akamai Firewall for AI: streaming output scan failed: %s", exc)
+            error_obj = {
+                "message": "Akamai Firewall for AI scan failed; response withheld",
+                "type": "guardrail_scan_error",
+                "code": 500,
+                "guardrail": self.guardrail_name,
+            }
+            yield f"data: {json.dumps({'error': error_obj})}\n\n"
+            return
+
+        for chunk in chunks:
+            yield chunk
+
+    @staticmethod
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
+        from litellm.types.proxy.guardrails.guardrail_hooks.akamai_firewall_for_ai import (
+            AkamaiFirewallForAIGuardrailConfigModel,
+        )
+
+        return AkamaiFirewallForAIGuardrailConfigModel

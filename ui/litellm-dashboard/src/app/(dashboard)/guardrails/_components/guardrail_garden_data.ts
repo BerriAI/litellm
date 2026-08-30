@@ -352,6 +352,15 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Threat Detection"],
   },
   {
+    id: "akamai_firewall_for_ai",
+    name: "Akamai Firewall for AI",
+    description:
+      "Akamai Firewall for AI detects prompt injection, sensitive data disclosure, and other LLM threats on prompts and responses.",
+    category: "partner",
+    logo: guardrailLogoMap["Akamai Firewall for AI"],
+    tags: ["Security", "Threat Detection"],
+  },
+  {
     id: "prompt_security",
     name: "Prompt Security",
     description: "Protect against prompt injection attacks, data leakage, and other LLM security threats.",
