@@ -1151,6 +1151,61 @@ def test_logging_payload_never_stamps_internal_calls():
     assert internal is None
 
 
+def test_savings_are_net_of_a_priced_classifier():
+    """The classifier call is part of what routing cost, so the per-request figure
+    deducts it; a charge big enough to outweigh the model saving goes negative,
+    since the figure is signed on purpose (GH #38816)."""
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
+
+    gross = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+    )
+    net = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision={**_routed_decision(), "classifier_cost": 0.005},
+        usage_object=_cached_usage_object(),
+    )
+    assert gross is not None and net == pytest.approx(gross - 0.005)
+
+
+@pytest.mark.parametrize("classifier_cost", [0.0, "bogus", True])
+def test_an_unpriced_classifier_deducts_nothing(classifier_cost: object):
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
+
+    gross = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+    )
+    with_cost_field = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision={**_routed_decision(), "classifier_cost": classifier_cost},
+        usage_object=_cached_usage_object(),
+    )
+    assert with_cost_field == gross
+
+
+def test_recorded_savings_are_already_net_and_not_deducted_again():
+    """The deduction lives at the figure's computation owner, so a stamped figure is
+    net by construction; the recorded-wins path must not subtract a second time."""
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        gateway_injected_cache=False,
+        routing_decision={**_routed_decision(), "classifier_cost": 0.005},
+        usage_object=_cached_usage_object(),
+        recorded_autorouter_savings=0.5,
+    )
+    assert result.autorouter == 0.5
+
+
 def test_caching_savings_require_a_gateway_injected_breakpoint():
     """The same cached usage is attributed to the gateway only when it added a breakpoint.
 

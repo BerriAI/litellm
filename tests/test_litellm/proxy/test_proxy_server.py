@@ -2127,6 +2127,53 @@ async def test_apply_search_filter_bounds_db_fetch_by_page_and_cap():
 
 
 @pytest.mark.asyncio
+async def test_apply_search_filter_honours_exact_model_name_in_db_query():
+    """
+    `/v2/model/info?model=<group>&search=<term>`: the router list is already
+    narrowed to the exact group, so the DB count and fetch must be too, or
+    other groups' rows leak into the page and inflate total_count.
+    """
+    from litellm.proxy.proxy_server import _apply_search_filter_to_models
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=0)
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    proxy_config = MagicMock()
+    proxy_config.decrypt_model_list_from_db = lambda rows: []
+
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="sonnet",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        model_name="anthropic-sonnet-5",
+    )
+    where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
+    assert where["model_name"] == "anthropic-sonnet-5"
+    assert prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["where"] == where
+
+    prisma_client.db.litellm_proxymodeltable.count.reset_mock()
+    _, total_count = await _apply_search_filter_to_models(
+        all_models=[],
+        search="opus",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        model_name="anthropic-sonnet-5",
+    )
+    prisma_client.db.litellm_proxymodeltable.count.assert_not_called()
+    assert total_count == 0
+
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="sonnet",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+    )
+    where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
+    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
+
+
+@pytest.mark.asyncio
 async def test_filter_models_by_team_id_excludes_viewer_direct_access():
     """
     Regression test: when the UI picks a specific team in the Current Team
@@ -9517,6 +9564,76 @@ class TestDeleteDeploymentSync:
         result = await proxy_config._get_models_from_db(prisma_client=mock_prisma)
 
         assert result is None, f"Expected None on DB failure to signal fetch error, got {result!r}"
+
+    @pytest.mark.asyncio
+    async def test_get_models_from_db_reads_from_writer_not_replica(self):
+        """
+        Regression for #38556: with DATABASE_URL_READ_REPLICA configured, the model
+        reconcile after /model/new used to read via the replica, so a lagging replica
+        made the reload miss the just-committed row and fail the request with a 500.
+        The reconcile read must be pinned to the writer.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.db.prisma_client import PrismaWrapper
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        writer_inner = MagicMock(name="writer_prisma")
+        reader_inner = MagicMock(name="reader_prisma")
+        committed_row = MagicMock(name="just_committed_model_row")
+        writer_inner.litellm_proxymodeltable.find_many = AsyncMock(return_value=[committed_row])
+        reader_inner.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = RoutingPrismaWrapper(
+            writer=PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False),
+            reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
+        )
+
+        result = await ProxyConfig()._get_models_from_db(prisma_client=mock_prisma)
+
+        assert result == [committed_row], f"Expected the writer's just-committed row, got {result!r}"
+        reader_inner.litellm_proxymodeltable.find_many.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_models_from_db_falls_back_to_replica_when_writer_down(self):
+        """
+        The writer pin must not break reader-only degraded mode: a proxy that
+        starts during a primary outage (writer connect failed, replica healthy)
+        must still load DB-backed models through the replica instead of sending
+        the reconcile read to the unavailable writer.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.db.prisma_client import PrismaWrapper
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        writer_inner = MagicMock(name="writer_prisma")
+        reader_inner = MagicMock(name="reader_prisma")
+        replica_row = MagicMock(name="replica_model_row")
+        writer_inner.litellm_proxymodeltable = SimpleNamespace(
+            find_many=AsyncMock(side_effect=RuntimeError("writer unreachable")),
+            create=MagicMock(name="writer_create"),
+        )
+        reader_inner.litellm_proxymodeltable = SimpleNamespace(
+            find_many=AsyncMock(return_value=[replica_row]),
+            create=MagicMock(name="reader_create"),
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = RoutingPrismaWrapper(
+            writer=PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False),
+            reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
+        )
+        mock_prisma.db._writer_unavailable = True
+
+        result = await ProxyConfig()._get_models_from_db(prisma_client=mock_prisma)
+
+        assert result == [replica_row], f"Expected the replica's rows in degraded mode, got {result!r}"
+        writer_inner.litellm_proxymodeltable.find_many.assert_not_awaited()
 
 
 def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):

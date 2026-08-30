@@ -104,6 +104,45 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
+describe("modelInfoCall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("sends the exact model name as the model query param and leaves search alone", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ data: [] }) } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.modelInfoCall(
+      "token",
+      "user",
+      "Admin",
+      2,
+      25,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+      "gpt-4",
+    );
+
+    const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://example.com");
+    expect(parsed.pathname).toBe("/v2/model/info");
+    expect(parsed.searchParams.get("model")).toBe("gpt-4");
+    expect(parsed.searchParams.has("search")).toBe(false);
+    expect(parsed.searchParams.get("page")).toBe("2");
+    expect(parsed.searchParams.get("exclude_auto_routers")).toBe("true");
+  });
+});
+
 describe("daily activity helpers", () => {
   const startTime = new Date("2025-02-12T00:00:00.000Z");
   const endTime = new Date("2025-02-19T00:00:00.000Z");

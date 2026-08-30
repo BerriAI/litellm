@@ -874,3 +874,25 @@ async def test_streaming_step_unchanged_texts_in_another_container_allow(monkeyp
 
     assert result.terminal_action == "allow"
     assert [step.outcome for step in result.step_results] == ["pass"]
+
+
+class _InPlaceMutatingGuardrail(CustomGuardrail):
+    """Rewrites like bedrock/presidio do: rebinds inputs["texts"] on the dict it was handed
+    and returns that same dict, so a post-call comparison against inputs sees no change."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        inputs["texts"] = ["hello [MASKED]"]
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_in_place_rewrite_still_withholds_stream(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_InPlaceMutatingGuardrail()])
+
+    with pytest.raises(UndeliverableStreamRewrite) as info:
+        await _run_streaming_step(["hello [MASKED]"], _TextTranslation())
+
+    assert info.value.guardrail_name == "masker"

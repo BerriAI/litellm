@@ -155,6 +155,59 @@ async def test_model_info_v2_translates_team_model_name(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_model_info_v2_exact_model_filter_matches_team_public_name(monkeypatch):
+    """`/v2/model/info?model=<public name>` must keep the team-scoped row whose
+    `model_name` is the internal routing key: the dashboard links team model
+    chips with the public name, and the exact filter ran before translation."""
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "normal-id-1", "db_model": False},
+    }
+    router = MagicMock()
+    router.model_list = [_team_row(), global_row]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        ps,
+        "_apply_search_filter_to_models",
+        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    )
+    monkeypatch.setattr(
+        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
+    )
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(
+        mlh,
+        "append_agents_to_model_info",
+        AsyncMock(side_effect=lambda models, **kw: models),
+    )
+
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+    resp = await ps.model_info_v2(
+        user_api_key_dict=admin,
+        model="team-claude-sonnet",
+        user_models_only=False,
+        include_team_models=False,
+        debug=False,
+        page=1,
+        size=50,
+        search=None,
+        modelId=None,
+        teamId=None,
+        sortBy=None,
+        sortOrder="asc",
+    )
+
+    assert [m["model_name"] for m in resp["data"]] == ["team-claude-sonnet"]
+    assert resp["total_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     """/v1/model/info list path (no litellm_model_id) must include team-scoped
     deployments from the router model list and surface the public name (#28382)."""
