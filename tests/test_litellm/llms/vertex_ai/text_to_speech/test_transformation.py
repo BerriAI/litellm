@@ -2,6 +2,7 @@ import base64
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
+import pytest
 
 import litellm
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
@@ -180,6 +181,41 @@ class TestVertexAITextToSpeechConfig:
         assert voice_str is None
         assert optional_params["audioEncoding"] == "LINEAR16"
         assert optional_params["vertex_voice_dict"] == expected_voice
+
+    @pytest.mark.parametrize(
+        "voice",
+        [
+            {"name": "Umbriel", "modelName": "gemini-2.5-flash-tts"},
+            {"name": "Umbriel", "model_name": "gemini-2.5-flash-tts"},
+            {"modelName": "gemini-2.5-flash-tts", "model_name": "chirp-3"},
+            {
+                "modelName": "gemini-2.5-flash-tts",
+                "model_name": "chirp-3",
+                "multi_speaker_voice_config": {
+                    "speaker_voice_configs": [
+                        {
+                            "speaker": "Ryan",
+                            "voice_config": {
+                                "prebuilt_voice_config": {
+                                    "voice_name": "Umbriel",
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    )
+    def test_gemini_tts_ignores_voice_model_name_override(self, voice):
+        config = VertexAITextToSpeechConfig()
+        routed_model = "gemini-3.1-flash-tts-preview"
+
+        _, optional_params = config.map_openai_params(
+            model=routed_model,
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+        assert optional_params["vertex_voice_dict"]["modelName"] == routed_model
 
     @patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
     @patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
