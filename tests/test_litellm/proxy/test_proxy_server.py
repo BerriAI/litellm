@@ -4115,6 +4115,7 @@ class TestPriceDataReloadIntegration:
         A revision this pod has not applied takes effect here even one minute into a 6h
         interval; a missing row is a no-op
         """
+        from litellm import utils as litellm_utils
         from litellm.proxy.proxy_server import ProxyConfig
 
         proxy_config = ProxyConfig()
@@ -4143,6 +4144,12 @@ class TestPriceDataReloadIntegration:
         from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 
         original_model_cost = litellm.model_cost.copy()
+        # A reload replays runtime registrations, so any gpt-3.5-turbo entry a
+        # prior test in this worker persisted would be re-registered on top of
+        # the mocked catalog and defeat the exact-equality check below. Isolate
+        # the registry for the duration of this test.
+        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        litellm_utils._runtime_registered_model_cost.clear()
         try:
             with (
                 patch(
@@ -4166,6 +4173,8 @@ class TestPriceDataReloadIntegration:
                 assert proxy_config.model_cost_map_applied_revision == 4
         finally:
             litellm.model_cost = original_model_cost
+            litellm_utils._runtime_registered_model_cost.clear()
+            litellm_utils._runtime_registered_model_cost.update(original_registry)
             _invalidate_model_cost_lowercase_map()
 
     def test_distributed_reload_ignores_already_applied_request(self):
