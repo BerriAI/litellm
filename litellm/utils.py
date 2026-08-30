@@ -3752,6 +3752,14 @@ def get_optional_params_embeddings(
             optional_params = non_default_params
     else:
         optional_params = non_default_params
+        if (
+            (litellm.drop_params is True or resolved_drop_params is True)
+            and (custom_llm_provider == "azure" or custom_llm_provider in litellm.openai_compatible_providers)
+            and "text-embedding-3" not in model
+            and "dimensions" in optional_params
+            and "dimensions" not in allowed_openai_params
+        ):
+            optional_params.pop("dimensions", None)
 
     final_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
@@ -3763,14 +3771,6 @@ def get_optional_params_embeddings(
 
     if "extra_body" in final_params and len(final_params["extra_body"]) == 0:
         final_params.pop("extra_body", None)
-
-    if (
-        (litellm.drop_params is True or resolved_drop_params is True)
-        and (custom_llm_provider == "azure" or custom_llm_provider in litellm.openai_compatible_providers)
-        and "text-embedding-3" not in model
-        and "dimensions" not in (allowed_openai_params or ())
-    ):
-        final_params.pop("dimensions", None)
 
     return final_params
 
