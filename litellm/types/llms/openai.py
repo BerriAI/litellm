@@ -41,7 +41,6 @@ from openai.types.responses.response import (
     ResponseOutputItem,
     Tool,
 )
-from typing_extensions import ReadOnly
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
