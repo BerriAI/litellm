@@ -1,4 +1,5 @@
 
+from typing import Final
 
 import pytest
 
@@ -11,7 +12,7 @@ from litellm.proxy.spend_tracking.savings import (
     marks_gateway_injection,
 )
 from litellm.router import Router
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelInfo, Usage
 
 
 def _anthropic_costs(model: str) -> tuple[float, float]:
@@ -737,18 +738,19 @@ def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
     turn that saved money reported a loss. Those tokens are plain input on such a model.
     """
     first_turn = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    gpt5: Final[ModelInfo] = litellm.get_model_info("gpt-5", "openai")
+    baseline_info: Final[ModelInfo] = {**gpt5, "cache_creation_input_token_cost": None}
     reported = compute_autorouter_savings(
         baseline_model="gpt-5",
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
         usage=first_turn,
         conversation_continuing=False,
+        baseline_info=baseline_info,
     )
 
-    gpt5 = litellm.get_model_info("gpt-5", "openai")
-    assert gpt5.get("cache_creation_input_token_cost") is None, "pick a baseline with no cache-write rate"
     haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    baseline_pays_input = 20_000 * gpt5["input_cost_per_token"] + 1_000 * gpt5["output_cost_per_token"]
+    baseline_pays_input = 20_000 * baseline_info["input_cost_per_token"] + 1_000 * baseline_info["output_cost_per_token"]
     actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
     assert reported == pytest.approx(baseline_pays_input - actually_paid)
     assert reported > 0, "routing a cold first turn onto a cheaper model is a saving, not a loss"
@@ -760,18 +762,19 @@ def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
     prompt at nothing and every switch away from it reported a loss.
     """
     continuing = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    grok: Final[ModelInfo] = litellm.get_model_info("grok-4", "xai")
+    baseline_info: Final[ModelInfo] = {**grok, "cache_read_input_token_cost": None}
     reported = compute_autorouter_savings(
         baseline_model="xai/grok-4",
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
         usage=continuing,
         conversation_continuing=True,
+        baseline_info=baseline_info,
     )
 
-    grok = litellm.get_model_info("grok-4", "xai")
-    assert grok.get("cache_read_input_token_cost") is None, "pick a baseline with no cache-read rate"
     haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    baseline_pays_input = 20_000 * grok["input_cost_per_token"] + 1_000 * grok["output_cost_per_token"]
+    baseline_pays_input = 20_000 * baseline_info["input_cost_per_token"] + 1_000 * baseline_info["output_cost_per_token"]
     actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
     assert reported == pytest.approx(baseline_pays_input - actually_paid)
 
