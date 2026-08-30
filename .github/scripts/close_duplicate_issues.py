@@ -39,31 +39,43 @@ def gh(*args: str) -> str:
     return result.stdout
 
 
+def parse_paginated_issues(raw: str) -> list[dict]:
+    """Parse gh --jq output as newline-delimited JSON, filter out PRs.
+
+    The `gh api --paginate --jq '.[] | ...'` invocation emits one JSON object
+    per line (jq streaming), so each line parses independently. Compared to
+    loading the entire issues payload, this avoids a single ~15MB blob that
+    caused intermittent parse failures on truncation or when older gh
+    versions concatenated arrays without a valid separator.
+    """
+    return [
+        parsed
+        for parsed in (json.loads(line) for line in raw.splitlines() if line.strip())
+        if not parsed.get("is_pr")
+    ]
+
+
 def fetch_open_issues(repo: str | None) -> list[dict]:
-    """Fetch all open issues (excluding PRs) via gh api --paginate."""
+    """Fetch all open issues (excluding PRs) via gh api --paginate.
+
+    Only requests the fields we actually use (number + title) plus a marker
+    for whether the record is a pull request, keeping the payload tiny and
+    the parsing line-oriented.
+    """
     if repo:
         endpoint = (
             f"repos/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
         )
     else:
         endpoint = "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
-    cmd = ["api", "--paginate", endpoint]
-
-    raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
-    issues = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parsed = json.loads(line)
-        if isinstance(parsed, list):
-            issues.extend(parsed)
-        else:
-            issues.append(parsed)
-
-    # Filter out pull requests (they also appear in the issues endpoint)
-    return [i for i in issues if "pull_request" not in i]
+    raw = gh(
+        "api",
+        "--paginate",
+        endpoint,
+        "--jq",
+        '.[] | {number, title, is_pr: has("pull_request")}',
+    )
+    return parse_paginated_issues(raw)
 
 
 def close_as_duplicate(
