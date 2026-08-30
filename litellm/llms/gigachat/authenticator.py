@@ -17,6 +17,7 @@ from litellm.caching.caching import InMemoryCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
+    _get_httpx_client,  # pyright: ignore[reportPrivateUsage]  # house cached-client factory has no public alias
     get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -56,7 +57,7 @@ def _get_scope() -> str:
 
 def _get_http_client() -> HTTPHandler:
     """Get cached httpx client with SSL verification disabled."""
-    return HTTPHandler(ssl_verify=False)
+    return _get_httpx_client(params={"ssl_verify": False})
 
 
 def get_access_token(

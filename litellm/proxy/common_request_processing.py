@@ -2496,7 +2496,7 @@ class ProxyBaseLLMRequestProcessing:
 
                         # For passthrough routes, stream directly without error parsing
                         # since we're dealing with raw binary data (e.g., AWS event streams)
-                        return StreamingResponse(
+                        return _UpstreamClosingStreamingResponse(
                             content=generator,  # pyright: ignore[reportArgumentType]  # generator-configured StreamingResponse
                             status_code=getattr(response, "status_code", status.HTTP_200_OK),
                             media_type=self._passthrough_event_stream_media_type(),

@@ -485,3 +485,10 @@ class TestParseTokenResponse:
             _parse_token_response(self._make_response({"exp": 1700000000000}))
         assert exc_info.value.status_code == 500
         assert "Invalid token response" in exc_info.value.message
+
+
+class TestGetHttpClient:
+    def test_reuses_cached_client_across_calls(self):
+        """Regression: the sync OAuth path must use the shared cached httpx client,
+        not construct a fresh HTTPHandler per token request."""
+        assert authenticator._get_http_client() is authenticator._get_http_client()
