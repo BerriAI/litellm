@@ -17097,7 +17097,13 @@ async def get_config(
             _added_normalized_names: Final[set] = set(_configured_callback_names_normalized)
 
             # Append runtime-only rows (those not in config).
+            # Filter out internal proxy hooks (names starting with _PROXY or known internal names).
+            _internal_callback_prefixes: Final[tuple] = ("_PROXY", "_Async", "ShadowEval", "ServiceLogging", "SkillsInjection", "ResponsesID")
             for _runtime_cb_name, _runtime_cb_type in _runtime_items:
+                # Skip internal proxy callbacks (these are infrastructure, not user-configured).
+                if isinstance(_runtime_cb_name, str) and any(_runtime_cb_name.startswith(p) for p in _internal_callback_prefixes):
+                    continue
+
                 _normalized_runtime = _normalize_callback_alias(_runtime_cb_name)
                 # Skip if this callback is in config or already appended.
                 if _normalized_runtime not in _added_normalized_names:

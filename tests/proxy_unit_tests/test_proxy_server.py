@@ -2922,18 +2922,21 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
 
         callbacks = result["callbacks"]
 
-        # Verify we have all 5 callbacks (2 success + 1 failure + 2 success_and_failure)
-        assert len(callbacks) == 5
+        # Filter out internal/runtime-only callbacks (read_only=True) to test configured callbacks
+        configured_callbacks = [cb for cb in callbacks if not cb.get("read_only", False)]
 
-        # Group callbacks by type
-        success_callbacks = [cb for cb in callbacks if cb.get("type") == "success"]
-        failure_callbacks = [cb for cb in callbacks if cb.get("type") == "failure"]
+        # Verify we have all 5 configured callbacks (2 success + 1 failure + 2 success_and_failure)
+        assert len(configured_callbacks) == 5
+
+        # Group callbacks by type (configured only)
+        success_callbacks = [cb for cb in configured_callbacks if cb.get("type") == "success"]
+        failure_callbacks = [cb for cb in configured_callbacks if cb.get("type") == "failure"]
         success_and_failure_callbacks = [
-            cb for cb in callbacks if cb.get("type") == "success_and_failure"
+            cb for cb in configured_callbacks if cb.get("type") == "success_and_failure"
         ]
 
-        # Verify all callbacks have required fields
-        for callback in callbacks:
+        # Verify all configured callbacks have required fields
+        for callback in configured_callbacks:
             assert "name" in callback
             assert "variables" in callback
             assert "type" in callback
