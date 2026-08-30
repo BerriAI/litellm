@@ -1030,6 +1030,42 @@ def test_bedrock_tools_pt_strict_parameter():
     assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
 
 
+def test_bedrock_tools_pt_forwards_freeform_tool_without_custom_field():
+    """OpenAI Agents SDK freeform tools carry a top-level name and a provider-specific
+    `custom` dict instead of a function payload. Bedrock rejects the `custom` key
+    outright (400 "tools.0.custom.strict: Extra inputs are not permitted"), so the
+    tool must be forwarded as a parameterless toolSpec with the extras stripped
+    rather than dropped or passed through.
+    """
+    tools = [
+        {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a unified diff patch to the workspace.",
+            "custom": {"strict": None},
+        }
+    ]
+    result = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5")
+    assert len(result) == 1, "the freeform tool must not be dropped"
+    tool_spec = result[0]["toolSpec"]
+    assert tool_spec["name"] == "apply_patch"
+    assert tool_spec["description"] == "Apply a unified diff patch to the workspace."
+    assert tool_spec["inputSchema"]["json"] == {"type": "object", "properties": {}, "required": []}
+    assert "custom" not in tool_spec
+    assert "strict" not in tool_spec
+
+
+def test_bedrock_tools_pt_still_drops_unnamed_builtin_tools():
+    """Responses built-in tools (web_search, image_generation, ...) have no top-level
+    name and no Bedrock toolSpec equivalent; they must stay dropped.
+    """
+    tools = [
+        {"type": "web_search_preview"},
+        {"type": "image_generation"},
+    ]
+    assert _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5") == []
+
+
 def test_bedrock_image_processor_content_type_fallback_url_extension():
     """
     Test that _post_call_image_processing falls back to URL extension
@@ -1632,9 +1668,13 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
 def test_bedrock_tools_pt_drops_unmappable_responses_builtin_tools():
     """
     Regression for LIT-3858: Responses built-in tools (image_generation, namespace,
-    tool_search, custom) have no Bedrock toolSpec equivalent. They must be dropped, not
+    tool_search) have no Bedrock toolSpec equivalent. They must be dropped, not
     emitted as junk ``litellm_unnamed_tool_N`` toolSpecs the model can hallucinate calls to.
     Mappable ``function`` and Anthropic ``input_schema`` tools must survive untouched.
+
+    Named ``custom`` tools (freeform tools, e.g. the OpenAI Agents SDK's apply_patch)
+    ARE mappable — a parameterless toolSpec — and are forwarded since #38799; only
+    nameless built-ins stay dropped.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
@@ -1657,7 +1697,7 @@ def test_bedrock_tools_pt_drops_unmappable_responses_builtin_tools():
     )
 
     names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
-    assert names == ["noop"]
+    assert names == ["noop", "free_form"], "named built-ins like namespace must stay dropped"
     assert not any(name.startswith("litellm_unnamed_tool_") for name in names)
 
 

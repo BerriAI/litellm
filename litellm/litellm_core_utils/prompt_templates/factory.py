@@ -5064,14 +5064,29 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
             tool_block_list.append(tool)
             continue
 
-        # Responses built-in tools (web_search, image_generation, namespace, tool_search,
-        # custom) carry neither an OpenAI "function" nor an Anthropic "input_schema" and have
-        # no Bedrock toolSpec equivalent; drop them instead of emitting an empty junk toolSpec.
-        if isinstance(tool, dict) and "function" not in tool and "input_schema" not in tool:
+        # OpenAI Agents SDK freeform tools ({"type": "custom", "name": ...,
+        # "description": ..., "custom": {...}}) carry a top-level name and no
+        # function payload; forward them as parameterless toolSpecs, dropping
+        # provider-specific extras like `custom`, which Bedrock rejects (#38799).
+        # Other named-but-builtin tools (e.g. namespace) and nameless Responses
+        # built-ins (web_search, image_generation, ...) have no Bedrock toolSpec
+        # equivalent and are still dropped below.
+        if (
+            isinstance(tool, dict)
+            and "function" not in tool
+            and "input_schema" not in tool
+            and tool.get("type") == "custom"
+        ):
+            freeform_name = tool.get("name")
+            if not (isinstance(freeform_name, str) and freeform_name.strip()):
+                continue
+            parameters = {"type": "object", "properties": {}}
+            raw_name = freeform_name
+            _tool_description = tool.get("description", None)
+        elif isinstance(tool, dict) and "function" not in tool and "input_schema" not in tool:
             continue
-
         # OpenAI function tools, or Anthropic Messages / Claude Code ({name, input_schema, type, ...})
-        if isinstance(tool, dict) and "input_schema" in tool and "function" not in tool:
+        elif isinstance(tool, dict) and "input_schema" in tool and "function" not in tool:
             parameters = copy.deepcopy(tool.get("input_schema") or {"type": "object", "properties": {}})
             raw_name = tool.get("name", "") or ""
             _tool_description = tool.get("description", None)
