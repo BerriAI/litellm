@@ -365,7 +365,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         else item_data.get("reasoning_content", "")
                     )
 
-                # Create ResponsesReasoningItem object with item data
+                # Create ResponseReasoningItem object from the item data
                 reasoning_item: Final = ResponseReasoningItem(**item_data)
 
                 # Convert back to dict with exclude_none=True to exclude None fields
