@@ -26,6 +26,7 @@ async fn handle(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ChatCompletionsRouteError> {
+    tracing::info!("Handler: Received request");
     let extra_headers = forwarded_headers(&headers)?;
     let result = service::run(
         &state,
