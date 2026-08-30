@@ -7,7 +7,7 @@ import json
 import time
 import types
 from collections.abc import Mapping
-from typing import Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
 
@@ -93,6 +93,9 @@ from ..common_utils import (
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
 )
+
+if TYPE_CHECKING:
+    import tiktoken
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS: Final = [
@@ -921,7 +924,7 @@ class AmazonConverseConfig(BaseConfig):
                         custom_llm_provider="bedrock",
                     )
                     capped = (
-                        AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
                         if legacy_thinking is not None
                         else None
                     )
@@ -1770,7 +1773,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
