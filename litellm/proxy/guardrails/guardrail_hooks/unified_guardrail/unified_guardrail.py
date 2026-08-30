@@ -431,7 +431,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             return
         if stream_started and endpoint_translation is not None:
             error_items: Final = endpoint_translation.build_stream_error_items(
-                exc, responses_so_far=list(responses_yielded) if responses_yielded is not None else None
+                exc, responses_so_far=tuple(responses_yielded) if responses_yielded is not None else None
             )
             if error_items is not None:
                 for error_item in error_items:

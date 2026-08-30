@@ -178,7 +178,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
 
         message, _ = serialize_http_exception_detail(exc.detail)
-        return list(anthropic_sse_error_frames(message))
+        return tuple(anthropic_sse_error_frames(message))
 
     def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
         import uuid

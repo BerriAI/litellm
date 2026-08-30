@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -578,8 +579,11 @@ class BedrockGuardrailStreamingParams(BaseModel):
 
     @classmethod
     def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
-        source: Final[Mapping[str, object]] = extras or {}
-        return cls.model_validate({name: source[name] for name in cls.model_fields if source.get(name) is not None})
+        if not extras:
+            return cls()
+        return cls.model_validate(
+            MappingProxyType({name: extras[name] for name in cls.model_fields if extras.get(name) is not None})
+        )
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):

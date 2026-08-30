@@ -17,6 +17,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
 from litellm.integrations.s3 import get_s3_object_key, resolve_sse_params
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -222,7 +223,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 protocol: Final = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
                 return f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{encoded_key}"
             return f"{self.s3_endpoint_url}/{self.s3_bucket_name}/{encoded_key}"
-        return f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{encoded_key}"
+        return (
+            f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}."
+            f"{get_aws_dns_suffix(self.s3_region_name)}/{encoded_key}"
+        )
 
     def _sse_headers(self) -> Mapping[str, str]:
         candidates: Final = {

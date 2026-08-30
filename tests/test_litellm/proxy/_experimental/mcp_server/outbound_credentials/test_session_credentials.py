@@ -3,6 +3,9 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from pydantic import SecretStr
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
     envelope_keys_from_master_key,
@@ -13,17 +16,22 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
     SessionBearerInvalid,
     SessionRefreshInvalid,
     SessionRefreshOpened,
+    SessionSigningConfigError,
     is_session_bearer_shaped,
     open_session_refresh_bearer,
     resolve_session_bearer,
+    resolve_session_signing_keys,
     session_keys_from_master_key,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     SESSION_TTL_SECONDS,
+    AsymmetricSessionKeys,
     MintedSessionToken,
+    SessionKeys,
     SessionPrincipal,
     mint_session_refresh_token,
     mint_session_token,
+    session_public_key_pem,
 )
 
 NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -133,3 +141,86 @@ def test_refresh_grant_rejects_a_different_client():
 def test_refresh_grant_rejects_access_token_presented_as_refresh():
     result = open_session_refresh_bearer(_access_token(), KEYS, NOW, expected_client_id="llm_client_abc")
     assert isinstance(result, SessionRefreshInvalid)
+
+
+def _rsa_private_pem() -> str:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+
+
+def test_absent_signing_setting_keeps_the_master_key_hs256_default():
+    resolved = resolve_session_signing_keys(MASTER_KEY, None)
+    assert isinstance(resolved, SessionKeys)
+    assert resolved.signing_key.get_secret_value() == KEYS.signing_key.get_secret_value()
+
+
+def test_rs256_signing_setting_resolves_inline_pem_material():
+    pem = _rsa_private_pem()
+    resolved = resolve_session_signing_keys(
+        MASTER_KEY,
+        {"algorithm": "RS256", "kid": "2026-01", "private_key": pem},
+    )
+    assert isinstance(resolved, AsymmetricSessionKeys)
+    assert resolved.kid == "2026-01"
+    minted = mint_session_token(PRINCIPAL, resolved, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    admitted = resolve_session_bearer(f"Bearer {minted.token.get_secret_value()}", resolved, NOW)
+    assert isinstance(admitted, SessionBearerAdmitted)
+
+
+def test_rs256_signing_setting_resolves_env_reference(monkeypatch):
+    monkeypatch.setenv("MCP_SESSION_PRIVATE_KEY", _rsa_private_pem())
+    resolved = resolve_session_signing_keys(
+        MASTER_KEY,
+        {"algorithm": "RS256", "kid": "2026-01", "private_key": "os.environ/MCP_SESSION_PRIVATE_KEY"},
+    )
+    assert isinstance(resolved, AsymmetricSessionKeys)
+
+
+def test_rs256_signing_setting_resolves_previous_public_keys():
+    old_pem = _rsa_private_pem()
+    old_keys = AsymmetricSessionKeys(private_key_pem=SecretStr(old_pem), kid="2025-06")
+    resolved = resolve_session_signing_keys(
+        MASTER_KEY,
+        {
+            "algorithm": "RS256",
+            "kid": "2026-01",
+            "private_key": _rsa_private_pem(),
+            "previous_public_keys": [{"kid": "2025-06", "public_key": session_public_key_pem(old_keys)}],
+        },
+    )
+    assert isinstance(resolved, AsymmetricSessionKeys)
+    minted = mint_session_token(PRINCIPAL, old_keys, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    admitted = resolve_session_bearer(f"Bearer {minted.token.get_secret_value()}", resolved, NOW)
+    assert isinstance(admitted, SessionBearerAdmitted)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"algorithm": "HS512", "kid": "k", "private_key": "irrelevant"},
+        {"algorithm": "RS256", "kid": "k"},
+        {"algorithm": "RS256", "kid": "k", "private_key": "not a pem"},
+        {"algorithm": "RS256", "kid": "k", "private_key": "os.environ/UNSET_MCP_SESSION_KEY_VAR"},
+        {"algorithm": "RS256", "kid": "k", "private_key": "x", "unexpected": True},
+        "not-a-mapping",
+    ],
+)
+def test_defective_signing_setting_fails_closed_never_falls_back_to_hs256(raw):
+    resolved = resolve_session_signing_keys(MASTER_KEY, raw)
+    assert isinstance(resolved, SessionSigningConfigError)
+
+
+def test_signing_config_error_detail_never_leaks_key_material():
+    pem = _rsa_private_pem()
+    resolved = resolve_session_signing_keys(
+        MASTER_KEY,
+        {"algorithm": "RS256", "kid": "k", "private_key": pem, "unexpected": True},
+    )
+    assert isinstance(resolved, SessionSigningConfigError)
+    assert pem.splitlines()[1] not in resolved.detail
