@@ -458,11 +458,35 @@ def _pipeline_managed_guardrail_names(
     )
 
 
-def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket_value: object) -> None:
+def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple[CustomLogger, ...]]:
+    resolved: Final = tuple(
+        litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+            cast(  # cast-ok: the resolver returns None for unknown names, filtered below
+                _custom_logger_compatible_callbacks_literal, callback
+            )
+        )
+        if isinstance(callback, str)
+        else callback
+        for callback in litellm.callbacks
+    )
+    present: Final = tuple(callback for callback in resolved if callback is not None)
+    guardrails: Final = tuple(callback for callback in present if isinstance(callback, CustomGuardrail))
+    others: Final = cast(  # cast-ok: mirrors the legacy loop, which treated every non-guardrail entry as a CustomLogger
+        "tuple[CustomLogger, ...]",
+        tuple(callback for callback in present if not isinstance(callback, CustomGuardrail)),
+    )
+    return (guardrails, others)
+
+
+def _merge_pipeline_metadata_bucket(
+    data: dict, bucket_key: str, modified_bucket_value: object
+) -> None:  # mutable-ok: request payload dict, written in place
     if not isinstance(modified_bucket_value, dict):
         return
     modified_bucket: Final = cast("dict[str, object]", modified_bucket_value)  # cast-ok: metadata buckets are str-keyed
-    surviving_writes: Final = {key: value for key, value in modified_bucket.items() if key != "guardrails"}
+    surviving_writes: Final = {
+        key: value for key, value in modified_bucket.items() if key != "guardrails"
+    }  # mutable-ok: merged into the live request metadata bucket in place
     existing_bucket: Final = data.get(bucket_key)
     if isinstance(existing_bucket, dict):
         cast("dict[str, object]", existing_bucket).update(surviving_writes)  # cast-ok: metadata buckets are str-keyed
@@ -470,7 +494,9 @@ def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket
         data[bucket_key] = surviving_writes
 
 
-def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, object]) -> None:
+def _merge_pipeline_metadata_writes(
+    data: dict, modified_data: Mapping[str, object]
+) -> None:  # mutable-ok: request payload dict, written in place
     """
     Copy metadata-bucket writes from a pipeline's working copy back onto the request.
 
@@ -1557,7 +1583,7 @@ class ProxyLogging:
         mutation is discarded and a warning is logged so the misconfiguration
         is visible instead of silently forwarding unredacted content.
         """
-        scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+        scans_raw_request: Final = callback.scan_raw_request
         should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
         input_data: Final = (  # mutable-ok: same request-payload shape as data
             independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
@@ -1594,7 +1620,7 @@ class ProxyLogging:
                 "scan_raw_request is for block-only guardrails and this mutation is being "
                 "discarded. Remove scan_raw_request from this guardrail's config if it needs "
                 "to mask/rewrite content.",
-                getattr(callback, "guardrail_name", None) or callback.__class__.__name__,
+                callback.guardrail_name or callback.__class__.__name__,
             )
         if scans_raw_request:
             if result is not None:
@@ -1720,7 +1746,7 @@ class ProxyLogging:
         event_hook: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
         response: LLMResponseTypes | None = None,
-    ) -> tuple[dict, LLMResponseTypes | None]:
+    ) -> tuple[dict, LLMResponseTypes | None]:  # mutable-ok: returns the request-payload dict onward
         """
         Execute guardrail pipelines if any are configured for this request.
 
@@ -1745,7 +1771,9 @@ class ProxyLogging:
             if pipeline.mode != event_hook:
                 continue
 
-            step_input: dict = {**data, "response": current_response} if current_response is not None else data
+            step_input: dict = (
+                {**data, "response": current_response} if current_response is not None else data
+            )  # mutable-ok: same request-payload shape as data
 
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,
@@ -1784,7 +1812,9 @@ class ProxyLogging:
         payload (already sent upstream) must stay untouched; a replacement
         response carried in ``modified_data`` is adopted by the caller, and
         metadata-bucket writes (applied guardrails, guardrail logging info)
-        are merged back so headers and spend logs still see them. On the
+        are merged back so headers and spend logs still see them, on block
+        and modify_response too, so failure spend records keep guardrail
+        cost and status. On the
         streaming path it is the buffered chunk list, carried into
         ``ModifyResponseException.original_response`` for usage reporting.
         """
@@ -1795,6 +1825,9 @@ class ProxyLogging:
                 else:
                     _merge_pipeline_metadata_writes(data, result.modified_data)
             return data
+
+        if result.modified_data is not None:
+            _merge_pipeline_metadata_writes(data, result.modified_data)
 
         if result.terminal_action == "block":
             original_exception: Final = result.original_exception
@@ -1941,7 +1974,7 @@ class ProxyLogging:
         # guarantee must hold even under litellm.safe_memory_mode, which
         # otherwise makes deep copies return the original object.
         needs_raw_request_snapshot: Final = any(
-            isinstance(cb, CustomGuardrail) and getattr(cb, "scan_raw_request", False)
+            isinstance(cb, CustomGuardrail) and cb.scan_raw_request
             for cb in ProxyLogging._callback_capabilities().resolved_callbacks
         )
         raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
@@ -2103,7 +2136,7 @@ class ProxyLogging:
         """
 
         def _input_for(callback: CustomGuardrail) -> dict:  # mutable-ok: same request-payload shape as data
-            if not getattr(callback, "scan_raw_request", False) or raw_request_snapshot is None:
+            if not callback.scan_raw_request or raw_request_snapshot is None:
                 return data
             return independent_snapshot(raw_request_snapshot)
 
@@ -2127,11 +2160,7 @@ class ProxyLogging:
             # deployment-level guardrail sharing this name would see no marker
             # via _pre_call_hook_already_ran and re-run it a second time on
             # live kwargs.
-            if (
-                getattr(callback, "scan_raw_request", False)
-                and not isinstance(result, BaseException)
-                and result is not None
-            ):
+            if callback.scan_raw_request and not isinstance(result, BaseException) and result is not None:
                 callback.mark_pre_call_hook_ran(data)
         raised: Final = tuple(result for result in results if isinstance(result, BaseException))
         blocking: Final = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
@@ -2950,26 +2979,8 @@ class ProxyLogging:
             response = pipeline_response  # rebind-ok: adopt the pipeline's replacement response, same contract as the callback loops below
 
         pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "post_call")
-        guardrail_callbacks: Final[list[CustomGuardrail]] = []
-        other_callbacks: Final[list[CustomLogger]] = []
+        guardrail_callbacks, other_callbacks = _partition_post_call_callbacks()
         try:
-            for callback in litellm.callbacks:
-                _callback: CustomLogger | None = None
-                if isinstance(callback, str):
-                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(_custom_logger_compatible_callbacks_literal, callback)
-                    )
-                else:
-                    _callback = callback
-
-                if _callback is not None:
-                    if isinstance(_callback, CustomGuardrail):
-                        guardrail_callbacks.append(_callback)
-                    else:
-                        other_callbacks.append(_callback)
-                    ############## Handle Guardrails ########################################
-                    #############################################################################
-
             # Merge model-level guardrails before checking which guardrails to run
             guardrail_data: Final = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
 
@@ -3449,7 +3460,7 @@ class ProxyLogging:
         self,
         response: "AsyncGenerator[object, None]",
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: dict,  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
     ) -> "AsyncGenerator[Any, None]":
         """
@@ -6323,10 +6334,42 @@ def _should_use_smtp_ssl(smtp_port: int) -> bool:
     return os.getenv("SMTP_USE_SSL", "False") == "True" or smtp_port == 465
 
 
-def _create_smtp_connection(smtp_host: str, smtp_port: int) -> smtplib.SMTP:
+def _create_smtp_connection(smtp_host: str, smtp_port: int, timeout: float) -> smtplib.SMTP:
     if _should_use_smtp_ssl(smtp_port=smtp_port):
-        return smtplib.SMTP_SSL(host=smtp_host, port=smtp_port, context=ssl.create_default_context())
-    return smtplib.SMTP(host=smtp_host, port=smtp_port)
+        return smtplib.SMTP_SSL(host=smtp_host, port=smtp_port, context=ssl.create_default_context(), timeout=timeout)
+    return smtplib.SMTP(host=smtp_host, port=smtp_port, timeout=timeout)
+
+
+def _send_smtp_message(
+    email_message: MIMEMultipart,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_username: str | None,
+    smtp_password: str | None,
+    sender_email: str,
+    receiver_email: str,
+    timeout: float,
+) -> None:
+    using_ssl: Final = _should_use_smtp_ssl(smtp_port=smtp_port)
+    with _create_smtp_connection(
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        timeout=timeout,
+    ) as server:
+        if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
+            server.starttls(context=ssl.create_default_context())
+
+        if smtp_username and smtp_password:
+            server.login(
+                user=smtp_username,
+                password=smtp_password,
+            )
+
+        server.send_message(
+            msg=email_message,
+            from_addr=sender_email,
+            to_addrs=receiver_email,
+        )
 
 
 async def send_email(
@@ -6372,27 +6415,18 @@ async def send_email(
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        using_ssl: Final = _should_use_smtp_ssl(smtp_port=smtp_port)
-        with _create_smtp_connection(
+        smtp_timeout: Final = float(os.getenv("SMTP_TIMEOUT", "30"))
+        await asyncio.to_thread(
+            _send_smtp_message,
+            email_message=email_message,
             smtp_host=smtp_host,
             smtp_port=smtp_port,
-        ) as server:
-            if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
-                server.starttls(context=ssl.create_default_context())
-
-            # Login to your email account only if smtp_username and smtp_password are provided
-            if smtp_username and smtp_password:
-                server.login(
-                    user=smtp_username,
-                    password=smtp_password,
-                )
-
-            # Send the email
-            server.send_message(
-                msg=email_message,
-                from_addr=sender_email,
-                to_addrs=receiver_email,
-            )
+            smtp_username=smtp_username,
+            smtp_password=smtp_password,
+            sender_email=sender_email,
+            receiver_email=receiver_email,
+            timeout=smtp_timeout,
+        )
 
     except Exception as e:
         verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))

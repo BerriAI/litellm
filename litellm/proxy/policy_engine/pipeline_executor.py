@@ -109,7 +109,7 @@ class _StreamRewriteObserver(CustomGuardrail):
 
 def _prepare_hook_input(
     step: PipelineStep,
-    callback: CustomLogger,
+    callback: CustomGuardrail,
     data: dict,  # mutable-ok: same request-payload shape the hooks mutate
     raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
 ) -> tuple[dict, bool]:  # mutable-ok: returns that same request-payload dict
@@ -119,15 +119,17 @@ def _prepare_hook_input(
     pipeline may have already rewritten), same reason the normal sequential/parallel
     guardrail loops do this."""
     if "metadata" not in data:
-        data["metadata"] = {}
-    data["metadata"]["guardrails"] = [step.guardrail]
+        data["metadata"] = {}  # mutable-ok: request metadata bucket, hooks mutate it
+    data["metadata"]["guardrails"] = [
+        step.guardrail
+    ]  # mutable-ok: guardrails list is part of the request-payload shape
 
-    scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+    scans_raw_request: Final = callback.scan_raw_request
     hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
         independent_snapshot(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
     )
     if hook_input is not data:
-        hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
+        hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]  # mutable-ok: request metadata shape
     return hook_input, scans_raw_request
 
 
@@ -238,6 +240,7 @@ class PipelineExecutor:
                     step_results=step_results,
                     error_message=error_detail,
                     original_exception=original_exception,
+                    modified_data=working_data if working_data != data else None,
                 )
 
             if action == "modify_response":
@@ -245,6 +248,7 @@ class PipelineExecutor:
                     terminal_action="modify_response",
                     step_results=step_results,
                     modify_response_message=step.modify_response_message or error_detail,
+                    modified_data=working_data if working_data != data else None,
                 )
 
             # action == "next" → continue to next step
@@ -382,7 +386,12 @@ class PipelineExecutor:
             if response is None or scans_raw_request:
                 return ("pass", None, None, None)
             if mode == "post_call":
-                return ("pass", {"response": response}, None, None)
+                return (
+                    "pass",
+                    {"response": response},
+                    None,
+                    None,
+                )  # mutable-ok: modified-data contract is a plain dict
             return ("pass", response if isinstance(response, dict) else None, None, None)
 
         except UndeliverableStreamRewrite:
