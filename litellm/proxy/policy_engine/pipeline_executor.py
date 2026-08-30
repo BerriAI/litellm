@@ -236,6 +236,7 @@ class PipelineExecutor:
                     step_results=step_results,
                     error_message=error_detail,
                     original_exception=original_exception,
+                    modified_data=working_data if working_data != data else None,
                 )
 
             if action == "modify_response":
@@ -243,6 +244,7 @@ class PipelineExecutor:
                     terminal_action="modify_response",
                     step_results=step_results,
                     modify_response_message=step.modify_response_message or error_detail,
+                    modified_data=working_data if working_data != data else None,
                 )
 
             # action == "next" → continue to next step
