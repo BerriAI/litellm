@@ -50,17 +50,7 @@ def fetch_open_issues(repo: str | None) -> list[dict]:
     cmd = ["api", "--paginate", endpoint]
 
     raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
-    issues = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parsed = json.loads(line)
-        if isinstance(parsed, list):
-            issues.extend(parsed)
-        else:
-            issues.append(parsed)
+    issues = json.loads(raw)
 
     # Filter out pull requests (they also appear in the issues endpoint)
     return [i for i in issues if "pull_request" not in i]
