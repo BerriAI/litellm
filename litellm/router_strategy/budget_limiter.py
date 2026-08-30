@@ -407,6 +407,8 @@ class RouterBudgetLimiting(CustomLogger):
             if self._detached_increment_operations is not None:
                 return self._detached_increment_operations
             increment_operations_to_flush: Final = tuple(self.redis_increment_operation_queue)
+            if not increment_operations_to_flush:
+                return increment_operations_to_flush
             self.redis_increment_operation_queue = []  # mutable-ok: emptied queue must stay appendable
             self._detached_increment_operations = increment_operations_to_flush
             return increment_operations_to_flush
@@ -443,6 +445,7 @@ class RouterBudgetLimiting(CustomLogger):
     async def _flush_queued_increment_operations(self, redis_cache: RedisCache) -> bool:
         increment_operations_to_flush: Final = await self._detach_queued_increment_operations()
         if len(increment_operations_to_flush) == 0:
+            await self._clear_detached_increment_operations()
             return True
 
         verbose_router_logger.debug(

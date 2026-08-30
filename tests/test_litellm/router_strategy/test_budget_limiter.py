@@ -206,6 +206,32 @@ async def test_should_keep_increments_when_flush_is_cancelled_after_success() ->
 
 
 @pytest.mark.asyncio
+async def test_empty_flush_does_not_block_later_increment_sync() -> None:
+    redis_cache = _MockRedisCache(initial_values={_SPEND_KEY: 100.0})
+    in_memory_cache = _MockInMemoryCache(initial_values={_SPEND_KEY: 100.0})
+    budget_limiter = _new_router_budget_limiter(
+        redis_cache=redis_cache,
+        in_memory_cache=in_memory_cache,
+        provider_budget_config={"openai": BudgetConfig(time_period="1d", budget_limit=500.0)},
+    )
+
+    empty_flush_succeeded = await budget_limiter._push_in_memory_increments_to_redis()
+    await budget_limiter._increment_spend_in_current_window(spend_key=_SPEND_KEY, response_cost=20.0, ttl=86400)
+    await budget_limiter._sync_in_memory_spend_with_redis()
+
+    assert empty_flush_succeeded is True
+    assert budget_limiter._detached_increment_operations is None
+    assert budget_limiter.redis_increment_operation_queue == []
+    assert redis_cache.values[_SPEND_KEY] == 120.0
+    assert in_memory_cache.values[_SPEND_KEY] == 120.0
+    assert redis_cache.events == [
+        "increment_pipeline:start",
+        "increment_pipeline:done",
+        "batch_get",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_should_requeue_increments_when_flush_is_cancelled_and_redis_fails() -> None:
     pipeline_started = asyncio.Event()
     allow_pipeline_to_complete = asyncio.Event()
