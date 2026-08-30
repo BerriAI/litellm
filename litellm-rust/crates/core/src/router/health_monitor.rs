@@ -10,11 +10,11 @@
 //! - Uses `AtomicU64` for all metrics to avoid RwLock overhead
 //! - Pre-allocates HashMap with expected capacity
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use parking_lot::RwLock;
 
 use super::Deployment;
 
@@ -50,7 +50,7 @@ struct DeploymentHealth {
     /// Last time health was updated (stored as nanoseconds since epoch in AtomicU64)
     last_updated_nanos: AtomicU64,
     /// Whether the deployment is marked as healthy in config
-    config_healthy: AtomicBool,
+    _config_healthy: AtomicBool,
 }
 
 impl DeploymentHealth {
@@ -63,7 +63,7 @@ impl DeploymentHealth {
             concurrent_requests: AtomicU64::new(0),
             avg_latency_ms_bits: AtomicU64::new(0.0_f64.to_bits()),
             last_updated_nanos: AtomicU64::new(0),
-            config_healthy: AtomicBool::new(config_healthy),
+            _config_healthy: AtomicBool::new(config_healthy),
         }
     }
 
@@ -91,20 +91,22 @@ impl DeploymentHealth {
         f64::from_bits(self.avg_latency_ms_bits.load(Ordering::Relaxed))
     }
 
-    fn set_avg_latency_ms(&self, latency_ms: f64) {
-        self.avg_latency_ms_bits.store(latency_ms.to_bits(), Ordering::Relaxed);
+    fn _set_avg_latency_ms(&self, latency_ms: f64) {
+        self.avg_latency_ms_bits
+            .store(latency_ms.to_bits(), Ordering::Relaxed);
     }
 
-    fn get_last_updated(&self) -> Option<Instant> {
+    fn _get_last_updated(&self) -> Option<Instant> {
         let nanos = self.last_updated_nanos.load(Ordering::Relaxed);
         if nanos == 0 {
             None
         } else {
             // Convert nanoseconds back to Instant
             // Note: This is an approximation since we can't perfectly reconstruct Instant
-            Some(Instant::now() - Duration::from_nanos(
-                Instant::now().elapsed().as_nanos() as u64 - nanos
-            ))
+            Some(
+                Instant::now()
+                    - Duration::from_nanos(Instant::now().elapsed().as_nanos() as u64 - nanos),
+            )
         }
     }
 
@@ -178,7 +180,10 @@ impl HealthMonitor {
     /// Returns Arc<str> for zero-copy sharing.
     #[inline]
     fn deployment_key(deployment: &Deployment) -> Arc<str> {
-        let key = format!("{}:{}", deployment.model_name, deployment.litellm_params.model);
+        let key = format!(
+            "{}:{}",
+            deployment.model_name, deployment.litellm_params.model
+        );
         Arc::from(key)
     }
 
@@ -229,20 +234,19 @@ impl HealthMonitor {
         // Update rolling average latency using atomic operations
         let latency_ms = latency.as_secs_f64() * 1000.0;
         let total_requests = health.total_requests.load(Ordering::Relaxed) as f64;
-        
+
         // Atomically update average latency using compare-and-swap
         loop {
             let current_bits = health.avg_latency_ms_bits.load(Ordering::Relaxed);
             let current_avg = f64::from_bits(current_bits);
             let new_avg = (current_avg * (total_requests - 1.0) + latency_ms) / total_requests;
             let new_bits = new_avg.to_bits();
-            
-            if health.avg_latency_ms_bits.compare_exchange(
-                current_bits,
-                new_bits,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ).is_ok() {
+
+            if health
+                .avg_latency_ms_bits
+                .compare_exchange(current_bits, new_bits, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
                 break;
             }
         }
@@ -269,20 +273,19 @@ impl HealthMonitor {
         // Update rolling average latency using atomic operations
         let latency_ms = latency.as_secs_f64() * 1000.0;
         let total_requests = health.total_requests.load(Ordering::Relaxed) as f64;
-        
+
         // Atomically update average latency using compare-and-swap
         loop {
             let current_bits = health.avg_latency_ms_bits.load(Ordering::Relaxed);
             let current_avg = f64::from_bits(current_bits);
             let new_avg = (current_avg * (total_requests - 1.0) + latency_ms) / total_requests;
             let new_bits = new_avg.to_bits();
-            
-            if health.avg_latency_ms_bits.compare_exchange(
-                current_bits,
-                new_bits,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ).is_ok() {
+
+            if health
+                .avg_latency_ms_bits
+                .compare_exchange(current_bits, new_bits, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
                 break;
             }
         }
@@ -304,14 +307,14 @@ impl HealthMonitor {
     async fn recalculate_health_status(&self, deployment: &Deployment) {
         let health = self.get_or_create_health(deployment);
         let total_requests = health.total_requests.load(Ordering::Relaxed);
-        
+
         // Not enough data yet
         if total_requests < self.config.min_requests_for_health {
             health.set_status(HealthStatus::Unknown);
             return;
         }
 
-        let successful_requests = health.successful_requests.load(Ordering::Relaxed);
+        let _successful_requests = health.successful_requests.load(Ordering::Relaxed);
         let failed_requests = health.failed_requests.load(Ordering::Relaxed);
         let error_rate = failed_requests as f64 / total_requests as f64;
         let avg_latency = health.get_avg_latency_ms();
@@ -459,7 +462,12 @@ impl HealthMonitor {
                 let key = Self::deployment_key(deployment);
                 deployments
                     .get(&key)
-                    .map(|h| matches!(h.get_status(), HealthStatus::Healthy | HealthStatus::Unknown))
+                    .map(|h| {
+                        matches!(
+                            h.get_status(),
+                            HealthStatus::Healthy | HealthStatus::Unknown
+                        )
+                    })
                     .unwrap_or(true) // Unknown status is considered healthy
             })
             .collect()
@@ -531,7 +539,10 @@ mod tests {
         let deployment = create_deployment("gpt-4", "openai/gpt-4", Some(true));
 
         // Initial status should be Unknown (no data yet)
-        assert_eq!(monitor.get_health_status(&deployment).await, HealthStatus::Unknown);
+        assert_eq!(
+            monitor.get_health_status(&deployment).await,
+            HealthStatus::Unknown
+        );
     }
 
     #[tokio::test]
@@ -542,7 +553,9 @@ mod tests {
         // Record some successful requests
         for _ in 0..15 {
             monitor.record_request_start(&deployment).await;
-            monitor.record_request_success(&deployment, Duration::from_millis(100)).await;
+            monitor
+                .record_request_success(&deployment, Duration::from_millis(100))
+                .await;
         }
 
         let metrics = monitor.get_health_metrics(&deployment).await;
@@ -564,11 +577,15 @@ mod tests {
         // Record some requests with failures
         for _ in 0..10 {
             monitor.record_request_start(&deployment).await;
-            monitor.record_request_success(&deployment, Duration::from_millis(100)).await;
+            monitor
+                .record_request_success(&deployment, Duration::from_millis(100))
+                .await;
         }
         for _ in 0..5 {
             monitor.record_request_start(&deployment).await;
-            monitor.record_request_failure(&deployment, Duration::from_millis(200)).await;
+            monitor
+                .record_request_failure(&deployment, Duration::from_millis(200))
+                .await;
         }
 
         let metrics = monitor.get_health_metrics(&deployment).await;
@@ -591,11 +608,15 @@ mod tests {
         // Record requests with high error rate
         for _ in 0..8 {
             monitor.record_request_start(&deployment).await;
-            monitor.record_request_success(&deployment, Duration::from_millis(100)).await;
+            monitor
+                .record_request_success(&deployment, Duration::from_millis(100))
+                .await;
         }
         for _ in 0..4 {
             monitor.record_request_start(&deployment).await;
-            monitor.record_request_failure(&deployment, Duration::from_millis(200)).await;
+            monitor
+                .record_request_failure(&deployment, Duration::from_millis(200))
+                .await;
         }
 
         let metrics = monitor.get_health_metrics(&deployment).await;
@@ -615,11 +636,15 @@ mod tests {
         // Record requests with very high error rate
         for _ in 0..5 {
             monitor.record_request_start(&deployment).await;
-            monitor.record_request_success(&deployment, Duration::from_millis(100)).await;
+            monitor
+                .record_request_success(&deployment, Duration::from_millis(100))
+                .await;
         }
         for _ in 0..10 {
             monitor.record_request_start(&deployment).await;
-            monitor.record_request_failure(&deployment, Duration::from_millis(200)).await;
+            monitor
+                .record_request_failure(&deployment, Duration::from_millis(200))
+                .await;
         }
 
         let metrics = monitor.get_health_metrics(&deployment).await;
@@ -637,7 +662,9 @@ mod tests {
         // Record some successful requests
         for _ in 0..15 {
             monitor.record_request_start(&deployment).await;
-            monitor.record_request_success(&deployment, Duration::from_millis(100)).await;
+            monitor
+                .record_request_success(&deployment, Duration::from_millis(100))
+                .await;
         }
 
         // Should still be healthy
@@ -653,12 +680,14 @@ mod tests {
         // Make dep2 unhealthy
         for _ in 0..10 {
             monitor.record_request_start(&dep2).await;
-            monitor.record_request_failure(&dep2, Duration::from_millis(200)).await;
+            monitor
+                .record_request_failure(&dep2, Duration::from_millis(200))
+                .await;
         }
 
         let candidates = vec![&dep1, &dep2];
         let healthy = monitor.filter_healthy(candidates).await;
-        
+
         // dep1 should be healthy (Unknown status), dep2 should be unhealthy
         assert_eq!(healthy.len(), 1);
         assert_eq!(healthy[0].litellm_params.model, "openai/gpt-4");

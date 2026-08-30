@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use futures::Stream;
 use litellm_core::auth::{HashedToken, KeyObject};
-use litellm_core::chat_completions::{chat_completions, chat_completions_stream, StreamingChunk};
 use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
+use litellm_core::chat_completions::{StreamingChunk, chat_completions, chat_completions_stream};
 use litellm_core::cost_calculator::{self, CostRequest};
 use litellm_core::persistence::CacheStore;
 use litellm_core::spend_tracking::{EntityType, SpendUpdateItem};
@@ -15,10 +15,10 @@ use litellm_core::{CoreError, CoreResult};
 use serde_json::{Map, Value};
 
 use crate::integrations::custom_guardrail::{GuardrailContext, GuardrailRequest};
+use crate::integrations::custom_logger::CallType;
 use crate::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLoggerRunner, ModelCallDetails,
 };
-use crate::integrations::custom_logger::CallType;
 use crate::state::AppState;
 
 // Global request counter for zero-alloc request IDs
@@ -58,12 +58,12 @@ impl Stream for SpendTrackingStream {
         if let Some(error_msg) = self.timeout_enforcer.check_timeout() {
             return Poll::Ready(Some(Err(CoreError::Timeout(error_msg))));
         }
-        
+
         // Check comprehensive timeouts (connect, read, pool, total, chunk)
         if let Some(error_msg) = self.comprehensive_timeout_tracker.check_timeouts() {
             return Poll::Ready(Some(Err(CoreError::Timeout(error_msg))));
         }
-        
+
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(Some(chunk)))) => {
                 // Update comprehensive timeout tracker
@@ -71,18 +71,18 @@ impl Stream for SpendTrackingStream {
                 if !self.comprehensive_timeout_tracker.connection_established {
                     self.comprehensive_timeout_tracker.connection_established = true;
                 }
-                
+
                 // Check for model repetition
                 if let Some(error_msg) = self.repetition_detector.check_repetition(&chunk) {
                     return Poll::Ready(Some(Err(CoreError::InvalidResponse(error_msg))));
                 }
-                
+
                 // Strip role from delta after first chunk
                 let chunk = self.role_stripper.process_chunk(&chunk);
-                
+
                 // Track usage for cost calculation
                 self.tracker.accumulate(&chunk);
-                
+
                 // Track tool calls and function calls
                 if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
                     if let Some(first_choice) = choices.first() {
@@ -93,10 +93,10 @@ impl Stream for SpendTrackingStream {
                         }
                     }
                 }
-                
+
                 // Track finish reason
                 self.finish_reason_tracker.process_chunk(&chunk);
-                
+
                 // Extract and preserve provider-specific fields
                 if let Some(fields) = crate::streaming::extract_provider_specific_fields(&chunk) {
                     // Merge with existing fields (later chunks override earlier ones)
@@ -106,10 +106,11 @@ impl Stream for SpendTrackingStream {
                         self.provider_specific_fields = Some(fields);
                     }
                 }
-                
+
                 // Extract provider-specific features from chunk
-                self.provider_feature_handler.extract_from_chunk(&chunk, None);
-                
+                self.provider_feature_handler
+                    .extract_from_chunk(&chunk, None);
+
                 Poll::Ready(Some(Ok(Some(chunk))))
             }
             Poll::Ready(Some(Ok(None))) => {
@@ -134,16 +135,17 @@ impl Stream for SpendTrackingStream {
                                 prompt_tokens,
                                 completion_tokens,
                                 total_tokens,
-                                prompt_tokens_details: Some(cost_calculator::types::PromptTokensDetails {
-                                    cached_tokens,
-                                    cache_hit_tokens: cached_tokens,
-                                    cache_creation_tokens,
-                                    text_tokens: prompt_tokens.saturating_sub(
-                                        cached_tokens + cache_creation_tokens
-                                    ),
-                                    audio_tokens: 0,
-                                    image_tokens: 0,
-                                }),
+                                prompt_tokens_details: Some(
+                                    cost_calculator::types::PromptTokensDetails {
+                                        cached_tokens,
+                                        cache_hit_tokens: cached_tokens,
+                                        cache_creation_tokens,
+                                        text_tokens: prompt_tokens
+                                            .saturating_sub(cached_tokens + cache_creation_tokens),
+                                        audio_tokens: 0,
+                                        image_tokens: 0,
+                                    },
+                                ),
                                 completion_tokens_details: None,
                             },
                             custom_llm_provider: None,
@@ -209,8 +211,16 @@ impl Stream for SpendTrackingStream {
                         }
 
                         // Update metrics
-                        state.metrics.tokens_total.with_label_values(&[&model, "prompt"]).inc_by(prompt_tokens);
-                        state.metrics.tokens_total.with_label_values(&[&model, "completion"]).inc_by(completion_tokens);
+                        state
+                            .metrics
+                            .tokens_total
+                            .with_label_values(&[&model, "prompt"])
+                            .inc_by(prompt_tokens);
+                        state
+                            .metrics
+                            .tokens_total
+                            .with_label_values(&[&model, "completion"])
+                            .inc_by(completion_tokens);
 
                         tracing::info!(
                             model = %model,
@@ -352,7 +362,13 @@ pub async fn run(
 
     // Check rate limits (RPM, max_parallel_requests)
     if let Some(ref redis) = state.redis {
-        match crate::auth::rate_limit::check_request_limits(redis, key_object, hashed_token.as_hex_str()).await {
+        match crate::auth::rate_limit::check_request_limits(
+            redis,
+            key_object,
+            hashed_token.as_hex_str(),
+        )
+        .await
+        {
             crate::auth::rate_limit::RateLimitResult::Allowed => {}
             crate::auth::rate_limit::RateLimitResult::RpmExceeded { limit, .. } => {
                 return Err(CoreError::Auth(format!(
@@ -377,9 +393,9 @@ pub async fn run(
         model = %model,
         "Looking up deployments for model"
     );
-    
+
     let deployments = state.router.get_all_deployments(&model);
-    
+
     tracing::debug!(
         request_id = request_id,
         model = %model,
@@ -387,7 +403,7 @@ pub async fn run(
         "Found {} deployments",
         deployments.len()
     );
-    
+
     if deployments.is_empty() {
         return Err(CoreError::Routing(format!(
             "no deployment available for model '{model}'"
@@ -398,7 +414,11 @@ pub async fn run(
         .get("timeout")
         .and_then(Value::as_f64)
         .map(Duration::from_secs_f64)
-        .or_else(|| Some(Duration::from_secs_f64(state.config.default_request_timeout_secs)));
+        .or_else(|| {
+            Some(Duration::from_secs_f64(
+                state.config.default_request_timeout_secs,
+            ))
+        });
 
     // Check if streaming is requested
     let is_streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
@@ -439,7 +459,11 @@ pub async fn run(
         // Run pre-call guardrails
         let guardrail_context = GuardrailContext::new(CallType::Completion);
         let guardrail_request = GuardrailRequest::new(body.clone());
-        match state.guardrail_runner.run_pre_call(&guardrail_context, guardrail_request).await {
+        match state
+            .guardrail_runner
+            .run_pre_call(&guardrail_context, guardrail_request)
+            .await
+        {
             Ok((modified_request, _report)) => {
                 // Guardrails may have modified the request
                 body = modified_request.data;
@@ -479,9 +503,15 @@ pub async fn run(
         if let (Some(key), Some(redis)) = (&cache_key, &state.redis) {
             use litellm_core::persistence::CacheStore;
             if let Ok(Some(cached)) = redis.get(key).await {
-                state.metrics.requests_total.with_label_values(&[provider_model, "cached"]).inc();
+                state
+                    .metrics
+                    .requests_total
+                    .with_label_values(&[provider_model, "cached"])
+                    .inc();
                 let cached_bytes = serde_json::to_vec(&cached).map_err(|err| {
-                    CoreError::InvalidResponse(format!("failed to serialize cached response: {err}"))
+                    CoreError::InvalidResponse(format!(
+                        "failed to serialize cached response: {err}"
+                    ))
                 })?;
                 return Ok(ChatCompletionsResult::Complete(cached_bytes));
             }
@@ -519,19 +549,32 @@ pub async fn run(
                         let breaker = state.circuit_breakers.get_or_create(provider);
                         breaker.record_success().await;
                     }
-                    state.metrics.requests_total.with_label_values(&[provider_model, "success"]).inc();
-                    state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(start.elapsed().as_secs_f64());
+                    state
+                        .metrics
+                        .requests_total
+                        .with_label_values(&[provider_model, "success"])
+                        .inc();
+                    state
+                        .metrics
+                        .request_duration_seconds
+                        .with_label_values(&[provider_model])
+                        .observe(start.elapsed().as_secs_f64());
 
                     // Count images in request for vision/multimodal support
-                    let messages = body.get("messages").cloned().unwrap_or(Value::Array(vec![]));
-                    let (image_count, image_tokens) = crate::streaming::StreamingCostTracker::count_images_in_messages(&messages);
-                    
+                    let messages = body
+                        .get("messages")
+                        .cloned()
+                        .unwrap_or(Value::Array(vec![]));
+                    let (image_count, image_tokens) =
+                        crate::streaming::StreamingCostTracker::count_images_in_messages(&messages);
+
                     let mut tracker = crate::streaming::StreamingCostTracker::new();
                     tracker.image_count = image_count;
                     tracker.image_tokens = image_tokens;
-                    
+
                     // Extract provider-specific features from request
-                    let optional_params = body.as_object()
+                    let optional_params = body
+                        .as_object()
                         .map(|obj| {
                             obj.iter()
                                 .filter(|(k, _)| k.as_str() != "model" && k.as_str() != "messages")
@@ -539,8 +582,10 @@ pub async fn run(
                                 .collect()
                         })
                         .unwrap_or_default();
-                    let mut provider_feature_handler = crate::streaming::ProviderFeatureHandler::new();
-                    provider_feature_handler.extract_from_request(&Value::Object(optional_params), custom_llm_provider);
+                    let mut provider_feature_handler =
+                        crate::streaming::ProviderFeatureHandler::new();
+                    provider_feature_handler
+                        .extract_from_request(&Value::Object(optional_params), custom_llm_provider);
 
                     let tracking_stream = SpendTrackingStream {
                         inner: stream,
@@ -552,19 +597,20 @@ pub async fn run(
                         timeout_enforcer: crate::streaming::StreamTimeoutEnforcer::new(
                             std::env::var("LITELLM_MAX_STREAMING_DURATION_SECONDS")
                                 .ok()
-                                .and_then(|v| v.parse().ok())
+                                .and_then(|v| v.parse().ok()),
                         ),
                         repetition_detector: crate::streaming::ModelRepetitionDetector::new(
                             std::env::var("LITELLM_MAX_STREAMING_REPETITIONS")
                                 .ok()
                                 .and_then(|v| v.parse().ok())
                                 .unwrap_or(10),
-                            5
+                            5,
                         ),
                         provider_feature_handler,
-                        comprehensive_timeout_tracker: crate::streaming::ComprehensiveTimeoutTracker::new(
-                            crate::streaming::ComprehensiveTimeoutConfig::from_env()
-                        ),
+                        comprehensive_timeout_tracker:
+                            crate::streaming::ComprehensiveTimeoutTracker::new(
+                                crate::streaming::ComprehensiveTimeoutConfig::from_env(),
+                            ),
                         provider_specific_fields: None,
                         state: Arc::new(state.clone()),
                         model: provider_model.to_string(),
@@ -578,8 +624,16 @@ pub async fn run(
                         let breaker = state.circuit_breakers.get_or_create(provider);
                         breaker.record_failure().await;
                     }
-                    state.metrics.requests_total.with_label_values(&[provider_model, "error"]).inc();
-                    state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(start.elapsed().as_secs_f64());
+                    state
+                        .metrics
+                        .requests_total
+                        .with_label_values(&[provider_model, "error"])
+                        .inc();
+                    state
+                        .metrics
+                        .request_duration_seconds
+                        .with_label_values(&[provider_model])
+                        .observe(start.elapsed().as_secs_f64());
                     Err(err)
                 }
             }
@@ -622,7 +676,11 @@ pub async fn run(
                         }
 
                         if let Some(ref redis) = state.redis {
-                            crate::auth::rate_limit::release_parallel_slot(redis, hashed_token.as_hex_str()).await;
+                            crate::auth::rate_limit::release_parallel_slot(
+                                redis,
+                                hashed_token.as_hex_str(),
+                            )
+                            .await;
                         }
 
                         if let Some(ref redis) = state.redis {
@@ -636,13 +694,30 @@ pub async fn run(
                             .await;
                         }
 
-                        record_spend(state, &response, provider_model, key_object, hashed_token).await;
+                        record_spend(state, &response, provider_model, key_object, hashed_token)
+                            .await;
 
                         let duration = start.elapsed().as_secs_f64();
-                        state.metrics.requests_total.with_label_values(&[provider_model, "success"]).inc();
-                        state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
-                        state.metrics.tokens_total.with_label_values(&[provider_model, "prompt"]).inc_by(response.usage.prompt_tokens as u64);
-                        state.metrics.tokens_total.with_label_values(&[provider_model, "completion"]).inc_by(response.usage.completion_tokens as u64);
+                        state
+                            .metrics
+                            .requests_total
+                            .with_label_values(&[provider_model, "success"])
+                            .inc();
+                        state
+                            .metrics
+                            .request_duration_seconds
+                            .with_label_values(&[provider_model])
+                            .observe(duration);
+                        state
+                            .metrics
+                            .tokens_total
+                            .with_label_values(&[provider_model, "prompt"])
+                            .inc_by(response.usage.prompt_tokens as u64);
+                        state
+                            .metrics
+                            .tokens_total
+                            .with_label_values(&[provider_model, "completion"])
+                            .inc_by(response.usage.completion_tokens as u64);
 
                         tracing::info!(
                             request_id = request_id,
@@ -665,7 +740,9 @@ pub async fn run(
                         if let (Some(key), Some(redis)) = (&cache_key, &state.redis) {
                             use litellm_core::persistence::CacheStore;
                             let cache_ttl = state.config.cache_ttl_secs;
-                            if let Ok(response_value) = serde_json::from_slice::<Value>(&response_bytes) {
+                            if let Ok(response_value) =
+                                serde_json::from_slice::<Value>(&response_bytes)
+                            {
                                 let _ = redis.set(key, &response_value, Some(cache_ttl)).await;
                             }
                         }
@@ -686,7 +763,11 @@ pub async fn run(
                         );
                         let runner = CustomLoggerRunner::new(state.loggers.as_ref().clone());
                         let _ = runner
-                            .async_log_success_event(&callback_details, &callback_response, callback_timing)
+                            .async_log_success_event(
+                                &callback_details,
+                                &callback_response,
+                                callback_timing,
+                            )
                             .await;
 
                         return Ok(ChatCompletionsResult::Complete(response_bytes));
@@ -694,7 +775,10 @@ pub async fn run(
                     Err(err) => {
                         if attempt < max_retries && crate::auth::retry::is_retryable_error(&err) {
                             deployment_error = Some(err);
-                            let delay = crate::auth::retry::calculate_delay(attempt + 1, &retry_config.network_strategy);
+                            let delay = crate::auth::retry::calculate_delay(
+                                attempt + 1,
+                                &retry_config.network_strategy,
+                            );
                             tokio::time::sleep(delay).await;
                             request = build_request();
                             continue;
@@ -712,8 +796,16 @@ pub async fn run(
             }
 
             let duration = start.elapsed().as_secs_f64();
-            state.metrics.requests_total.with_label_values(&[provider_model, "error"]).inc();
-            state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
+            state
+                .metrics
+                .requests_total
+                .with_label_values(&[provider_model, "error"])
+                .inc();
+            state
+                .metrics
+                .request_duration_seconds
+                .with_label_values(&[provider_model])
+                .observe(duration);
 
             let err = match deployment_error {
                 Some(e) => e,
@@ -767,7 +859,11 @@ pub async fn run(
     }
 
     // All deployments exhausted
-    let err = last_error.unwrap_or_else(|| CoreError::Routing("no chat completions deployment is configured for this model".to_string()));
+    let err = last_error.unwrap_or_else(|| {
+        CoreError::Routing(
+            "no chat completions deployment is configured for this model".to_string(),
+        )
+    });
     let duration = start.elapsed().as_secs_f64();
 
     tracing::error!(
@@ -781,11 +877,7 @@ pub async fn run(
     );
 
     // Execute final failure callbacks
-    let callback_details = ModelCallDetails::new(
-        &model,
-        "unknown",
-        CallType::ChatCompletion,
-    );
+    let callback_details = ModelCallDetails::new(&model, "unknown", CallType::ChatCompletion);
     let callback_timing = CallbackTiming::new(
         start.elapsed().as_secs_f64() - duration,
         start.elapsed().as_secs_f64(),
@@ -894,9 +986,9 @@ fn validate_chat_completions_body(body: &Value) -> CoreResult<()> {
         CoreError::InvalidRequest("chat completions body requires 'messages'".to_string())
     })?;
 
-    let messages_arr = messages.as_array().ok_or_else(|| {
-        CoreError::InvalidRequest("'messages' must be an array".to_string())
-    })?;
+    let messages_arr = messages
+        .as_array()
+        .ok_or_else(|| CoreError::InvalidRequest("'messages' must be an array".to_string()))?;
 
     if messages_arr.is_empty() {
         return Err(CoreError::InvalidRequest(
@@ -1068,14 +1160,20 @@ mod tests {
                 request: GuardrailRequest,
             ) -> GuardrailFuture<'a> {
                 Box::pin(async move {
-                    if request.data.get("messages").and_then(|m| m.as_array()).map(|arr| {
-                        arr.iter().any(|msg| {
-                            msg.get("content")
-                                .and_then(|c| c.as_str())
-                                .map(|s| s.contains("blocked_keyword"))
-                                .unwrap_or(false)
+                    if request
+                        .data
+                        .get("messages")
+                        .and_then(|m| m.as_array())
+                        .map(|arr| {
+                            arr.iter().any(|msg| {
+                                msg.get("content")
+                                    .and_then(|c| c.as_str())
+                                    .map(|s| s.contains("blocked_keyword"))
+                                    .unwrap_or(false)
+                            })
                         })
-                    }).unwrap_or(false) {
+                        .unwrap_or(false)
+                    {
                         Err(GuardrailError::blocked("request contains blocked keyword"))
                     } else {
                         Ok(GuardrailDecision::Allow(request))
@@ -1084,14 +1182,18 @@ mod tests {
             }
         }
 
-        let guardrail_runner = Arc::new(CustomGuardrailRunner::new(vec![Arc::new(BlockingGuardrail)]));
+        let guardrail_runner = Arc::new(CustomGuardrailRunner::new(vec![Arc::new(
+            BlockingGuardrail,
+        )]));
         let context = GuardrailContext::new(CallType::Completion);
 
         // Test blocking
         let blocked_request = GuardrailRequest::new(json!({
             "messages": [{"role": "user", "content": "this contains blocked_keyword"}]
         }));
-        let result = guardrail_runner.run_pre_call(&context, blocked_request).await;
+        let result = guardrail_runner
+            .run_pre_call(&context, blocked_request)
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("blocked keyword"));
 
@@ -1099,7 +1201,9 @@ mod tests {
         let allowed_request = GuardrailRequest::new(json!({
             "messages": [{"role": "user", "content": "this is fine"}]
         }));
-        let result = guardrail_runner.run_pre_call(&context, allowed_request).await;
+        let result = guardrail_runner
+            .run_pre_call(&context, allowed_request)
+            .await;
         assert!(result.is_ok());
     }
 }

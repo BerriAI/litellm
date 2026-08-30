@@ -3,9 +3,9 @@
 //! This module provides OpenTelemetry integration for the AI gateway,
 //! enabling distributed tracing across all LLM calls.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// OpenTelemetry callback configuration.
 #[derive(Debug, Clone)]
@@ -98,7 +98,7 @@ impl OpenTelemetryCallback {
     pub fn end_span(&self, span_id: &str) {
         let end_time = self.current_time_nanos();
         let mut traces = self.traces.write();
-        
+
         if let Some(trace) = traces.iter_mut().find(|t| t.span_id == span_id) {
             trace.end_time = end_time;
         }
@@ -107,7 +107,7 @@ impl OpenTelemetryCallback {
     /// Add a tag to a span.
     pub fn add_tag(&self, span_id: &str, key: &str, value: &str) {
         let mut traces = self.traces.write();
-        
+
         if let Some(trace) = traces.iter_mut().find(|t| t.span_id == span_id) {
             trace.tags.insert(key.to_string(), value.to_string());
         }
@@ -117,7 +117,7 @@ impl OpenTelemetryCallback {
     pub fn add_log(&self, span_id: &str, message: &str, level: &str) {
         let timestamp = self.current_time_nanos();
         let mut traces = self.traces.write();
-        
+
         if let Some(trace) = traces.iter_mut().find(|t| t.span_id == span_id) {
             trace.logs.push(LogEntry {
                 timestamp,
@@ -166,13 +166,17 @@ impl OpenTelemetryCallback {
         latency_ms: u64,
     ) {
         let span_id = self.start_span("llm_call");
-        
+
         self.add_tag(&span_id, "model", model);
         self.add_tag(&span_id, "provider", provider);
         self.add_tag(&span_id, "prompt_tokens", &prompt_tokens.to_string());
-        self.add_tag(&span_id, "completion_tokens", &completion_tokens.to_string());
+        self.add_tag(
+            &span_id,
+            "completion_tokens",
+            &completion_tokens.to_string(),
+        );
         self.add_tag(&span_id, "latency_ms", &latency_ms.to_string());
-        
+
         self.add_log(&span_id, "LLM call completed", "info");
         self.end_span(&span_id);
     }
@@ -193,10 +197,10 @@ mod tests {
     fn test_start_and_end_span() {
         let config = OpenTelemetryConfig::default();
         let callback = OpenTelemetryCallback::new(config);
-        
+
         let span_id = callback.start_span("test_operation");
         assert_eq!(callback.get_traces().len(), 1);
-        
+
         callback.end_span(&span_id);
         let traces = callback.get_traces();
         assert_eq!(traces.len(), 1);
@@ -207,11 +211,11 @@ mod tests {
     fn test_add_tags() {
         let config = OpenTelemetryConfig::default();
         let callback = OpenTelemetryCallback::new(config);
-        
+
         let span_id = callback.start_span("test_operation");
         callback.add_tag(&span_id, "key1", "value1");
         callback.add_tag(&span_id, "key2", "value2");
-        
+
         let traces = callback.get_traces();
         assert_eq!(traces[0].tags.len(), 2);
         assert_eq!(traces[0].tags.get("key1"), Some(&"value1".to_string()));
@@ -222,10 +226,10 @@ mod tests {
     fn test_add_logs() {
         let config = OpenTelemetryConfig::default();
         let callback = OpenTelemetryCallback::new(config);
-        
+
         let span_id = callback.start_span("test_operation");
         callback.add_log(&span_id, "Test message", "info");
-        
+
         let traces = callback.get_traces();
         assert_eq!(traces[0].logs.len(), 1);
         assert_eq!(traces[0].logs[0].message, "Test message");
@@ -236,15 +240,21 @@ mod tests {
     fn test_record_llm_call() {
         let config = OpenTelemetryConfig::default();
         let callback = OpenTelemetryCallback::new(config);
-        
+
         callback.record_llm_call("gpt-4", "openai", 100, 50, 150);
-        
+
         let traces = callback.get_traces();
         assert_eq!(traces.len(), 1);
         assert_eq!(traces[0].tags.get("model"), Some(&"gpt-4".to_string()));
         assert_eq!(traces[0].tags.get("provider"), Some(&"openai".to_string()));
-        assert_eq!(traces[0].tags.get("prompt_tokens"), Some(&"100".to_string()));
-        assert_eq!(traces[0].tags.get("completion_tokens"), Some(&"50".to_string()));
+        assert_eq!(
+            traces[0].tags.get("prompt_tokens"),
+            Some(&"100".to_string())
+        );
+        assert_eq!(
+            traces[0].tags.get("completion_tokens"),
+            Some(&"50".to_string())
+        );
         assert_eq!(traces[0].tags.get("latency_ms"), Some(&"150".to_string()));
     }
 }

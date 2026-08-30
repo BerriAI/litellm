@@ -26,7 +26,7 @@ pub enum EmbeddingsInput {
 }
 
 pub(super) struct ProviderEmbeddingsRequest {
-    pub(super) provider: String,
+    pub(super) _provider: String,
     pub(super) model: String,
     pub(super) config: &'static dyn EmbeddingsProviderConfig,
     pub(super) url: String,

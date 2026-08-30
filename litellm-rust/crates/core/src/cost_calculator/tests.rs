@@ -407,7 +407,7 @@ fn test_provider_prefix_stripping() {
 
     for model in &prefixed_models {
         let request = CostRequest {
-            model: model,
+            model,
             usage: Usage {
                 prompt_tokens: 100,
                 completion_tokens: 50,

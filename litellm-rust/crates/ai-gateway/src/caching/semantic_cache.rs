@@ -4,9 +4,9 @@
 //! for similar requests. This improves cache hit rates for similar but not
 //! identical requests.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// A cached entry with its embedding and response.
 #[derive(Clone)]
@@ -100,7 +100,7 @@ impl SemanticCache {
     /// Get a cached response for a request embedding.
     pub fn get(&self, embedding: &[f32]) -> Option<String> {
         let entries = self.entries.read();
-        
+
         // Find the most similar entry above the threshold.
         let mut best_match = None;
         let mut best_similarity = self.config.similarity_threshold;
@@ -121,12 +121,12 @@ impl SemanticCache {
         if let Some(key) = best_match {
             let mut stats = self.stats.write();
             stats.hits += 1;
-            
+
             // Update access count.
             if let Some(entry) = self.entries.write().get_mut(&key) {
                 entry.access_count += 1;
             }
-            
+
             entries.get(&key).map(|e| e.response.clone())
         } else {
             let mut stats = self.stats.write();
@@ -136,7 +136,13 @@ impl SemanticCache {
     }
 
     /// Insert a new entry into the cache.
-    pub fn insert(&self, key: String, embedding: Vec<f32>, response: String, ttl_secs: Option<u64>) {
+    pub fn insert(
+        &self,
+        key: String,
+        embedding: Vec<f32>,
+        response: String,
+        ttl_secs: Option<u64>,
+    ) {
         let mut entries = self.entries.write();
         let mut stats = self.stats.write();
 
@@ -239,9 +245,14 @@ mod tests {
     fn test_cache_insert_and_get() {
         let cache = SemanticCache::new(SemanticCacheConfig::default());
         let embedding = vec![1.0, 0.0, 0.0];
-        
-        cache.insert("key1".to_string(), embedding.clone(), "response1".to_string(), None);
-        
+
+        cache.insert(
+            "key1".to_string(),
+            embedding.clone(),
+            "response1".to_string(),
+            None,
+        );
+
         let result = cache.get(&embedding);
         assert_eq!(result, Some("response1".to_string()));
     }
@@ -250,7 +261,7 @@ mod tests {
     fn test_cache_miss() {
         let cache = SemanticCache::new(SemanticCacheConfig::default());
         let embedding = vec![1.0, 0.0, 0.0];
-        
+
         let result = cache.get(&embedding);
         assert_eq!(result, None);
     }
@@ -262,11 +273,26 @@ mod tests {
             ..Default::default()
         };
         let cache = SemanticCache::new(config);
-        
-        cache.insert("key1".to_string(), vec![1.0, 0.0, 0.0], "response1".to_string(), None);
-        cache.insert("key2".to_string(), vec![0.0, 1.0, 0.0], "response2".to_string(), None);
-        cache.insert("key3".to_string(), vec![0.0, 0.0, 1.0], "response3".to_string(), None);
-        
+
+        cache.insert(
+            "key1".to_string(),
+            vec![1.0, 0.0, 0.0],
+            "response1".to_string(),
+            None,
+        );
+        cache.insert(
+            "key2".to_string(),
+            vec![0.0, 1.0, 0.0],
+            "response2".to_string(),
+            None,
+        );
+        cache.insert(
+            "key3".to_string(),
+            vec![0.0, 0.0, 1.0],
+            "response3".to_string(),
+            None,
+        );
+
         assert_eq!(cache.len(), 2);
     }
 
@@ -274,12 +300,17 @@ mod tests {
     fn test_cache_stats() {
         let cache = SemanticCache::new(SemanticCacheConfig::default());
         let embedding = vec![1.0, 0.0, 0.0];
-        
-        cache.insert("key1".to_string(), embedding.clone(), "response1".to_string(), None);
-        
+
+        cache.insert(
+            "key1".to_string(),
+            embedding.clone(),
+            "response1".to_string(),
+            None,
+        );
+
         let _ = cache.get(&embedding); // Hit
         let _ = cache.get(&vec![0.0, 1.0, 0.0]); // Miss
-        
+
         let stats = cache.get_stats();
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 1);
@@ -289,14 +320,22 @@ mod tests {
     #[test]
     fn test_cache_warming() {
         let cache = SemanticCache::new(SemanticCacheConfig::default());
-        
+
         let requests = vec![
-            ("key1".to_string(), vec![1.0, 0.0, 0.0], "response1".to_string()),
-            ("key2".to_string(), vec![0.0, 1.0, 0.0], "response2".to_string()),
+            (
+                "key1".to_string(),
+                vec![1.0, 0.0, 0.0],
+                "response1".to_string(),
+            ),
+            (
+                "key2".to_string(),
+                vec![0.0, 1.0, 0.0],
+                "response2".to_string(),
+            ),
         ];
-        
+
         cache.warm(requests);
-        
+
         assert_eq!(cache.len(), 2);
     }
 }

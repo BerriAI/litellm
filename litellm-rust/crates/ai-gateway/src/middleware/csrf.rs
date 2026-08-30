@@ -9,11 +9,11 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use base64::{Engine as _, engine::general_purpose};
+use rand::Rng;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::collections::HashMap;
-use rand::Rng;
-use base64::{Engine as _, engine::general_purpose};
 
 /// CSRF protection state.
 pub struct CsrfState {
@@ -37,10 +37,10 @@ impl CsrfState {
         let mut rng = rand::thread_rng();
         let token_bytes: [u8; 32] = rng.r#gen();
         let token = general_purpose::STANDARD.encode(token_bytes);
-        
+
         let mut tokens = self.tokens.lock().await;
         tokens.insert(session_id.to_string(), token.clone());
-        
+
         token
     }
 
@@ -73,11 +73,14 @@ pub async fn csrf_middleware(
     if path.starts_with("/v1/") || request.headers().get("Authorization").is_some() {
         return Ok(next.run(request).await);
     }
-    
+
     // Only validate CSRF token for state-changing methods
     if matches!(
         request.method(),
-        &axum::http::Method::POST | &axum::http::Method::PUT | &axum::http::Method::DELETE | &axum::http::Method::PATCH
+        &axum::http::Method::POST
+            | &axum::http::Method::PUT
+            | &axum::http::Method::DELETE
+            | &axum::http::Method::PATCH
     ) {
         // Get session ID from cookie or header
         let session_id = request
@@ -114,7 +117,10 @@ pub async fn csrf_middleware_from_app_state(
 ) -> Result<Response, StatusCode> {
     if matches!(
         request.method(),
-        &axum::http::Method::POST | &axum::http::Method::PUT | &axum::http::Method::DELETE | &axum::http::Method::PATCH
+        &axum::http::Method::POST
+            | &axum::http::Method::PUT
+            | &axum::http::Method::DELETE
+            | &axum::http::Method::PATCH
     ) {
         // Skip CSRF validation for API routes that use bearer token authentication
         // CSRF protection is mainly needed for cookie-based authentication in browsers
@@ -154,7 +160,7 @@ mod tests {
     async fn test_csrf_token_generation() {
         let state = CsrfState::new(3600);
         let token = state.generate_token("session1").await;
-        
+
         assert!(!token.is_empty());
         assert!(state.validate_token("session1", &token).await);
     }
@@ -163,7 +169,7 @@ mod tests {
     async fn test_csrf_token_validation() {
         let state = CsrfState::new(3600);
         let token = state.generate_token("session1").await;
-        
+
         assert!(state.validate_token("session1", &token).await);
         assert!(!state.validate_token("session2", &token).await);
         assert!(!state.validate_token("session1", "invalid_token").await);
@@ -173,7 +179,7 @@ mod tests {
     async fn test_csrf_token_removal() {
         let state = CsrfState::new(3600);
         let token = state.generate_token("session1").await;
-        
+
         assert!(state.validate_token("session1", &token).await);
         state.remove_token("session1").await;
         assert!(!state.validate_token("session1", &token).await);

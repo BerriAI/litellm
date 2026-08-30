@@ -4,20 +4,19 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::middleware::{
+        security_headers::security_headers_middleware, tracing::tracing_middleware,
+        validation::validation_middleware,
+    };
     use axum::{
+        Router,
         body::Body,
         http::{Method, Request, StatusCode},
         middleware::from_fn,
         routing::post,
-        Router,
     };
-    use tower::ServiceExt;
     use std::sync::Arc;
-    use crate::middleware::{
-        validation::validation_middleware,
-        security_headers::security_headers_middleware,
-        tracing::tracing_middleware,
-    };
+    use tower::ServiceExt;
 
     async fn test_handler() -> &'static str {
         "OK"
@@ -38,10 +37,7 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get("X-Frame-Options").unwrap(),
-            "DENY"
-        );
+        assert_eq!(response.headers().get("X-Frame-Options").unwrap(), "DENY");
         assert_eq!(
             response.headers().get("X-Content-Type-Options").unwrap(),
             "nosniff"
@@ -153,13 +149,10 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        
+
         // Check security headers
-        assert_eq!(
-            response.headers().get("X-Frame-Options").unwrap(),
-            "DENY"
-        );
-        
+        assert_eq!(response.headers().get("X-Frame-Options").unwrap(), "DENY");
+
         // Check tracing headers
         assert!(response.headers().get("X-Trace-ID").is_some());
     }
@@ -181,10 +174,7 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get("X-Frame-Options").unwrap(),
-            "DENY"
-        );
+        assert_eq!(response.headers().get("X-Frame-Options").unwrap(), "DENY");
     }
 
     #[tokio::test]
@@ -222,8 +212,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_alerting_state_tracking() {
-        use crate::middleware::alerting::AlertingState;
         use crate::alerting::AlertingConfig;
+        use crate::middleware::alerting::AlertingState;
 
         let alerting_state = AlertingState::new(AlertingConfig::default());
 
@@ -268,13 +258,10 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        
+
         // Check security headers
-        assert_eq!(
-            response.headers().get("X-Frame-Options").unwrap(),
-            "DENY"
-        );
-        
+        assert_eq!(response.headers().get("X-Frame-Options").unwrap(), "DENY");
+
         // Check tracing headers
         assert!(response.headers().get("X-Trace-ID").is_some());
     }

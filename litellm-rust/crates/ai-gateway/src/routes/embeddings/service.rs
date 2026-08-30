@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use litellm_core::auth::{HashedToken, KeyObject};
 use litellm_core::cost_calculator::{self, CostRequest};
-use litellm_core::embeddings::types::{EmbeddingsInput, EmbeddingsRequest, EmbeddingsResponse};
 use litellm_core::embeddings::embeddings;
+use litellm_core::embeddings::types::{EmbeddingsInput, EmbeddingsRequest, EmbeddingsResponse};
 use litellm_core::persistence::CacheStore;
 use litellm_core::spend_tracking::{EntityType, SpendUpdateItem};
 use litellm_core::{CoreError, CoreResult};
@@ -96,7 +96,13 @@ pub async fn run(
 
     // Check rate limits (RPM, max_parallel_requests)
     if let Some(ref redis) = state.redis {
-        match crate::auth::rate_limit::check_request_limits(redis, key_object, hashed_token.as_hex_str()).await {
+        match crate::auth::rate_limit::check_request_limits(
+            redis,
+            key_object,
+            hashed_token.as_hex_str(),
+        )
+        .await
+        {
             crate::auth::rate_limit::RateLimitResult::Allowed => {}
             crate::auth::rate_limit::RateLimitResult::RpmExceeded { limit, .. } => {
                 return Err(CoreError::Auth(format!(
@@ -123,7 +129,9 @@ pub async fn run(
         )));
     }
 
-    let timeout = Some(Duration::from_secs_f64(state.config.default_request_timeout_secs));
+    let timeout = Some(Duration::from_secs_f64(
+        state.config.default_request_timeout_secs,
+    ));
 
     // Try each deployment in order (fallback routing)
     let mut last_error: Option<CoreError> = None;
@@ -153,17 +161,31 @@ pub async fn run(
             Some(Value::Array(arr)) => {
                 let strings: Result<Vec<String>, _> = arr
                     .iter()
-                    .map(|v| v.as_str().map(String::from).ok_or_else(|| CoreError::InvalidRequest("input array must contain strings".to_string())))
+                    .map(|v| {
+                        v.as_str().map(String::from).ok_or_else(|| {
+                            CoreError::InvalidRequest(
+                                "input array must contain strings".to_string(),
+                            )
+                        })
+                    })
                     .collect();
                 EmbeddingsInput::Multiple(strings?)
             }
-            _ => return Err(CoreError::InvalidRequest("embeddings body requires an 'input' field".to_string())),
+            _ => {
+                return Err(CoreError::InvalidRequest(
+                    "embeddings body requires an 'input' field".to_string(),
+                ));
+            }
         };
 
         // Run pre-call guardrails
         let guardrail_context = GuardrailContext::new(CallType::Other("embeddings".to_string()));
         let guardrail_request = GuardrailRequest::new(body.clone());
-        match state.guardrail_runner.run_pre_call(&guardrail_context, guardrail_request).await {
+        match state
+            .guardrail_runner
+            .run_pre_call(&guardrail_context, guardrail_request)
+            .await
+        {
             Ok((modified_request, _report)) => {
                 // Guardrails may have modified the request
                 // For embeddings, we just continue with the modified body
@@ -179,8 +201,14 @@ pub async fn run(
         let request = EmbeddingsRequest {
             model: upstream_model,
             input,
-            encoding_format: body.get("encoding_format").and_then(Value::as_str).map(String::from),
-            dimensions: body.get("dimensions").and_then(Value::as_u64).map(|d| d as u32),
+            encoding_format: body
+                .get("encoding_format")
+                .and_then(Value::as_str)
+                .map(String::from),
+            dimensions: body
+                .get("dimensions")
+                .and_then(Value::as_u64)
+                .map(|d| d as u32),
             user: body.get("user").and_then(Value::as_str).map(String::from),
             api_key: deployment.litellm_params.api_key.as_deref(),
             api_base: deployment.litellm_params.api_base.as_deref(),
@@ -204,7 +232,11 @@ pub async fn run(
                     }
 
                     if let Some(ref redis) = state.redis {
-                        crate::auth::rate_limit::release_parallel_slot(redis, hashed_token.as_hex_str()).await;
+                        crate::auth::rate_limit::release_parallel_slot(
+                            redis,
+                            hashed_token.as_hex_str(),
+                        )
+                        .await;
                     }
 
                     // Record spend
@@ -222,9 +254,21 @@ pub async fn run(
                     }
 
                     let duration = start.elapsed().as_secs_f64();
-                    state.metrics.requests_total.with_label_values(&[provider_model, "success"]).inc();
-                    state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
-                    state.metrics.tokens_total.with_label_values(&[provider_model, "prompt"]).inc_by(response.usage.prompt_tokens as u64);
+                    state
+                        .metrics
+                        .requests_total
+                        .with_label_values(&[provider_model, "success"])
+                        .inc();
+                    state
+                        .metrics
+                        .request_duration_seconds
+                        .with_label_values(&[provider_model])
+                        .observe(duration);
+                    state
+                        .metrics
+                        .tokens_total
+                        .with_label_values(&[provider_model, "prompt"])
+                        .inc_by(response.usage.prompt_tokens as u64);
 
                     tracing::info!(
                         model = %provider_model,
@@ -239,13 +283,18 @@ pub async fn run(
                     return serde_json::to_value(response)
                         .map(EmbeddingsResponseEnum::Json)
                         .map_err(|err| {
-                            CoreError::InvalidResponse(format!("failed to serialize embeddings response: {err}"))
+                            CoreError::InvalidResponse(format!(
+                                "failed to serialize embeddings response: {err}"
+                            ))
                         });
                 }
                 Err(err) => {
                     if attempt < max_retries && crate::auth::retry::is_retryable_error(&err) {
                         deployment_error = Some(err);
-                        let delay = crate::auth::retry::calculate_delay(attempt + 1, &retry_config.network_strategy);
+                        let delay = crate::auth::retry::calculate_delay(
+                            attempt + 1,
+                            &retry_config.network_strategy,
+                        );
                         tokio::time::sleep(delay).await;
                         // Recreate request for retry
                         let input = match body.get("input") {
@@ -253,17 +302,33 @@ pub async fn run(
                             Some(Value::Array(arr)) => {
                                 let strings: Result<Vec<String>, _> = arr
                                     .iter()
-                                    .map(|v| v.as_str().map(String::from).ok_or_else(|| CoreError::InvalidRequest("input array must contain strings".to_string())))
+                                    .map(|v| {
+                                        v.as_str().map(String::from).ok_or_else(|| {
+                                            CoreError::InvalidRequest(
+                                                "input array must contain strings".to_string(),
+                                            )
+                                        })
+                                    })
                                     .collect();
                                 EmbeddingsInput::Multiple(strings?)
                             }
-                            _ => return Err(CoreError::InvalidRequest("embeddings body requires an 'input' field".to_string())),
+                            _ => {
+                                return Err(CoreError::InvalidRequest(
+                                    "embeddings body requires an 'input' field".to_string(),
+                                ));
+                            }
                         };
                         request = EmbeddingsRequest {
                             model: upstream_model,
                             input,
-                            encoding_format: body.get("encoding_format").and_then(Value::as_str).map(String::from),
-                            dimensions: body.get("dimensions").and_then(Value::as_u64).map(|d| d as u32),
+                            encoding_format: body
+                                .get("encoding_format")
+                                .and_then(Value::as_str)
+                                .map(String::from),
+                            dimensions: body
+                                .get("dimensions")
+                                .and_then(Value::as_u64)
+                                .map(|d| d as u32),
                             user: body.get("user").and_then(Value::as_str).map(String::from),
                             api_key: deployment.litellm_params.api_key.as_deref(),
                             api_base: deployment.litellm_params.api_base.as_deref(),

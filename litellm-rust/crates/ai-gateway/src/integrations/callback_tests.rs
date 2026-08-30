@@ -2,10 +2,10 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::integrations::custom_logger::CallType;
     use crate::integrations::custom_logger::{
         CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, ModelCallDetails,
     };
-    use crate::integrations::custom_logger::CallType;
     use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
     use serde_json::json;
     use std::sync::Arc;
@@ -109,9 +109,7 @@ mod tests {
         let details = ModelCallDetails::from_standard_logging_payload(payload);
         let timing = CallbackTiming::new(1000.0, 1001.0);
 
-        let report = runner
-            .async_log_failure_event(&details, None, timing)
-            .await;
+        let report = runner.async_log_failure_event(&details, None, timing).await;
 
         assert_eq!(report.invoked, 1);
         assert_eq!(report.dropped, 0);

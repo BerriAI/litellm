@@ -3,10 +3,10 @@
 //! Provides tools for load testing the gateway under various conditions
 //! to identify performance limits and bottlenecks.
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
 
 /// Load test configuration.
 #[derive(Debug, Clone)]
@@ -81,10 +81,7 @@ impl LoadTester {
     }
 
     /// Run a load test.
-    pub async fn run_test<F, Fut>(
-        &self,
-        request_fn: F,
-    ) -> LoadTestResult
+    pub async fn run_test<F, Fut>(&self, request_fn: F) -> LoadTestResult
     where
         F: Fn() -> Fut + Send + Sync + 'static + Clone,
         Fut: Future<Output = Result<(), String>> + Send,
@@ -209,14 +206,20 @@ impl LoadTester {
             report.push_str(&format!("- Total Requests: {}\n", result.total_requests));
             report.push_str(&format!("- Successful: {}\n", result.successful_requests));
             report.push_str(&format!("- Failed: {}\n", result.failed_requests));
-            report.push_str(&format!("- Duration: {:.2}s\n", result.duration.as_secs_f64()));
+            report.push_str(&format!(
+                "- Duration: {:.2}s\n",
+                result.duration.as_secs_f64()
+            ));
             report.push_str(&format!("- RPS: {:.2}\n\n", result.requests_per_second));
 
             report.push_str("### Latency Statistics\n\n");
             report.push_str(&format!("- Min: {:.2}ms\n", result.latency_stats.min_ms));
             report.push_str(&format!("- Max: {:.2}ms\n", result.latency_stats.max_ms));
             report.push_str(&format!("- Mean: {:.2}ms\n", result.latency_stats.mean_ms));
-            report.push_str(&format!("- Median: {:.2}ms\n", result.latency_stats.median_ms));
+            report.push_str(&format!(
+                "- Median: {:.2}ms\n",
+                result.latency_stats.median_ms
+            ));
             report.push_str(&format!("- P95: {:.2}ms\n", result.latency_stats.p95_ms));
             report.push_str(&format!("- P99: {:.2}ms\n\n", result.latency_stats.p99_ms));
 

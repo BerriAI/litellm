@@ -39,7 +39,8 @@ impl GlobalRateLimiter {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs() / window_secs
+            .as_secs()
+            / window_secs
     }
 
     /// Check if a request is allowed under the global rate limit.
@@ -47,7 +48,7 @@ impl GlobalRateLimiter {
     /// Zero-allocation: uses atomic operations only.
     pub async fn check(&self) -> bool {
         let current_window = Self::current_window(self.window_secs);
-        
+
         // Check if we're in a new window
         {
             let window_start = self.window_start.read().await;
@@ -62,7 +63,7 @@ impl GlobalRateLimiter {
                 }
             }
         }
-        
+
         // Increment counter and check limit
         let count = self.count.fetch_add(1, Ordering::Relaxed) + 1;
         count <= self.max_requests
@@ -193,7 +194,9 @@ impl AuditLogShipper {
         };
 
         let body = serde_json::to_string(&batch).unwrap_or_default();
-        match self.client.post(&self.endpoint)
+        match self
+            .client
+            .post(&self.endpoint)
             .header("content-type", "application/json")
             .body(body)
             .timeout(Duration::from_secs(5))

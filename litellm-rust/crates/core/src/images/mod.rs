@@ -15,9 +15,13 @@ use crate::error::CoreResult;
 
 use handler::{execute_images_edit_provider_call, execute_images_generation_provider_call};
 use prepare::{prepare_images_edit_call, prepare_images_generation_call};
-use types::{ImagesEditRequest, ImagesEditResponse, ImagesGenerationRequest, ImagesGenerationResponse};
+use types::{
+    ImagesEditRequest, ImagesEditResponse, ImagesGenerationRequest, ImagesGenerationResponse,
+};
 
-pub async fn images_generation(request: ImagesGenerationRequest<'_>) -> CoreResult<ImagesGenerationResponse> {
+pub async fn images_generation(
+    request: ImagesGenerationRequest<'_>,
+) -> CoreResult<ImagesGenerationResponse> {
     execute_images_generation_provider_call(prepare_images_generation_call(request)?).await
 }
 

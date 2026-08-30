@@ -44,7 +44,10 @@ impl CostTracker {
     /// Returns Arc<str> for zero-copy sharing.
     #[inline]
     fn deployment_key(deployment: &Deployment) -> Arc<str> {
-        let key = format!("{}:{}", deployment.model_name, deployment.litellm_params.model);
+        let key = format!(
+            "{}:{}",
+            deployment.model_name, deployment.litellm_params.model
+        );
         Arc::from(key)
     }
 
@@ -71,7 +74,10 @@ impl CostTracker {
     #[inline]
     pub fn get_cost(&self, deployment: &Deployment) -> (f64, f64) {
         let key = Self::deployment_key(deployment);
-        self.costs.get(&key).copied().unwrap_or((f64::MAX, f64::MAX))
+        self.costs
+            .get(&key)
+            .copied()
+            .unwrap_or((f64::MAX, f64::MAX))
     }
 
     /// Calculate the total cost for a request with the given token counts.
@@ -81,7 +87,12 @@ impl CostTracker {
     /// - Uses Arc<str> keys for zero-copy lookup
     /// - O(1) cost calculation
     #[inline]
-    pub fn calculate_cost(&self, deployment: &Deployment, input_tokens: u64, output_tokens: u64) -> f64 {
+    pub fn calculate_cost(
+        &self,
+        deployment: &Deployment,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) -> f64 {
         let (input_cost, output_cost) = self.get_cost(deployment);
         (input_tokens as f64 * input_cost) + (output_tokens as f64 * output_cost)
     }
@@ -140,9 +151,8 @@ impl CostTracker {
             .collect();
 
         // Sort by cost (lowest first)
-        candidates_with_cost.sort_by(|a, b| {
-            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        candidates_with_cost
+            .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         candidates_with_cost.into_iter().map(|(d, _)| d).collect()
     }
@@ -246,7 +256,7 @@ mod tests {
 
         let candidates = vec![&dep1, &dep2, &dep3];
         let sorted = tracker.sort_by_cost(candidates, 1000, 500);
-        
+
         assert_eq!(sorted[0].litellm_params.model, "azure/gpt-4");
         assert_eq!(sorted[1].litellm_params.model, "anthropic/gpt-4");
         assert_eq!(sorted[2].litellm_params.model, "openai/gpt-4");
@@ -283,11 +293,11 @@ mod tests {
         tracker.set_cost(&dep2, 0.00004, 0.00004);
 
         let candidates = vec![&dep1, &dep2];
-        
+
         // For input-heavy request, dep1 should be cheaper
         let selected = tracker.select(&candidates, 10000, 100).unwrap();
         assert_eq!(selected.litellm_params.model, "openai/gpt-4");
-        
+
         // For output-heavy request, dep2 should be cheaper
         let selected = tracker.select(&candidates, 100, 10000).unwrap();
         assert_eq!(selected.litellm_params.model, "azure/gpt-4");

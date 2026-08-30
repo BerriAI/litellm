@@ -55,28 +55,28 @@ pub(super) fn prepare_embeddings_call(
     }
 
     let url = config.complete_url(request.api_base, &model, &env_lookup)?;
-    
+
     let mut body = serde_json::json!({
         "model": model,
         "input": request.input,
     });
-    
+
     if let Some(encoding_format) = request.encoding_format {
         body["encoding_format"] = Value::String(encoding_format);
     }
-    
+
     if let Some(dimensions) = request.dimensions {
         body["dimensions"] = Value::Number(dimensions.into());
     }
-    
+
     if let Some(user) = request.user {
         body["user"] = Value::String(user);
     }
-    
+
     let transformed = config.transform_request(body)?;
 
     Ok(ProviderEmbeddingsRequest {
-        provider: provider.to_string(),
+        _provider: provider.to_string(),
         model,
         config,
         url,
@@ -117,9 +117,7 @@ impl EmbeddingsProviderConfig for OpenAiEmbeddingsConfig {
         api_key
             .map(|k| k.to_string())
             .or_else(|| env_lookup("OPENAI_API_KEY"))
-            .ok_or_else(|| {
-                CoreError::InvalidRequest("OpenAI API key not found".to_string())
-            })
+            .ok_or_else(|| CoreError::InvalidRequest("OpenAI API key not found".to_string()))
     }
 }
 
@@ -145,9 +143,7 @@ impl EmbeddingsProviderConfig for CohereEmbeddingsConfig {
         api_key
             .map(|k| k.to_string())
             .or_else(|| env_lookup("COHERE_API_KEY"))
-            .ok_or_else(|| {
-                CoreError::InvalidRequest("Cohere API key not found".to_string())
-            })
+            .ok_or_else(|| CoreError::InvalidRequest("Cohere API key not found".to_string()))
     }
 
     fn auth_strategy(&self) -> EmbeddingsAuthStrategy {

@@ -59,8 +59,12 @@ mod tests {
             secret_rotator: None,
             audit_log_shipper: None,
             csrf_state: Arc::new(crate::middleware::csrf::CsrfState::new(3600)),
-            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(crate::alerting::AlertingConfig::default())),
-            guardrail_runner: Arc::new(crate::integrations::custom_guardrail::CustomGuardrailRunner::new(vec![])),
+            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(
+                crate::alerting::AlertingConfig::default(),
+            )),
+            guardrail_runner: Arc::new(
+                crate::integrations::custom_guardrail::CustomGuardrailRunner::new(vec![]),
+            ),
         }
     }
 

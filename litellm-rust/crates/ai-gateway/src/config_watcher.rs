@@ -2,9 +2,9 @@
 //!
 //! Watches a YAML config file for changes and triggers a router reload.
 
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
 use std::sync::Arc;
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::watch;
 
 use litellm_core::router::Router;

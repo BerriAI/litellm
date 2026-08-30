@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{load_config_from_yaml, GeneralSettings, LiteLLMSettings, RouterSettings};
+    use crate::config::{GeneralSettings, LiteLLMSettings, RouterSettings, load_config_from_yaml};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -17,9 +17,9 @@ model_list:
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
-        
+
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
-        
+
         assert_eq!(config.router.deployments().len(), 1);
         assert_eq!(config.router.deployments()[0].model_name, "gpt-4");
     }
@@ -50,21 +50,32 @@ general_settings:
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
-        
+
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
-        
+
         assert!(config.general_settings.master_key.is_some());
         assert!(config.general_settings.database_url.is_some());
         assert!(config.general_settings.coordination_redis.is_some());
         assert_eq!(config.general_settings.max_parallel_requests, Some(100));
-        assert_eq!(config.general_settings.global_max_parallel_requests, Some(1000));
+        assert_eq!(
+            config.general_settings.global_max_parallel_requests,
+            Some(1000)
+        );
         assert_eq!(config.general_settings.max_request_size_mb, Some(10));
         assert_eq!(config.general_settings.max_response_size_mb, Some(100));
         assert!(config.general_settings.alerting.is_some());
         assert_eq!(config.general_settings.alerting.as_ref().unwrap().len(), 2);
         assert!(config.general_settings.alert_webhook_url.is_some());
         assert!(config.general_settings.allowed_routes.is_some());
-        assert_eq!(config.general_settings.allowed_routes.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            config
+                .general_settings
+                .allowed_routes
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -101,13 +112,16 @@ litellm_settings:
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
-        
+
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
-        
+
         assert!(config.litellm_settings.callbacks.is_some());
         assert_eq!(config.litellm_settings.callbacks.as_ref().unwrap().len(), 2);
         assert!(config.litellm_settings.guardrails.is_some());
-        assert_eq!(config.litellm_settings.guardrails.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            config.litellm_settings.guardrails.as_ref().unwrap().len(),
+            1
+        );
         assert_eq!(config.litellm_settings.cache, Some(true));
         assert!(config.litellm_settings.cache_params.is_some());
         let cache_params = config.litellm_settings.cache_params.as_ref().unwrap();
@@ -138,10 +152,13 @@ router_settings:
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
-        
+
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(config.router_settings.routing_strategy, Some("latency-based".to_string()));
+
+        assert_eq!(
+            config.router_settings.routing_strategy,
+            Some("latency-based".to_string())
+        );
         assert_eq!(config.router_settings.num_retries, Some(5));
         assert_eq!(config.router_settings.timeout, Some(300));
         assert_eq!(config.router_settings.cooldown_seconds, Some(60));
@@ -170,9 +187,9 @@ model_list:
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
-        
+
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
-        
+
         assert_eq!(config.router.deployments().len(), 1);
         let deployment = &config.router.deployments()[0];
         assert_eq!(deployment.model_name, "gpt-4");
@@ -197,11 +214,15 @@ general_settings:
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
-        
+
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
-        
+
         assert!(config.general_settings.pass_through_endpoints.is_some());
-        let endpoints = config.general_settings.pass_through_endpoints.as_ref().unwrap();
+        let endpoints = config
+            .general_settings
+            .pass_through_endpoints
+            .as_ref()
+            .unwrap();
         assert_eq!(endpoints.len(), 1);
         assert_eq!(endpoints[0].path, "/custom/endpoint");
         assert_eq!(endpoints[0].target, "https://api.example.com/v1");
@@ -214,7 +235,7 @@ general_settings:
         unsafe {
             std::env::set_var("TEST_API_KEY", "test-key-123");
         }
-        
+
         let yaml = r#"
 model_list:
   - model_name: gpt-4
@@ -224,13 +245,16 @@ model_list:
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
-        
+
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
-        
+
         assert_eq!(config.router.deployments().len(), 1);
         let deployment = &config.router.deployments()[0];
-        assert_eq!(deployment.litellm_params.api_key, Some("test-key-123".to_string()));
-        
+        assert_eq!(
+            deployment.litellm_params.api_key,
+            Some("test-key-123".to_string())
+        );
+
         // SAFETY: This test is single-threaded and only modifies this specific env var
         unsafe {
             std::env::remove_var("TEST_API_KEY");
@@ -244,9 +268,9 @@ model_list: []
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
-        
+
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
-        
+
         assert_eq!(config.router.deployments().len(), 0);
     }
 
@@ -263,14 +287,20 @@ model_list:
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
-        
+
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
-        
+
         assert_eq!(config.router.deployments().len(), 1);
         let deployment = &config.router.deployments()[0];
         assert_eq!(deployment.model_name, "gpt-4");
         assert_eq!(deployment.litellm_params.model, "openai/gpt-4");
-        assert_eq!(deployment.litellm_params.api_key, Some("sk-test".to_string()));
-        assert_eq!(deployment.litellm_params.api_base, Some("https://api.openai.com/v1".to_string()));
+        assert_eq!(
+            deployment.litellm_params.api_key,
+            Some("sk-test".to_string())
+        );
+        assert_eq!(
+            deployment.litellm_params.api_base,
+            Some("https://api.openai.com/v1".to_string())
+        );
     }
 }

@@ -3,15 +3,9 @@
 //! Validates incoming requests before they reach the handlers, including
 //! request size, message format, model names, and input sanitization.
 
-use axum::{
-    body::Body,
-    extract::Request,
-    http::StatusCode,
-    middleware::Next,
-    response::Response,
-};
-use serde_json::Value;
 use crate::validation::{InputValidator, ValidationConfig, ValidationError};
+use axum::{body::Body, extract::Request, http::StatusCode, middleware::Next, response::Response};
+use serde_json::Value;
 
 /// Validation middleware that validates incoming requests.
 pub async fn validation_middleware(
@@ -51,20 +45,27 @@ pub async fn validation_middleware(
 }
 
 /// Validate a JSON request body.
-pub fn validate_json_body(body: &Value, config: &ValidationConfig) -> Result<(), Vec<ValidationError>> {
+pub fn validate_json_body(
+    body: &Value,
+    config: &ValidationConfig,
+) -> Result<(), Vec<ValidationError>> {
     let validator = InputValidator::new(config.clone());
-    
+
     // Validate model name
     if let Some(model) = body.get("model") {
         if let Some(model_str) = model.as_str() {
             if model_str.len() > config.max_model_name_length {
                 return Err(vec![ValidationError {
                     field: "model".to_string(),
-                    message: format!("Model name length {} exceeds maximum {}", model_str.len(), config.max_model_name_length),
+                    message: format!(
+                        "Model name length {} exceeds maximum {}",
+                        model_str.len(),
+                        config.max_model_name_length
+                    ),
                     code: crate::validation::ValidationErrorCode::ModelNameTooLong,
                 }]);
             }
-            
+
             if !validator.is_valid_model_name(model_str) {
                 return Err(vec![ValidationError {
                     field: "model".to_string(),
@@ -81,7 +82,11 @@ pub fn validate_json_body(body: &Value, config: &ValidationConfig) -> Result<(),
             if messages_arr.len() > config.max_messages {
                 return Err(vec![ValidationError {
                     field: "messages".to_string(),
-                    message: format!("Number of messages {} exceeds maximum {}", messages_arr.len(), config.max_messages),
+                    message: format!(
+                        "Number of messages {} exceeds maximum {}",
+                        messages_arr.len(),
+                        config.max_messages
+                    ),
                     code: crate::validation::ValidationErrorCode::TooManyMessages,
                 }]);
             }
@@ -92,7 +97,11 @@ pub fn validate_json_body(body: &Value, config: &ValidationConfig) -> Result<(),
                         if content_str.len() > config.max_message_length {
                             return Err(vec![ValidationError {
                                 field: format!("messages[{}].content", i),
-                                message: format!("Message content length {} exceeds maximum {}", content_str.len(), config.max_message_length),
+                                message: format!(
+                                    "Message content length {} exceeds maximum {}",
+                                    content_str.len(),
+                                    config.max_message_length
+                                ),
                                 code: crate::validation::ValidationErrorCode::MessageTooLong,
                             }]);
                         }

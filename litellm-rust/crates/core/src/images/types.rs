@@ -36,7 +36,7 @@ pub struct ImagesEditRequest<'a> {
 }
 
 pub(super) struct ProviderImagesGenerationRequest {
-    pub(super) provider: String,
+    pub(super) _provider: String,
     pub(super) model: String,
     pub(super) config: &'static dyn ImagesProviderConfig,
     pub(super) url: String,
@@ -46,7 +46,7 @@ pub(super) struct ProviderImagesGenerationRequest {
 }
 
 pub(super) struct ProviderImagesEditRequest {
-    pub(super) provider: String,
+    pub(super) _provider: String,
     pub(super) model: String,
     pub(super) config: &'static dyn ImagesProviderConfig,
     pub(super) url: String,

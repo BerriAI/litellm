@@ -28,9 +28,15 @@ async fn handle(
     Json(body): Json<Value>,
 ) -> Result<Response, MessagesRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run(&state, body, extra_headers, &auth.key_object, &auth.hashed_token)
-        .await
-        .map_err(MessagesRouteError::from)?
+    match service::run(
+        &state,
+        body,
+        extra_headers,
+        &auth.key_object,
+        &auth.hashed_token,
+    )
+    .await
+    .map_err(MessagesRouteError::from)?
     {
         service::MessagesResponse::Json(body) => Ok(Json(body).into_response()),
         service::MessagesResponse::Stream(upstream) => stream_response(upstream),
@@ -193,8 +199,12 @@ mod tests {
             secret_rotator: None,
             audit_log_shipper: None,
             csrf_state: Arc::new(crate::middleware::csrf::CsrfState::new(3600)),
-            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(crate::alerting::AlertingConfig::default())),
-            guardrail_runner: Arc::new(crate::integrations::custom_guardrail::CustomGuardrailRunner::new(Vec::new())),
+            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(
+                crate::alerting::AlertingConfig::default(),
+            )),
+            guardrail_runner: Arc::new(
+                crate::integrations::custom_guardrail::CustomGuardrailRunner::new(Vec::new()),
+            ),
         }
     }
 

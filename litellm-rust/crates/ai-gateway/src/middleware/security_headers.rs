@@ -2,13 +2,7 @@
 //!
 //! Adds security headers to all responses to protect against common web vulnerabilities.
 
-use axum::{
-    body::Body,
-    extract::Request,
-    http::header,
-    middleware::Next,
-    response::Response,
-};
+use axum::{body::Body, extract::Request, http::header, middleware::Next, response::Response};
 
 /// Security headers configuration.
 #[derive(Debug, Clone)]
@@ -44,27 +38,21 @@ impl Default for SecurityHeadersConfig {
 }
 
 /// Security headers middleware.
-pub async fn security_headers_middleware(
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn security_headers_middleware(request: Request<Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
 
     // Add security headers
-    response.headers_mut().insert(
-        header::X_FRAME_OPTIONS,
-        "DENY".parse().unwrap(),
-    );
+    response
+        .headers_mut()
+        .insert(header::X_FRAME_OPTIONS, "DENY".parse().unwrap());
 
-    response.headers_mut().insert(
-        "X-Content-Type-Options",
-        "nosniff".parse().unwrap(),
-    );
+    response
+        .headers_mut()
+        .insert("X-Content-Type-Options", "nosniff".parse().unwrap());
 
-    response.headers_mut().insert(
-        "X-XSS-Protection",
-        "1; mode=block".parse().unwrap(),
-    );
+    response
+        .headers_mut()
+        .insert("X-XSS-Protection", "1; mode=block".parse().unwrap());
 
     response.headers_mut().insert(
         "Strict-Transport-Security",
@@ -92,11 +80,11 @@ pub async fn security_headers_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::StatusCode;
-    use axum::routing::get;
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
+    use axum::http::StatusCode;
+    use axum::routing::get;
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -106,12 +94,7 @@ mod tests {
             .layer(axum::middleware::from_fn(security_headers_middleware));
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/test")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/test").body(Body::empty()).unwrap())
             .await
             .unwrap();
 

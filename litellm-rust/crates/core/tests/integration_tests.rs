@@ -87,8 +87,8 @@ fn full_pipeline_token_count_then_cost() {
 
 #[test]
 fn auth_hash_then_cache_lookup() {
-    use std::sync::Arc;
     use litellm_core::auth::HashedToken;
+    use std::sync::Arc;
 
     let raw_key = "sk-test-integration-key";
     let hashed = HashedToken::hash(raw_key);

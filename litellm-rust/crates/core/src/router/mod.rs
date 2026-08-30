@@ -155,7 +155,7 @@ impl Router {
 
     /// Pick a deployment for `model` per the routing strategy. Returns `None`
     /// when no deployment is registered under that `model_name`.
-    /// 
+    ///
     /// Note: For latency-based routing, use `get_available_deployment_with_latency` instead.
     pub fn get_available_deployment(&self, model: &str) -> Option<&Deployment> {
         let candidates: Vec<&Deployment> = self
@@ -221,7 +221,7 @@ impl Router {
     /// Get all deployments for `model`, ordered by routing strategy.
     /// Used for fallback routing where we try deployments in order.
     pub fn get_all_deployments(&self, model: &str) -> Vec<&Deployment> {
-        let mut candidates: Vec<&Deployment> = self
+        let candidates: Vec<&Deployment> = self
             .model_list
             .iter()
             .filter(|deployment| deployment.model_name == model)

@@ -2,13 +2,7 @@
 //!
 //! Provides distributed tracing support for tracking requests across services.
 
-use axum::{
-    body::Body,
-    extract::Request,
-    http::header,
-    middleware::Next,
-    response::Response,
-};
+use axum::{body::Body, extract::Request, http::header, middleware::Next, response::Response};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -43,12 +37,9 @@ impl TracingState {
 }
 
 /// Distributed tracing middleware.
-pub async fn tracing_middleware(
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn tracing_middleware(request: Request<Body>, next: Next) -> Response {
     let start = Instant::now();
-    
+
     // Generate or extract trace ID
     let trace_id = request
         .headers()
@@ -56,10 +47,10 @@ pub async fn tracing_middleware(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    
+
     // Generate span ID
     let span_id = Uuid::new_v4().to_string();
-    
+
     // Extract request information
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
@@ -68,7 +59,7 @@ pub async fn tracing_middleware(
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    
+
     // Log the start of the request
     tracing::info!(
         trace_id = %trace_id,
@@ -78,14 +69,14 @@ pub async fn tracing_middleware(
         user_agent = ?user_agent,
         "Request started"
     );
-    
+
     // Process the request
     let response = next.run(request).await;
-    
+
     // Calculate duration
     let duration = start.elapsed();
     let status = response.status().as_u16();
-    
+
     // Log the end of the request
     tracing::info!(
         trace_id = %trace_id,
@@ -94,25 +85,24 @@ pub async fn tracing_middleware(
         duration_ms = duration.as_millis(),
         "Request completed"
     );
-    
+
     // Add trace ID to response headers
     let mut response = response;
-    response.headers_mut().insert(
-        "X-Trace-ID",
-        trace_id.parse().unwrap(),
-    );
-    
+    response
+        .headers_mut()
+        .insert("X-Trace-ID", trace_id.parse().unwrap());
+
     response
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::StatusCode;
-    use axum::routing::get;
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
+    use axum::http::StatusCode;
+    use axum::routing::get;
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -122,12 +112,7 @@ mod tests {
             .layer(axum::middleware::from_fn(tracing_middleware));
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/test")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/test").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -154,9 +139,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get("X-Trace-ID").unwrap(),
-            trace_id
-        );
+        assert_eq!(response.headers().get("X-Trace-ID").unwrap(), trace_id);
     }
 }

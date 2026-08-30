@@ -5,12 +5,12 @@
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::{StatusCode, header, Method},
+    http::{Method, StatusCode, header},
     middleware::Next,
     response::Response,
 };
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// CORS configuration.
 #[derive(Debug, Clone)]
@@ -33,22 +33,22 @@ impl Default for CorsConfig {
     fn default() -> Self {
         let mut allowed_origins = HashSet::new();
         allowed_origins.insert("*".to_string());
-        
+
         let mut allowed_methods = HashSet::new();
         allowed_methods.insert(Method::GET);
         allowed_methods.insert(Method::POST);
         allowed_methods.insert(Method::PUT);
         allowed_methods.insert(Method::DELETE);
         allowed_methods.insert(Method::OPTIONS);
-        
+
         let mut allowed_headers = HashSet::new();
         allowed_headers.insert("Content-Type".to_string());
         allowed_headers.insert("Authorization".to_string());
         allowed_headers.insert("X-CSRF-Token".to_string());
-        
+
         let mut exposed_headers = HashSet::new();
         exposed_headers.insert("X-Request-ID".to_string());
-        
+
         Self {
             allowed_origins,
             allowed_methods,
@@ -108,14 +108,16 @@ pub async fn cors_middleware(
 
         if let Some(origin) = &origin {
             if state.is_origin_allowed(origin) {
-                response.headers_mut().insert(
-                    header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                    origin.parse().unwrap(),
-                );
+                response
+                    .headers_mut()
+                    .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
             }
         }
 
-        let allowed_methods: Vec<String> = state.config.allowed_methods.iter()
+        let allowed_methods: Vec<String> = state
+            .config
+            .allowed_methods
+            .iter()
             .map(|m| m.to_string())
             .collect();
         response.headers_mut().insert(
@@ -123,9 +125,7 @@ pub async fn cors_middleware(
             allowed_methods.join(", ").parse().unwrap(),
         );
 
-        let allowed_headers: Vec<String> = state.config.allowed_headers.iter()
-            .cloned()
-            .collect();
+        let allowed_headers: Vec<String> = state.config.allowed_headers.iter().cloned().collect();
         response.headers_mut().insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,
             allowed_headers.join(", ").parse().unwrap(),
@@ -152,10 +152,9 @@ pub async fn cors_middleware(
     // Add CORS headers to the response
     if let Some(origin) = &origin {
         if state.is_origin_allowed(origin) {
-            response.headers_mut().insert(
-                header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                origin.parse().unwrap(),
-            );
+            response
+                .headers_mut()
+                .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
         }
     }
 
@@ -166,9 +165,7 @@ pub async fn cors_middleware(
         );
     }
 
-    let exposed_headers: Vec<String> = state.config.exposed_headers.iter()
-        .cloned()
-        .collect();
+    let exposed_headers: Vec<String> = state.config.exposed_headers.iter().cloned().collect();
     if !exposed_headers.is_empty() {
         response.headers_mut().insert(
             header::ACCESS_CONTROL_EXPOSE_HEADERS,
@@ -200,17 +197,18 @@ pub async fn cors_middleware_default(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         if let Some(origin) = &origin {
-            let origin_allowed = config.allowed_origins.contains("*")
-                || config.allowed_origins.contains(origin);
+            let origin_allowed =
+                config.allowed_origins.contains("*") || config.allowed_origins.contains(origin);
             if origin_allowed {
-                response.headers_mut().insert(
-                    header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                    origin.parse().unwrap(),
-                );
+                response
+                    .headers_mut()
+                    .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
             }
         }
 
-        let allowed_methods: Vec<String> = config.allowed_methods.iter()
+        let allowed_methods: Vec<String> = config
+            .allowed_methods
+            .iter()
             .map(|m| m.to_string())
             .collect();
         response.headers_mut().insert(
@@ -218,9 +216,7 @@ pub async fn cors_middleware_default(
             allowed_methods.join(", ").parse().unwrap(),
         );
 
-        let allowed_headers: Vec<String> = config.allowed_headers.iter()
-            .cloned()
-            .collect();
+        let allowed_headers: Vec<String> = config.allowed_headers.iter().cloned().collect();
         response.headers_mut().insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,
             allowed_headers.join(", ").parse().unwrap(),
@@ -237,19 +233,16 @@ pub async fn cors_middleware_default(
     let mut response = next.run(request).await;
 
     if let Some(origin) = &origin {
-        let origin_allowed = config.allowed_origins.contains("*")
-            || config.allowed_origins.contains(origin);
+        let origin_allowed =
+            config.allowed_origins.contains("*") || config.allowed_origins.contains(origin);
         if origin_allowed {
-            response.headers_mut().insert(
-                header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                origin.parse().unwrap(),
-            );
+            response
+                .headers_mut()
+                .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
         }
     }
 
-    let exposed_headers: Vec<String> = config.exposed_headers.iter()
-        .cloned()
-        .collect();
+    let exposed_headers: Vec<String> = config.exposed_headers.iter().cloned().collect();
     if !exposed_headers.is_empty() {
         response.headers_mut().insert(
             header::ACCESS_CONTROL_EXPOSE_HEADERS,
@@ -278,7 +271,7 @@ mod tests {
     fn test_is_origin_allowed() {
         let config = CorsConfig::default();
         let state = CorsState::new(config);
-        
+
         assert!(state.is_origin_allowed("http://example.com"));
         assert!(state.is_origin_allowed("https://example.com"));
     }
@@ -287,7 +280,7 @@ mod tests {
     fn test_is_method_allowed() {
         let config = CorsConfig::default();
         let state = CorsState::new(config);
-        
+
         assert!(state.is_method_allowed(&Method::GET));
         assert!(state.is_method_allowed(&Method::POST));
         assert!(!state.is_method_allowed(&Method::PATCH));
@@ -297,7 +290,7 @@ mod tests {
     fn test_is_header_allowed() {
         let config = CorsConfig::default();
         let state = CorsState::new(config);
-        
+
         assert!(state.is_header_allowed("Content-Type"));
         assert!(state.is_header_allowed("Authorization"));
         assert!(!state.is_header_allowed("X-Custom-Header"));

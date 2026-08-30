@@ -3,15 +3,15 @@
 //! These benchmarks measure the performance of critical paths in the gateway,
 //! including caching, authentication, and request handling.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use litellm_ai_gateway::caching::semantic_cache::{SemanticCache, SemanticCacheConfig};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use litellm_ai_gateway::auth::hash_token;
+use litellm_ai_gateway::caching::semantic_cache::{SemanticCache, SemanticCacheConfig};
 use std::sync::Arc;
 
 /// Benchmark semantic cache operations.
 fn benchmark_semantic_cache(c: &mut Criterion) {
     let cache = Arc::new(SemanticCache::new(SemanticCacheConfig::default()));
-    
+
     // Benchmark cache insert
     c.bench_function("semantic_cache_insert", |b| {
         let mut i = 0;
@@ -30,8 +30,13 @@ fn benchmark_semantic_cache(c: &mut Criterion) {
     // Benchmark cache get (hit)
     c.bench_function("semantic_cache_get_hit", |b| {
         let embedding = vec![1.0; 128];
-        cache.insert("hit_key".to_string(), embedding.clone(), "hit_response".to_string(), None);
-        
+        cache.insert(
+            "hit_key".to_string(),
+            embedding.clone(),
+            "hit_response".to_string(),
+            None,
+        );
+
         b.iter(|| {
             black_box(cache.get(black_box(&embedding)));
         });
@@ -40,7 +45,7 @@ fn benchmark_semantic_cache(c: &mut Criterion) {
     // Benchmark cache get (miss)
     c.bench_function("semantic_cache_get_miss", |b| {
         let embedding = vec![999.0; 128];
-        
+
         b.iter(|| {
             black_box(cache.get(black_box(&embedding)));
         });
@@ -71,9 +76,11 @@ fn benchmark_request_parsing(c: &mut Criterion) {
             "messages": [{"role": "user", "content": "Hello"}],
             "max_tokens": 100
         }"#;
-        
+
         b.iter(|| {
-            black_box(serde_json::from_str::<serde_json::Value>(black_box(request_str)));
+            black_box(serde_json::from_str::<serde_json::Value>(black_box(
+                request_str,
+            )));
         });
     });
 }

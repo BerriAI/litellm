@@ -36,7 +36,7 @@ impl LangfuseLogger {
 
     async fn send_trace(&self, payload: &LangfuseTrace) -> Result<(), String> {
         let url = format!("{}/api/public/ingestion", self.config.host);
-        
+
         let response = self
             .client
             .post(&url)
@@ -52,10 +52,7 @@ impl LangfuseLogger {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Failed to read response body".to_string());
-            return Err(format!(
-                "Langfuse API error: {} - {}",
-                status, body
-            ));
+            return Err(format!("Langfuse API error: {} - {}", status, body));
         }
 
         Ok(())

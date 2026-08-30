@@ -5,4 +5,4 @@
 
 pub mod semantic_cache;
 
-pub use semantic_cache::{SemanticCache, SemanticCacheConfig, CacheStats};
+pub use semantic_cache::{CacheStats, SemanticCache, SemanticCacheConfig};

@@ -30,8 +30,11 @@ impl RoleStripper {
     /// Returns a modified chunk with role stripped if appropriate.
     pub fn process_chunk(&mut self, chunk: &Value) -> Value {
         let mut modified_chunk = chunk.clone();
-        
-        if let Some(choices) = modified_chunk.get_mut("choices").and_then(|c| c.as_array_mut()) {
+
+        if let Some(choices) = modified_chunk
+            .get_mut("choices")
+            .and_then(|c| c.as_array_mut())
+        {
             if let Some(first_choice) = choices.first_mut() {
                 if let Some(delta) = first_choice.get_mut("delta") {
                     if self.sent_first_chunk {
@@ -45,7 +48,10 @@ impl RoleStripper {
                         if let Some(delta_obj) = delta.as_object_mut() {
                             if let Some(role) = delta_obj.get("role") {
                                 if role.is_null() {
-                                    delta_obj.insert("role".to_string(), Value::String("assistant".to_string()));
+                                    delta_obj.insert(
+                                        "role".to_string(),
+                                        Value::String("assistant".to_string()),
+                                    );
                                 }
                             }
                         }
@@ -54,7 +60,7 @@ impl RoleStripper {
                 }
             }
         }
-        
+
         modified_chunk
     }
 
@@ -304,7 +310,7 @@ impl ModelRepetitionDetector {
     pub fn check_repetition(&mut self, chunk: &Value) -> Option<String> {
         // Extract content from chunk for comparison
         let chunk_content = self.extract_chunk_content(chunk);
-        
+
         // Skip empty chunks or chunks with no content
         if chunk_content.is_empty() {
             return None;
@@ -314,7 +320,7 @@ impl ModelRepetitionDetector {
         if let Some(last_chunk) = self.recent_chunks.last() {
             if *last_chunk == chunk_content {
                 self.repetition_count += 1;
-                
+
                 if self.repetition_count >= self.max_repetitions {
                     return Some(format!(
                         "Model is repeating the same chunk {} times: {:?}",
@@ -330,7 +336,7 @@ impl ModelRepetitionDetector {
 
         // Add chunk to history
         self.recent_chunks.push(chunk_content);
-        
+
         // Keep only the most recent chunks
         if self.recent_chunks.len() > self.max_history {
             self.recent_chunks.remove(0);
@@ -343,7 +349,7 @@ impl ModelRepetitionDetector {
     /// Focuses on the delta content to detect repetition.
     fn extract_chunk_content(&self, chunk: &Value) -> String {
         let mut content = String::new();
-        
+
         // Extract delta content from choices
         if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
             if let Some(first_choice) = choices.first() {
@@ -352,12 +358,14 @@ impl ModelRepetitionDetector {
                     if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
                         content.push_str(text);
                     }
-                    
+
                     // Extract tool calls
                     if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                         for tool_call in tool_calls {
                             if let Some(function) = tool_call.get("function") {
-                                if let Some(args) = function.get("arguments").and_then(|a| a.as_str()) {
+                                if let Some(args) =
+                                    function.get("arguments").and_then(|a| a.as_str())
+                                {
                                     content.push_str(args);
                                 }
                             }
@@ -366,7 +374,7 @@ impl ModelRepetitionDetector {
                 }
             }
         }
-        
+
         content
     }
 
@@ -493,20 +501,29 @@ impl ProviderFeatureHandler {
     /// Get all provider-specific features as a Value for logging/tracking
     pub fn to_value(&self) -> Value {
         let mut features = serde_json::Map::new();
-        
+
         if let Some(ref response_format) = self.openai_response_format {
-            features.insert("openai_response_format".to_string(), response_format.clone());
+            features.insert(
+                "openai_response_format".to_string(),
+                response_format.clone(),
+            );
         }
         if let Some(ref cache_control) = self.anthropic_cache_control {
             features.insert("anthropic_cache_control".to_string(), cache_control.clone());
         }
         if let Some(ref guardrail_config) = self.bedrock_guardrail_config {
-            features.insert("bedrock_guardrail_config".to_string(), guardrail_config.clone());
+            features.insert(
+                "bedrock_guardrail_config".to_string(),
+                guardrail_config.clone(),
+            );
         }
         if let Some(ref performance_config) = self.bedrock_performance_config {
-            features.insert("bedrock_performance_config".to_string(), performance_config.clone());
+            features.insert(
+                "bedrock_performance_config".to_string(),
+                performance_config.clone(),
+            );
         }
-        
+
         Value::Object(features)
     }
 }
@@ -539,10 +556,7 @@ impl ToolCallAccumulator {
     pub fn accumulate_tool_call_delta(&mut self, delta: &Value) {
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for tool_call in tool_calls {
-                let index = tool_call
-                    .get("index")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as usize;
+                let index = tool_call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
 
                 // Ensure we have space for this index
                 while self.tool_calls.len() <= index {
@@ -617,7 +631,10 @@ impl ToolCallAccumulator {
     /// Check if we have any accumulated tool calls
     pub fn has_tool_calls(&self) -> bool {
         !self.tool_calls.is_empty()
-            && self.tool_calls.iter().any(|tc| tc.name.is_some() || !tc.arguments.is_empty())
+            && self
+                .tool_calls
+                .iter()
+                .any(|tc| tc.name.is_some() || !tc.arguments.is_empty())
     }
 
     /// Get the accumulated tool calls as a JSON value
@@ -636,17 +653,14 @@ impl ToolCallAccumulator {
                     tool_call.insert("id".to_string(), Value::String(id.clone()));
                 }
                 tool_call.insert("type".to_string(), Value::String(tc.call_type.clone()));
-                
+
                 let mut function = Map::new();
                 if let Some(ref name) = tc.name {
                     function.insert("name".to_string(), Value::String(name.clone()));
                 }
-                function.insert(
-                    "arguments".to_string(),
-                    Value::String(tc.arguments.clone()),
-                );
+                function.insert("arguments".to_string(), Value::String(tc.arguments.clone()));
                 tool_call.insert("function".to_string(), Value::Object(function));
-                
+
                 Value::Object(tool_call)
             })
             .collect();
@@ -681,15 +695,25 @@ impl FinishReasonTracker {
         if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
             if let Some(first_choice) = choices.first() {
                 // Check for finish_reason in the choice
-                if let Some(finish_reason) = first_choice.get("finish_reason").and_then(Value::as_str) {
+                if let Some(finish_reason) =
+                    first_choice.get("finish_reason").and_then(Value::as_str)
+                {
                     self.intermittent_finish_reason = Some(finish_reason.to_string());
-                    
+
                     // Check if delta is empty (trailing chunk)
                     let delta = first_choice.get("delta");
                     let is_empty_delta = delta
                         .map(|d| {
-                            let has_content = d.get("content").and_then(Value::as_str).map(|s| !s.is_empty()).unwrap_or(false);
-                            let has_tool_calls = d.get("tool_calls").and_then(Value::as_array).map(|a| !a.is_empty()).unwrap_or(false);
+                            let has_content = d
+                                .get("content")
+                                .and_then(Value::as_str)
+                                .map(|s| !s.is_empty())
+                                .unwrap_or(false);
+                            let has_tool_calls = d
+                                .get("tool_calls")
+                                .and_then(Value::as_array)
+                                .map(|a| !a.is_empty())
+                                .unwrap_or(false);
                             let has_function_call = d.get("function_call").is_some();
                             !has_content && !has_tool_calls && !has_function_call
                         })
@@ -742,7 +766,9 @@ impl ThinkingBlockTracker {
             if let Some(first_choice) = choices.first() {
                 if let Some(delta) = first_choice.get("delta") {
                     // Check for thinking_blocks
-                    if let Some(thinking_blocks) = delta.get("thinking_blocks").and_then(Value::as_array) {
+                    if let Some(thinking_blocks) =
+                        delta.get("thinking_blocks").and_then(Value::as_array)
+                    {
                         for block in thinking_blocks {
                             if let Some(thinking) = block.get("thinking").and_then(Value::as_str) {
                                 self.thinking_content.push_str(thinking);
@@ -754,7 +780,8 @@ impl ThinkingBlockTracker {
                     }
 
                     // Check for reasoning_content
-                    if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str) {
+                    if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str)
+                    {
                         self.thinking_content.push_str(reasoning);
                         if !self.sent_first_thinking_block {
                             self.sent_first_thinking_block = true;
@@ -827,10 +854,11 @@ impl StreamingCostTracker {
     pub fn accumulate(&mut self, chunk: &Value) {
         if let Some(usage) = chunk.get("usage") {
             // Track if this is a usage-only chunk (no choices or empty choices)
-            let is_usage_only = chunk.get("choices").map(|c| {
-                c.as_array().map(|a| a.is_empty()).unwrap_or(true)
-            }).unwrap_or(true);
-            
+            let is_usage_only = chunk
+                .get("choices")
+                .map(|c| c.as_array().map(|a| a.is_empty()).unwrap_or(true))
+                .unwrap_or(true);
+
             if is_usage_only {
                 self.received_usage_only_chunk = true;
             }
@@ -844,13 +872,14 @@ impl StreamingCostTracker {
             if let Some(total) = usage.get("total_tokens").and_then(Value::as_u64) {
                 self.total_tokens = total;
             }
-            
+
             // Handle prompt_tokens_details (OpenAI format)
             if let Some(details) = usage.get("prompt_tokens_details") {
                 if let Some(cached) = details.get("cached_tokens").and_then(Value::as_u64) {
                     self.cached_tokens = cached;
                 }
-                if let Some(creation) = details.get("cache_creation_tokens").and_then(Value::as_u64) {
+                if let Some(creation) = details.get("cache_creation_tokens").and_then(Value::as_u64)
+                {
                     self.cache_creation_tokens = creation;
                 }
                 // Handle image tokens if present in details
@@ -858,7 +887,7 @@ impl StreamingCostTracker {
                     self.image_tokens = image_tokens;
                 }
             }
-            
+
             // Handle provider-reported cost (Perplexity format)
             // Perplexity sends cost in usage.cost as a number or breakdown object
             if let Some(cost) = usage.get("cost") {
@@ -866,7 +895,7 @@ impl StreamingCostTracker {
                     self.provider_reported_cost_usd = Some(cost_value);
                 }
             }
-            
+
             // Also check for cost in completion_tokens_details (some providers)
             if let Some(completion_details) = usage.get("completion_tokens_details") {
                 if let Some(cost) = completion_details.get("cost") {
@@ -877,13 +906,13 @@ impl StreamingCostTracker {
             }
         }
     }
-    
+
     /// Count images in message content for vision/multimodal requests.
     /// Supports OpenAI format (image_url), Anthropic format (image source), and base64 images.
     pub fn count_images_in_messages(messages: &Value) -> (u64, u64) {
         let mut image_count = 0u64;
         let mut estimated_image_tokens = 0u64;
-        
+
         if let Some(messages_array) = messages.as_array() {
             for message in messages_array {
                 if let Some(content) = message.get("content") {
@@ -891,7 +920,7 @@ impl StreamingCostTracker {
                     if content.is_string() {
                         continue;
                     }
-                    
+
                     // Handle array content (multimodal)
                     if let Some(content_array) = content.as_array() {
                         for part in content_array {
@@ -902,7 +931,9 @@ impl StreamingCostTracker {
                                         // Estimate tokens based on image detail
                                         // OpenAI: low=85, high=1105, auto=depends on size
                                         if let Some(image_url) = part.get("image_url") {
-                                            if let Some(detail) = image_url.get("detail").and_then(Value::as_str) {
+                                            if let Some(detail) =
+                                                image_url.get("detail").and_then(Value::as_str)
+                                            {
                                                 match detail {
                                                     "low" => estimated_image_tokens += 85,
                                                     "high" => estimated_image_tokens += 1105,
@@ -929,10 +960,10 @@ impl StreamingCostTracker {
                 }
             }
         }
-        
+
         (image_count, estimated_image_tokens)
     }
-    
+
     /// Extract cost value from various formats:
     /// - Direct number: 0.001
     /// - Breakdown object: {"total_cost": 0.001}
@@ -942,25 +973,25 @@ impl StreamingCostTracker {
         if let Some(cost_num) = cost.as_f64() {
             return Some(cost_num);
         }
-        
+
         // Breakdown object with total_cost
         if let Some(total_cost) = cost.get("total_cost").and_then(Value::as_f64) {
             return Some(total_cost);
         }
-        
+
         // Nested cost object
         if let Some(nested_cost) = cost.get("cost") {
             return Self::extract_cost_value(nested_cost);
         }
-        
+
         None
     }
-    
+
     /// Check if we have valid usage data
     pub fn has_usage(&self) -> bool {
         self.prompt_tokens > 0 || self.completion_tokens > 0
     }
-    
+
     /// Get the effective cost: provider-reported cost if available, otherwise None
     /// (caller should calculate from token counts if not available)
     pub fn get_effective_cost_usd(&self) -> Option<f64> {
@@ -971,14 +1002,20 @@ impl StreamingCostTracker {
 /// Extracts and preserves provider-specific fields from chunks.
 pub fn extract_provider_specific_fields(chunk: &Value) -> Option<Map<String, Value>> {
     // Look for provider_specific_fields in the chunk
-    if let Some(fields) = chunk.get("provider_specific_fields").and_then(Value::as_object) {
+    if let Some(fields) = chunk
+        .get("provider_specific_fields")
+        .and_then(Value::as_object)
+    {
         return Some(fields.clone());
     }
 
     // Also check in choices[0]
     if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
         if let Some(first_choice) = choices.first() {
-            if let Some(fields) = first_choice.get("provider_specific_fields").and_then(Value::as_object) {
+            if let Some(fields) = first_choice
+                .get("provider_specific_fields")
+                .and_then(Value::as_object)
+            {
                 return Some(fields.clone());
             }
         }
@@ -1013,7 +1050,8 @@ mod tests {
             }]
         });
 
-        accumulator.accumulate_tool_call_delta(chunk1.get("choices").unwrap()[0].get("delta").unwrap());
+        accumulator
+            .accumulate_tool_call_delta(chunk1.get("choices").unwrap()[0].get("delta").unwrap());
 
         // Second chunk with continued arguments
         let chunk2 = json!({
@@ -1029,18 +1067,22 @@ mod tests {
             }]
         });
 
-        accumulator.accumulate_tool_call_delta(chunk2.get("choices").unwrap()[0].get("delta").unwrap());
+        accumulator
+            .accumulate_tool_call_delta(chunk2.get("choices").unwrap()[0].get("delta").unwrap());
 
         assert!(accumulator.has_tool_calls());
         let result = accumulator.to_json().unwrap();
         let tool_calls = result.as_array().unwrap();
         assert_eq!(tool_calls.len(), 1);
-        
+
         let tool_call = &tool_calls[0];
         assert_eq!(tool_call["id"], "call_abc123");
         assert_eq!(tool_call["type"], "function");
         assert_eq!(tool_call["function"]["name"], "get_weather");
-        assert_eq!(tool_call["function"]["arguments"], "{\"location\":\"New York\"}");
+        assert_eq!(
+            tool_call["function"]["arguments"],
+            "{\"location\":\"New York\"}"
+        );
     }
 
     #[test]
@@ -1063,7 +1105,8 @@ mod tests {
             }]
         });
 
-        accumulator.accumulate_tool_call_delta(chunk.get("choices").unwrap()[0].get("delta").unwrap());
+        accumulator
+            .accumulate_tool_call_delta(chunk.get("choices").unwrap()[0].get("delta").unwrap());
 
         assert!(accumulator.has_tool_calls());
         let result = accumulator.to_json().unwrap();

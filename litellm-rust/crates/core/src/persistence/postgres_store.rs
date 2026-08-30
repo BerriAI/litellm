@@ -174,7 +174,10 @@ impl DatabaseStore for PostgresStore {
 
 impl PostgresStore {
     /// Get key information by hashed token.
-    pub async fn get_key_by_hashed_token(&self, hashed_token: &str) -> Result<Option<Value>, PersistenceError> {
+    pub async fn get_key_by_hashed_token(
+        &self,
+        hashed_token: &str,
+    ) -> Result<Option<Value>, PersistenceError> {
         let row: Option<(Value,)> = sqlx::query_as(
             r#"
             SELECT row_to_json(t)
@@ -196,6 +199,7 @@ impl PostgresStore {
     }
 
     /// Get spend logs with optional filtering and pagination.
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_spend_logs(
         &self,
         start_time: Option<&str>,
@@ -329,7 +333,10 @@ impl PostgresStore {
     }
 
     /// Get organization information by organization ID.
-    pub async fn get_organization_by_id(&self, org_id: &str) -> Result<Option<Value>, PersistenceError> {
+    pub async fn get_organization_by_id(
+        &self,
+        org_id: &str,
+    ) -> Result<Option<Value>, PersistenceError> {
         let row: Option<(Value,)> = sqlx::query_as(
             r#"
             SELECT row_to_json(t)

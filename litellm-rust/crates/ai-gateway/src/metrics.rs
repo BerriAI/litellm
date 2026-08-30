@@ -48,7 +48,9 @@ impl GatewayMetrics {
                 "litellm_request_duration_seconds",
                 "Request latency in seconds",
             )
-            .buckets(vec![0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]),
+            .buckets(vec![
+                0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+            ]),
             &["model"],
         )
         .expect("histogram");
@@ -97,7 +99,10 @@ impl GatewayMetrics {
 
         // Enhanced metrics
         let deployment_requests_total = IntCounterVec::new(
-            Opts::new("litellm_deployment_requests_total", "Total requests per deployment"),
+            Opts::new(
+                "litellm_deployment_requests_total",
+                "Total requests per deployment",
+            ),
             &["model_name", "provider", "status"],
         )
         .expect("counter");
@@ -107,7 +112,9 @@ impl GatewayMetrics {
                 "litellm_deployment_duration_seconds",
                 "Request latency per deployment in seconds",
             )
-            .buckets(vec![0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]),
+            .buckets(vec![
+                0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+            ]),
             &["model_name", "provider"],
         )
         .expect("histogram");
@@ -159,7 +166,9 @@ impl GatewayMetrics {
                 "litellm_latency_tracker_avg_ms",
                 "Average latency per deployment in milliseconds",
             )
-            .buckets(vec![10.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0]),
+            .buckets(vec![
+                10.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0,
+            ]),
             &["model_name", "provider"],
         )
         .expect("histogram");
@@ -369,7 +378,7 @@ mod tests {
     #[test]
     fn test_middleware_metrics() {
         let metrics = GatewayMetrics::new();
-        
+
         metrics
             .validation_failures_total
             .with_label_values(&["model_name"])

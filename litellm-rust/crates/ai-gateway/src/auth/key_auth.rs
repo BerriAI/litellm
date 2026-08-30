@@ -235,8 +235,12 @@ impl FromRequestParts<AppState> for RequireValidKey {
             tracing::warn!("Auth: No key extracted from headers");
             AuthRejection::KeyNotFound
         })?;
-        
-        tracing::info!("Auth: Extracted raw_key='{}', master_key={:?}", raw_key, state.master_key.as_deref());
+
+        tracing::info!(
+            "Auth: Extracted raw_key='{}', master_key={:?}",
+            raw_key,
+            state.master_key.as_deref()
+        );
 
         // 2. Check master key (constant-time)
         if is_master_key(raw_key, state.master_key.as_deref()) {
@@ -269,12 +273,10 @@ impl FromRequestParts<AppState> for RequireValidKey {
 
         // 5. Cache miss: look up in DB (returns Arc)
         tracing::debug!("Auth: Looking up key in DB");
-        let key_obj = lookup_db(state, &hashed_token)
-            .await?
-            .ok_or_else(|| {
-                tracing::warn!("Auth: Key not found in DB, returning KeyNotFound");
-                AuthRejection::KeyNotFound
-            })?;
+        let key_obj = lookup_db(state, &hashed_token).await?.ok_or_else(|| {
+            tracing::warn!("Auth: Key not found in DB, returning KeyNotFound");
+            AuthRejection::KeyNotFound
+        })?;
 
         tracing::info!("Auth: Found key in DB, blocked={}", key_obj.blocked);
         if key_obj.blocked {

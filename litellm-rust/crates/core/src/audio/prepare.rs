@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::error::{CoreError, CoreResult};
+use crate::error::CoreResult;
 
 use super::transformation::get_audio_provider_config;
 use super::types::{SpeechRequest, TranscriptionRequest};

@@ -3,12 +3,12 @@ use super::types::{CostRequest, CostResponse, ModelPricing, Usage};
 use crate::CoreResult;
 
 pub fn calculate_cost(request: &CostRequest<'_>) -> CoreResult<CostResponse> {
-    let pricing = lookup_model_pricing(&request.model).ok_or_else(|| {
+    let pricing = lookup_model_pricing(request.model).ok_or_else(|| {
         crate::CoreError::InvalidRequest(format!("No pricing found for model: {}", request.model))
     })?;
 
     let (prompt_cost, completion_cost) =
-        generic_cost_per_token(pricing, &request.usage, request.service_tier.as_deref());
+        generic_cost_per_token(pricing, &request.usage, request.service_tier);
 
     Ok(CostResponse {
         prompt_cost_usd: prompt_cost,

@@ -106,14 +106,21 @@ impl InputValidator {
     }
 
     /// Validate a request.
-    pub fn validate_request(&self, request: &Value, size: usize) -> Result<(), Vec<ValidationError>> {
+    pub fn validate_request(
+        &self,
+        request: &Value,
+        size: usize,
+    ) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
 
         // Check request size
         if size > self.config.max_request_size {
             errors.push(ValidationError {
                 field: "request".to_string(),
-                message: format!("Request size {} exceeds maximum {}", size, self.config.max_request_size),
+                message: format!(
+                    "Request size {} exceeds maximum {}",
+                    size, self.config.max_request_size
+                ),
                 code: ValidationErrorCode::RequestTooLarge,
             });
         }
@@ -124,7 +131,11 @@ impl InputValidator {
                 if model_str.len() > self.config.max_model_name_length {
                     errors.push(ValidationError {
                         field: "model".to_string(),
-                        message: format!("Model name length {} exceeds maximum {}", model_str.len(), self.config.max_model_name_length),
+                        message: format!(
+                            "Model name length {} exceeds maximum {}",
+                            model_str.len(),
+                            self.config.max_model_name_length
+                        ),
                         code: ValidationErrorCode::ModelNameTooLong,
                     });
                 } else if !self.is_valid_model_name(model_str) {
@@ -155,7 +166,11 @@ impl InputValidator {
                 if messages_arr.len() > self.config.max_messages {
                     errors.push(ValidationError {
                         field: "messages".to_string(),
-                        message: format!("Number of messages {} exceeds maximum {}", messages_arr.len(), self.config.max_messages),
+                        message: format!(
+                            "Number of messages {} exceeds maximum {}",
+                            messages_arr.len(),
+                            self.config.max_messages
+                        ),
                         code: ValidationErrorCode::TooManyMessages,
                     });
                 } else {
@@ -165,7 +180,11 @@ impl InputValidator {
                                 if content_str.len() > self.config.max_message_length {
                                     errors.push(ValidationError {
                                         field: format!("messages[{}].content", i),
-                                        message: format!("Message content length {} exceeds maximum {}", content_str.len(), self.config.max_message_length),
+                                        message: format!(
+                                            "Message content length {} exceeds maximum {}",
+                                            content_str.len(),
+                                            self.config.max_message_length
+                                        ),
                                         code: ValidationErrorCode::MessageTooLong,
                                     });
                                 }
@@ -192,7 +211,8 @@ impl InputValidator {
     /// Sanitize a string input by removing potentially dangerous characters.
     pub fn sanitize_string(input: &str) -> String {
         // Remove null bytes and control characters
-        input.chars()
+        input
+            .chars()
             .filter(|c| !c.is_control() || *c == '\n' || *c == '\r' || *c == '\t')
             .collect()
     }
@@ -306,12 +326,12 @@ mod tests {
     #[test]
     fn test_validate_model_name_patterns() {
         let validator = InputValidator::new(ValidationConfig::default());
-        
+
         assert!(validator.is_valid_model_name("gpt-4"));
         assert!(validator.is_valid_model_name("openai/gpt-4"));
         assert!(validator.is_valid_model_name("claude-3-opus"));
         assert!(validator.is_valid_model_name("model_v2.1"));
-        
+
         assert!(!validator.is_valid_model_name("model<script>"));
         assert!(!validator.is_valid_model_name("model; DROP TABLE"));
     }

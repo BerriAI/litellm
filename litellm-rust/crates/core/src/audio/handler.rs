@@ -25,9 +25,10 @@ pub async fn speech(
         req_builder = req_builder.header("Authorization", format!("Bearer {}", api_key));
     }
 
-    let response = req_builder.send().await.map_err(|e| {
-        CoreError::Network(format!("Failed to send speech request: {}", e))
-    })?;
+    let response = req_builder
+        .send()
+        .await
+        .map_err(|e| CoreError::Network(format!("Failed to send speech request: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -38,9 +39,10 @@ pub async fn speech(
         });
     }
 
-    let audio_data = response.bytes().await.map_err(|e| {
-        CoreError::Network(format!("Failed to read speech response: {}", e))
-    })?;
+    let audio_data = response
+        .bytes()
+        .await
+        .map_err(|e| CoreError::Network(format!("Failed to read speech response: {}", e)))?;
 
     Ok(SpeechResponse {
         audio_data: audio_data.to_vec(),
@@ -90,9 +92,10 @@ pub async fn transcription(
         req_builder = req_builder.header("Authorization", format!("Bearer {}", api_key));
     }
 
-    let response = req_builder.send().await.map_err(|e| {
-        CoreError::Network(format!("Failed to send transcription request: {}", e))
-    })?;
+    let response = req_builder
+        .send()
+        .await
+        .map_err(|e| CoreError::Network(format!("Failed to send transcription request: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -103,17 +106,18 @@ pub async fn transcription(
         });
     }
 
-    let response_text = response.text().await.map_err(|e| {
-        CoreError::Network(format!("Failed to read transcription response: {}", e))
-    })?;
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| CoreError::Network(format!("Failed to read transcription response: {}", e)))?;
 
     // Try to parse as JSON first
-    if let Ok(json_response) = serde_json::from_str::<Value>(&response_text) {
-        if let Some(text) = json_response.get("text").and_then(|v| v.as_str()) {
-            return Ok(TranscriptionResponse {
-                text: text.to_string(),
-            });
-        }
+    if let Ok(json_response) = serde_json::from_str::<Value>(&response_text)
+        && let Some(text) = json_response.get("text").and_then(|v| v.as_str())
+    {
+        return Ok(TranscriptionResponse {
+            text: text.to_string(),
+        });
     }
 
     // If not JSON, treat the entire response as the text

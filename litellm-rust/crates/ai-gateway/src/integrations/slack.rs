@@ -127,7 +127,7 @@ impl CustomLogger for SlackLogger {
     ) -> LogFuture<'a> {
         Box::pin(async move {
             let latency_ms = (timing.end_time - timing.start_time) * 1000.0;
-            
+
             let error_info = model_call_details
                 .failure_error
                 .as_ref()
@@ -159,10 +159,7 @@ impl CustomLogger for SlackLogger {
                     .user_api_key_team_id
                     .as_deref()
                     .unwrap_or("N/A"),
-                model_call_details
-                    .request_id
-                    .as_deref()
-                    .unwrap_or("N/A"),
+                model_call_details.request_id.as_deref().unwrap_or("N/A"),
             );
 
             let message = SlackMessage {

@@ -112,10 +112,17 @@ mod tests {
         let tracker = router.latency_tracker().unwrap();
 
         // Record latencies: dep2 is faster
-        tracker.record_latency(&dep1, Duration::from_millis(300)).await;
-        tracker.record_latency(&dep2, Duration::from_millis(100)).await;
+        tracker
+            .record_latency(&dep1, Duration::from_millis(300))
+            .await;
+        tracker
+            .record_latency(&dep2, Duration::from_millis(100))
+            .await;
 
-        let selected = router.get_available_deployment_with_latency("gpt-4").await.unwrap();
+        let selected = router
+            .get_available_deployment_with_latency("gpt-4")
+            .await
+            .unwrap();
         assert_eq!(selected.litellm_params.model, "azure/gpt-4");
     }
 
@@ -134,7 +141,10 @@ mod tests {
         tracker.increment_load(&dep1).await;
         tracker.increment_load(&dep2).await;
 
-        let selected = router.get_available_deployment_with_load("gpt-4").await.unwrap();
+        let selected = router
+            .get_available_deployment_with_load("gpt-4")
+            .await
+            .unwrap();
         assert_eq!(selected.litellm_params.model, "azure/gpt-4");
     }
 
@@ -190,10 +200,14 @@ mod tests {
 
         // Record some requests
         monitor.record_request_start(&dep1).await;
-        monitor.record_request_success(&dep1, Duration::from_millis(100)).await;
+        monitor
+            .record_request_success(&dep1, Duration::from_millis(100))
+            .await;
 
         monitor.record_request_start(&dep2).await;
-        monitor.record_request_failure(&dep2, Duration::from_millis(200)).await;
+        monitor
+            .record_request_failure(&dep2, Duration::from_millis(200))
+            .await;
 
         // Check health status
         let status1 = monitor.get_health_status(&dep1).await;
@@ -216,7 +230,10 @@ mod tests {
             allowed_fails: Some(3),
         };
 
-        assert_eq!(settings.to_routing_strategy(), RoutingStrategy::LatencyBased);
+        assert_eq!(
+            settings.to_routing_strategy(),
+            RoutingStrategy::LatencyBased
+        );
 
         let settings = RouterSettings {
             routing_strategy: Some("load-based".to_string()),
@@ -240,13 +257,19 @@ mod tests {
             routing_strategy: Some("simple-shuffle".to_string()),
             ..Default::default()
         };
-        assert_eq!(settings.to_routing_strategy(), RoutingStrategy::SimpleShuffle);
+        assert_eq!(
+            settings.to_routing_strategy(),
+            RoutingStrategy::SimpleShuffle
+        );
 
         let settings = RouterSettings {
             routing_strategy: None,
             ..Default::default()
         };
-        assert_eq!(settings.to_routing_strategy(), RoutingStrategy::SimpleShuffle);
+        assert_eq!(
+            settings.to_routing_strategy(),
+            RoutingStrategy::SimpleShuffle
+        );
     }
 
     #[tokio::test]

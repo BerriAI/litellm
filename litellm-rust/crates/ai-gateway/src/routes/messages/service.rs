@@ -98,7 +98,13 @@ pub async fn run(
 
     // Check rate limits (RPM, max_parallel_requests)
     if let Some(ref redis) = state.redis {
-        match crate::auth::rate_limit::check_request_limits(redis, key_object, hashed_token.as_hex_str()).await {
+        match crate::auth::rate_limit::check_request_limits(
+            redis,
+            key_object,
+            hashed_token.as_hex_str(),
+        )
+        .await
+        {
             crate::auth::rate_limit::RateLimitResult::Allowed => {}
             crate::auth::rate_limit::RateLimitResult::RpmExceeded { limit, .. } => {
                 return Err(CoreError::Auth(format!(
@@ -125,7 +131,9 @@ pub async fn run(
         )));
     }
 
-    let timeout = Some(Duration::from_secs_f64(state.config.default_request_timeout_secs));
+    let timeout = Some(Duration::from_secs_f64(
+        state.config.default_request_timeout_secs,
+    ));
     let mut body = body;
 
     // Try each deployment in order (fallback routing)
@@ -155,7 +163,9 @@ pub async fn run(
         }
 
         body.as_object_mut()
-            .ok_or_else(|| CoreError::InvalidRequest("messages body must be an object".to_string()))?
+            .ok_or_else(|| {
+                CoreError::InvalidRequest("messages body must be an object".to_string())
+            })?
             .insert(
                 "model".to_string(),
                 Value::String(upstream_model.to_string()),
@@ -164,7 +174,11 @@ pub async fn run(
         // Run pre-call guardrails
         let guardrail_context = GuardrailContext::new(CallType::Completion);
         let guardrail_request = GuardrailRequest::new(body.clone());
-        match state.guardrail_runner.run_pre_call(&guardrail_context, guardrail_request).await {
+        match state
+            .guardrail_runner
+            .run_pre_call(&guardrail_context, guardrail_request)
+            .await
+        {
             Ok((modified_request, _report)) => {
                 body = modified_request.data;
             }
@@ -227,20 +241,32 @@ pub async fn run(
                         }
 
                         if let Some(ref redis) = state.redis {
-                            crate::auth::rate_limit::release_parallel_slot(redis, hashed_token.as_hex_str()).await;
+                            crate::auth::rate_limit::release_parallel_slot(
+                                redis,
+                                hashed_token.as_hex_str(),
+                            )
+                            .await;
                         }
 
                         // Parse usage for spend tracking and metrics
-                        let (input_tokens, output_tokens) = if let Some(usage_value) = &response.usage {
-                            let input = usage_value.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-                            let output = usage_value.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-                            (input, output)
-                        } else {
-                            (0, 0)
-                        };
+                        let (input_tokens, output_tokens) =
+                            if let Some(usage_value) = &response.usage {
+                                let input = usage_value
+                                    .get("input_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0);
+                                let output = usage_value
+                                    .get("output_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0);
+                                (input, output)
+                            } else {
+                                (0, 0)
+                            };
 
                         // Record spend
-                        record_spend(state, &response, provider_model, key_object, hashed_token).await;
+                        record_spend(state, &response, provider_model, key_object, hashed_token)
+                            .await;
 
                         if let Some(ref redis) = state.redis {
                             crate::auth::rate_limit::check_token_limits(
@@ -254,10 +280,26 @@ pub async fn run(
                         }
 
                         let duration = start.elapsed().as_secs_f64();
-                        state.metrics.requests_total.with_label_values(&[provider_model, "success"]).inc();
-                        state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
-                        state.metrics.tokens_total.with_label_values(&[provider_model, "prompt"]).inc_by(input_tokens);
-                        state.metrics.tokens_total.with_label_values(&[provider_model, "completion"]).inc_by(output_tokens);
+                        state
+                            .metrics
+                            .requests_total
+                            .with_label_values(&[provider_model, "success"])
+                            .inc();
+                        state
+                            .metrics
+                            .request_duration_seconds
+                            .with_label_values(&[provider_model])
+                            .observe(duration);
+                        state
+                            .metrics
+                            .tokens_total
+                            .with_label_values(&[provider_model, "prompt"])
+                            .inc_by(input_tokens);
+                        state
+                            .metrics
+                            .tokens_total
+                            .with_label_values(&[provider_model, "completion"])
+                            .inc_by(output_tokens);
 
                         tracing::info!(
                             model = %provider_model,
@@ -273,13 +315,18 @@ pub async fn run(
                         return serde_json::to_value(response)
                             .map(MessagesResponse::Json)
                             .map_err(|err| {
-                                CoreError::InvalidResponse(format!("failed to serialize messages response: {err}"))
+                                CoreError::InvalidResponse(format!(
+                                    "failed to serialize messages response: {err}"
+                                ))
                             });
                     }
                     Err(err) => {
                         if attempt < max_retries && crate::auth::retry::is_retryable_error(&err) {
                             deployment_error = Some(err);
-                            let delay = crate::auth::retry::calculate_delay(attempt + 1, &retry_config.network_strategy);
+                            let delay = crate::auth::retry::calculate_delay(
+                                attempt + 1,
+                                &retry_config.network_strategy,
+                            );
                             tokio::time::sleep(delay).await;
                             request = MessagesRequest {
                                 model: provider_model,
@@ -362,11 +409,17 @@ async fn record_spend(
     hashed_token: &HashedToken,
 ) {
     let hex = hashed_token.as_hex_str();
-    
+
     // Parse usage from the Value type
     let (input_tokens, output_tokens) = if let Some(usage_value) = &response.usage {
-        let input = usage_value.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-        let output = usage_value.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+        let input = usage_value
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let output = usage_value
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         (input, output)
     } else {
         (0, 0)
@@ -451,4 +504,3 @@ async fn record_spend(
         }
     }
 }
-

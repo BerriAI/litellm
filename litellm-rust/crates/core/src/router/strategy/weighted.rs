@@ -9,9 +9,9 @@
 //! - Pre-allocates HashMap with expected capacity
 //! - No locking required (weights are set during initialization, not during request processing)
 
+use rand::Rng;
 use std::collections::HashMap;
 use std::sync::Arc;
-use rand::Rng;
 
 use super::Deployment;
 
@@ -44,7 +44,10 @@ impl WeightTracker {
     /// Returns Arc<str> for zero-copy sharing.
     #[inline]
     fn deployment_key(deployment: &Deployment) -> Arc<str> {
-        let key = format!("{}:{}", deployment.model_name, deployment.litellm_params.model);
+        let key = format!(
+            "{}:{}",
+            deployment.model_name, deployment.litellm_params.model
+        );
         Arc::from(key)
     }
 
@@ -88,10 +91,7 @@ impl WeightTracker {
         }
 
         // Calculate total weight
-        let total_weight: u32 = candidates
-            .iter()
-            .map(|d| self.get_weight(d))
-            .sum();
+        let total_weight: u32 = candidates.iter().map(|d| self.get_weight(d)).sum();
 
         if total_weight == 0 {
             // If all weights are 0, fall back to first candidate
@@ -132,7 +132,7 @@ impl WeightTracker {
             .collect();
 
         // Sort by weight (highest first)
-        candidates_with_weight.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates_with_weight.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         candidates_with_weight.into_iter().map(|(d, _)| d).collect()
     }
@@ -161,10 +161,7 @@ impl WeightTracker {
     /// - O(n) calculation where n is number of candidates
     #[inline]
     pub fn get_traffic_distribution(&self, candidates: &[&Deployment]) -> HashMap<Arc<str>, f64> {
-        let total_weight: u32 = candidates
-            .iter()
-            .map(|d| self.get_weight(d))
-            .sum();
+        let total_weight: u32 = candidates.iter().map(|d| self.get_weight(d)).sum();
 
         if total_weight == 0 {
             return HashMap::new();
@@ -232,24 +229,27 @@ mod tests {
         tracker.set_weight(&dep2, 10);
 
         let candidates = vec![&dep1, &dep2];
-        
+
         // Run selection many times to verify distribution
         let mut dep1_count = 0;
-        let mut dep2_count = 0;
-        
+        let mut _dep2_count = 0;
+
         for _ in 0..1000 {
             let selected = tracker.select(&candidates).unwrap();
             if selected.litellm_params.model == "openai/gpt-4" {
                 dep1_count += 1;
             } else {
-                dep2_count += 1;
+                _dep2_count += 1;
             }
         }
-        
+
         // dep1 should be selected roughly 90% of the time (with some variance)
         let dep1_percentage = dep1_count as f64 / 1000.0 * 100.0;
-        assert!(dep1_percentage > 80.0 && dep1_percentage < 95.0, 
-                "Expected ~90% for dep1, got {}%", dep1_percentage);
+        assert!(
+            dep1_percentage > 80.0 && dep1_percentage < 95.0,
+            "Expected ~90% for dep1, got {}%",
+            dep1_percentage
+        );
     }
 
     #[tokio::test]
@@ -265,7 +265,7 @@ mod tests {
 
         let candidates = vec![&dep1, &dep2, &dep3];
         let sorted = tracker.sort_by_weight(candidates);
-        
+
         assert_eq!(sorted[0].litellm_params.model, "openai/gpt-4");
         assert_eq!(sorted[1].litellm_params.model, "azure/gpt-4");
         assert_eq!(sorted[2].litellm_params.model, "anthropic/gpt-4");
@@ -289,10 +289,10 @@ mod tests {
 
         let candidates = vec![&dep1, &dep2];
         let distribution = tracker.get_traffic_distribution(&candidates);
-        
+
         let dep1_key = WeightTracker::deployment_key(&dep1);
         let dep2_key = WeightTracker::deployment_key(&dep2);
-        
+
         assert!((distribution[&dep1_key] - 70.0).abs() < 0.01);
         assert!((distribution[&dep2_key] - 30.0).abs() < 0.01);
     }
@@ -307,23 +307,26 @@ mod tests {
         tracker.set_weight(&dep2, 50);
 
         let candidates = vec![&dep1, &dep2];
-        
+
         // Run selection many times to verify equal distribution
         let mut dep1_count = 0;
-        let mut dep2_count = 0;
-        
+        let mut _dep2_count = 0;
+
         for _ in 0..1000 {
             let selected = tracker.select(&candidates).unwrap();
             if selected.litellm_params.model == "openai/gpt-4" {
                 dep1_count += 1;
             } else {
-                dep2_count += 1;
+                _dep2_count += 1;
             }
         }
-        
+
         // Both should be selected roughly 50% of the time
         let dep1_percentage = dep1_count as f64 / 1000.0 * 100.0;
-        assert!(dep1_percentage > 40.0 && dep1_percentage < 60.0, 
-                "Expected ~50% for dep1, got {}%", dep1_percentage);
+        assert!(
+            dep1_percentage > 40.0 && dep1_percentage < 60.0,
+            "Expected ~50% for dep1, got {}%",
+            dep1_percentage
+        );
     }
 }

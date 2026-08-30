@@ -10,10 +10,10 @@
 //! - Uses `AtomicU64` directly (no Arc wrapper) for lock-free counter updates
 //! - Pre-allocates HashMap with expected capacity
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use parking_lot::RwLock;
 
 use super::Deployment;
 
@@ -49,7 +49,10 @@ impl LoadTracker {
     /// Returns Arc<str> for zero-copy sharing.
     #[inline]
     fn deployment_key(deployment: &Deployment) -> Arc<str> {
-        let key = format!("{}:{}", deployment.model_name, deployment.litellm_params.model);
+        let key = format!(
+            "{}:{}",
+            deployment.model_name, deployment.litellm_params.model
+        );
         Arc::from(key)
     }
 
@@ -64,10 +67,12 @@ impl LoadTracker {
     fn get_or_create_counter(&self, deployment: &Deployment) -> Arc<str> {
         let key = Self::deployment_key(deployment);
         let mut loads = self.loads.write();
-        
+
         // Insert if not present
-        loads.entry(Arc::clone(&key)).or_insert_with(|| AtomicU64::new(0));
-        
+        loads
+            .entry(Arc::clone(&key))
+            .or_insert_with(|| AtomicU64::new(0));
+
         key
     }
 
@@ -136,7 +141,7 @@ impl LoadTracker {
         }
 
         let loads = self.loads.read();
-        
+
         let mut best_deployment = candidates[0];
         let mut best_load = loads
             .get(&Self::deployment_key(best_deployment))
@@ -148,7 +153,7 @@ impl LoadTracker {
                 .get(&Self::deployment_key(deployment))
                 .map(|counter| counter.load(Ordering::Relaxed))
                 .unwrap_or(0);
-            
+
             if load < best_load {
                 best_load = load;
                 best_deployment = deployment;
@@ -169,7 +174,7 @@ impl LoadTracker {
     #[inline]
     pub async fn sort_by_load<'a>(&self, candidates: Vec<&'a Deployment>) -> Vec<&'a Deployment> {
         let loads = self.loads.read();
-        
+
         let mut candidates_with_load: Vec<(&Deployment, u64)> = candidates
             .into_iter()
             .map(|deployment| {
@@ -182,7 +187,7 @@ impl LoadTracker {
             .collect();
 
         // Sort by load (lowest first)
-        candidates_with_load.sort_by(|a, b| a.1.cmp(&b.1));
+        candidates_with_load.sort_by_key(|a| a.1);
 
         candidates_with_load.into_iter().map(|(d, _)| d).collect()
     }
@@ -279,9 +284,9 @@ mod tests {
         tracker.increment_load(&dep1).await;
         tracker.increment_load(&dep1).await;
         tracker.increment_load(&dep1).await;
-        
+
         tracker.increment_load(&dep2).await;
-        
+
         tracker.increment_load(&dep3).await;
         tracker.increment_load(&dep3).await;
 
@@ -300,15 +305,15 @@ mod tests {
         tracker.increment_load(&dep1).await;
         tracker.increment_load(&dep1).await;
         tracker.increment_load(&dep1).await;
-        
+
         tracker.increment_load(&dep2).await;
-        
+
         tracker.increment_load(&dep3).await;
         tracker.increment_load(&dep3).await;
 
         let candidates = vec![&dep1, &dep2, &dep3];
         let sorted = tracker.sort_by_load(candidates).await;
-        
+
         assert_eq!(sorted[0].litellm_params.model, "azure/gpt-4"); // Load: 1
         assert_eq!(sorted[1].litellm_params.model, "anthropic/gpt-4"); // Load: 2
         assert_eq!(sorted[2].litellm_params.model, "openai/gpt-4"); // Load: 3

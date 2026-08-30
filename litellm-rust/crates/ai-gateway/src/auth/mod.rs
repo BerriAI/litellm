@@ -8,11 +8,11 @@
 //! A handler opts in by adding [`RequireMasterKey`] to its arguments; auth then
 //! runs during extraction, before the handler body. Routes never re-implement it.
 
+pub mod circuit_breaker;
 pub mod key_auth;
 pub mod rate_limit;
-pub mod sliding_window_rate_limit;
-pub mod circuit_breaker;
 pub mod retry;
+pub mod sliding_window_rate_limit;
 
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;

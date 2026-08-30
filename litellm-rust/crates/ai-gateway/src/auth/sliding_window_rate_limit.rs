@@ -3,10 +3,10 @@
 //! Uses a sliding window algorithm instead of fixed windows to provide
 //! smoother rate limiting without the boundary issues of fixed windows.
 
+use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use parking_lot::Mutex;
 
 /// Sliding window rate limiter configuration.
 #[derive(Debug, Clone)]
@@ -57,10 +57,12 @@ impl SlidingWindowRateLimiter {
     pub fn check_and_record(&self, key: &str) -> bool {
         let now = Instant::now();
         let window_start = now - self.config.window_size;
-        
+
         let mut requests = self.requests.lock();
-        let timestamps = requests.entry(key.to_string()).or_insert_with(VecDeque::new);
-        
+        let timestamps = requests
+            .entry(key.to_string())
+            .or_insert_with(VecDeque::new);
+
         // Remove timestamps outside the window
         while let Some(front) = timestamps.front() {
             if front.timestamp < window_start {
@@ -69,12 +71,12 @@ impl SlidingWindowRateLimiter {
                 break;
             }
         }
-        
+
         // Check if we're at the limit
         if timestamps.len() as u64 >= self.config.max_requests {
             return false;
         }
-        
+
         // Record the request
         timestamps.push_back(RequestTimestamp { timestamp: now });
         true
@@ -84,11 +86,12 @@ impl SlidingWindowRateLimiter {
     pub fn check(&self, key: &str) -> bool {
         let now = Instant::now();
         let window_start = now - self.config.window_size;
-        
+
         let requests = self.requests.lock();
         if let Some(timestamps) = requests.get(key) {
             // Count timestamps within the window
-            let count = timestamps.iter()
+            let count = timestamps
+                .iter()
                 .filter(|ts| ts.timestamp >= window_start)
                 .count();
             (count as u64) < self.config.max_requests
@@ -101,10 +104,11 @@ impl SlidingWindowRateLimiter {
     pub fn get_count(&self, key: &str) -> u64 {
         let now = Instant::now();
         let window_start = now - self.config.window_size;
-        
+
         let requests = self.requests.lock();
         if let Some(timestamps) = requests.get(key) {
-            timestamps.iter()
+            timestamps
+                .iter()
                 .filter(|ts| ts.timestamp >= window_start)
                 .count() as u64
         } else {
@@ -128,12 +132,13 @@ impl SlidingWindowRateLimiter {
     pub fn retry_after(&self, key: &str) -> Option<Duration> {
         let now = Instant::now();
         let window_start = now - self.config.window_size;
-        
+
         let requests = self.requests.lock();
         if let Some(timestamps) = requests.get(key) {
             if timestamps.len() as u64 >= self.config.max_requests {
                 // Find the oldest timestamp in the window
-                if let Some(oldest) = timestamps.iter()
+                if let Some(oldest) = timestamps
+                    .iter()
                     .filter(|ts| ts.timestamp >= window_start)
                     .next()
                 {
@@ -160,11 +165,11 @@ mod tests {
             window_size: Duration::from_secs(1),
         };
         let limiter = SlidingWindowRateLimiter::new(config);
-        
+
         for _ in 0..5 {
             assert!(limiter.check_and_record("test_key"));
         }
-        
+
         assert!(!limiter.check_and_record("test_key"));
     }
 
@@ -175,11 +180,11 @@ mod tests {
             window_size: Duration::from_secs(1),
         };
         let limiter = SlidingWindowRateLimiter::new(config);
-        
+
         assert!(limiter.check_and_record("key1"));
         assert!(limiter.check_and_record("key1"));
         assert!(!limiter.check_and_record("key1"));
-        
+
         assert!(limiter.check_and_record("key2"));
         assert!(limiter.check_and_record("key2"));
         assert!(!limiter.check_and_record("key2"));
@@ -192,14 +197,14 @@ mod tests {
             window_size: Duration::from_millis(100),
         };
         let limiter = SlidingWindowRateLimiter::new(config);
-        
+
         assert!(limiter.check_and_record("test_key"));
         assert!(limiter.check_and_record("test_key"));
         assert!(!limiter.check_and_record("test_key"));
-        
+
         // Wait for window to expire
         thread::sleep(Duration::from_millis(150));
-        
+
         assert!(limiter.check_and_record("test_key"));
     }
 
@@ -210,13 +215,13 @@ mod tests {
             window_size: Duration::from_secs(1),
         };
         let limiter = SlidingWindowRateLimiter::new(config);
-        
+
         assert!(limiter.check_and_record("test_key"));
         assert!(limiter.check_and_record("test_key"));
         assert!(!limiter.check_and_record("test_key"));
-        
+
         limiter.reset("test_key");
-        
+
         assert!(limiter.check_and_record("test_key"));
     }
 
@@ -227,12 +232,12 @@ mod tests {
             window_size: Duration::from_secs(1),
         };
         let limiter = SlidingWindowRateLimiter::new(config);
-        
+
         assert_eq!(limiter.remaining("test_key"), 5);
-        
+
         limiter.check_and_record("test_key");
         assert_eq!(limiter.remaining("test_key"), 4);
-        
+
         limiter.check_and_record("test_key");
         assert_eq!(limiter.remaining("test_key"), 3);
     }
@@ -244,12 +249,12 @@ mod tests {
             window_size: Duration::from_secs(1),
         };
         let limiter = SlidingWindowRateLimiter::new(config);
-        
+
         assert!(limiter.retry_after("test_key").is_none());
-        
+
         limiter.check_and_record("test_key");
         limiter.check_and_record("test_key");
-        
+
         let retry_after = limiter.retry_after("test_key");
         assert!(retry_after.is_some());
         assert!(retry_after.unwrap() <= Duration::from_secs(1));

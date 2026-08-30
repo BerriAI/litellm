@@ -32,13 +32,15 @@ pub(super) async fn execute_embeddings_provider_call(
         });
     }
 
-    let transformed = request.config.transform_response(&request.model, serde_json::from_str(&text).map_err(|err| {
-        CoreError::InvalidResponse(format!("invalid embeddings response JSON: {err}"))
-    })?)?;
-    
-    serde_json::from_value(transformed).map_err(|err| {
-        CoreError::InvalidResponse(format!("invalid embeddings response: {err}"))
-    })
+    let transformed = request.config.transform_response(
+        &request.model,
+        serde_json::from_str(&text).map_err(|err| {
+            CoreError::InvalidResponse(format!("invalid embeddings response JSON: {err}"))
+        })?,
+    )?;
+
+    serde_json::from_value(transformed)
+        .map_err(|err| CoreError::InvalidResponse(format!("invalid embeddings response: {err}")))
 }
 
 fn truncate_error_body(body: &str) -> String {

@@ -3,8 +3,7 @@
 //! Monitors error rates, latency, and other metrics, and sends alerts
 //! when thresholds are exceeded.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use crate::alerting::{Alert, AlertManager, AlertSeverity, AlertType, AlertingConfig};
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -12,8 +11,9 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use crate::alerting::{AlertManager, AlertingConfig, Alert, AlertType, AlertSeverity};
 
 /// Alerting middleware state.
 pub struct AlertingState {
@@ -50,7 +50,7 @@ impl AlertingState {
     pub async fn get_error_rate(&self) -> f64 {
         let request_count = *self.request_count.lock().await;
         let error_count = *self.error_count.lock().await;
-        
+
         if request_count == 0 {
             0.0
         } else {
@@ -63,7 +63,7 @@ impl AlertingState {
         let mut request_count = self.request_count.lock().await;
         let mut error_count = self.error_count.lock().await;
         let mut last_reset = self.last_reset.lock().await;
-        
+
         *request_count = 0;
         *error_count = 0;
         *last_reset = Instant::now();
@@ -72,15 +72,17 @@ impl AlertingState {
     /// Check thresholds and send alerts if needed.
     pub async fn check_thresholds(&self, error_rate_threshold: f64, latency_threshold_ms: u64) {
         let error_rate = self.get_error_rate().await;
-        
+
         if error_rate > error_rate_threshold {
             let alert = Alert::new(
                 AlertType::HighErrorRate,
                 AlertSeverity::Critical,
                 "High Error Rate Detected".to_string(),
-                format!("Error rate {:.2}% exceeds threshold {:.2}%", 
-                    error_rate * 100.0, 
-                    error_rate_threshold * 100.0),
+                format!(
+                    "Error rate {:.2}% exceeds threshold {:.2}%",
+                    error_rate * 100.0,
+                    error_rate_threshold * 100.0
+                ),
             );
             let _ = self.alert_manager.send_alert(alert).await;
         }
@@ -95,26 +97,26 @@ pub async fn alerting_middleware(
 ) -> Result<Response, StatusCode> {
     // Record the request
     state.record_request().await;
-    
+
     let start = Instant::now();
-    
+
     // Process the request
     let response = next.run(request).await;
-    
+
     let latency = start.elapsed();
-    
+
     // Check if it was an error
     if response.status().is_server_error() {
         state.record_error().await;
     }
-    
+
     // Check thresholds periodically (every 100 requests)
     let request_count = *state.request_count.lock().await;
     if request_count % 100 == 0 {
         state.check_thresholds(0.05, 5000).await; // 5% error rate, 5s latency
         state.reset_counters().await;
     }
-    
+
     Ok(response)
 }
 
@@ -152,7 +154,7 @@ mod tests {
     async fn test_alerting_state_creation() {
         let config = AlertingConfig::default();
         let state = AlertingState::new(config);
-        
+
         let error_rate = state.get_error_rate().await;
         assert_eq!(error_rate, 0.0);
     }
@@ -161,11 +163,11 @@ mod tests {
     async fn test_record_request_and_error() {
         let config = AlertingConfig::default();
         let state = AlertingState::new(config);
-        
+
         state.record_request().await;
         state.record_request().await;
         state.record_error().await;
-        
+
         let error_rate = state.get_error_rate().await;
         assert_eq!(error_rate, 0.5); // 1 error out of 2 requests
     }
@@ -174,11 +176,11 @@ mod tests {
     async fn test_reset_counters() {
         let config = AlertingConfig::default();
         let state = AlertingState::new(config);
-        
+
         state.record_request().await;
         state.record_error().await;
         state.reset_counters().await;
-        
+
         let error_rate = state.get_error_rate().await;
         assert_eq!(error_rate, 0.0);
     }

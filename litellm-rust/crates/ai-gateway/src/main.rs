@@ -23,12 +23,12 @@ use litellm_core::persistence::{PostgresStore, RedisPostgresSpendFlush, RedisSto
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 use litellm_core::spend_tracking::SpendWorker;
 
+use litellm_ai_gateway::alerting::AlertingConfig;
 use litellm_ai_gateway::integrations::custom_guardrail::CustomGuardrailRunner;
 use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
 use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
 use litellm_ai_gateway::middleware::alerting::AlertingState;
 use litellm_ai_gateway::middleware::csrf::CsrfState;
-use litellm_ai_gateway::alerting::AlertingConfig;
 
 /// Bind to localhost by default so the gateway is not a public, unauthenticated
 /// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).
@@ -60,7 +60,9 @@ async fn main() {
             Ok(config) => {
                 eprintln!("loaded config from {config_path}");
                 // Use master_key from config if set, otherwise fall back to env var
-                let master_key = config.general_settings.master_key
+                let master_key = config
+                    .general_settings
+                    .master_key
                     .or_else(|| std::env::var("LITELLM_MASTER_KEY").ok())
                     .map(|key| key.trim().to_string())
                     .filter(|key| !key.is_empty())
@@ -69,19 +71,25 @@ async fn main() {
             }
             Err(err) => {
                 eprintln!("YAML config load failed ({err}); falling back to env deployment");
-                (Arc::new(build_router()), std::env::var("LITELLM_MASTER_KEY")
-                    .ok()
-                    .map(|key| key.trim().to_string())
-                    .filter(|key| !key.is_empty())
-                    .map(Arc::from))
+                (
+                    Arc::new(build_router()),
+                    std::env::var("LITELLM_MASTER_KEY")
+                        .ok()
+                        .map(|key| key.trim().to_string())
+                        .filter(|key| !key.is_empty())
+                        .map(Arc::from),
+                )
             }
         }
     } else {
-        (Arc::new(build_router()), std::env::var("LITELLM_MASTER_KEY")
-            .ok()
-            .map(|key| key.trim().to_string())
-            .filter(|key| !key.is_empty())
-            .map(Arc::from))
+        (
+            Arc::new(build_router()),
+            std::env::var("LITELLM_MASTER_KEY")
+                .ok()
+                .map(|key| key.trim().to_string())
+                .filter(|key| !key.is_empty())
+                .map(Arc::from),
+        )
     };
 
     eprintln!("master_key loaded: {:?}", master_key.as_deref());

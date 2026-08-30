@@ -10,11 +10,11 @@
 //! - Uses `SmallVec` for rolling average samples to avoid heap allocation for small windows
 //! - Pre-allocates HashMap with expected capacity
 
+use parking_lot::RwLock;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use parking_lot::RwLock;
-use smallvec::SmallVec;
 
 use super::Deployment;
 
@@ -92,7 +92,7 @@ impl LatencyTracker {
     ///
     /// Pre-allocates HashMap with capacity for 16 deployments to reduce rehashing.
     pub fn new(window_size: usize) -> Self {
-        let mut latencies = HashMap::with_capacity(16);
+        let latencies = HashMap::with_capacity(16);
         Self {
             latencies: Arc::new(RwLock::new(latencies)),
             window_size,
@@ -104,7 +104,10 @@ impl LatencyTracker {
     #[inline]
     fn deployment_key(deployment: &Deployment) -> Arc<str> {
         // Use Arc<str> to avoid String allocation on every access
-        let key = format!("{}:{}", deployment.model_name, deployment.litellm_params.model);
+        let key = format!(
+            "{}:{}",
+            deployment.model_name, deployment.litellm_params.model
+        );
         Arc::from(key)
     }
 
@@ -148,7 +151,10 @@ impl LatencyTracker {
     pub async fn get_sample_count(&self, deployment: &Deployment) -> usize {
         let key = Self::deployment_key(deployment);
         let latencies = self.latencies.read();
-        latencies.get(&key).map(|avg| avg.sample_count()).unwrap_or(0)
+        latencies
+            .get(&key)
+            .map(|avg| avg.sample_count())
+            .unwrap_or(0)
     }
 
     /// Select the deployment with the lowest average latency.
@@ -166,7 +172,7 @@ impl LatencyTracker {
         }
 
         let latencies = self.latencies.read();
-        
+
         let mut best_deployment = candidates[0];
         let mut best_latency = latencies
             .get(&Self::deployment_key(best_deployment))
@@ -178,7 +184,7 @@ impl LatencyTracker {
                 .get(&Self::deployment_key(deployment))
                 .map(|avg| avg.average())
                 .unwrap_or(f64::MAX);
-            
+
             if latency < best_latency {
                 best_latency = latency;
                 best_deployment = deployment;
@@ -196,9 +202,12 @@ impl LatencyTracker {
     /// - Uses Arc<str> keys for zero-copy lookup
     /// - O(n log n) sort where n is number of candidates
     #[inline]
-    pub async fn sort_by_latency<'a>(&self, candidates: Vec<&'a Deployment>) -> Vec<&'a Deployment> {
+    pub async fn sort_by_latency<'a>(
+        &self,
+        candidates: Vec<&'a Deployment>,
+    ) -> Vec<&'a Deployment> {
         let latencies = self.latencies.read();
-        
+
         let mut candidates_with_latency: Vec<(&Deployment, f64)> = candidates
             .into_iter()
             .map(|deployment| {
@@ -211,11 +220,13 @@ impl LatencyTracker {
             .collect();
 
         // Sort by latency (lowest first)
-        candidates_with_latency.sort_by(|a, b| {
-            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        candidates_with_latency
+            .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        candidates_with_latency.into_iter().map(|(d, _)| d).collect()
+        candidates_with_latency
+            .into_iter()
+            .map(|(d, _)| d)
+            .collect()
     }
 
     /// Clear all latency data.
@@ -273,16 +284,16 @@ mod tests {
     #[tokio::test]
     async fn test_rolling_average() {
         let mut avg = RollingAverage::new(3);
-        
+
         avg.add_sample(100.0);
         assert_eq!(avg.average(), 100.0);
-        
+
         avg.add_sample(200.0);
         assert_eq!(avg.average(), 150.0);
-        
+
         avg.add_sample(300.0);
         assert_eq!(avg.average(), 200.0);
-        
+
         // Window is full, should replace oldest
         avg.add_sample(400.0);
         assert_eq!(avg.average(), 300.0); // (200 + 300 + 400) / 3
@@ -298,9 +309,15 @@ mod tests {
         assert_eq!(tracker.get_sample_count(&deployment).await, 0);
 
         // Record some latencies
-        tracker.record_latency(&deployment, Duration::from_millis(100)).await;
-        tracker.record_latency(&deployment, Duration::from_millis(200)).await;
-        tracker.record_latency(&deployment, Duration::from_millis(300)).await;
+        tracker
+            .record_latency(&deployment, Duration::from_millis(100))
+            .await;
+        tracker
+            .record_latency(&deployment, Duration::from_millis(200))
+            .await;
+        tracker
+            .record_latency(&deployment, Duration::from_millis(300))
+            .await;
 
         assert_eq!(tracker.get_average_latency(&deployment).await, 200.0);
         assert_eq!(tracker.get_sample_count(&deployment).await, 3);
@@ -314,9 +331,15 @@ mod tests {
         let dep3 = create_deployment("gpt-4", "anthropic/gpt-4");
 
         // Record latencies: dep2 is fastest
-        tracker.record_latency(&dep1, Duration::from_millis(300)).await;
-        tracker.record_latency(&dep2, Duration::from_millis(100)).await;
-        tracker.record_latency(&dep3, Duration::from_millis(200)).await;
+        tracker
+            .record_latency(&dep1, Duration::from_millis(300))
+            .await;
+        tracker
+            .record_latency(&dep2, Duration::from_millis(100))
+            .await;
+        tracker
+            .record_latency(&dep3, Duration::from_millis(200))
+            .await;
 
         let candidates = vec![&dep1, &dep2, &dep3];
         let selected = tracker.select(&candidates).await.unwrap();
@@ -330,13 +353,19 @@ mod tests {
         let dep2 = create_deployment("gpt-4", "azure/gpt-4");
         let dep3 = create_deployment("gpt-4", "anthropic/gpt-4");
 
-        tracker.record_latency(&dep1, Duration::from_millis(300)).await;
-        tracker.record_latency(&dep2, Duration::from_millis(100)).await;
-        tracker.record_latency(&dep3, Duration::from_millis(200)).await;
+        tracker
+            .record_latency(&dep1, Duration::from_millis(300))
+            .await;
+        tracker
+            .record_latency(&dep2, Duration::from_millis(100))
+            .await;
+        tracker
+            .record_latency(&dep3, Duration::from_millis(200))
+            .await;
 
         let candidates = vec![&dep1, &dep2, &dep3];
         let sorted = tracker.sort_by_latency(candidates).await;
-        
+
         assert_eq!(sorted[0].litellm_params.model, "azure/gpt-4");
         assert_eq!(sorted[1].litellm_params.model, "anthropic/gpt-4");
         assert_eq!(sorted[2].litellm_params.model, "openai/gpt-4");

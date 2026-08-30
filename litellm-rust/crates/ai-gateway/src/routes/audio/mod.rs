@@ -14,7 +14,9 @@ use litellm_core::CoreError;
 use serde_json::{Map, Value};
 
 use crate::auth::key_auth::RequireValidKey;
-use crate::constants::{AUDIO_HEADERS_NOT_FORWARDED, AUDIO_ROUTE_PATH_SPEECH, AUDIO_ROUTE_PATH_TRANSCRIPTIONS};
+use crate::constants::{
+    AUDIO_HEADERS_NOT_FORWARDED, AUDIO_ROUTE_PATH_SPEECH, AUDIO_ROUTE_PATH_TRANSCRIPTIONS,
+};
 use crate::state::AppState;
 
 /// This route's contribution to the app router.
@@ -31,21 +33,22 @@ async fn handle_speech(
     Json(body): Json<Value>,
 ) -> Result<Response, AudioRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run_speech(&state, body, extra_headers, &auth.key_object, &auth.hashed_token)
-        .await
-        .map_err(AudioRouteError::from)?
+    match service::run_speech(
+        &state,
+        body,
+        extra_headers,
+        &auth.key_object,
+        &auth.hashed_token,
+    )
+    .await
+    .map_err(AudioRouteError::from)?
     {
         service::AudioResponseEnum::Binary { data, content_type } => {
-            Ok((
-                [(axum::http::header::CONTENT_TYPE, content_type)],
-                data,
-            ).into_response())
+            Ok(([(axum::http::header::CONTENT_TYPE, content_type)], data).into_response())
         }
-        service::AudioResponseEnum::Json(_) => {
-            Err(AudioRouteError(CoreError::InvalidResponse(
-                "speech endpoint should return binary data, not JSON".to_string(),
-            )))
-        }
+        service::AudioResponseEnum::Json(_) => Err(AudioRouteError(CoreError::InvalidResponse(
+            "speech endpoint should return binary data, not JSON".to_string(),
+        ))),
     }
 }
 
@@ -56,9 +59,15 @@ async fn handle_transcription(
     Json(body): Json<Value>,
 ) -> Result<Response, AudioRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run_transcription(&state, body, extra_headers, &auth.key_object, &auth.hashed_token)
-        .await
-        .map_err(AudioRouteError::from)?
+    match service::run_transcription(
+        &state,
+        body,
+        extra_headers,
+        &auth.key_object,
+        &auth.hashed_token,
+    )
+    .await
+    .map_err(AudioRouteError::from)?
     {
         service::AudioResponseEnum::Json(body) => Ok(Json(body).into_response()),
         service::AudioResponseEnum::Binary { .. } => {

@@ -3,10 +3,10 @@
 //! Sends alerts via webhooks and email when certain conditions are met,
 //! such as high error rates, high latency, rate limit exceeded, or circuit breaker trips.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Alert severity levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -76,7 +76,7 @@ impl Alert {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         Self {
             id: format!("alert_{}", timestamp),
             alert_type,
@@ -123,8 +123,8 @@ impl Default for AlertingConfig {
     fn default() -> Self {
         Self {
             channels: Vec::new(),
-            error_rate_threshold: 0.05, // 5%
-            latency_threshold_ms: 5000, // 5 seconds
+            error_rate_threshold: 0.05,                  // 5%
+            latency_threshold_ms: 5000,                  // 5 seconds
             cooldown_duration: Duration::from_secs(300), // 5 minutes
         }
     }
@@ -149,13 +149,13 @@ impl AlertManager {
     fn should_alert(&self, alert_type: &AlertType) -> bool {
         let mut last_alert = self.last_alert.lock();
         let now = Instant::now();
-        
+
         if let Some(last) = last_alert.get(alert_type) {
             if now.duration_since(*last) < self.config.cooldown_duration {
                 return false;
             }
         }
-        
+
         last_alert.insert(alert_type.clone(), now);
         true
     }
@@ -191,36 +191,38 @@ impl AlertManager {
     ) -> Result<(), String> {
         let client = reqwest::Client::new();
         let mut request = client.post(url).json(alert);
-        
+
         for (key, value) in headers {
             request = request.header(key, value);
         }
 
-        let response = request.send().await.map_err(|e| {
-            format!("Failed to send webhook alert: {}", e)
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send webhook alert: {}", e))?;
 
         if !response.status().is_success() {
-            return Err(format!("Webhook returned error status: {}", response.status()));
+            return Err(format!(
+                "Webhook returned error status: {}",
+                response.status()
+            ));
         }
 
         Ok(())
     }
 
     /// Check metrics and send alerts if thresholds are exceeded.
-    pub async fn check_and_alert(
-        &self,
-        error_rate: f64,
-        latency_ms: u64,
-    ) -> Result<(), String> {
+    pub async fn check_and_alert(&self, error_rate: f64, latency_ms: u64) -> Result<(), String> {
         if error_rate > self.config.error_rate_threshold {
             let alert = Alert::new(
                 AlertType::HighErrorRate,
                 AlertSeverity::Critical,
                 "High Error Rate Detected".to_string(),
-                format!("Error rate {:.2}% exceeds threshold {:.2}%", 
-                    error_rate * 100.0, 
-                    self.config.error_rate_threshold * 100.0),
+                format!(
+                    "Error rate {:.2}% exceeds threshold {:.2}%",
+                    error_rate * 100.0,
+                    self.config.error_rate_threshold * 100.0
+                ),
             );
             self.send_alert(alert).await?;
         }
@@ -230,9 +232,10 @@ impl AlertManager {
                 AlertType::HighLatency,
                 AlertSeverity::Warning,
                 "High Latency Detected".to_string(),
-                format!("Latency {}ms exceeds threshold {}ms", 
-                    latency_ms, 
-                    self.config.latency_threshold_ms),
+                format!(
+                    "Latency {}ms exceeds threshold {}ms",
+                    latency_ms, self.config.latency_threshold_ms
+                ),
             );
             self.send_alert(alert).await?;
         }

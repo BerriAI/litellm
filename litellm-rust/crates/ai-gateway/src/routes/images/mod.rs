@@ -14,7 +14,9 @@ use litellm_core::CoreError;
 use serde_json::{Map, Value};
 
 use crate::auth::key_auth::RequireValidKey;
-use crate::constants::{IMAGES_HEADERS_NOT_FORWARDED, IMAGES_ROUTE_PATH_GENERATIONS, IMAGES_ROUTE_PATH_EDITS};
+use crate::constants::{
+    IMAGES_HEADERS_NOT_FORWARDED, IMAGES_ROUTE_PATH_EDITS, IMAGES_ROUTE_PATH_GENERATIONS,
+};
 use crate::state::AppState;
 
 /// This route's contribution to the app router.
@@ -31,9 +33,15 @@ async fn handle_generation(
     Json(body): Json<Value>,
 ) -> Result<Response, ImagesRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run_generation(&state, body, extra_headers, &auth.key_object, &auth.hashed_token)
-        .await
-        .map_err(ImagesRouteError::from)?
+    match service::run_generation(
+        &state,
+        body,
+        extra_headers,
+        &auth.key_object,
+        &auth.hashed_token,
+    )
+    .await
+    .map_err(ImagesRouteError::from)?
     {
         service::ImagesResponseEnum::Json(body) => Ok(Json(body).into_response()),
     }
@@ -46,9 +54,15 @@ async fn handle_edit(
     Json(body): Json<Value>,
 ) -> Result<Response, ImagesRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run_edit(&state, body, extra_headers, &auth.key_object, &auth.hashed_token)
-        .await
-        .map_err(ImagesRouteError::from)?
+    match service::run_edit(
+        &state,
+        body,
+        extra_headers,
+        &auth.key_object,
+        &auth.hashed_token,
+    )
+    .await
+    .map_err(ImagesRouteError::from)?
     {
         service::ImagesResponseEnum::Json(body) => Ok(Json(body).into_response()),
     }

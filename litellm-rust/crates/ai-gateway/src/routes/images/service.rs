@@ -3,7 +3,10 @@ use std::time::{Duration, Instant};
 
 use litellm_core::auth::{HashedToken, KeyObject};
 use litellm_core::cost_calculator::{self, CostRequest};
-use litellm_core::images::types::{ImagesData, ImagesEditRequest, ImagesEditResponse, ImagesGenerationRequest, ImagesGenerationResponse};
+use litellm_core::images::types::{
+    ImagesData, ImagesEditRequest, ImagesEditResponse, ImagesGenerationRequest,
+    ImagesGenerationResponse,
+};
 use litellm_core::images::{images_edit, images_generation};
 use litellm_core::persistence::CacheStore;
 use litellm_core::spend_tracking::{EntityType, SpendUpdateItem};
@@ -32,7 +35,9 @@ pub async fn run_generation(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|model| !model.is_empty())
-        .ok_or_else(|| CoreError::InvalidRequest("images generation body requires a model".to_string()))?
+        .ok_or_else(|| {
+            CoreError::InvalidRequest("images generation body requires a model".to_string())
+        })?
         .to_string();
 
     let prompt = body
@@ -40,7 +45,9 @@ pub async fn run_generation(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|prompt| !prompt.is_empty())
-        .ok_or_else(|| CoreError::InvalidRequest("images generation body requires a prompt".to_string()))?
+        .ok_or_else(|| {
+            CoreError::InvalidRequest("images generation body requires a prompt".to_string())
+        })?
         .to_string();
 
     // Check global rate limit
@@ -104,7 +111,13 @@ pub async fn run_generation(
 
     // Check rate limits (RPM, max_parallel_requests)
     if let Some(ref redis) = state.redis {
-        match crate::auth::rate_limit::check_request_limits(redis, key_object, hashed_token.as_hex_str()).await {
+        match crate::auth::rate_limit::check_request_limits(
+            redis,
+            key_object,
+            hashed_token.as_hex_str(),
+        )
+        .await
+        {
             crate::auth::rate_limit::RateLimitResult::Allowed => {}
             crate::auth::rate_limit::RateLimitResult::RpmExceeded { limit, .. } => {
                 return Err(CoreError::Auth(format!(
@@ -131,7 +144,9 @@ pub async fn run_generation(
         )));
     }
 
-    let timeout = Some(Duration::from_secs_f64(state.config.default_request_timeout_secs));
+    let timeout = Some(Duration::from_secs_f64(
+        state.config.default_request_timeout_secs,
+    ));
 
     // Try each deployment in order (fallback routing)
     let mut last_error: Option<CoreError> = None;
@@ -156,9 +171,14 @@ pub async fn run_generation(
         }
 
         // Run pre-call guardrails
-        let guardrail_context = GuardrailContext::new(CallType::Other("images_generation".to_string()));
+        let guardrail_context =
+            GuardrailContext::new(CallType::Other("images_generation".to_string()));
         let guardrail_request = GuardrailRequest::new(body.clone());
-        match state.guardrail_runner.run_pre_call(&guardrail_context, guardrail_request).await {
+        match state
+            .guardrail_runner
+            .run_pre_call(&guardrail_context, guardrail_request)
+            .await
+        {
             Ok((_modified_request, _report)) => {
                 // Guardrails may have modified the request
                 // For images generation, we just continue with the original body
@@ -176,7 +196,10 @@ pub async fn run_generation(
             prompt: prompt.clone(),
             n: body.get("n").and_then(Value::as_u64).map(|n| n as u32),
             size: body.get("size").and_then(Value::as_str).map(String::from),
-            response_format: body.get("response_format").and_then(Value::as_str).map(String::from),
+            response_format: body
+                .get("response_format")
+                .and_then(Value::as_str)
+                .map(String::from),
             user: body.get("user").and_then(Value::as_str).map(String::from),
             api_key: deployment.litellm_params.api_key.as_deref(),
             api_base: deployment.litellm_params.api_base.as_deref(),
@@ -200,7 +223,11 @@ pub async fn run_generation(
                     }
 
                     if let Some(ref redis) = state.redis {
-                        crate::auth::rate_limit::release_parallel_slot(redis, hashed_token.as_hex_str()).await;
+                        crate::auth::rate_limit::release_parallel_slot(
+                            redis,
+                            hashed_token.as_hex_str(),
+                        )
+                        .await;
                     }
 
                     // Record spend
@@ -218,8 +245,16 @@ pub async fn run_generation(
                     }
 
                     let duration = start.elapsed().as_secs_f64();
-                    state.metrics.requests_total.with_label_values(&[provider_model, "success"]).inc();
-                    state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
+                    state
+                        .metrics
+                        .requests_total
+                        .with_label_values(&[provider_model, "success"])
+                        .inc();
+                    state
+                        .metrics
+                        .request_duration_seconds
+                        .with_label_values(&[provider_model])
+                        .observe(duration);
 
                     tracing::info!(
                         model = %provider_model,
@@ -234,13 +269,18 @@ pub async fn run_generation(
                     return serde_json::to_value(response)
                         .map(ImagesResponseEnum::Json)
                         .map_err(|err| {
-                            CoreError::InvalidResponse(format!("failed to serialize images generation response: {err}"))
+                            CoreError::InvalidResponse(format!(
+                                "failed to serialize images generation response: {err}"
+                            ))
                         });
                 }
                 Err(err) => {
                     if attempt < max_retries && crate::auth::retry::is_retryable_error(&err) {
                         deployment_error = Some(err);
-                        let delay = crate::auth::retry::calculate_delay(attempt + 1, &retry_config.network_strategy);
+                        let delay = crate::auth::retry::calculate_delay(
+                            attempt + 1,
+                            &retry_config.network_strategy,
+                        );
                         tokio::time::sleep(delay).await;
                         // Recreate request for retry
                         request = ImagesGenerationRequest {
@@ -248,7 +288,10 @@ pub async fn run_generation(
                             prompt: prompt.clone(),
                             n: body.get("n").and_then(Value::as_u64).map(|n| n as u32),
                             size: body.get("size").and_then(Value::as_str).map(String::from),
-                            response_format: body.get("response_format").and_then(Value::as_str).map(String::from),
+                            response_format: body
+                                .get("response_format")
+                                .and_then(Value::as_str)
+                                .map(String::from),
                             user: body.get("user").and_then(Value::as_str).map(String::from),
                             api_key: deployment.litellm_params.api_key.as_deref(),
                             api_base: deployment.litellm_params.api_base.as_deref(),
@@ -325,17 +368,21 @@ pub async fn run_edit(
         .ok_or_else(|| CoreError::InvalidRequest("images edit body requires a prompt".to_string()))?
         .to_string();
 
-    let image = body
-        .get("image")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CoreError::InvalidRequest("images edit body requires an image (base64)".to_string()))?;
+    let image = body.get("image").and_then(Value::as_str).ok_or_else(|| {
+        CoreError::InvalidRequest("images edit body requires an image (base64)".to_string())
+    })?;
 
     let image_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, image)
-        .map_err(|err| CoreError::InvalidRequest(format!("failed to decode image base64: {err}")))?;
+        .map_err(|err| {
+            CoreError::InvalidRequest(format!("failed to decode image base64: {err}"))
+        })?;
 
     let mask_bytes = if let Some(mask) = body.get("mask").and_then(Value::as_str) {
-        Some(base64::Engine::decode(&base64::engine::general_purpose::STANDARD, mask)
-            .map_err(|err| CoreError::InvalidRequest(format!("failed to decode mask base64: {err}")))?)
+        Some(
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, mask).map_err(
+                |err| CoreError::InvalidRequest(format!("failed to decode mask base64: {err}")),
+            )?,
+        )
     } else {
         None
     };
@@ -401,7 +448,13 @@ pub async fn run_edit(
 
     // Check rate limits (RPM, max_parallel_requests)
     if let Some(ref redis) = state.redis {
-        match crate::auth::rate_limit::check_request_limits(redis, key_object, hashed_token.as_hex_str()).await {
+        match crate::auth::rate_limit::check_request_limits(
+            redis,
+            key_object,
+            hashed_token.as_hex_str(),
+        )
+        .await
+        {
             crate::auth::rate_limit::RateLimitResult::Allowed => {}
             crate::auth::rate_limit::RateLimitResult::RpmExceeded { limit, .. } => {
                 return Err(CoreError::Auth(format!(
@@ -428,7 +481,9 @@ pub async fn run_edit(
         )));
     }
 
-    let timeout = Some(Duration::from_secs_f64(state.config.default_request_timeout_secs));
+    let timeout = Some(Duration::from_secs_f64(
+        state.config.default_request_timeout_secs,
+    ));
 
     // Try each deployment in order (fallback routing)
     let mut last_error: Option<CoreError> = None;
@@ -455,7 +510,11 @@ pub async fn run_edit(
         // Run pre-call guardrails
         let guardrail_context = GuardrailContext::new(CallType::Other("images_edit".to_string()));
         let guardrail_request = GuardrailRequest::new(body.clone());
-        match state.guardrail_runner.run_pre_call(&guardrail_context, guardrail_request).await {
+        match state
+            .guardrail_runner
+            .run_pre_call(&guardrail_context, guardrail_request)
+            .await
+        {
             Ok((_modified_request, _report)) => {
                 // Guardrails may have modified the request
                 // For images edit, we just continue with the original body
@@ -475,7 +534,10 @@ pub async fn run_edit(
             prompt: prompt.clone(),
             n: body.get("n").and_then(Value::as_u64).map(|n| n as u32),
             size: body.get("size").and_then(Value::as_str).map(String::from),
-            response_format: body.get("response_format").and_then(Value::as_str).map(String::from),
+            response_format: body
+                .get("response_format")
+                .and_then(Value::as_str)
+                .map(String::from),
             user: body.get("user").and_then(Value::as_str).map(String::from),
             api_key: deployment.litellm_params.api_key.as_deref(),
             api_base: deployment.litellm_params.api_base.as_deref(),
@@ -499,11 +561,16 @@ pub async fn run_edit(
                     }
 
                     if let Some(ref redis) = state.redis {
-                        crate::auth::rate_limit::release_parallel_slot(redis, hashed_token.as_hex_str()).await;
+                        crate::auth::rate_limit::release_parallel_slot(
+                            redis,
+                            hashed_token.as_hex_str(),
+                        )
+                        .await;
                     }
 
                     // Record spend
-                    record_edit_spend(state, &response, provider_model, key_object, hashed_token).await;
+                    record_edit_spend(state, &response, provider_model, key_object, hashed_token)
+                        .await;
 
                     if let Some(ref redis) = state.redis {
                         crate::auth::rate_limit::check_token_limits(
@@ -517,8 +584,16 @@ pub async fn run_edit(
                     }
 
                     let duration = start.elapsed().as_secs_f64();
-                    state.metrics.requests_total.with_label_values(&[provider_model, "success"]).inc();
-                    state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
+                    state
+                        .metrics
+                        .requests_total
+                        .with_label_values(&[provider_model, "success"])
+                        .inc();
+                    state
+                        .metrics
+                        .request_duration_seconds
+                        .with_label_values(&[provider_model])
+                        .observe(duration);
 
                     tracing::info!(
                         model = %provider_model,
@@ -533,13 +608,18 @@ pub async fn run_edit(
                     return serde_json::to_value(response)
                         .map(ImagesResponseEnum::Json)
                         .map_err(|err| {
-                            CoreError::InvalidResponse(format!("failed to serialize images edit response: {err}"))
+                            CoreError::InvalidResponse(format!(
+                                "failed to serialize images edit response: {err}"
+                            ))
                         });
                 }
                 Err(err) => {
                     if attempt < max_retries && crate::auth::retry::is_retryable_error(&err) {
                         deployment_error = Some(err);
-                        let delay = crate::auth::retry::calculate_delay(attempt + 1, &retry_config.network_strategy);
+                        let delay = crate::auth::retry::calculate_delay(
+                            attempt + 1,
+                            &retry_config.network_strategy,
+                        );
                         tokio::time::sleep(delay).await;
                         // Recreate request for retry
                         request = ImagesEditRequest {
@@ -549,7 +629,10 @@ pub async fn run_edit(
                             prompt: prompt.clone(),
                             n: body.get("n").and_then(Value::as_u64).map(|n| n as u32),
                             size: body.get("size").and_then(Value::as_str).map(String::from),
-                            response_format: body.get("response_format").and_then(Value::as_str).map(String::from),
+                            response_format: body
+                                .get("response_format")
+                                .and_then(Value::as_str)
+                                .map(String::from),
                             user: body.get("user").and_then(Value::as_str).map(String::from),
                             api_key: deployment.litellm_params.api_key.as_deref(),
                             api_base: deployment.litellm_params.api_base.as_deref(),

@@ -36,7 +36,7 @@ impl DatadogLogger {
 
     async fn send_metrics(&self, metrics: &DatadogMetrics) -> Result<(), String> {
         let url = format!("{}/api/v1/distribution_points", self.config.host);
-        
+
         let response = self
             .client
             .post(&url)
@@ -60,7 +60,7 @@ impl DatadogLogger {
 
     async fn send_logs(&self, logs: &DatadogLogs) -> Result<(), String> {
         let url = format!("{}/api/v2/logs", self.config.host);
-        
+
         let response = self
             .client
             .post(&url)
@@ -93,7 +93,7 @@ impl CustomLogger for DatadogLogger {
     ) -> LogFuture<'a> {
         Box::pin(async move {
             let latency_ms = (timing.end_time - timing.start_time) * 1000.0;
-            
+
             // Send metrics
             let metrics = DatadogMetrics {
                 series: vec![
@@ -188,7 +188,7 @@ impl CustomLogger for DatadogLogger {
     ) -> LogFuture<'a> {
         Box::pin(async move {
             let latency_ms = (timing.end_time - timing.start_time) * 1000.0;
-            
+
             // Send metrics
             let metrics = DatadogMetrics {
                 series: vec![DatadogMetric {
@@ -225,10 +225,7 @@ impl CustomLogger for DatadogLogger {
                 .unwrap_or_else(|| json!({"message": "Unknown error"}));
 
             let log_entry = DatadogLogEntry {
-                message: format!(
-                    "LLM call to {} failed",
-                    model_call_details.model
-                ),
+                message: format!("LLM call to {} failed", model_call_details.model),
                 level: "error".to_string(),
                 timestamp: (timing.end_time * 1000.0) as u64,
                 service: "litellm".to_string(),

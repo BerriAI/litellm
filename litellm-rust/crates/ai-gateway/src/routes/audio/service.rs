@@ -116,7 +116,13 @@ pub async fn run_speech(
 
     // Check rate limits (RPM, max_parallel_requests)
     if let Some(ref redis) = state.redis {
-        match crate::auth::rate_limit::check_request_limits(redis, key_object, hashed_token.as_hex_str()).await {
+        match crate::auth::rate_limit::check_request_limits(
+            redis,
+            key_object,
+            hashed_token.as_hex_str(),
+        )
+        .await
+        {
             crate::auth::rate_limit::RateLimitResult::Allowed => {}
             crate::auth::rate_limit::RateLimitResult::RpmExceeded { limit, .. } => {
                 return Err(CoreError::Auth(format!(
@@ -168,7 +174,11 @@ pub async fn run_speech(
         // Run pre-call guardrails
         let guardrail_context = GuardrailContext::new(CallType::Other("speech".to_string()));
         let guardrail_request = GuardrailRequest::new(body.clone());
-        match state.guardrail_runner.run_pre_call(&guardrail_context, guardrail_request).await {
+        match state
+            .guardrail_runner
+            .run_pre_call(&guardrail_context, guardrail_request)
+            .await
+        {
             Ok((_modified_request, _report)) => {
                 // Guardrails may have modified the request
             }
@@ -184,7 +194,10 @@ pub async fn run_speech(
             model: upstream_model.to_string(),
             input: input.clone(),
             voice: voice.clone(),
-            response_format: body.get("response_format").and_then(Value::as_str).map(String::from),
+            response_format: body
+                .get("response_format")
+                .and_then(Value::as_str)
+                .map(String::from),
             speed: body.get("speed").and_then(Value::as_f64).map(|s| s as f32),
         };
 
@@ -194,7 +207,14 @@ pub async fn run_speech(
         // Use network strategy for provider calls
         let max_retries = retry_config.network_strategy.max_retries;
         for attempt in 0..=max_retries {
-            match speech(&request, "openai", deployment.litellm_params.api_base.as_deref(), deployment.litellm_params.api_key.clone()).await {
+            match speech(
+                &request,
+                "openai",
+                deployment.litellm_params.api_base.as_deref(),
+                deployment.litellm_params.api_key.clone(),
+            )
+            .await
+            {
                 Ok(response) => {
                     if let Some(provider) = custom_llm_provider {
                         let breaker = state.circuit_breakers.get_or_create(provider);
@@ -202,15 +222,28 @@ pub async fn run_speech(
                     }
 
                     if let Some(ref redis) = state.redis {
-                        crate::auth::rate_limit::release_parallel_slot(redis, hashed_token.as_hex_str()).await;
+                        crate::auth::rate_limit::release_parallel_slot(
+                            redis,
+                            hashed_token.as_hex_str(),
+                        )
+                        .await;
                     }
 
                     // Record spend
-                    record_speech_spend(state, &input, provider_model, key_object, hashed_token).await;
+                    record_speech_spend(state, &input, provider_model, key_object, hashed_token)
+                        .await;
 
                     let duration = start.elapsed().as_secs_f64();
-                    state.metrics.requests_total.with_label_values(&[provider_model, "success"]).inc();
-                    state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
+                    state
+                        .metrics
+                        .requests_total
+                        .with_label_values(&[provider_model, "success"])
+                        .inc();
+                    state
+                        .metrics
+                        .request_duration_seconds
+                        .with_label_values(&[provider_model])
+                        .observe(duration);
 
                     tracing::info!(
                         model = %provider_model,
@@ -230,7 +263,10 @@ pub async fn run_speech(
                 Err(err) => {
                     if attempt < max_retries && crate::auth::retry::is_retryable_error(&err) {
                         deployment_error = Some(err);
-                        let delay = crate::auth::retry::calculate_delay(attempt + 1, &retry_config.network_strategy);
+                        let delay = crate::auth::retry::calculate_delay(
+                            attempt + 1,
+                            &retry_config.network_strategy,
+                        );
                         tokio::time::sleep(delay).await;
                         continue;
                     }
@@ -290,13 +326,14 @@ pub async fn run_transcription(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|model| !model.is_empty())
-        .ok_or_else(|| CoreError::InvalidRequest("transcription body requires a model".to_string()))?
+        .ok_or_else(|| {
+            CoreError::InvalidRequest("transcription body requires a model".to_string())
+        })?
         .to_string();
 
-    let file_b64 = body
-        .get("file")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CoreError::InvalidRequest("transcription body requires a file (base64)".to_string()))?;
+    let file_b64 = body.get("file").and_then(Value::as_str).ok_or_else(|| {
+        CoreError::InvalidRequest("transcription body requires a file (base64)".to_string())
+    })?;
 
     let file_bytes = base64::engine::general_purpose::STANDARD
         .decode(file_b64)
@@ -363,7 +400,13 @@ pub async fn run_transcription(
 
     // Check rate limits (RPM, max_parallel_requests)
     if let Some(ref redis) = state.redis {
-        match crate::auth::rate_limit::check_request_limits(redis, key_object, hashed_token.as_hex_str()).await {
+        match crate::auth::rate_limit::check_request_limits(
+            redis,
+            key_object,
+            hashed_token.as_hex_str(),
+        )
+        .await
+        {
             crate::auth::rate_limit::RateLimitResult::Allowed => {}
             crate::auth::rate_limit::RateLimitResult::RpmExceeded { limit, .. } => {
                 return Err(CoreError::Auth(format!(
@@ -415,7 +458,11 @@ pub async fn run_transcription(
         // Run pre-call guardrails
         let guardrail_context = GuardrailContext::new(CallType::Other("transcription".to_string()));
         let guardrail_request = GuardrailRequest::new(body.clone());
-        match state.guardrail_runner.run_pre_call(&guardrail_context, guardrail_request).await {
+        match state
+            .guardrail_runner
+            .run_pre_call(&guardrail_context, guardrail_request)
+            .await
+        {
             Ok((_modified_request, _report)) => {
                 // Guardrails may have modified the request
             }
@@ -430,10 +477,19 @@ pub async fn run_transcription(
         let request = TranscriptionRequest {
             model: upstream_model.to_string(),
             file: file_bytes.clone(),
-            language: body.get("language").and_then(Value::as_str).map(String::from),
+            language: body
+                .get("language")
+                .and_then(Value::as_str)
+                .map(String::from),
             prompt: body.get("prompt").and_then(Value::as_str).map(String::from),
-            response_format: body.get("response_format").and_then(Value::as_str).map(String::from),
-            temperature: body.get("temperature").and_then(Value::as_f64).map(|t| t as f32),
+            response_format: body
+                .get("response_format")
+                .and_then(Value::as_str)
+                .map(String::from),
+            temperature: body
+                .get("temperature")
+                .and_then(Value::as_f64)
+                .map(|t| t as f32),
         };
 
         let retry_config = crate::auth::retry::RetryConfig::default();
@@ -442,7 +498,14 @@ pub async fn run_transcription(
         // Use network strategy for provider calls
         let max_retries = retry_config.network_strategy.max_retries;
         for attempt in 0..=max_retries {
-            match transcription(&request, "openai", deployment.litellm_params.api_base.as_deref(), deployment.litellm_params.api_key.clone()).await {
+            match transcription(
+                &request,
+                "openai",
+                deployment.litellm_params.api_base.as_deref(),
+                deployment.litellm_params.api_key.clone(),
+            )
+            .await
+            {
                 Ok(response) => {
                     if let Some(provider) = custom_llm_provider {
                         let breaker = state.circuit_breakers.get_or_create(provider);
@@ -450,15 +513,34 @@ pub async fn run_transcription(
                     }
 
                     if let Some(ref redis) = state.redis {
-                        crate::auth::rate_limit::release_parallel_slot(redis, hashed_token.as_hex_str()).await;
+                        crate::auth::rate_limit::release_parallel_slot(
+                            redis,
+                            hashed_token.as_hex_str(),
+                        )
+                        .await;
                     }
 
                     // Record spend
-                    record_transcription_spend(state, file_bytes.len(), provider_model, key_object, hashed_token).await;
+                    record_transcription_spend(
+                        state,
+                        file_bytes.len(),
+                        provider_model,
+                        key_object,
+                        hashed_token,
+                    )
+                    .await;
 
                     let duration = start.elapsed().as_secs_f64();
-                    state.metrics.requests_total.with_label_values(&[provider_model, "success"]).inc();
-                    state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
+                    state
+                        .metrics
+                        .requests_total
+                        .with_label_values(&[provider_model, "success"])
+                        .inc();
+                    state
+                        .metrics
+                        .request_duration_seconds
+                        .with_label_values(&[provider_model])
+                        .observe(duration);
 
                     tracing::info!(
                         model = %provider_model,
@@ -477,7 +559,10 @@ pub async fn run_transcription(
                 Err(err) => {
                     if attempt < max_retries && crate::auth::retry::is_retryable_error(&err) {
                         deployment_error = Some(err);
-                        let delay = crate::auth::retry::calculate_delay(attempt + 1, &retry_config.network_strategy);
+                        let delay = crate::auth::retry::calculate_delay(
+                            attempt + 1,
+                            &retry_config.network_strategy,
+                        );
                         tokio::time::sleep(delay).await;
                         continue;
                     }

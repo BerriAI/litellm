@@ -27,9 +27,15 @@ async fn handle(
     Json(body): Json<Value>,
 ) -> Result<Response, EmbeddingsRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run(&state, body, extra_headers, &auth.key_object, &auth.hashed_token)
-        .await
-        .map_err(EmbeddingsRouteError::from)?
+    match service::run(
+        &state,
+        body,
+        extra_headers,
+        &auth.key_object,
+        &auth.hashed_token,
+    )
+    .await
+    .map_err(EmbeddingsRouteError::from)?
     {
         service::EmbeddingsResponseEnum::Json(body) => Ok(Json(body).into_response()),
     }

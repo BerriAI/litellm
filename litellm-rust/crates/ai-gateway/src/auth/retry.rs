@@ -5,8 +5,8 @@
 //! Supports multiple retry strategies for different error types.
 //! Supports exception-specific retry policies and Retry-After header parsing.
 
-use std::time::Duration;
 use rand::Rng;
+use std::time::Duration;
 
 /// Error categories for retry decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +96,7 @@ pub fn parse_retry_after(header_value: &str) -> Option<Duration> {
     if let Ok(seconds) = header_value.parse::<u64>() {
         return Some(Duration::from_secs(seconds));
     }
-    
+
     // Try parsing as HTTP-date (RFC 7231)
     // For simplicity, we'll just return None for HTTP-date format
     // In a full implementation, you'd parse the date and calculate the duration
@@ -197,7 +197,9 @@ impl RetryConfig {
         if let Some(max_retries) = self.exception_policy.get_retries(category) {
             // Use the base strategy for this category but override max_retries
             let base_strategy = match category {
-                ErrorCategory::BadRequest | ErrorCategory::Authentication => &self.application_strategy,
+                ErrorCategory::BadRequest | ErrorCategory::Authentication => {
+                    &self.application_strategy
+                }
                 ErrorCategory::RateLimit | ErrorCategory::Timeout => &self.http_strategy,
                 _ => &self.unknown_strategy,
             };
@@ -206,12 +208,16 @@ impl RetryConfig {
                 ..base_strategy.clone()
             };
         }
-        
+
         // Fall back to category strategies
         match category {
             ErrorCategory::Network => self.network_strategy.clone(),
-            ErrorCategory::Http | ErrorCategory::RateLimit | ErrorCategory::Timeout => self.http_strategy.clone(),
-            ErrorCategory::Application | ErrorCategory::BadRequest | ErrorCategory::Authentication => self.application_strategy.clone(),
+            ErrorCategory::Http | ErrorCategory::RateLimit | ErrorCategory::Timeout => {
+                self.http_strategy.clone()
+            }
+            ErrorCategory::Application
+            | ErrorCategory::BadRequest
+            | ErrorCategory::Authentication => self.application_strategy.clone(),
             ErrorCategory::Provider => self.provider_strategy.clone(),
             ErrorCategory::Unknown => self.unknown_strategy.clone(),
         }
@@ -221,7 +227,7 @@ impl RetryConfig {
     pub fn is_retryable(&self, category: ErrorCategory) -> bool {
         self.strategy_for(category).max_retries > 0
     }
-    
+
     /// Get retry strategy for a specific provider.
     pub fn provider_strategy_for(&self, provider: &str) -> Option<RetryStrategy> {
         self.provider_config.get_strategy(provider).cloned()
@@ -231,9 +237,10 @@ impl RetryConfig {
 /// Calculate delay for a given retry attempt with exponential backoff and optional jitter.
 pub fn calculate_delay(attempt: u32, strategy: &RetryStrategy) -> Duration {
     // Exponential backoff: base_delay * multiplier^attempt
-    let exponential = strategy.base_delay.as_millis() as f64 * strategy.backoff_multiplier.powi(attempt as i32);
+    let exponential =
+        strategy.base_delay.as_millis() as f64 * strategy.backoff_multiplier.powi(attempt as i32);
     let delay_ms = (exponential as u64).min(strategy.max_delay.as_millis() as u64);
-    
+
     if strategy.jitter {
         // Add jitter: random value between 0 and delay_ms
         let jitter = rand::thread_rng().gen_range(0..=delay_ms);
@@ -250,33 +257,23 @@ pub fn categorize_error(err: &litellm_core::CoreError) -> ErrorCategory {
         litellm_core::CoreError::Network(_) | litellm_core::CoreError::Connect(_) => {
             ErrorCategory::Network
         }
-        litellm_core::CoreError::Http { status, .. } => {
-            match *status {
-                400 => ErrorCategory::BadRequest,
-                401 | 403 => ErrorCategory::Authentication,
-                408 | 504 => ErrorCategory::Timeout,
-                429 => ErrorCategory::RateLimit,
-                500..=599 => ErrorCategory::Http,
-                _ => ErrorCategory::Application,
-            }
-        }
-        litellm_core::CoreError::Timeout(_) => {
-            ErrorCategory::Timeout
-        }
-        litellm_core::CoreError::InvalidRequest(_) 
+        litellm_core::CoreError::Http { status, .. } => match *status {
+            400 => ErrorCategory::BadRequest,
+            401 | 403 => ErrorCategory::Authentication,
+            408 | 504 => ErrorCategory::Timeout,
+            429 => ErrorCategory::RateLimit,
+            500..=599 => ErrorCategory::Http,
+            _ => ErrorCategory::Application,
+        },
+        litellm_core::CoreError::Timeout(_) => ErrorCategory::Timeout,
+        litellm_core::CoreError::InvalidRequest(_)
         | litellm_core::CoreError::InvalidType { .. }
-        | litellm_core::CoreError::MissingField(_) => {
-            ErrorCategory::BadRequest
-        }
-        litellm_core::CoreError::Auth(_) => {
-            ErrorCategory::Authentication
-        }
+        | litellm_core::CoreError::MissingField(_) => ErrorCategory::BadRequest,
+        litellm_core::CoreError::Auth(_) => ErrorCategory::Authentication,
         litellm_core::CoreError::InvalidProvider(_)
         | litellm_core::CoreError::InvalidResponse(_)
         | litellm_core::CoreError::Routing(_)
-        | litellm_core::CoreError::Unsupported(_) => {
-            ErrorCategory::Provider
-        }
+        | litellm_core::CoreError::Unsupported(_) => ErrorCategory::Provider,
         _ => ErrorCategory::Unknown,
     }
 }
@@ -303,7 +300,7 @@ where
             Err(err) => {
                 last_category = categorize(&err);
                 let strategy = config.strategy_for(last_category);
-                
+
                 if !config.is_retryable(last_category) || attempt >= strategy.max_retries {
                     return Err(err);
                 }
@@ -382,19 +379,29 @@ mod tests {
             ErrorCategory::Network
         );
         assert_eq!(
-            categorize_error(&litellm_core::CoreError::Connect("connection refused".to_string())),
+            categorize_error(&litellm_core::CoreError::Connect(
+                "connection refused".to_string()
+            )),
             ErrorCategory::Network
         );
         assert_eq!(
-            categorize_error(&litellm_core::CoreError::Http { status: 500, body: "error".to_string() }),
+            categorize_error(&litellm_core::CoreError::Http {
+                status: 500,
+                body: "error".to_string()
+            }),
             ErrorCategory::Http
         );
         assert_eq!(
-            categorize_error(&litellm_core::CoreError::Http { status: 429, body: "rate limited".to_string() }),
+            categorize_error(&litellm_core::CoreError::Http {
+                status: 429,
+                body: "rate limited".to_string()
+            }),
             ErrorCategory::Http
         );
         assert_eq!(
-            categorize_error(&litellm_core::CoreError::InvalidRequest("bad request".to_string())),
+            categorize_error(&litellm_core::CoreError::InvalidRequest(
+                "bad request".to_string()
+            )),
             ErrorCategory::Application
         );
         assert_eq!(
@@ -402,7 +409,9 @@ mod tests {
             ErrorCategory::Application
         );
         assert_eq!(
-            categorize_error(&litellm_core::CoreError::InvalidProvider("unknown provider".to_string())),
+            categorize_error(&litellm_core::CoreError::InvalidProvider(
+                "unknown provider".to_string()
+            )),
             ErrorCategory::Provider
         );
     }
@@ -410,10 +419,13 @@ mod tests {
     #[test]
     fn test_retry_config_strategies() {
         let config = RetryConfig::default();
-        
+
         assert_eq!(config.strategy_for(ErrorCategory::Network).max_retries, 5);
         assert_eq!(config.strategy_for(ErrorCategory::Http).max_retries, 3);
-        assert_eq!(config.strategy_for(ErrorCategory::Application).max_retries, 1);
+        assert_eq!(
+            config.strategy_for(ErrorCategory::Application).max_retries,
+            1
+        );
         assert_eq!(config.strategy_for(ErrorCategory::Provider).max_retries, 2);
         assert_eq!(config.strategy_for(ErrorCategory::Unknown).max_retries, 1);
     }
@@ -421,7 +433,7 @@ mod tests {
     #[test]
     fn test_is_retryable() {
         let config = RetryConfig::default();
-        
+
         assert!(config.is_retryable(ErrorCategory::Network));
         assert!(config.is_retryable(ErrorCategory::Http));
         assert!(config.is_retryable(ErrorCategory::Application));
@@ -434,10 +446,15 @@ mod tests {
         let config = RetryConfig::default();
         let mut attempts = 0;
 
-        let result = retry_with_backoff(&config, || {
-            attempts += 1;
-            async { Ok::<_, String>("success") }
-        }, |_| ErrorCategory::Unknown).await;
+        let result = retry_with_backoff(
+            &config,
+            || {
+                attempts += 1;
+                async { Ok::<_, String>("success") }
+            },
+            |_| ErrorCategory::Unknown,
+        )
+        .await;
 
         assert_eq!(result.unwrap(), "success");
         assert_eq!(attempts, 1);
@@ -457,16 +474,23 @@ mod tests {
         };
         let mut attempts = 0;
 
-        let result = retry_with_backoff(&config, || {
-            attempts += 1;
-            async move {
-                if attempts < 3 {
-                    Err(litellm_core::CoreError::Network("temporary error".to_string()))
-                } else {
-                    Ok("success")
+        let result = retry_with_backoff(
+            &config,
+            || {
+                attempts += 1;
+                async move {
+                    if attempts < 3 {
+                        Err(litellm_core::CoreError::Network(
+                            "temporary error".to_string(),
+                        ))
+                    } else {
+                        Ok("success")
+                    }
                 }
-            }
-        }, |e| categorize_error(e)).await;
+            },
+            |e| categorize_error(e),
+        )
+        .await;
 
         assert_eq!(result.unwrap(), "success");
         assert_eq!(attempts, 3);
@@ -486,10 +510,19 @@ mod tests {
         };
         let mut attempts = 0;
 
-        let result = retry_with_backoff(&config, || {
-            attempts += 1;
-            async { Err::<(), _>(litellm_core::CoreError::Network("permanent error".to_string())) }
-        }, |e| categorize_error(e)).await;
+        let result = retry_with_backoff(
+            &config,
+            || {
+                attempts += 1;
+                async {
+                    Err::<(), _>(litellm_core::CoreError::Network(
+                        "permanent error".to_string(),
+                    ))
+                }
+            },
+            |e| categorize_error(e),
+        )
+        .await;
 
         assert!(result.is_err());
         assert_eq!(attempts, 3); // 1 initial + 2 retries
@@ -509,10 +542,19 @@ mod tests {
         };
         let mut attempts = 0;
 
-        let result = retry_with_backoff(&config, || {
-            attempts += 1;
-            async { Err::<(), _>(litellm_core::CoreError::InvalidRequest("auth error".to_string())) }
-        }, |e| categorize_error(e)).await;
+        let result = retry_with_backoff(
+            &config,
+            || {
+                attempts += 1;
+                async {
+                    Err::<(), _>(litellm_core::CoreError::InvalidRequest(
+                        "auth error".to_string(),
+                    ))
+                }
+            },
+            |e| categorize_error(e),
+        )
+        .await;
 
         assert!(result.is_err());
         assert_eq!(attempts, 1);
@@ -520,9 +562,17 @@ mod tests {
 
     #[test]
     fn test_is_retryable_error_backward_compat() {
-        assert!(is_retryable_error(&litellm_core::CoreError::Network("timeout".to_string())));
-        assert!(is_retryable_error(&litellm_core::CoreError::Connect("connection refused".to_string())));
-        assert!(!is_retryable_error(&litellm_core::CoreError::InvalidRequest("bad request".to_string())));
-        assert!(!is_retryable_error(&litellm_core::CoreError::Auth("unauthorized".to_string())));
+        assert!(is_retryable_error(&litellm_core::CoreError::Network(
+            "timeout".to_string()
+        )));
+        assert!(is_retryable_error(&litellm_core::CoreError::Connect(
+            "connection refused".to_string()
+        )));
+        assert!(!is_retryable_error(
+            &litellm_core::CoreError::InvalidRequest("bad request".to_string())
+        ));
+        assert!(!is_retryable_error(&litellm_core::CoreError::Auth(
+            "unauthorized".to_string()
+        )));
     }
 }

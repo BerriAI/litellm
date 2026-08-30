@@ -212,24 +212,30 @@ pub fn load_config_from_yaml(path: &str) -> Result<LoadedConfig, String> {
                 },
                 healthy: entry.healthy,
                 weight: entry.weight,
-                input_cost_per_token: entry.model_info.as_ref().and_then(|info| info.input_cost_per_token),
-                output_cost_per_token: entry.model_info.as_ref().and_then(|info| info.output_cost_per_token),
+                input_cost_per_token: entry
+                    .model_info
+                    .as_ref()
+                    .and_then(|info| info.input_cost_per_token),
+                output_cost_per_token: entry
+                    .model_info
+                    .as_ref()
+                    .and_then(|info| info.output_cost_per_token),
             }
         })
         .collect();
 
     eprintln!("  total deployments loaded: {}", deployments.len());
-    
+
     let general_settings = config.general_settings.unwrap_or_default();
     let litellm_settings = config.litellm_settings.unwrap_or_default();
     let router_settings = config.router_settings.unwrap_or_default();
-    
+
     // Create router with the configured routing strategy
     let routing_strategy = router_settings.to_routing_strategy();
     let router = Router::with_strategy(deployments, routing_strategy);
-    
+
     eprintln!("  routing strategy: {:?}", routing_strategy);
-    
+
     Ok(LoadedConfig {
         router,
         general_settings,

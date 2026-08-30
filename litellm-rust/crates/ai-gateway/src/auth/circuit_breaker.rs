@@ -107,7 +107,8 @@ impl CircuitBreaker {
                 if let Some(last) = *last_failure {
                     if last.elapsed() >= self.config.recovery_timeout {
                         // Transition to HalfOpen
-                        self.state.store(CircuitState::HalfOpen as u8, Ordering::Relaxed);
+                        self.state
+                            .store(CircuitState::HalfOpen as u8, Ordering::Relaxed);
                         self.success_count.store(0, Ordering::Relaxed);
                         true
                     } else {
@@ -127,13 +128,14 @@ impl CircuitBreaker {
     /// Record a successful request.
     pub async fn record_success(&self) {
         let state = CircuitState::from(self.state.load(Ordering::Relaxed));
-        
+
         if state == CircuitState::HalfOpen {
             let success_count = self.success_count.fetch_add(1, Ordering::Relaxed) + 1;
-            
+
             if success_count >= self.config.success_threshold {
                 // Transition to closed
-                self.state.store(CircuitState::Closed as u8, Ordering::Relaxed);
+                self.state
+                    .store(CircuitState::Closed as u8, Ordering::Relaxed);
                 self.failure_count.store(0, Ordering::Relaxed);
             }
         } else if state == CircuitState::Closed {
@@ -145,20 +147,22 @@ impl CircuitBreaker {
     /// Record a failed request.
     pub async fn record_failure(&self) {
         let state = CircuitState::from(self.state.load(Ordering::Relaxed));
-        
+
         match state {
             CircuitState::Closed => {
                 let failure_count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
                 *self.last_failure.write().await = Some(Instant::now());
-                
+
                 if failure_count >= self.config.failure_threshold {
                     // Transition to open
-                    self.state.store(CircuitState::Open as u8, Ordering::Relaxed);
+                    self.state
+                        .store(CircuitState::Open as u8, Ordering::Relaxed);
                 }
             }
             CircuitState::HalfOpen => {
                 // Any failure in half-open transitions back to open
-                self.state.store(CircuitState::Open as u8, Ordering::Relaxed);
+                self.state
+                    .store(CircuitState::Open as u8, Ordering::Relaxed);
                 *self.last_failure.write().await = Some(Instant::now());
             }
             CircuitState::Open => {
@@ -175,7 +179,8 @@ impl CircuitBreaker {
 
     /// Reset the circuit breaker to closed state.
     pub async fn reset(&self) {
-        self.state.store(CircuitState::Closed as u8, Ordering::Relaxed);
+        self.state
+            .store(CircuitState::Closed as u8, Ordering::Relaxed);
         self.failure_count.store(0, Ordering::Relaxed);
         self.success_count.store(0, Ordering::Relaxed);
         *self.last_failure.write().await = None;

@@ -117,8 +117,12 @@ mod tests {
             secret_rotator: None,
             audit_log_shipper: None,
             csrf_state: Arc::new(crate::middleware::csrf::CsrfState::new(3600)),
-            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(crate::alerting::AlertingConfig::default())),
-            guardrail_runner: Arc::new(crate::integrations::custom_guardrail::CustomGuardrailRunner::new(vec![])),
+            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(
+                crate::alerting::AlertingConfig::default(),
+            )),
+            guardrail_runner: Arc::new(
+                crate::integrations::custom_guardrail::CustomGuardrailRunner::new(vec![]),
+            ),
         }
     }
 
@@ -163,7 +167,7 @@ mod tests {
             };
 
             let response = app.clone().oneshot(request).await.unwrap();
-            
+
             // Routes should exist (not 404), even if they return errors
             assert_ne!(
                 response.status(),
@@ -212,7 +216,7 @@ mod tests {
             };
 
             let response = app.clone().oneshot(request).await.unwrap();
-            
+
             assert_eq!(
                 response.status(),
                 StatusCode::UNAUTHORIZED,
@@ -251,10 +255,7 @@ mod tests {
         assert_eq!(models.len(), 6);
 
         // Verify all models are present
-        let model_ids: Vec<&str> = models
-            .iter()
-            .map(|m| m["id"].as_str().unwrap())
-            .collect();
+        let model_ids: Vec<&str> = models.iter().map(|m| m["id"].as_str().unwrap()).collect();
         assert!(model_ids.contains(&"gpt-4"));
         assert!(model_ids.contains(&"claude-3"));
         assert!(model_ids.contains(&"text-embedding-3-small"));
@@ -343,7 +344,10 @@ router_settings:
         // Verify general_settings
         assert!(config.general_settings.master_key.is_some());
         assert_eq!(config.general_settings.max_parallel_requests, Some(100));
-        assert_eq!(config.general_settings.global_max_parallel_requests, Some(1000));
+        assert_eq!(
+            config.general_settings.global_max_parallel_requests,
+            Some(1000)
+        );
         assert_eq!(config.general_settings.max_request_size_mb, Some(10));
         assert!(config.general_settings.alerting.is_some());
         assert!(config.general_settings.alert_webhook_url.is_some());
@@ -359,7 +363,10 @@ router_settings:
         assert_eq!(config.litellm_settings.timeout, Some(600));
 
         // Verify router_settings
-        assert_eq!(config.router_settings.routing_strategy, Some("latency-based".to_string()));
+        assert_eq!(
+            config.router_settings.routing_strategy,
+            Some("latency-based".to_string())
+        );
         assert_eq!(config.router_settings.num_retries, Some(5));
         assert_eq!(config.router_settings.timeout, Some(300));
         assert_eq!(config.router_settings.cooldown_seconds, Some(60));
@@ -379,7 +386,11 @@ host: https://langfuse.example.com
 "#;
         let config: CallbackConfig = serde_yaml::from_str(yaml).unwrap();
         match config {
-            CallbackConfig::Langfuse { public_key, secret_key, host } => {
+            CallbackConfig::Langfuse {
+                public_key,
+                secret_key,
+                host,
+            } => {
                 assert_eq!(public_key, "pk_test");
                 assert_eq!(secret_key, "sk_test");
                 assert_eq!(host, "https://langfuse.example.com");
@@ -395,7 +406,11 @@ host: https://api.datadoghq.com
 "#;
         let config: CallbackConfig = serde_yaml::from_str(yaml).unwrap();
         match config {
-            CallbackConfig::Datadog { api_key, app_key, host } => {
+            CallbackConfig::Datadog {
+                api_key,
+                app_key,
+                host,
+            } => {
                 assert_eq!(api_key, "dd_api_key");
                 assert!(app_key.is_none());
                 assert_eq!(host, "https://api.datadoghq.com");
@@ -411,7 +426,11 @@ auth_token: secret_token
 "#;
         let config: CallbackConfig = serde_yaml::from_str(yaml).unwrap();
         match config {
-            CallbackConfig::Webhooks { url, headers, auth_token } => {
+            CallbackConfig::Webhooks {
+                url,
+                headers,
+                auth_token,
+            } => {
                 assert_eq!(url, "https://webhook.example.com");
                 assert!(headers.is_none());
                 assert_eq!(auth_token, Some("secret_token".to_string()));
@@ -428,7 +447,12 @@ username: LiteLLM Bot
 "#;
         let config: CallbackConfig = serde_yaml::from_str(yaml).unwrap();
         match config {
-            CallbackConfig::Slack { webhook_url, channel, username, icon_emoji } => {
+            CallbackConfig::Slack {
+                webhook_url,
+                channel,
+                username,
+                icon_emoji,
+            } => {
                 assert_eq!(webhook_url, "https://hooks.slack.com/services/test");
                 assert_eq!(channel, Some("#alerts".to_string()));
                 assert_eq!(username, Some("LiteLLM Bot".to_string()));

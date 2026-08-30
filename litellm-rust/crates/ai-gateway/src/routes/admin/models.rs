@@ -15,12 +15,9 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/v1/models", get(handle_list_models))
 }
 
-async fn handle_list_models(
-    _auth: RequireValidKey,
-    State(state): State<AppState>,
-) -> Response {
+async fn handle_list_models(_auth: RequireValidKey, State(state): State<AppState>) -> Response {
     let deployments = state.router.deployments();
-    
+
     let models: Vec<serde_json::Value> = deployments
         .iter()
         .map(|d| {

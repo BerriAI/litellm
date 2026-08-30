@@ -39,12 +39,11 @@ async fn handle(
     .map_err(ChatCompletionsRouteError::from)?;
 
     match result {
-        service::ChatCompletionsResult::Complete(bytes) => {
-            Ok((
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
-                bytes,
-            ).into_response())
-        }
+        service::ChatCompletionsResult::Complete(bytes) => Ok((
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            bytes,
+        )
+            .into_response()),
         service::ChatCompletionsResult::Streaming(stream) => {
             // Convert the stream of Result<Option<Value>> to SSE events
             let sse_stream = stream.filter_map(|chunk_result| async move {
@@ -52,7 +51,9 @@ async fn handle(
                     Ok(Some(value)) => {
                         // Format as SSE event
                         match serde_json::to_string(&value) {
-                            Ok(data) => Some(Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(data))),
+                            Ok(data) => Some(Ok::<_, std::convert::Infallible>(
+                                axum::response::sse::Event::default().data(data),
+                            )),
                             Err(_) => None,
                         }
                     }
@@ -73,7 +74,7 @@ async fn handle(
 fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, CoreError> {
     // Pre-allocate with estimated capacity (most requests have 5-10 headers)
     let mut forwarded = Map::with_capacity(headers.len().min(10));
-    
+
     for (name, value) in headers.iter() {
         if CHAT_COMPLETIONS_HEADERS_NOT_FORWARDED
             .iter()
@@ -81,13 +82,13 @@ fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, 
         {
             continue;
         }
-        
+
         let value = value.to_str().map_err(|_| {
             CoreError::InvalidRequest(format!("invalid value for header {}", name.as_str()))
         })?;
         forwarded.insert(name.to_string(), Value::String(value.to_string()));
     }
-    
+
     Ok((!forwarded.is_empty()).then_some(forwarded))
 }
 
@@ -209,8 +210,12 @@ mod tests {
             secret_rotator: None,
             audit_log_shipper: None,
             csrf_state: Arc::new(crate::middleware::csrf::CsrfState::new(3600)),
-            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(crate::alerting::AlertingConfig::default())),
-            guardrail_runner: Arc::new(crate::integrations::custom_guardrail::CustomGuardrailRunner::new(Vec::new())),
+            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(
+                crate::alerting::AlertingConfig::default(),
+            )),
+            guardrail_runner: Arc::new(
+                crate::integrations::custom_guardrail::CustomGuardrailRunner::new(Vec::new()),
+            ),
         }
     }
 
@@ -478,7 +483,12 @@ mod tests {
     async fn input_validation_rejects_missing_messages() {
         let app = Router::new()
             .merge(super::router())
-            .with_state(state_with_provider("gpt-4", "gpt-4", "http://unused".into(), Some("master-key")));
+            .with_state(state_with_provider(
+                "gpt-4",
+                "gpt-4",
+                "http://unused".into(),
+                Some("master-key"),
+            ));
 
         let response = tower::ServiceExt::oneshot(
             app,
@@ -487,9 +497,7 @@ mod tests {
                 .uri("/v1/chat/completions")
                 .header("authorization", "Bearer master-key")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({"model": "gpt-4"}).to_string(),
-                ))
+                .body(Body::from(json!({"model": "gpt-4"}).to_string()))
                 .expect("request builds"),
         )
         .await
@@ -500,14 +508,24 @@ mod tests {
             .await
             .expect("body reads");
         let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("messages"));
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("messages")
+        );
     }
 
     #[tokio::test]
     async fn input_validation_rejects_invalid_temperature() {
         let app = Router::new()
             .merge(super::router())
-            .with_state(state_with_provider("gpt-4", "gpt-4", "http://unused".into(), Some("master-key")));
+            .with_state(state_with_provider(
+                "gpt-4",
+                "gpt-4",
+                "http://unused".into(),
+                Some("master-key"),
+            ));
 
         let response = tower::ServiceExt::oneshot(
             app,
@@ -521,7 +539,8 @@ mod tests {
                         "model": "gpt-4",
                         "messages": [{"role": "user", "content": "hi"}],
                         "temperature": 5.0
-                    }).to_string(),
+                    })
+                    .to_string(),
                 ))
                 .expect("request builds"),
         )
@@ -533,14 +552,24 @@ mod tests {
             .await
             .expect("body reads");
         let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("temperature"));
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("temperature")
+        );
     }
 
     #[tokio::test]
     async fn budget_enforcement_allows_within_budget_key() {
         let app = Router::new()
             .merge(super::router())
-            .with_state(state_with_provider("gpt-4", "gpt-4", "http://unused".into(), Some("master-key")));
+            .with_state(state_with_provider(
+                "gpt-4",
+                "gpt-4",
+                "http://unused".into(),
+                Some("master-key"),
+            ));
 
         let response = tower::ServiceExt::oneshot(
             app,
@@ -553,7 +582,8 @@ mod tests {
                     json!({
                         "model": "gpt-4",
                         "messages": [{"role": "user", "content": "hi"}]
-                    }).to_string(),
+                    })
+                    .to_string(),
                 ))
                 .expect("request builds"),
         )
@@ -566,7 +596,8 @@ mod tests {
 
     #[tokio::test]
     async fn metrics_endpoint_returns_prometheus_format() {
-        let state = state_with_provider("gpt-4", "gpt-4", "http://unused".into(), Some("master-key"));
+        let state =
+            state_with_provider("gpt-4", "gpt-4", "http://unused".into(), Some("master-key"));
         let app = Router::new()
             .route("/metrics", axum::routing::get(crate::routes::metrics))
             .with_state(state);

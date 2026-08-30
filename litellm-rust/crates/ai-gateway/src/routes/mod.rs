@@ -26,12 +26,12 @@ use axum::routing::get;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
+use crate::middleware::alerting::alerting_middleware_from_app_state;
+use crate::middleware::cors::cors_middleware_default;
+use crate::middleware::csrf::csrf_middleware_from_app_state;
 use crate::middleware::security_headers::security_headers_middleware;
 use crate::middleware::tracing::tracing_middleware;
 use crate::middleware::validation::validation_middleware;
-use crate::middleware::cors::cors_middleware_default;
-use crate::middleware::csrf::csrf_middleware_from_app_state;
-use crate::middleware::alerting::alerting_middleware_from_app_state;
 use crate::state::AppState;
 
 /// Maximum request body size: 10MB. Prevents abuse from oversized payloads.
@@ -62,15 +62,23 @@ pub fn app(state: AppState) -> Router {
         .merge(realtime::router())
         .merge(responses::router())
         .route("/metrics", get(metrics))
-        .layer(from_fn_with_state(state.clone(), csrf_middleware_from_app_state))
+        .layer(from_fn_with_state(
+            state.clone(),
+            csrf_middleware_from_app_state,
+        ))
         .layer(from_fn(cors_middleware_default))
         .layer(from_fn(validation_middleware))
         .layer(from_fn(security_headers_middleware))
         .layer(from_fn(tracing_middleware))
-        .layer(from_fn_with_state(state.clone(), alerting_middleware_from_app_state))
+        .layer(from_fn_with_state(
+            state.clone(),
+            alerting_middleware_from_app_state,
+        ))
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
         .layer(ConcurrencyLimitLayer::new(max_concurrent))
-        .layer(TimeoutLayer::new(std::time::Duration::from_secs(request_timeout)))
+        .layer(TimeoutLayer::new(std::time::Duration::from_secs(
+            request_timeout,
+        )))
         .with_state(state)
 }
 

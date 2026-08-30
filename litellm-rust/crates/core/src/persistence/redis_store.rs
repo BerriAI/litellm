@@ -45,7 +45,9 @@ impl RedisStore {
         if pong == "PONG" {
             Ok(())
         } else {
-            Err(PersistenceError::Redis(format!("unexpected PING response: {pong}")))
+            Err(PersistenceError::Redis(format!(
+                "unexpected PING response: {pong}"
+            )))
         }
     }
 
@@ -57,16 +59,16 @@ impl RedisStore {
         ttl_seconds: u64,
     ) -> Result<f64, PersistenceError> {
         let mut conn = self.client.clone();
-        
+
         // Use Lua script for atomic increment + TTL
         let script = redis::Script::new(
             r#"
             local current = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])
             redis.call('EXPIRE', KEYS[1], ARGV[2])
             return current
-            "#
+            "#,
         );
-        
+
         let result: f64 = script
             .key(key)
             .arg(amount)
@@ -74,7 +76,7 @@ impl RedisStore {
             .invoke_async(&mut conn)
             .await
             .map_err(|e| PersistenceError::Redis(format!("INCR with TTL failed: {e}")))?;
-        
+
         Ok(result)
     }
 }

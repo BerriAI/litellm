@@ -24,8 +24,8 @@ use std::pin::Pin;
 
 use crate::error::CoreResult;
 
-use handler::{execute_chat_completions_provider_call, execute_chat_completions_streaming_call};
 pub use handler::StreamingChunk;
+use handler::{execute_chat_completions_provider_call, execute_chat_completions_streaming_call};
 use prepare::{parse_messages, prepare_chat_completions_call, resolve_provider_config};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 

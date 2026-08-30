@@ -4,7 +4,10 @@ use crate::error::{CoreError, CoreResult};
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::transformation::{ImagesAuthStrategy, ImagesProviderConfig};
-use super::types::{ImagesEditRequest, ImagesGenerationRequest, ProviderImagesEditRequest, ProviderImagesGenerationRequest};
+use super::types::{
+    ImagesEditRequest, ImagesGenerationRequest, ProviderImagesEditRequest,
+    ProviderImagesGenerationRequest,
+};
 
 pub(super) fn prepare_images_generation_call(
     request: ImagesGenerationRequest<'_>,
@@ -35,9 +38,7 @@ pub(super) fn prepare_images_generation_call(
     let auth_strategy = config.auth_strategy();
     let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
     let auth_header = match auth_strategy {
-        ImagesAuthStrategy::Bearer => {
-            ("authorization".to_string(), format!("Bearer {api_key}"))
-        }
+        ImagesAuthStrategy::Bearer => ("authorization".to_string(), format!("Bearer {api_key}")),
         ImagesAuthStrategy::Header(name) => (name.to_string(), api_key),
     };
     headers.push(auth_header);
@@ -55,32 +56,32 @@ pub(super) fn prepare_images_generation_call(
     }
 
     let url = config.complete_url(request.api_base, &model, false, &env_lookup)?;
-    
+
     let mut body = serde_json::json!({
         "model": model,
         "prompt": request.prompt,
     });
-    
+
     if let Some(n) = request.n {
         body["n"] = Value::Number(n.into());
     }
-    
+
     if let Some(size) = request.size {
         body["size"] = Value::String(size);
     }
-    
+
     if let Some(response_format) = request.response_format {
         body["response_format"] = Value::String(response_format);
     }
-    
+
     if let Some(user) = request.user {
         body["user"] = Value::String(user);
     }
-    
+
     let transformed = config.transform_generation_request(body)?;
 
     Ok(ProviderImagesGenerationRequest {
-        provider: provider.to_string(),
+        _provider: provider.to_string(),
         model,
         config,
         url,
@@ -119,15 +120,16 @@ pub(super) fn prepare_images_edit_call(
     let auth_strategy = config.auth_strategy();
     let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
     let auth_header = match auth_strategy {
-        ImagesAuthStrategy::Bearer => {
-            ("authorization".to_string(), format!("Bearer {api_key}"))
-        }
+        ImagesAuthStrategy::Bearer => ("authorization".to_string(), format!("Bearer {api_key}")),
         ImagesAuthStrategy::Header(name) => (name.to_string(), api_key),
     };
     headers.push(auth_header);
 
     // For edit requests, we need multipart/form-data
-    headers.push(("content-type".to_string(), "multipart/form-data".to_string()));
+    headers.push((
+        "content-type".to_string(),
+        "multipart/form-data".to_string(),
+    ));
 
     if let Some(extra_headers) = request.extra_headers {
         for (name, value) in extra_headers {
@@ -138,32 +140,32 @@ pub(super) fn prepare_images_edit_call(
     }
 
     let url = config.complete_url(request.api_base, &model, true, &env_lookup)?;
-    
+
     let mut body = serde_json::json!({
         "model": model,
         "prompt": request.prompt,
     });
-    
+
     if let Some(n) = request.n {
         body["n"] = Value::Number(n.into());
     }
-    
+
     if let Some(size) = request.size {
         body["size"] = Value::String(size);
     }
-    
+
     if let Some(response_format) = request.response_format {
         body["response_format"] = Value::String(response_format);
     }
-    
+
     if let Some(user) = request.user {
         body["user"] = Value::String(user);
     }
-    
+
     let transformed = config.transform_edit_request(body)?;
 
     Ok(ProviderImagesEditRequest {
-        provider: provider.to_string(),
+        _provider: provider.to_string(),
         model,
         config,
         url,
@@ -211,9 +213,7 @@ impl ImagesProviderConfig for OpenAiImagesConfig {
         api_key
             .map(|k| k.to_string())
             .or_else(|| env_lookup("OPENAI_API_KEY"))
-            .ok_or_else(|| {
-                CoreError::InvalidRequest("OpenAI API key not found".to_string())
-            })
+            .ok_or_else(|| CoreError::InvalidRequest("OpenAI API key not found".to_string()))
     }
 }
 
@@ -245,9 +245,7 @@ impl ImagesProviderConfig for StabilityImagesConfig {
         api_key
             .map(|k| k.to_string())
             .or_else(|| env_lookup("STABILITY_API_KEY"))
-            .ok_or_else(|| {
-                CoreError::InvalidRequest("Stability API key not found".to_string())
-            })
+            .ok_or_else(|| CoreError::InvalidRequest("Stability API key not found".to_string()))
     }
 
     fn auth_strategy(&self) -> ImagesAuthStrategy {
