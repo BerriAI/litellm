@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 16389
+    "limit": 16387
   },
   "reportArgumentType": {
     "limit": 2229
@@ -24,7 +24,7 @@
     "limit": 19
   },
   "reportExplicitAny": {
-    "limit": 5242
+    "limit": 5241
   },
   "reportFunctionMemberAccess": {
     "limit": 7
