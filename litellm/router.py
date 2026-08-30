@@ -50,6 +50,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -3475,6 +3476,17 @@ class Router:
 
         ## DEPLOYMENT-LEVEL TAGS
         deployment_tags: Final = deployment.get("litellm_params", {}).get("tags")
+        credential_name: Final = deployment.get("litellm_params", {}).get("litellm_credential_name")
+        # The tags stamped below are for spend tracking, not routing, but retries and
+        # fallbacks re-route off this same metadata dict. Snapshot the caller's tags
+        # once, before the first deployment stamps its own onto them, so tag-based
+        # routing never mistakes a previous attempt's deployment tags for the
+        # request's own.
+        if deployment_tags or credential_name:
+            kwargs[metadata_variable_name].setdefault(
+                ROUTING_REQUEST_TAGS_METADATA_KEY,
+                tuple(kwargs[metadata_variable_name].get("tags") or ()),
+            )
         if deployment_tags:
             existing_tags = kwargs[metadata_variable_name].get("tags") or []
             merged_tags: Final = list(existing_tags)
@@ -3484,7 +3496,6 @@ class Router:
             kwargs[metadata_variable_name]["tags"] = merged_tags
 
         ## CREDENTIAL NAME AS TAG
-        credential_name: Final = deployment.get("litellm_params", {}).get("litellm_credential_name")
         if credential_name:
             credential_tag: Final = f"Credential: {credential_name}"
             existing_tags = kwargs[metadata_variable_name].get("tags") or []

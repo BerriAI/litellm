@@ -21,6 +21,7 @@ from litellm.constants import (
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -315,10 +316,13 @@ _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.mod
 # into response_cost and spend; a client seeding it forges (even negative)
 # guardrail cost.
 _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
-# ``attempted_fallbacks`` and ``original_model_group`` are written by the router
-# and read by spend logs as fact; a client value has no legitimate meaning and no
-# key or team setting keeps it, so the strip is never gated.
-_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset({"attempted_fallbacks", "original_model_group"})
+# These are written by the router and read back as fact, by spend logs for the
+# fallback stamps and by tag-based routing for the pre-deployment tag snapshot; a
+# client value has no legitimate meaning and no key or team setting keeps it, so
+# the strip is never gated.
+_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
+    {"attempted_fallbacks", "original_model_group", ROUTING_REQUEST_TAGS_METADATA_KEY}
+)
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
 
 # Request fields whose value, when URL-valued, becomes the outbound destination

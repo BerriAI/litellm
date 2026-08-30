@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
-from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY, ROUTING_REQUEST_TAGS_METADATA_KEY
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.types.router import ConsumedRequestTagsStamp, RouterErrors
 
@@ -52,6 +52,7 @@ class _TagRoutingMetadata(TypedDict, total=False):
     user_agent: ReadOnly[str]
     tag_routing: ReadOnly[_TagRoutingMatchStamp]
     _consumed_request_tags: ReadOnly[object]
+    _routing_request_tags: ReadOnly[object]
 
 
 _EMPTY_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
@@ -428,16 +429,29 @@ def _tag_known_to_group(
     )
 
 
+def _caller_request_tags(metadata: _TagRoutingMetadata) -> Sequence[str] | None:
+    # Once a deployment is picked, the router merges that deployment's own
+    # litellm_params.tags into metadata["tags"] for spend tracking, and retries and
+    # fallbacks then re-route off that same metadata dict. Route off the snapshot the
+    # router took before the first such merge, so a previous attempt's deployment tags
+    # are never treated as tags the caller asked for.
+    snapshot: Final = metadata.get(ROUTING_REQUEST_TAGS_METADATA_KEY)
+    if isinstance(snapshot, (list, tuple)):
+        return snapshot
+    return metadata.get("tags")
+
+
 def _request_tags_after_router_consumption(metadata: _TagRoutingMetadata, model: str) -> Sequence[str] | None:
     # The pre-routing hook stamps which tags selected the router it rewrote the request
     # to: those tags already did their job and must not also constrain deployment choice
     # inside the routed group. The request's other tags still apply there, on top of the
     # inherited_tags snapshot that keeps key/team policy applying. Every other model
     # group keeps the full list.
+    caller_tags: Final = _caller_request_tags(metadata)
     stamp: Final = metadata.get(CONSUMED_REQUEST_TAGS_METADATA_KEY)
     if not isinstance(stamp, ConsumedRequestTagsStamp) or stamp.model_group != model:
-        return metadata.get("tags")
-    request_tags: Final = metadata.get("tags")
+        return caller_tags
+    request_tags: Final = caller_tags
     leftover: Final = tuple(
         tag for tag in (request_tags if isinstance(request_tags, (list, tuple)) else ()) if tag not in stamp.tags
     )

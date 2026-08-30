@@ -3147,3 +3147,109 @@ async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merg
     )
 
     assert deployment["model_info"]["id"] == "team-a-deployment"
+
+
+def _leaky_deployment_tag_router(**router_kwargs):
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "reasoning-complex",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4",
+                    "api_key": "sk-fake",
+                    "tags": ["default", "provider:anthropic", "paid"],
+                    "mock_response": "litellm.RateLimitError",
+                },
+                "model_info": {"id": "anthropic-deployment"},
+            },
+            {
+                "model_name": "reasoning-complex-backup",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-fake",
+                    "tags": ["provider:bedrock", "private"],
+                    "mock_response": "hi from the backup",
+                },
+                "model_info": {"id": "bedrock-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+        tag_filtering_match_any=False,
+        **router_kwargs,
+    )
+
+
+@pytest.mark.asyncio()
+async def test_deployment_tags_do_not_become_request_tags_on_fallback():
+    """
+    The router merges the chosen deployment's own `tags` into request metadata for
+    spend tracking, and fallbacks re-route off that same metadata dict. An untagged
+    request must not inherit the failed deployment's tags as if the caller had sent
+    them, which used to deny the fallback group outright.
+    """
+    router = _leaky_deployment_tag_router(
+        fallbacks=[{"reasoning-complex": ["reasoning-complex-backup"]}],
+        num_retries=0,
+    )
+
+    response = await router.acompletion(
+        model="reasoning-complex",
+        messages=[{"role": "user", "content": "explain briefly"}],
+    )
+
+    assert response._hidden_params["model_id"] == "bedrock-deployment"
+
+
+@pytest.mark.asyncio()
+async def test_deployment_tags_stamped_for_spend_tracking_are_kept_out_of_routing():
+    """
+    Regression for the retry case: once the first attempt stamps its deployment's
+    tags onto metadata, a re-route that no longer has that deployment available
+    must still see the request as untagged instead of raising the tag-denial error.
+    """
+    from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+
+    router = _leaky_deployment_tag_router()
+    anthropic_deployment, bedrock_deployment = router.model_list[0], router.model_list[1]
+    kwargs = {"model": "reasoning-complex", "metadata": {}}
+
+    router._update_kwargs_with_deployment(
+        deployment=anthropic_deployment, kwargs=kwargs, function_name="acompletion"
+    )
+
+    # still stamped for spend tracking
+    assert kwargs["metadata"]["tags"] == ["default", "provider:anthropic", "paid"]
+
+    surviving = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="reasoning-complex",
+        healthy_deployments=[bedrock_deployment],
+        request_kwargs=kwargs,
+    )
+
+    assert [d["model_info"]["id"] for d in surviving] == ["bedrock-deployment"]
+
+
+@pytest.mark.asyncio()
+async def test_caller_tags_still_filter_after_a_deployment_stamps_its_own_tags():
+    """
+    The snapshot must preserve the caller's tags, not discard tag filtering wholesale.
+    """
+    from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+
+    router = _leaky_deployment_tag_router()
+    anthropic_deployment, bedrock_deployment = router.model_list[0], router.model_list[1]
+    kwargs = {"model": "reasoning-complex", "metadata": {"tags": ["private"]}}
+
+    router._update_kwargs_with_deployment(
+        deployment=anthropic_deployment, kwargs=kwargs, function_name="acompletion"
+    )
+
+    surviving = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="reasoning-complex",
+        healthy_deployments=[anthropic_deployment, bedrock_deployment],
+        request_kwargs=kwargs,
+    )
+
+    assert [d["model_info"]["id"] for d in surviving] == ["bedrock-deployment"]
