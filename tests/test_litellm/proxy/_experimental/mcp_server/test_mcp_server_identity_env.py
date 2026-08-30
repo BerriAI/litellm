@@ -18,6 +18,7 @@ pytest.importorskip("mcp")
 
 UTILS_MODULE = "litellm.proxy._experimental.mcp_server.utils"
 MGMT_MODULE = "litellm.proxy.management_endpoints.mcp_management_endpoints"
+MANAGER_MODULE = "litellm.proxy._experimental.mcp_server.mcp_server_manager"
 
 
 @contextlib.contextmanager
@@ -32,8 +33,17 @@ def _env_and_reload(**env):
                 os.environ[key] = value
 
     def _reload():
+        # utils must reload first: MGMT_MODULE and MANAGER_MODULE both do
+        # ``from ...utils import X`` at module load time, so reloading them
+        # afterward re-binds those names to the fresh utils classes/values.
+        # Every module with a frozen import from utils needs to be listed
+        # here -- mcp_server_manager.py imports MCPMissingUserEnvVarsError
+        # this way, and a stale reference there causes
+        # pytest.raises(_u("MCPMissingUserEnvVarsError")) to stop matching
+        # in any test that runs after this one reloads utils.
         utils = importlib.reload(importlib.import_module(UTILS_MODULE))
         mgmt = importlib.reload(importlib.import_module(MGMT_MODULE))
+        importlib.reload(importlib.import_module(MANAGER_MODULE))
         return utils, mgmt
 
     try:
