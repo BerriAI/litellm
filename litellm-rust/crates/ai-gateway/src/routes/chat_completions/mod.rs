@@ -70,20 +70,23 @@ async fn handle(
 }
 
 fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, CoreError> {
-    let forwarded = headers
-        .iter()
-        .filter(|(name, _)| {
-            !CHAT_COMPLETIONS_HEADERS_NOT_FORWARDED
-                .iter()
-                .any(|excluded| name.as_str().eq_ignore_ascii_case(excluded))
-        })
-        .map(|(name, value)| {
-            let value = value.to_str().map_err(|_| {
-                CoreError::InvalidRequest(format!("invalid value for header {}", name.as_str()))
-            })?;
-            Ok((name.to_string(), Value::String(value.to_string())))
-        })
-        .collect::<Result<Map<_, _>, CoreError>>()?;
+    // Pre-allocate with estimated capacity (most requests have 5-10 headers)
+    let mut forwarded = Map::with_capacity(headers.len().min(10));
+    
+    for (name, value) in headers.iter() {
+        if CHAT_COMPLETIONS_HEADERS_NOT_FORWARDED
+            .iter()
+            .any(|excluded| name.as_str().eq_ignore_ascii_case(excluded))
+        {
+            continue;
+        }
+        
+        let value = value.to_str().map_err(|_| {
+            CoreError::InvalidRequest(format!("invalid value for header {}", name.as_str()))
+        })?;
+        forwarded.insert(name.to_string(), Value::String(value.to_string()));
+    }
+    
     Ok((!forwarded.is_empty()).then_some(forwarded))
 }
 
