@@ -27,7 +27,6 @@ def test_friendli_glm_5_3_model_info():
     assert info["supports_max_reasoning_effort"] is True
     assert info["supports_tool_choice"] is True
     assert info["supports_prompt_caching"] is True
-    # GLM-5.3 (non-flash) is text-only on Friendli's catalog
     assert info["supports_vision"] is False
     assert info["supports_image_input"] is False
 
