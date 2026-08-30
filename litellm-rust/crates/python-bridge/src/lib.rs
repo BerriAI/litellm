@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 mod gil;
 mod marshal;
 
-use marshal::{from_py, to_py};
+use marshal::{from_py, py_to_json, to_py};
 
 pyo3::create_exception!(
     _native,
