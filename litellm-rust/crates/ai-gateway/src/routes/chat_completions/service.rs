@@ -29,56 +29,16 @@ fn next_request_id() -> u64 {
     REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Tracks usage across streaming chunks
-struct StreamingCostTracker {
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    total_tokens: u64,
-    cached_tokens: u64,
-    cache_creation_tokens: u64,
-}
-
-impl StreamingCostTracker {
-    fn new() -> Self {
-        Self {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            cached_tokens: 0,
-            cache_creation_tokens: 0,
-        }
-    }
-
-    /// Extract usage from a chunk if present. OpenAI sends usage in the final chunk
-    /// when stream_options.include_usage is true.
-    fn accumulate(&mut self, chunk: &Value) {
-        if let Some(usage) = chunk.get("usage") {
-            if let Some(prompt) = usage.get("prompt_tokens").and_then(Value::as_u64) {
-                self.prompt_tokens = prompt;
-            }
-            if let Some(completion) = usage.get("completion_tokens").and_then(Value::as_u64) {
-                self.completion_tokens = completion;
-            }
-            if let Some(total) = usage.get("total_tokens").and_then(Value::as_u64) {
-                self.total_tokens = total;
-            }
-            if let Some(details) = usage.get("prompt_tokens_details") {
-                if let Some(cached) = details.get("cached_tokens").and_then(Value::as_u64) {
-                    self.cached_tokens = cached;
-                }
-                if let Some(creation) = details.get("cache_creation_tokens").and_then(Value::as_u64) {
-                    self.cache_creation_tokens = creation;
-                }
-            }
-        }
-    }
-}
-
 /// A stream wrapper that tracks usage and records spend after completion.
 /// Clones necessary data so it can record spend independently after the stream ends.
 struct SpendTrackingStream {
     inner: Pin<Box<dyn Stream<Item = StreamingChunk> + Send>>,
-    tracker: StreamingCostTracker,
+    tracker: crate::streaming::StreamingCostTracker,
+    tool_call_tracker: crate::streaming::ToolCallAccumulator,
+    finish_reason_tracker: crate::streaming::FinishReasonTracker,
+    thinking_tracker: crate::streaming::ThinkingBlockTracker,
+    /// Provider-specific fields extracted from streaming chunks (e.g., Anthropic thinking, OpenAI metadata)
+    provider_specific_fields: Option<Map<String, Value>>,
     state: Arc<AppState>,
     model: String,
     key_object: Arc<KeyObject>,
@@ -91,7 +51,33 @@ impl Stream for SpendTrackingStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(Some(chunk)))) => {
+                // Track usage for cost calculation
                 self.tracker.accumulate(&chunk);
+                
+                // Track tool calls and function calls
+                if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
+                    if let Some(first_choice) = choices.first() {
+                        if let Some(delta) = first_choice.get("delta") {
+                            self.tool_call_tracker.accumulate_tool_call_delta(delta);
+                            self.tool_call_tracker.accumulate_function_call_delta(delta);
+                            self.thinking_tracker.process_chunk(&chunk);
+                        }
+                    }
+                }
+                
+                // Track finish reason
+                self.finish_reason_tracker.process_chunk(&chunk);
+                
+                // Extract and preserve provider-specific fields
+                if let Some(fields) = crate::streaming::extract_provider_specific_fields(&chunk) {
+                    // Merge with existing fields (later chunks override earlier ones)
+                    if let Some(ref mut existing) = self.provider_specific_fields {
+                        existing.extend(fields);
+                    } else {
+                        self.provider_specific_fields = Some(fields);
+                    }
+                }
+                
                 Poll::Ready(Some(Ok(Some(chunk))))
             }
             Poll::Ready(Some(Ok(None))) => {
@@ -491,7 +477,11 @@ pub async fn run(
 
                     let tracking_stream = SpendTrackingStream {
                         inner: stream,
-                        tracker: StreamingCostTracker::new(),
+                        tracker: crate::streaming::StreamingCostTracker::new(),
+                        tool_call_tracker: crate::streaming::ToolCallAccumulator::new(),
+                        finish_reason_tracker: crate::streaming::FinishReasonTracker::new(),
+                        thinking_tracker: crate::streaming::ThinkingBlockTracker::new(),
+                        provider_specific_fields: None,
                         state: Arc::new(state.clone()),
                         model: provider_model.to_string(),
                         key_object: Arc::clone(key_object),
@@ -641,7 +631,23 @@ pub async fn run(
             state.metrics.requests_total.with_label_values(&[provider_model, "error"]).inc();
             state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(duration);
 
-            let err = deployment_error.unwrap();
+            let err = match deployment_error {
+                Some(e) => e,
+                None => {
+                    // This happens when all deployments were skipped (e.g., circuit breaker open)
+                    tracing::warn!(
+                        request_id = request_id,
+                        model = %provider_model,
+                        deployment_idx = deployment_idx,
+                        hashed_token = %hashed_token.as_hex_str(),
+                        duration_secs = duration,
+                        event = "chat_completions.deployment_skipped",
+                        "audit: deployment skipped (likely circuit breaker open)"
+                    );
+                    continue; // Try next deployment
+                }
+            };
+
             tracing::warn!(
                 request_id = request_id,
                 model = %provider_model,
@@ -677,7 +683,7 @@ pub async fn run(
     }
 
     // All deployments exhausted
-    let err = last_error.unwrap();
+    let err = last_error.unwrap_or_else(|| CoreError::Routing("no chat completions deployment is configured for this model".to_string()));
     let duration = start.elapsed().as_secs_f64();
 
     tracing::error!(
@@ -864,7 +870,7 @@ mod tests {
 
     #[test]
     fn test_streaming_cost_tracker_accumulate_usage() {
-        let mut tracker = StreamingCostTracker::new();
+        let mut tracker = crate::streaming::StreamingCostTracker::new();
 
         // First chunk with no usage
         let chunk1 = json!({
@@ -907,7 +913,7 @@ mod tests {
 
     #[test]
     fn test_streaming_cost_tracker_multiple_usage_chunks() {
-        let mut tracker = StreamingCostTracker::new();
+        let mut tracker = crate::streaming::StreamingCostTracker::new();
 
         // Some providers send usage in multiple chunks
         let chunk1 = json!({
@@ -936,7 +942,7 @@ mod tests {
 
     #[test]
     fn test_streaming_cost_tracker_no_prompt_details() {
-        let mut tracker = StreamingCostTracker::new();
+        let mut tracker = crate::streaming::StreamingCostTracker::new();
 
         let chunk = json!({
             "usage": {
