@@ -155,12 +155,12 @@ def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
     """
     Check if a tool is a web search tool for Chat Completions API (strict check).
 
-    This is a stricter version that ONLY checks for the exact LiteLLM web search tool name.
+    This is a stricter version that checks the recognized web search tool names.
     Use this for Chat Completions API to avoid false positives with user-defined tools.
 
     Detects ONLY:
     - LiteLLM standard: name == "litellm_web_search" (Anthropic format)
-    - OpenAI format: type == "function" with function.name == "litellm_web_search"
+    - OpenAI format: type == "function" with function.name == "litellm_web_search" or "web_search"
 
     Args:
         tool: Tool dictionary to check
@@ -185,7 +185,7 @@ def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
     if tool_type == "function" and "function" in tool:
         function_def: Final = tool.get("function", {})
         function_name: Final = function_def.get("name", "")
-        if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+        if function_name in (LITELLM_WEB_SEARCH_TOOL_NAME, "web_search"):
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
@@ -269,7 +269,7 @@ def is_web_search_tool(tool: dict[str, Any]) -> bool:
     if tool_type == "function" and "function" in tool:
         function_def: Final = tool.get("function", {})
         function_name: Final = function_def.get("name", "")
-        if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+        if function_name in (LITELLM_WEB_SEARCH_TOOL_NAME, "web_search"):
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
