@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { ArrowLeftOutlined, CopyOutlined, CheckOutlined, LinkOutlined } from "@ant-design/icons";
-import { formatInstallCommand } from "./helpers";
+import { ArrowLeft, Check, Copy, Link2 } from "lucide-react";
+import { buildMarketplaceSettingsSnippet, formatInstallCommand } from "./helpers";
 import { Plugin } from "./types";
 
 interface SkillDetailProps {
@@ -31,6 +31,10 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
 
   const installCommand = formatInstallCommand(skill);
 
+  const settingsSnippet = buildMarketplaceSettingsSnippet(
+    typeof window !== "undefined" ? window.location.origin : "<proxy-url>",
+  );
+
   const detailRows = [
     ...(skill.category ? [{ property: "Category", value: skill.category }] : []),
     ...(skill.domain ? [{ property: "Domain", value: skill.domain }] : []),
@@ -60,7 +64,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
           marginBottom: 24,
         }}
       >
-        <ArrowLeftOutlined style={{ fontSize: 11 }} />
+        <ArrowLeft className="size-3" />
         <span>Skills</span>
       </div>
 
@@ -159,7 +163,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   }}
                 >
                   {sourceUrl.replace("https://", "")}
-                  <LinkOutlined style={{ fontSize: 11, flexShrink: 0 }} />
+                  <Link2 className="size-3 shrink-0" />
                 </a>
               </div>
             )}
@@ -239,7 +243,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   padding: 0,
                 }}
               >
-                {copiedKey === "install" ? <CheckOutlined /> : <CopyOutlined />}
+                {copiedKey === "install" ? <Check className="size-3" /> : <Copy className="size-3" />}
                 {copiedKey === "install" ? "Copied" : "Copy"}
               </button>
             </div>
@@ -254,6 +258,32 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
               }}
             >
               {installCommand}
+            </pre>
+          </div>
+
+          {/* Shown when the marketplace catalog is stale and the plugin isn't found yet */}
+          <div
+            style={{
+              border: "1px solid #fce8b2",
+              borderRadius: 8,
+              padding: "12px 16px",
+              backgroundColor: "#fefce8",
+              marginBottom: 16,
+            }}
+          >
+            <p style={{ fontSize: 13, color: "#5f6368", lineHeight: 1.6, margin: "0 0 8px 0" }}>
+              If you see &quot;Plugin {skill.name} not found in marketplace&quot;, update the catalog first:
+            </p>
+            <pre
+              style={{
+                margin: 0,
+                fontSize: 13,
+                fontFamily: "monospace",
+                color: "#202124",
+                backgroundColor: "transparent",
+              }}
+            >
+              /plugin marketplace update litellm
             </pre>
           </div>
 
@@ -272,12 +302,73 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
           <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 8px 0" }}>
             One-time marketplace setup
           </h2>
-          <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 24px 0", lineHeight: 1.6 }}>
-            Add this to{" "}
+
+          {/* Option 1: single command — fastest path for most users */}
+          <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 12px 0", lineHeight: 1.6 }}>
+            Run this command in Claude Code to register the marketplace:
+          </p>
+          <div
+            style={{
+              border: "1px solid #dadce0",
+              borderRadius: 8,
+              overflow: "hidden",
+              marginBottom: 24,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 16px",
+                backgroundColor: "#f8f9fa",
+                borderBottom: "1px solid #dadce0",
+              }}
+            >
+              <span style={{ fontSize: 13, color: "#3c4043", fontWeight: 500 }}>Run in Claude Code</span>
+              <button
+                onClick={() => {
+                  const origin = typeof window !== "undefined" ? window.location.origin : "";
+                  copyToClipboard(`/plugin marketplace add ${origin}/claude-code/marketplace.json`, "marketplace-cmd");
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 12,
+                  color: copiedKey === "marketplace-cmd" ? "#137333" : "#1a73e8",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                {copiedKey === "marketplace-cmd" ? <Check className="size-3" /> : <Copy className="size-3" />}
+                {copiedKey === "marketplace-cmd" ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <pre
+              style={{
+                margin: 0,
+                padding: "14px 16px",
+                fontSize: 13,
+                fontFamily: "monospace",
+                color: "#202124",
+                backgroundColor: "#fff",
+              }}
+            >
+              {`/plugin marketplace add ${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`}
+            </pre>
+          </div>
+
+          {/* Option 2: settings.json — for persistent config or managed deployments.
+              extraKnownMarketplaces requires source to be a nested object, not a flat string. */}
+          <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 12px 0", lineHeight: 1.6 }}>
+            Or add this to{" "}
             <code style={{ fontSize: 13, backgroundColor: "#f1f3f4", padding: "1px 6px", borderRadius: 4 }}>
               ~/.claude/settings.json
             </code>{" "}
-            to point Claude Code at your proxy:
+            for a persistent configuration:
           </p>
           <div
             style={{
@@ -298,21 +389,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
             >
               <span style={{ fontSize: 13, color: "#3c4043", fontWeight: 500 }}>~/.claude/settings.json</span>
               <button
-                onClick={() => {
-                  const snippet = JSON.stringify(
-                    {
-                      extraKnownMarketplaces: {
-                        "my-org": {
-                          source: "url",
-                          url: `${typeof window !== "undefined" ? window.location.origin : ""}/claude-code/marketplace.json`,
-                        },
-                      },
-                    },
-                    null,
-                    2,
-                  );
-                  copyToClipboard(snippet, "settings");
-                }}
+                onClick={() => copyToClipboard(settingsSnippet, "settings")}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -325,7 +402,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   padding: 0,
                 }}
               >
-                {copiedKey === "settings" ? <CheckOutlined /> : <CopyOutlined />}
+                {copiedKey === "settings" ? <Check className="size-3" /> : <Copy className="size-3" />}
                 {copiedKey === "settings" ? "Copied" : "Copy"}
               </button>
             </div>
@@ -339,18 +416,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                 backgroundColor: "#fff",
               }}
             >
-              {JSON.stringify(
-                {
-                  extraKnownMarketplaces: {
-                    "my-org": {
-                      source: "url",
-                      url: `${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`,
-                    },
-                  },
-                },
-                null,
-                2,
-              )}
+              {settingsSnippet}
             </pre>
           </div>
         </div>

@@ -1,5 +1,6 @@
 export interface SpendMetrics {
   spend: number;
+  flat_cost?: number;
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
@@ -8,6 +9,11 @@ export interface SpendMetrics {
   failed_requests: number;
   cache_read_input_tokens: number;
   cache_creation_input_tokens: number;
+  compression_saved_tokens?: number;
+  compression_savings_spend?: number;
+  prompt_caching_savings_spend?: number;
+  gateway_injected_caching_savings_spend?: number;
+  autorouter_savings_spend?: number;
 }
 
 export type DailyData = {

@@ -28,10 +28,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from expression import case, tag, tagged_union
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
@@ -39,7 +39,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
-from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
+from litellm.types.mcp import (
+    DEFAULT_CREDENTIAL_HEADER,
+    DEFAULT_SUBJECT_TOKEN_TYPE,
+    normalize_upstream_header_name,
+)
 
 
 class AuthSpecKind(str, Enum):
@@ -56,6 +60,7 @@ class AuthSpecKind(str, Enum):
     authorization_code = "authorization_code"  # per-user 3LO; gateway-stored token
     client_credentials = "client_credentials"  # gateway service account (M2M)
     token_exchange = "token_exchange"  # RFC 8693: token endpoint + subject_token (OBO)
+    id_jag = "id_jag"  # draft-ietf-oauth-identity-assertion-authz-grant: two-leg exchange then jwt-bearer
     api_key = "api_key"  # static header, any scheme (BYOK = per-user-seeded source)
     passthrough = "passthrough"  # client forwards an upstream-audience token
     none = "none"  # no upstream credential; resolve yields a no-op auth, never an error
@@ -160,7 +165,52 @@ class CredError:
         assert_never(self.tag)
 
 
-class AuthorizationCodeConfig(BaseModel):
+def validate_header_name(raw: str) -> Result[str, CredError]:
+    """``normalize_upstream_header_name`` with this package's error-as-value policy.
+
+    The grammar itself lives in ``litellm.types.mcp`` so the v1 model, the management endpoint and
+    this vocabulary all judge a header name the same way while each keeps its own failure shape.
+    """
+    normalized: Final = normalize_upstream_header_name(raw)
+    if normalized is None:
+        return Error(CredError.of_misconfigured(f"invalid upstream header name: {raw!r}"))
+    return Ok(normalized)
+
+
+class HeaderCarrier(BaseModel):
+    """Where a resolved credential is written upstream, and how its value is formatted.
+
+    ``Authorization: Bearer`` is only OAuth's *default* conveyance (RFC 6750 section 2.1), not its
+    only one: an ESB or API gateway commonly terminates its own credential in a private header while
+    a second credential passes through to the origin, so a credential has to be able to say which
+    slot it owns. Modeled like OpenAPI's apiKey scheme, so any upstream convention is expressible
+    (Authorization + Bearer, a raw value on X-API-Key, Ocp-Apim-Subscription-Key, esb-oauth, ...).
+
+    Every config whose credential the gateway mints or holds inherits this, so no resolver arm names
+    a header itself and the conflict rule in ``_resolve_v2_auth`` can always ask the auth object
+    which slot it is about to occupy. ``passthrough`` deliberately does not: it forwards the
+    caller's own credential into the slot the caller used, and mints nothing to place.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    header_name: str = DEFAULT_CREDENTIAL_HEADER
+    value_prefix: str = "Bearer"
+
+    @field_validator("header_name")
+    @classmethod
+    def _check_header_name(cls, value: str) -> str:
+        match validate_header_name(value):
+            case Ok(name):
+                return name
+            case Error(err):
+                raise ValueError(err.summary)
+
+    def header(self, value: str) -> tuple[str, str]:
+        formatted: Final = f"{self.value_prefix} {value}" if self.value_prefix else value
+        return self.header_name, formatted
+
+
+class AuthorizationCodeConfig(HeaderCarrier):
     """Per-user 3LO; the gateway is the OAuth client and stores the user's token.
 
     Endpoints are discovered (RFC 9728 -> RFC 8414) and the client is registered via DCR
@@ -178,12 +228,17 @@ class AuthorizationCodeConfig(BaseModel):
     token_url: str | None = None
 
 
-class ClientCredentialsConfig(BaseModel):
+class ClientCredentialsConfig(HeaderCarrier):
     """M2M service account; one upstream identity for every user.
 
     Fields are optional so the config can be built incomplete: a value may be supplied at
     runtime (`token_url` via RFC 8414 discovery, `client_id`/`secret` via DCR), and the
-    resolver arm raises `CredError.misconfigured` when a needed field is still absent.
+    resolver arm returns `CredError.misconfigured` when a needed field is still absent.
+
+    `audience` is the IdP-specific audience parameter some authorization servers require on
+    the client_credentials grant (sent as `audience` in the token request when set).
+    `token_endpoint_auth_method` selects how the client authenticates to the token endpoint
+    (RFC 6749 section 2.3.1); `None` defaults to `client_secret_post`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -192,9 +247,12 @@ class ClientCredentialsConfig(BaseModel):
     client_secret: SecretStr | None = None
     token_url: str | None = None
     scopes: tuple[str, ...] = ()
+    audience: str | None = None
+    upstream_resource: str | None = None
+    token_endpoint_auth_method: Literal["client_secret_post", "client_secret_basic"] | None = None
 
 
-class TokenExchangeConfig(BaseModel):
+class TokenExchangeConfig(HeaderCarrier):
     """OBO: swap the caller's live inbound token for a token bound to the upstream's audience. The
     gateway authenticates to the exchange endpoint as an OAuth client (`client_id`/`client_secret`);
     the inbound token is sent only to that endpoint, never to the upstream.
@@ -225,6 +283,49 @@ class TokenExchangeConfig(BaseModel):
     scopes: tuple[str, ...] = ()
 
 
+class PrivateKeyJwtAuth(BaseModel):
+    """RFC 7523 private-key-JWT client authentication: the gateway signs a `client_assertion`."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["private_key_jwt"] = "private_key_jwt"
+    private_key: SecretStr
+    key_id: str | None = None
+    signing_alg: str = "RS256"
+
+
+class ClientSecretAuth(BaseModel):
+    """`client_secret_post` client authentication: the gateway posts `client_id` + `client_secret`."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["client_secret"] = "client_secret"
+    client_secret: SecretStr
+
+
+ClientAuth = Annotated[PrivateKeyJwtAuth | ClientSecretAuth, Field(discriminator="source")]
+
+
+class IdJagConfig(HeaderCarrier):
+    """draft-ietf-oauth-identity-assertion-authz-grant (Okta "AI agent token exchange").
+
+    Two legs: leg 1 is an RFC 8693 token exchange at the IdP org AS (`org_token_endpoint`) that
+    swaps the caller's identity token for an ID-JAG assertion; leg 2 is an RFC 7523 jwt-bearer at
+    the upstream resource AS (`resource_token_endpoint`) that swaps the assertion for the access
+    token. The gateway authenticates to both endpoints as `client_id` via `client_auth`. Required
+    fields are enforced at construction so a half-configured server cannot reach the arm.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal[AuthSpecKind.id_jag] = AuthSpecKind.id_jag
+    org_token_endpoint: str
+    resource_token_endpoint: str
+    client_id: str
+    client_auth: ClientAuth
+    subject_token_type: str = "urn:ietf:params:oauth:token-type:id_token"
+    audience: str | None = None
+    resource: str | None = None
+    scopes: tuple[str, ...] = ()
+
+
 class SharedKey(BaseModel):
     """A fixed key configured on the server, identical for every caller."""
 
@@ -245,22 +346,15 @@ class Byok(BaseModel):
 ApiKeySource = Annotated[SharedKey | Byok, Field(discriminator="source")]
 
 
-class ApiKeyConfig(BaseModel):
+class ApiKeyConfig(HeaderCarrier):
     """A fixed credential injected as a header. The value is shared (in config) or seeded
-    per-user (pulled from the store); `header_name` and `value_prefix` say where and how it is
-    written, modeled like OpenAPI's apiKey scheme so any upstream convention is expressible
-    (Authorization + Bearer, a raw value on X-API-Key, Ocp-Apim-Subscription-Key, etc.).
+    per-user (pulled from the store); the inherited `header_name` and `value_prefix` say where
+    and how it is written.
     """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.api_key] = AuthSpecKind.api_key
-    header_name: str = "Authorization"
-    value_prefix: str = "Bearer"
     key_source: ApiKeySource
-
-    def header(self, value: str) -> tuple[str, str]:
-        formatted = f"{self.value_prefix} {value}" if self.value_prefix else value
-        return self.header_name, formatted
 
 
 class PassthroughConfig(BaseModel):
@@ -323,6 +417,7 @@ AuthConfig = Annotated[
     AuthorizationCodeConfig
     | ClientCredentialsConfig
     | TokenExchangeConfig
+    | IdJagConfig
     | ApiKeyConfig
     | PassthroughConfig
     | NoneConfig
@@ -338,7 +433,8 @@ class Subject(BaseModel):
 
     tenant_id: str
     subject_id: str
-    # Opaque, already-validated inbound identity. Only `token_exchange` / `passthrough` read it.
+    # Opaque, already-validated inbound identity. Read by `token_exchange`, `passthrough`, and
+    # `id_jag` (which falls back to the user's stored SSO assertion when it is absent).
     inbound_token: SecretStr | None = None
 
 

@@ -20,6 +20,7 @@ the matrix builder still sees three rows for this (feature, provider).
 
 from __future__ import annotations
 
+import pytest
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 # Per-model aliases registered in the LiteLLM proxy's routing config to
@@ -28,11 +29,12 @@ from claude_code._basic_messaging import run_basic_messaging_cell
 # routing strategy.
 BEDROCK_INVOKE_MODELS = [
     "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-6-bedrock-invoke",
+    "claude-sonnet-4-5-bedrock-invoke",
     "claude-opus-4-7-bedrock-invoke",
 ]
 
 
+@pytest.mark.covers("llm.messages.bedrock_invoke.basic.nonstream.works")
 def test_basic_messaging_non_streaming_bedrock_invoke(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a reply."""
     run_basic_messaging_cell(

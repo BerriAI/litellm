@@ -174,6 +174,86 @@ def _aggregate_cell(results: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     return {"status": "not_tested"}
 
 
+def _index_cells(matrix: Mapping[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Map ``(feature_id, provider) -> cell dict`` for a built matrix.
+
+    Cells are keyed by the *stable* feature ``id`` (not the display
+    ``name``, which can be reworded without changing the underlying row)
+    and the provider key, so two matrices built at different times line up
+    even if feature names drift.
+    """
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for feature in matrix.get("features", []) or []:
+        if not isinstance(feature, Mapping):
+            continue
+        feature_id = feature.get("id")
+        if not feature_id:
+            continue
+        providers = feature.get("providers", {}) or {}
+        if not isinstance(providers, Mapping):
+            continue
+        for provider, cell in providers.items():
+            if isinstance(cell, Mapping):
+                out[(feature_id, provider)] = dict(cell)
+    return out
+
+
+def find_regressions(
+    old_matrix: Mapping[str, Any],
+    new_matrix: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Return the cells that flipped green→red (``pass`` → ``fail``).
+
+    A *regression* is defined strictly: a cell that was ``pass`` in
+    ``old_matrix`` and is ``fail`` in ``new_matrix``. Every other
+    transition is intentionally *not* a regression:
+
+      * ``red → green`` / ``green → green`` — the happy path.
+      * ``red → red`` — a cell that is *already* failing for an unrelated
+        reason (e.g. Anthropic out of API credits) must not block
+        publishing, otherwise the daily PR would never auto-merge until
+        that independent issue is fixed.
+      * ``green → not_tested`` / ``green → not_applicable`` — a cell going
+        grey is a degradation but not a *red* regression; treating a
+        skipped/flaky run as a hard block would create false positives.
+
+    Cells present only in ``new_matrix`` (a newly added feature or
+    provider) have no baseline and therefore cannot be regressions.
+
+    Each returned item is a flat str→str mapping so callers (the cron's
+    ``check_regressions.py``) can render it without further lookups:
+    ``feature_id``, ``feature_name``, ``provider``, ``old_status``,
+    ``new_status``, ``error``.
+    """
+    old_cells = _index_cells(old_matrix)
+    feature_names = {
+        f.get("id"): str(f.get("name", f.get("id")))
+        for f in new_matrix.get("features", []) or []
+        if isinstance(f, Mapping) and f.get("id")
+    }
+
+    regressions: list[dict[str, str]] = []
+    for (feature_id, provider), new_cell in sorted(
+        _index_cells(new_matrix).items(), key=lambda kv: (kv[0][0], kv[0][1])
+    ):
+        if new_cell.get("status") != "fail":
+            continue
+        old_cell = old_cells.get((feature_id, provider))
+        if old_cell is None or old_cell.get("status") != "pass":
+            continue
+        regressions.append(
+            {
+                "feature_id": str(feature_id),
+                "feature_name": feature_names.get(feature_id, str(feature_id)),
+                "provider": str(provider),
+                "old_status": "pass",
+                "new_status": "fail",
+                "error": str(new_cell.get("error", "")),
+            }
+        )
+    return regressions
+
+
 def build_from_paths(
     *,
     manifest_path: Path,
@@ -183,7 +263,7 @@ def build_from_paths(
     generated_at: str,
     output_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """I/O wrapper around build_matrix used by the publisher script."""
+    """I/O wrapper around ``build_matrix``: reads the manifest and per-test results from disk, calls ``build_matrix``, and (optionally) writes the compat-matrix JSON to ``output_path``. Whatever orchestrator publishes the matrix (currently the ECR image) invokes this."""
     manifest = load_manifest(manifest_path)
     results = load_results(results_path)
     matrix = build_matrix(

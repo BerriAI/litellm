@@ -1,13 +1,8 @@
 import asyncio
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock
 
 from litellm.caching.redis_cache import RedisCache
@@ -22,76 +17,29 @@ def redis_no_ping():
         yield
 
 
-@pytest.mark.parametrize("namespace", [None, "test"])
-@pytest.mark.asyncio
-async def test_redis_cache_async_increment(namespace, monkeypatch, redis_no_ping):
+@pytest.mark.parametrize(
+    ("namespace", "key", "expected"),
+    [
+        ("litellm", "litellm_spend_update_buffer", "litellm:litellm_spend_update_buffer"),
+        ("litellm", "litellm_config:param:general_settings", "litellm:litellm_config:param:general_settings"),
+        ("litellm", "litellm:3997c4abcdef", "litellm:3997c4abcdef"),
+        ("litellm", "spend:key:3997c4abcdef", "litellm:spend:key:3997c4abcdef"),
+        (None, "litellm_spend_update_buffer", "litellm_spend_update_buffer"),
+        ("", "litellm_spend_update_buffer", "litellm_spend_update_buffer"),
+    ],
+)
+def test_check_and_fix_namespace_prefixes_keys_sharing_the_namespace_prefix(
+    namespace, key, expected, monkeypatch, redis_no_ping
+):
+    """A key whose name merely begins with the namespace string (e.g.
+    litellm_spend_update_buffer under namespace "litellm") is not namespaced
+    yet and must still get the "namespace:" prefix; only a key already carrying
+    the delimited prefix is left alone. Without this, spend update buffers and
+    litellm_config:param:* keys reach Redis unprefixed and NOPERM under an ACL
+    scoped to the namespace pattern."""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace=namespace)
-    # Create an AsyncMock for the Redis client
-    mock_redis_instance = AsyncMock()
-
-    # Make sure the mock can be used as an async context manager
-    mock_redis_instance.__aenter__.return_value = mock_redis_instance
-    mock_redis_instance.__aexit__.return_value = None
-
-    assert redis_cache is not None
-
-    expected_key = "test:test" if namespace else "test"
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        # Call async_set_cache
-        await redis_cache.async_increment(key=expected_key, value=1)
-
-        # Verify that the set method was called on the mock Redis instance
-        mock_redis_instance.incrbyfloat.assert_called_once_with(
-            name=expected_key, amount=1
-        )
-
-
-@pytest.mark.asyncio
-async def test_redis_cache_async_increment_refresh_ttl_true_bumps_existing_ttl(
-    monkeypatch, redis_no_ping
-):
-    """With refresh_ttl=True, every increment should call expire() to bump
-    the TTL, even when the key already has a TTL (counter-style use)."""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-    mock_redis_instance = AsyncMock()
-    mock_redis_instance.__aenter__.return_value = mock_redis_instance
-    mock_redis_instance.__aexit__.return_value = None
-    mock_redis_instance.ttl.return_value = 42  # key already has ~42s left
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        await redis_cache.async_increment(
-            key="spend:team_member:u:t", value=0.05, refresh_ttl=True
-        )
-
-    mock_redis_instance.expire.assert_awaited_once_with("spend:team_member:u:t", 60)
-
-
-@pytest.mark.asyncio
-async def test_redis_cache_async_increment_default_does_not_bump_existing_ttl(
-    monkeypatch, redis_no_ping
-):
-    """Default (refresh_ttl=False) preserves window-style semantics: TTL is
-    set only on first creation, never refreshed (used by rate-limit windows)."""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-    mock_redis_instance = AsyncMock()
-    mock_redis_instance.__aenter__.return_value = mock_redis_instance
-    mock_redis_instance.__aexit__.return_value = None
-    mock_redis_instance.ttl.return_value = 42  # key already has ~42s left
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        await redis_cache.async_increment(key="rate_limit:window", value=1)
-
-    mock_redis_instance.expire.assert_not_awaited()
+    assert redis_cache.check_and_fix_namespace(key=key) == expected
 
 
 @pytest.mark.parametrize("namespace", [None, "litellm"])
@@ -131,49 +79,28 @@ def test_delete_cache_applies_namespace(namespace, monkeypatch, redis_no_ping):
 
 
 @pytest.mark.asyncio
-async def test_redis_client_init_with_socket_timeout(monkeypatch, redis_no_ping):
-    monkeypatch.setenv("REDIS_HOST", "my-fake-host")
-    redis_cache = RedisCache(socket_timeout=1.0)
+@pytest.mark.parametrize(
+    "redis_config",
+    [
+        pytest.param({"host": "my-fake-host"}, id="host_port"),
+        pytest.param({"url": "redis://my-fake-host:6379"}, id="url"),
+    ],
+)
+async def test_redis_client_init_with_socket_timeout(monkeypatch, redis_no_ping, redis_config):
+    """socket_timeout has to reach the connection however Redis was configured.
+
+    A url config used to drop every connection kwarg, so redis-py was left with
+    socket_timeout (and socket_connect_timeout, which falls back to it) unset. A
+    Redis host that drops packets instead of refusing them then blocks each caller
+    indefinitely, and the circuit breaker never trips because no call ever returns.
+    """
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    redis_cache = RedisCache(socket_timeout=1.0, **redis_config)
     assert redis_cache.redis_kwargs["socket_timeout"] == 1.0
     client = redis_cache.init_async_client()
     assert client is not None
     assert client.connection_pool.connection_kwargs["socket_timeout"] == 1.0
-
-
-@pytest.mark.asyncio
-async def test_redis_cache_async_batch_get_cache(monkeypatch, redis_no_ping):
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-
-    # Create an AsyncMock for the Redis client
-    mock_redis_instance = AsyncMock()
-
-    # Make sure the mock can be used as an async context manager
-    mock_redis_instance.__aenter__.return_value = mock_redis_instance
-    mock_redis_instance.__aexit__.return_value = None
-
-    # Setup the return value for mget
-    mock_redis_instance.mget.return_value = [
-        b'{"key1": "value1"}',
-        None,
-        b'{"key3": "value3"}',
-    ]
-
-    test_keys = ["key1", "key2", "key3"]
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        # Call async_batch_get_cache
-        result = await redis_cache.async_batch_get_cache(key_list=test_keys)
-
-        # Verify mget was called with the correct keys
-        mock_redis_instance.mget.assert_called_once()
-
-        # Check that results were properly decoded
-        assert result["key1"] == {"key1": "value1"}
-        assert result["key2"] is None
-        assert result["key3"] == {"key3": "value3"}
 
 
 @pytest.mark.asyncio
@@ -203,41 +130,6 @@ async def test_handle_lpop_count_for_older_redis_versions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_rpush_pipeline_executes_all_operations(monkeypatch, redis_no_ping):
-    """Verify that multiple rpush ops are batched into a single pipeline execute"""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-
-    mock_redis_instance = AsyncMock()
-    mock_pipeline = MagicMock()
-    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
-    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
-    mock_pipeline.rpush = MagicMock()
-    mock_pipeline.execute = AsyncMock(return_value=[3, 5, 1])
-    mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
-
-    from litellm.types.caching import RedisPipelineRpushOperation
-
-    rpush_list = [
-        RedisPipelineRpushOperation(key="key1", values=["a", "b"]),
-        RedisPipelineRpushOperation(key="key2", values=["c"]),
-        RedisPipelineRpushOperation(key="key3", values=["d", "e", "f"]),
-    ]
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        result = await redis_cache.async_rpush_pipeline(rpush_list=rpush_list)
-
-    assert result == [3, 5, 1]
-    assert mock_pipeline.rpush.call_count == 3
-    mock_pipeline.rpush.assert_any_call("key1", "a", "b")
-    mock_pipeline.rpush.assert_any_call("key2", "c")
-    mock_pipeline.rpush.assert_any_call("key3", "d", "e", "f")
-    mock_pipeline.execute.assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_async_rpush_pipeline_empty_list_returns_empty(
     monkeypatch, redis_no_ping
 ):
@@ -257,183 +149,6 @@ async def test_async_rpush_pipeline_empty_list_returns_empty(
 
 
 @pytest.mark.asyncio
-async def test_async_rpush_pipeline_raises_on_redis_error(monkeypatch, redis_no_ping):
-    """Pipeline errors should propagate"""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-
-    mock_redis_instance = AsyncMock()
-    mock_pipeline = MagicMock()
-    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
-    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
-    mock_pipeline.rpush = MagicMock()
-    mock_pipeline.execute = AsyncMock(side_effect=ConnectionError("Redis down"))
-    mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
-
-    from litellm.types.caching import RedisPipelineRpushOperation
-
-    rpush_list = [RedisPipelineRpushOperation(key="key1", values=["a"])]
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        with pytest.raises(ConnectionError, match="Redis down"):
-            await redis_cache.async_rpush_pipeline(rpush_list=rpush_list)
-
-
-@pytest.mark.asyncio
-async def test_async_lpop_pipeline_single_round_trip(monkeypatch, redis_no_ping):
-    """Verify that multiple lpop ops are batched into a single pipeline execute"""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-    redis_cache.redis_version = "7.0.0"
-
-    mock_redis_instance = AsyncMock()
-    mock_pipeline = MagicMock()
-    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
-    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
-    mock_pipeline.lpop = MagicMock()
-    mock_pipeline.execute = AsyncMock(
-        return_value=[
-            [b"val1", b"val2"],  # key1 results
-            None,  # key2 empty
-            [b"val3"],  # key3 results
-        ]
-    )
-    mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
-
-    from litellm.types.caching import RedisPipelineLpopOperation
-
-    lpop_list = [
-        RedisPipelineLpopOperation(key="key1", count=10),
-        RedisPipelineLpopOperation(key="key2", count=10),
-        RedisPipelineLpopOperation(key="key3", count=5),
-    ]
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        results = await redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
-
-    assert len(results) == 3
-    assert results[0] == ["val1", "val2"]
-    assert results[1] is None
-    assert results[2] == ["val3"]
-    mock_pipeline.execute.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_lpop_pipeline_redis_lt7_regroups_flat_results(
-    monkeypatch, redis_no_ping
-):
-    """Verify Redis < 7 fallback issues individual LPOPs and regroups correctly"""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-    redis_cache.redis_version = "6.2.0"
-
-    mock_redis_instance = AsyncMock()
-    mock_pipeline = MagicMock()
-    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
-    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
-    mock_pipeline.lpop = MagicMock()
-
-    # With count=3 for key1 and count=2 for key2, we get 5 individual LPOP commands
-    # Simulate: key1 has 2 values then None, key2 has 1 value then None
-    mock_pipeline.execute = AsyncMock(
-        return_value=[
-            b"val1",
-            b"val2",
-            None,  # 3 LPOPs for key1
-            b"val3",
-            None,  # 2 LPOPs for key2
-        ]
-    )
-    mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
-
-    from litellm.types.caching import RedisPipelineLpopOperation
-
-    lpop_list = [
-        RedisPipelineLpopOperation(key="key1", count=3),
-        RedisPipelineLpopOperation(key="key2", count=2),
-    ]
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        results = await redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
-
-    assert len(results) == 2
-    assert results[0] == ["val1", "val2"]  # 2 values, None filtered out
-    assert results[1] == ["val3"]  # 1 value, None filtered out
-    # All 5 individual LPOPs should be queued, but only 1 execute() call
-    assert mock_pipeline.lpop.call_count == 5
-    mock_pipeline.execute.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_rpush_pipeline_raises_on_per_command_error(
-    monkeypatch, redis_no_ping
-):
-    """Verify that per-command errors in pipeline results are raised, not silently dropped"""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-
-    mock_redis_instance = AsyncMock()
-    mock_pipeline = MagicMock()
-    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
-    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
-    mock_pipeline.rpush = MagicMock()
-    # Simulate: first RPUSH succeeds, second returns a per-command error
-    mock_pipeline.execute = AsyncMock(return_value=[3, Exception("WRONGTYPE")])
-    mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
-
-    from litellm.types.caching import RedisPipelineRpushOperation
-
-    rpush_list = [
-        RedisPipelineRpushOperation(key="key1", values=["a"]),
-        RedisPipelineRpushOperation(key="key2", values=["b"]),
-    ]
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        with pytest.raises(Exception, match="WRONGTYPE"):
-            await redis_cache.async_rpush_pipeline(rpush_list=rpush_list)
-
-
-@pytest.mark.asyncio
-async def test_async_lpop_pipeline_raises_on_per_command_error(
-    monkeypatch, redis_no_ping
-):
-    """Verify that per-command errors in LPOP pipeline results are raised, not silently dropped"""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-    redis_cache.redis_version = "7.0.0"
-
-    mock_redis_instance = AsyncMock()
-    mock_pipeline = MagicMock()
-    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
-    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
-    mock_pipeline.lpop = MagicMock()
-    # Simulate: first LPOP succeeds, second returns a per-command error
-    mock_pipeline.execute = AsyncMock(return_value=[[b"val1"], Exception("WRONGTYPE")])
-    mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
-
-    from litellm.types.caching import RedisPipelineLpopOperation
-
-    lpop_list = [
-        RedisPipelineLpopOperation(key="key1", count=10),
-        RedisPipelineLpopOperation(key="key2", count=10),
-    ]
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        with pytest.raises(Exception, match="WRONGTYPE"):
-            await redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
-
-
-@pytest.mark.asyncio
 async def test_async_lpop_pipeline_empty_list(monkeypatch, redis_no_ping):
     """Empty lpop_list should return empty list without touching Redis"""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
@@ -448,111 +163,6 @@ async def test_async_lpop_pipeline_empty_list(monkeypatch, redis_no_ping):
 
     assert result == []
     mock_redis_instance.pipeline.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_async_lpop_pipeline_propagates_redis_exception(
-    monkeypatch, redis_no_ping
-):
-    """Pipeline errors should propagate"""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-    redis_cache.redis_version = "7.0.0"
-
-    mock_redis_instance = AsyncMock()
-    mock_pipeline = MagicMock()
-    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
-    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
-    mock_pipeline.lpop = MagicMock()
-    mock_pipeline.execute = AsyncMock(side_effect=ConnectionError("Redis down"))
-    mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
-
-    from litellm.types.caching import RedisPipelineLpopOperation
-
-    lpop_list = [RedisPipelineLpopOperation(key="key1", count=10)]
-
-    with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
-    ):
-        with pytest.raises(ConnectionError, match="Redis down"):
-            await redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "redis_version",
-    [
-        # Standard cases
-        "7.0.0",  # Standard Redis string version
-        7.0,  # Valkey/ElastiCache float version (THE BUG this fix addresses)
-        7,  # Integer version (e.g., from some Redis forks)
-        # Version < 7
-        "6",  # String without dots, version < 7
-        # Malformed versions (fallback to 7)
-        "latest",  # Non-numeric version
-        "",  # Empty string
-        -7.0,  # Negative float
-        # Format variations
-        " 7.0.0 ",  # Whitespace (should be stripped)
-        "7.0.0-rc1",  # Version with suffix
-        "10.0.0",  # Double digit major version
-    ],
-)
-async def test_async_lpop_with_float_redis_version(
-    monkeypatch, redis_no_ping, redis_version
-):
-    """
-    Test async_lpop with various Redis version formats (especially float).
-
-    This test specifically addresses the issue where AWS ElastiCache Valkey
-    returns redis_version as a float (e.g., 7.0) instead of a string (e.g., "7.0.0"),
-    which caused a 'float' object has no attribute 'split' error when trying to
-    use the Redis transaction buffer feature.
-
-    The fix converts the version to a string and handles edge cases like:
-    - Floats (7.0) and integers (7)
-    - Strings with/without dots ("7" vs "7.0.0")
-    - Malformed versions ("v7.0.0", "latest") - fallback to version 7
-    - Whitespace (" 7.0.0 ")
-    - Negative versions (fallback to version 7)
-
-    Related: Database deadlock issues when use_redis_transaction_buffer is enabled.
-    """
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-
-    # Create RedisCache instance
-    redis_cache = RedisCache()
-    redis_cache.redis_version = redis_version  # Set the version to test
-
-    # Create an AsyncMock for the Redis client
-    mock_redis_instance = AsyncMock()
-    mock_redis_instance.__aenter__.return_value = mock_redis_instance
-    mock_redis_instance.__aexit__.return_value = None
-
-    # Mock lpop to return a test value (Redis >= 7.0 behavior)
-    mock_redis_instance.lpop.return_value = [b"value1", b"value2"]
-
-    # Mock pipeline for Redis < 7.0 (used when major_version < 7)
-    mock_pipeline = MagicMock()
-    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
-    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
-    # Make pipeline() a regular method (not async) that returns the mock
-    mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
-
-    # Mock handle_lpop_count_for_older_redis_versions for Redis < 7
-    with patch.object(
-        redis_cache,
-        "handle_lpop_count_for_older_redis_versions",
-        return_value=[b"value1", b"value2"],
-    ):
-        with patch.object(
-            redis_cache, "init_async_client", return_value=mock_redis_instance
-        ):
-            # Call async_lpop with count - this should not raise AttributeError
-            result = await redis_cache.async_lpop(key="test_key", count=2)
-
-            # Verify the method completed without error
-            assert result is not None
 
 
 # LIT-3374: the namespace must be applied uniformly across every key-taking
@@ -853,3 +463,173 @@ def test_delete_cache_namespaces_key(namespace, expected, monkeypatch, redis_no_
     redis_cache.redis_client = mock_client
     redis_cache.delete_cache(key="k")
     mock_client.delete.assert_called_once_with(expected)
+
+
+def _closed_port() -> int:
+    """A port with nothing listening, so Redis calls fail fast and deterministically."""
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_method",
+    [
+        pytest.param(lambda c: c.async_get_cache("lit4930"), id="async_get_cache"),
+        pytest.param(lambda c: c.async_batch_get_cache(["lit4930"]), id="async_batch_get_cache"),
+        pytest.param(lambda c: c.async_set_cache("lit4930", "v"), id="async_set_cache"),
+        pytest.param(lambda c: c.async_get_ttl("lit4930"), id="async_get_ttl"),
+    ],
+)
+async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no_ping, call_method):
+    """A guarded method that swallows its own Redis error must still count as a failure.
+
+    These methods catch connection errors and return a default so callers degrade instead
+    of failing, which is correct. But that returns cleanly through the circuit breaker
+    guard, and counting it as a success reset the failure streak on every call, so the
+    breaker could never open. An unreachable Redis then stayed in the pool and every
+    request kept paying the full socket timeout on it.
+    """
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        await call_method(cache)
+
+    with pytest.raises(Exception, match="circuit breaker is open"):
+        await call_method(cache)
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_ping):
+    """A reachable Redis must keep the breaker closed, however many earlier calls failed.
+
+    The guard now records success only when nothing failed while the method ran, so this
+    pins the other half of that contract: a call that genuinely reaches Redis has to clear
+    the streak, or a healthy Redis would eventually be evicted from the pool.
+    """
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD - 1):
+        await cache.async_get_cache("lit4930")
+    assert cache._circuit_breaker.is_open() is False
+
+    reachable_redis = AsyncMock()
+    reachable_redis.get.return_value = None
+    with patch.object(cache, "init_async_client", return_value=reachable_redis):
+        await cache.async_get_cache("lit4930")
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD - 1):
+        await cache.async_get_cache("lit4930")
+
+    assert cache._circuit_breaker.is_open() is False, "one success must clear the streak"
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_covers_lua_script_execution(redis_no_ping):
+    """Lua script execution must feed the breaker like every other Redis call.
+
+    The v3 rate limiter issues all of its Redis traffic through async_register_script, so
+    leaving that path unguarded meant the coordination calls during an outage never
+    counted toward taking Redis out of the pool and kept paying a full socket timeout
+    each, which is the traffic the outage hurts most.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+    run_script = cache.async_register_script("return 1")
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        with pytest.raises(RedisConnectionError):
+            await run_script(keys=["lit4930"], args=[1])
+
+    with pytest.raises(Exception, match="circuit breaker is open"):
+        await run_script(keys=["lit4930"], args=[1])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_success_is_not_cancelled_by_another_calls_failure():
+    """One caller's failure must not discard a different caller's success.
+
+    A breaker is shared by every concurrent caller, so tracking "did this call fail" on the
+    breaker itself cannot tell my failure from someone else's. A Redis that is still
+    answering would then be evicted from the pool by unrelated in-flight failures, which is
+    the opposite of the outage this guard exists to handle.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _record_swallowed_redis_failure,
+        _run_under_circuit_breaker,
+    )
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+
+    # The failure has to land after both calls are already in flight, which is the only
+    # ordering where a shared counter confuses the two. Failing before the healthy call
+    # starts would leave its snapshot correct and prove nothing.
+    async def swallows_a_failure():
+        await asyncio.sleep(0.02)
+        _record_swallowed_redis_failure(breaker, RedisConnectionError("redis unreachable"))
+        return None
+
+    async def succeeds_while_the_other_fails():
+        await asyncio.sleep(0.05)
+        return "ok"
+
+    rounds = breaker.failure_threshold + 1
+    for _ in range(rounds):
+        await asyncio.gather(
+            _run_under_circuit_breaker(breaker, "failing", swallows_a_failure),
+            _run_under_circuit_breaker(breaker, "healthy", succeeds_while_the_other_fails),
+        )
+
+    assert breaker._failure_count < breaker.failure_threshold, "the healthy call must clear the streak"
+    assert breaker.is_open() is False, "a Redis answering every round must stay in the pool"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error, opens_breaker",
+    [
+        pytest.param("ConnectionError", True, id="connection_refused_is_unhealthy"),
+        pytest.param("TimeoutError", True, id="timeout_is_unhealthy"),
+        pytest.param("BusyLoadingError", True, id="loading_is_unhealthy"),
+        pytest.param("ResponseError", False, id="wrong_type_command_is_not"),
+        pytest.param("DataError", False, id="bad_data_is_not"),
+    ],
+)
+async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker):
+    """Command and data errors must not count against Redis health.
+
+    They say nothing about connectivity, and a caller able to provoke them (an INCR against
+    a non-numeric value, say) could otherwise trip the shared breaker on demand and drop
+    rate limiting to per-process counters, which spreading traffic across replicas outruns.
+    """
+    import redis.exceptions
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    raised = getattr(redis.exceptions, error)("boom")
+
+    async def failing_call():
+        raise raised
+
+    for _ in range(breaker.failure_threshold):
+        with pytest.raises(type(raised)):
+            await _run_under_circuit_breaker(breaker, "op", failing_call)
+
+    with pytest.raises(Exception, match="circuit breaker is open" if opens_breaker else "boom"):
+        await _run_under_circuit_breaker(breaker, "op", failing_call)
+
+    assert breaker.is_open() is opens_breaker

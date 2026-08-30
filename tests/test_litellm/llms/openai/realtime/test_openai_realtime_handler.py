@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -8,9 +6,6 @@ import pytest
 
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 
 @pytest.mark.parametrize(
@@ -97,7 +92,6 @@ def test_openai_realtime_handler_model_parameter_inclusion():
 
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

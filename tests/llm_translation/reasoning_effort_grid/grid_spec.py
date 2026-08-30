@@ -103,7 +103,7 @@ def _bedrock_clamps_effort(model: "ModelEntry", effort: str) -> bool:
     return _EFFORT_RANK[effort] > _EFFORT_RANK[model.bedrock_effort_ceiling]
 
 
-def expected(model: ModelEntry, effort: str) -> CellExpectation:
+def expected(route_name: str, model: ModelEntry, effort: str) -> CellExpectation:
     if effort in ("__omit__", "none"):
         if model.mode == "budget":
             return CellExpectation(
@@ -117,6 +117,15 @@ def expected(model: ModelEntry, effort: str) -> CellExpectation:
     if effort in ("xhigh", "max"):
         cap = f"supports_{effort}_reasoning_effort"
         if cap not in model.caps and not _bedrock_clamps_effort(model, effort):
+            if model.mode == "budget" and route_name == "bedrock_invoke_messages":
+                # the /v1/messages path caps the mapped budget below max_tokens
+                # (LIT-6498), so oversized tiers succeed there instead of 400ing
+                return CellExpectation(
+                    status=200,
+                    thinking_type="enabled",
+                    thinking_budget_tokens=BUDGET_MODE_MAX_TOKENS - 1,
+                    max_tokens=BUDGET_MODE_MAX_TOKENS,
+                )
             return CellExpectation(status=400, thinking_type=OMIT)
 
     if model.mode == "adaptive":
@@ -168,6 +177,13 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
         ),
     ),
     ModelEntry(
+        alias="claude-opus-5",
+        model="anthropic/claude-opus-5",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_XHIGH_MAX,
+    ),
+    ModelEntry(
         alias="claude-opus-4-8",
         model="anthropic/claude-opus-4-8",
         mode="adaptive",
@@ -212,12 +228,6 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         required_env=_AZURE_FOUNDRY_REQ,
         caps=_CAPS_XHIGH_MAX,
-        fail_reason=(
-            "claude-fable-5 has no deployment on the CI Microsoft Foundry "
-            "resource yet; Foundry returns DeploymentNotFound until someone "
-            "creates the fable-5 deployment, so this cell stays loud in CI. "
-            "Remove this fail_reason once the deployment exists."
-        ),
     ),
     ModelEntry(
         alias="azure-claude-opus-4-8",
@@ -225,12 +235,6 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         required_env=_AZURE_FOUNDRY_REQ,
         caps=_CAPS_XHIGH_MAX,
-        fail_reason=(
-            "claude-opus-4-8 has no deployment on the CI Microsoft Foundry "
-            "resource yet; Foundry returns DeploymentNotFound until someone "
-            "creates the opus-4-8 deployment, so this cell stays loud in CI. "
-            "Remove this fail_reason once the deployment exists."
-        ),
     ),
     ModelEntry(
         alias="azure-claude-opus-4-7",
@@ -446,5 +450,7 @@ def all_cells() -> List[Tuple[str, ModelEntry, str, CellExpectation]]:
     for route in ROUTES:
         for model in route.models:
             for effort in EFFORTS:
-                cells.append((route.name, model, effort, expected(model, effort)))
+                cells.append(
+                    (route.name, model, effort, expected(route.name, model, effort))
+                )
     return cells

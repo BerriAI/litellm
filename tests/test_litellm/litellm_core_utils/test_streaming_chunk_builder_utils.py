@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
@@ -716,6 +711,66 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.server_tool_use.web_search_requests == 2
 
 
+def test_calculate_usage_carries_google_maps_grounding_requests():
+    """
+    The Maps grounding counter set on a streamed usage chunk must survive the stream rebuild even
+    when a later chunk carries its own prompt_tokens_details, or Maps grounding on streaming
+    requests silently bills $0.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Here"),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=0,
+            prompt_tokens=15,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(google_maps_grounding_requests=1),
+        ),
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=None),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=27,
+            prompt_tokens=0,
+            total_tokens=27,
+            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=0),
+        ),
+    )
+
+    chunks = [chunk1, chunk2]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(chunks=chunks, model="gemini-2.5-flash", completion_output="")
+
+    assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
+
+
 def test_sort_chunks_handles_dict_hidden_params_created_at():
     chunks = [
         {
@@ -956,3 +1011,415 @@ def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_dict_chunks():
     assert response.model_dump()["vertex_ai_grounding_metadata"] == [
         {"webSearchQueries": ["test query"]}
     ]
+
+
+def test_cost_field_in_usage_chunks():
+    chunk1_usage = Usage(completion_tokens=1, prompt_tokens=10, total_tokens=11)
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513206,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
+        usage=chunk1_usage,
+    )
+
+    chunk2_usage = Usage(
+        completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513207,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=chunk2_usage,
+    )
+
+    processor = ChunkProcessor(chunks=[chunk1, chunk2])
+    usage = processor.calculate_usage(
+        chunks=[chunk1, chunk2], model="openrouter/claude", completion_output="Hi"
+    )
+
+    assert hasattr(usage, "cost")
+    assert usage.cost == 0.00025
+    assert usage.prompt_tokens == 10
+    assert usage.completion_tokens == 5
+
+
+def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
+    """Regression for https://github.com/BerriAI/litellm/issues/32051
+
+    The Responses-API bridge yields ModelResponseStream chunks with choices
+    followed by a trailing event object that has no ``choices`` key. Building
+    those chunks used to raise ``KeyError('choices')`` (surfaced as a 500
+    APIError); it must now skip the choices-less chunk and assemble content.
+    """
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+
+    content_chunks = [
+        ModelResponseStream(
+            model="gpt-4o",
+            choices=[StreamingChoices(index=0, delta=Delta(content=part))],
+        )
+        for part in ("Hello", " world")
+    ]
+    trailing_chunk = BaseLiteLLMOpenAIResponseObject()
+    assert "choices" not in trailing_chunk
+
+    response = stream_chunk_builder(chunks=content_chunks + [trailing_chunk])
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+
+
+def test_anthropic_speed_and_geo_survive_stream_assembly():
+    """Anthropic prices fast mode and non-global regions with a multiplier read off
+    ``usage.speed`` / ``usage.inference_geo``. Dropping them while reassembling a stream
+    bills streamed fast-mode calls at the standard rate."""
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    def _usage(**extra):
+        usage = Usage(completion_tokens=100, prompt_tokens=1000, total_tokens=1100)
+        for key, value in extra.items():
+            setattr(usage, key, value)
+        return usage
+
+    def _chunk(usage):
+        return ModelResponseStream(
+            id="chatcmpl-1",
+            created=1745513206,
+            model="claude-opus-4-8",
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="Hi"))],
+            usage=usage,
+        )
+
+    fast_chunk = _chunk(_usage(speed="fast", inference_geo="global"))
+    fast_usage = ChunkProcessor(chunks=[fast_chunk]).calculate_usage(
+        chunks=[fast_chunk], model="claude-opus-4-8", completion_output="Hi"
+    )
+    standard_chunk = _chunk(_usage(inference_geo="global"))
+    standard_usage = ChunkProcessor(chunks=[standard_chunk]).calculate_usage(
+        chunks=[standard_chunk], model="claude-opus-4-8", completion_output="Hi"
+    )
+
+    assert fast_usage.speed == "fast"
+    assert fast_usage.inference_geo == "global"
+    assert getattr(standard_usage, "speed", None) is None
+
+    fast_cost = sum(cost_per_token(model="claude-opus-4-8", usage=fast_usage))
+    standard_cost = sum(cost_per_token(model="claude-opus-4-8", usage=standard_usage))
+    assert fast_cost == pytest.approx(standard_cost * 2.0)
+
+
+def test_prompt_tokens_details_survive_later_usage_chunk_without_details():
+    """Regression for #34801: a trailing usage chunk that omits
+    `prompt_tokens_details` must not wipe the OpenAI cache-read/cache-write split,
+    otherwise those tokens get re-priced at the uncached input rate."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    chunk_with_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513206,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
+        usage=Usage(
+            prompt_tokens=6017,
+            completion_tokens=4,
+            total_tokens=6021,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=6004, cache_write_tokens=10
+            ),
+        ),
+    )
+    chunk_without_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513207,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=Usage(prompt_tokens=6017, completion_tokens=4, total_tokens=6021),
+    )
+
+    chunks = [chunk_with_details, chunk_without_details]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="openai/gpt-5.6-sol", completion_output="Hi"
+    )
+
+    assert usage.prompt_tokens == 6017
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 6004
+    assert usage.prompt_tokens_details.cache_write_tokens == 10
+
+
+def test_get_combined_tool_content_custom_tool_call():
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+    from litellm.types.utils import ChatCompletionMessageCustomToolCall
+
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    tool_call_chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_TBs",
+                                "type": "custom",
+                                "custom": {"name": "ApplyPatch", "input": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "custom": {"input": "*** Begin Patch\n"}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "custom": {"input": "*** End Patch\n"}}]}}]},
+    ]
+    combined = processor.get_combined_tool_content(tool_call_chunks)
+    assert len(combined) == 1
+    assert isinstance(combined[0], ChatCompletionMessageCustomToolCall)
+    assert combined[0].model_dump() == {
+        "id": "call_TBs",
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": "*** Begin Patch\n*** End Patch\n"},
+    }
+
+
+def test_get_combined_tool_content_custom_tool_call_without_type_field():
+    """Delta coercion classifies a tool-call chunk as custom from its ``custom`` payload
+    alone (``type`` may never arrive on any chunk). The assembler must use the same
+    evidence; requiring ``type == "custom"`` dropped the whole tool call from the
+    combined message (it matched neither the custom nor the function branch)."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+    from litellm.types.utils import ChatCompletionMessageCustomToolCall
+
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    tool_call_chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_TBs",
+                                "custom": {"name": "ApplyPatch", "input": "*** Begin"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "custom": {"input": " Patch"}}]}}]},
+    ]
+    combined = processor.get_combined_tool_content(tool_call_chunks)
+    assert len(combined) == 1
+    assert isinstance(combined[0], ChatCompletionMessageCustomToolCall)
+    assert combined[0].model_dump() == {
+        "id": "call_TBs",
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": "*** Begin Patch"},
+    }
+
+
+def _tool_call_delta_chunk(tool_call: dict[str, object] | ChatCompletionDeltaToolCall) -> dict[str, object]:
+    return {"choices": [{"delta": {"tool_calls": [tool_call]}}]}
+
+
+def test_get_combined_tool_content_joins_many_dict_shaped_argument_fragments_in_order():
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    first_fragments = [f"a{i};" for i in range(300)]
+    second_fragments = [f"b{i};" for i in range(300)]
+    header_chunks = [
+        _tool_call_delta_chunk({"index": 0, "id": "call_a", "type": "function", "function": {"name": "tool_a"}}),
+        _tool_call_delta_chunk({"index": 1, "id": "call_b", "type": "function", "function": {"name": "tool_b"}}),
+        _tool_call_delta_chunk({"index": 2, "id": "call_c", "type": "function", "function": {"name": "tool_c"}}),
+    ]
+    fragment_chunks = [
+        _tool_call_delta_chunk({"index": index, "function": {"arguments": fragment}})
+        for first, second in zip(first_fragments, second_fragments)
+        for index, fragment in ((0, first), (1, second))
+    ]
+
+    combined = processor.get_combined_tool_content(header_chunks + fragment_chunks)
+
+    assert [tool_call.id for tool_call in combined] == ["call_a", "call_b", "call_c"]
+    assert combined[0].function.name == "tool_a"
+    assert combined[0].function.arguments == "".join(first_fragments)
+    assert combined[1].function.name == "tool_b"
+    assert combined[1].function.arguments == "".join(second_fragments)
+    assert combined[2].function.arguments == "{}"
+
+
+def test_get_combined_tool_content_joins_fragments_across_many_parallel_tool_calls():
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    indexes = range(40)
+    header_chunks = [
+        _tool_call_delta_chunk(
+            {"index": index, "id": f"call_{index}", "type": "function", "function": {"name": f"tool_{index}"}}
+        )
+        for index in indexes
+    ]
+    fragment_chunks = [
+        _tool_call_delta_chunk({"index": index, "function": {"arguments": f"{index}.{position};"}})
+        for position in range(5)
+        for index in indexes
+    ]
+
+    combined = processor.get_combined_tool_content(header_chunks + fragment_chunks)
+
+    assert [tool_call.id for tool_call in combined] == [f"call_{index}" for index in indexes]
+    for index, tool_call in zip(indexes, combined):
+        assert tool_call.function.arguments == "".join(f"{index}.{position};" for position in range(5))
+
+
+def test_get_combined_tool_content_joins_many_object_shaped_argument_fragments_in_order():
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    first_fragments = [f"x{i}|" for i in range(300)]
+    second_fragments = [f"y{i}|" for i in range(300)]
+    header_chunks = [
+        _tool_call_delta_chunk(
+            ChatCompletionDeltaToolCall(
+                id="call_x", type="function", index=0, function=Function(name="tool_x", arguments="")
+            )
+        ),
+        _tool_call_delta_chunk(
+            ChatCompletionDeltaToolCall(
+                id="call_y", type="function", index=1, function=Function(name="tool_y", arguments="")
+            )
+        ),
+    ]
+    fragment_chunks = [
+        _tool_call_delta_chunk(ChatCompletionDeltaToolCall(index=index, function=Function(arguments=fragment)))
+        for first, second in zip(first_fragments, second_fragments)
+        for index, fragment in ((0, first), (1, second))
+    ]
+
+    combined = processor.get_combined_tool_content(header_chunks + fragment_chunks)
+
+    assert [tool_call.id for tool_call in combined] == ["call_x", "call_y"]
+    assert combined[0].function.name == "tool_x"
+    assert combined[0].function.arguments == "".join(first_fragments)
+    assert combined[1].function.name == "tool_y"
+    assert combined[1].function.arguments == "".join(second_fragments)
+
+
+def test_get_combined_tool_content_joins_many_custom_tool_input_fragments_in_order():
+    from types import SimpleNamespace
+
+    from litellm.types.utils import ChatCompletionMessageCustomToolCall
+
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    dict_fragments = [f"d{i}," for i in range(200)]
+    object_fragments = [f"o{i}," for i in range(200)]
+    header_chunks = [
+        _tool_call_delta_chunk({"index": 0, "id": "call_d", "type": "custom", "custom": {"name": "apply_patch"}}),
+        _tool_call_delta_chunk(
+            SimpleNamespace(index=1, id="call_o", type="custom", custom=SimpleNamespace(name="run_script", input=""))
+        ),
+    ]
+    fragment_chunks = [
+        _tool_call_delta_chunk(tool_call)
+        for dict_fragment, object_fragment in zip(dict_fragments, object_fragments)
+        for tool_call in (
+            {"index": 0, "custom": {"input": dict_fragment}},
+            SimpleNamespace(index=1, custom=SimpleNamespace(input=object_fragment)),
+        )
+    ]
+
+    combined = processor.get_combined_tool_content(header_chunks + fragment_chunks)
+
+    assert [tool_call.id for tool_call in combined] == ["call_d", "call_o"]
+    assert isinstance(combined[0], ChatCompletionMessageCustomToolCall)
+    assert combined[0].custom.name == "apply_patch"
+    assert combined[0].custom.input == "".join(dict_fragments)
+    assert isinstance(combined[1], ChatCompletionMessageCustomToolCall)
+    assert combined[1].custom.name == "run_script"
+    assert combined[1].custom.input == "".join(object_fragments)
+
+
+def _reasoning_stream_chunk() -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-reasoning",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="10", role="assistant"))],
+    )
+
+
+def test_count_reasoning_tokens_returns_none_for_signature_only_thinking():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="10", role="assistant", reasoning_content=""),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) is None
+
+
+def test_count_reasoning_tokens_counts_visible_reasoning():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="10",
+                    role="assistant",
+                    reasoning_content="let me count the primes under thirty",
+                ),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) > 0
+
+
+@pytest.mark.parametrize(
+    "estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens",
+    [(40, 40, 60), (250, 100, 0)],
+)
+def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
+    estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens
+):
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-unknown-split",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None, role=None))],
+        usage=Usage(
+            prompt_tokens=50,
+            completion_tokens=100,
+            total_tokens=150,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=None, text_tokens=None),
+        ),
+    )
+    processor = ChunkProcessor(chunks=[chunk])
+
+    usage = processor.calculate_usage(
+        chunks=[chunk],
+        model="claude-opus-4-8",
+        completion_output="10",
+        reasoning_tokens=estimated_reasoning_tokens,
+    )
+
+    assert usage.completion_tokens == 100
+    assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
+    assert usage.completion_tokens_details.text_tokens == expected_text_tokens

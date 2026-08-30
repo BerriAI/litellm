@@ -14,14 +14,11 @@ URL/ARN handling, and the error class. AWS auth/sigv4 is the only external seam
 we mock; everything else runs for real.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 from litellm.types.utils import LiteLLMBatch, LlmProviders
@@ -172,7 +169,7 @@ def test_create_request_omits_kms_key_when_absent(config):
         "generate_unique_job_name",
         return_value="litellm-batch-1",
     ), patch.object(config.common_utils, "sign_aws_request") as mock_sign, patch(
-        "litellm.llms.bedrock.batches.transformation.get_secret_str",
+        "litellm.llms.bedrock.common_utils.get_secret_str",
         return_value=None,
     ):
         mock_sign.return_value = ({}, b"{}")
@@ -256,6 +253,112 @@ def test_create_request_no_timeout_for_non_24h_window(config):
             litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r"},
         )
     assert "timeoutDurationInHours" not in mock_sign.call_args.kwargs["data"]
+
+
+def test_create_request_forwards_bedrock_tags_from_litellm_params(config):
+    tags = [
+        {"key": "application", "value": "genai-proxy"},
+        {"key": "team", "value": "ml-platform"},
+    ]
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "bedrock_tags": tags,
+            },
+        )
+    assert mock_sign.call_args.kwargs["data"]["tags"] == tags
+
+
+def test_create_request_forwards_bedrock_tags_from_optional_params(config):
+    tags = [{"key": "env", "value": "prod"}]
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={"bedrock_tags": tags},
+            litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r"},
+        )
+    assert mock_sign.call_args.kwargs["data"]["tags"] == tags
+
+
+def test_create_request_empty_litellm_params_tags_do_not_fall_through(config):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={"bedrock_tags": [{"key": "env", "value": "prod"}]},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "bedrock_tags": [],
+            },
+        )
+    assert mock_sign.call_args.kwargs["data"]["tags"] == []
+
+
+def test_create_request_omits_tags_when_bedrock_tags_absent(config):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={},
+            litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r"},
+        )
+    assert "tags" not in mock_sign.call_args.kwargs["data"]
+
+
+@pytest.mark.parametrize(
+    "bad_tags",
+    [
+        ["application=genai-proxy"],
+        [{"key": "application"}],
+        [{"value": "genai-proxy"}],
+        [{"key": "application", "value": 42}],
+        {"key": "application", "value": "genai-proxy"},
+        "application=genai-proxy",
+    ],
+)
+def test_create_request_rejects_malformed_bedrock_tags(config, bad_tags):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        with pytest.raises(ValueError, match="Invalid 'bedrock_tags' value"):
+            config.transform_create_batch_request(
+                model="m",
+                create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+                optional_params={},
+                litellm_params={
+                    "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                    "bedrock_tags": bad_tags,
+                },
+            )
+    mock_sign.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
@@ -682,3 +785,37 @@ class TestBedrockBatchesContract(BatchesConfigContractTests):
 
     expected_retrieve_batch_id = ARN
     expected_retrieve_status = "completed"
+
+
+def test_get_complete_batch_url_cn_partition(config: BedrockBatchesConfig) -> None:
+    url = config.get_complete_batch_url(
+        api_base=None,
+        api_key=None,
+        model="anthropic.claude-3",
+        optional_params={"aws_region_name": "cn-north-1"},
+        litellm_params={},
+        data={"input_file_id": "s3://b/k"},
+    )
+    assert url == "https://bedrock.cn-north-1.amazonaws.com.cn/model-invocation-job"
+
+
+@pytest.mark.parametrize(
+    "arn,expected_prefix",
+    [
+        (
+            "arn:aws-cn:bedrock:cn-north-1:123456789012:model-invocation-job/abc1234567",
+            "https://bedrock.cn-north-1.amazonaws.com.cn/model-invocation-job/",
+        ),
+        (
+            "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:model-invocation-job/abc1234567",
+            "https://bedrock.us-gov-west-1.amazonaws.com/model-invocation-job/",
+        ),
+    ],
+)
+def test_retrieve_request_accepts_partition_arns(config: BedrockBatchesConfig, arn: str, expected_prefix: str) -> None:
+    with patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({"Authorization": "signed"}, b"")
+        result = config.transform_retrieve_batch_request(
+            batch_id=arn, optional_params={}, litellm_params={}
+        )
+    assert result["url"].startswith(expected_prefix)

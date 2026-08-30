@@ -6,16 +6,11 @@ Covers:
 """
 
 import io
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -242,3 +237,177 @@ class TestRagIngestSSRFBlocked:
         assert response.status_code != 400, (
             f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
         )
+
+
+def test_rag_query_returns_response_cost_header(client_internal_user):
+    """
+    /v1/rag/query must surface the completion cost via the
+    x-litellm-response-cost response header, like /v1/chat/completions does.
+    """
+    from litellm.types.utils import ModelResponse
+
+    mock_response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "The codename is AZURE-FALCON-42."},
+                "finish_reason": "stop",
+            }
+        ],
+        model="gpt-4o-mini",
+        usage={"prompt_tokens": 35, "completion_tokens": 14, "total_tokens": 49},
+    )
+    mock_response._hidden_params["response_cost"] = 3.45e-06
+
+    with patch(
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ), patch("litellm.vector_store_registry", None), patch(
+        "litellm.proxy.proxy_server.prisma_client", None
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the codename?"}],
+                "retrieval_config": {
+                    "vector_store_id": "vs_test_123",
+                    "custom_llm_provider": "openai",
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.headers.get("x-litellm-response-cost") == "3.45e-06"
+
+
+def test_rag_query_stream_returns_event_stream(client_internal_user):
+    """
+    A stream=true /v1/rag/query must return an SSE response. Returning the raw
+    stream wrapper makes FastAPI try to serialize it, which raises and turns
+    every streaming RAG query into a 500; the stream then never drains, so its
+    single billing event (which carries the folded sub-call costs) never fires.
+    """
+    import litellm as litellm_module
+
+    async def fake_aquery(**kwargs):
+        return await litellm_module.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "What is the codename?"}],
+            mock_response="The codename is AZURE-FALCON-42.",
+            stream=True,
+            api_key="test-key",
+        )
+
+    with patch(
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+        new=AsyncMock(side_effect=fake_aquery),
+    ), patch("litellm.vector_store_registry", None), patch("litellm.proxy.proxy_server.prisma_client", None):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the codename?"}],
+                "retrieval_config": {
+                    "vector_store_id": "vs_test_123",
+                    "custom_llm_provider": "openai",
+                },
+                "stream": True,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    assert '"object":"chat.completion.chunk"' in response.text
+    assert "data: [DONE]" in response.text
+
+
+EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+INGEST_REQUEST = '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
+
+
+def _multipart_ingest_request(*, filename: str, content: bytes, content_type: str):
+    from starlette.requests import Request
+
+    boundary = "litellmuploadtestboundary"
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode()
+    tail = (
+        f"\r\n--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="request"\r\n\r\n'
+        f"{INGEST_REQUEST}\r\n"
+        f"--{boundary}--\r\n"
+    ).encode()
+    body = head + content + tail
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/rag/ingest",
+        "headers": [
+            (b"content-type", f"multipart/form-data; boundary={boundary}".encode()),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "state": {},
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(scope, receive)
+
+
+class TestVectorStoreUploadControls:
+    """End-to-end enforcement of pentest M4 upload controls on /v1/rag/ingest."""
+
+    def test_eicar_upload_blocked_by_malware_scanner(self, client_internal_user):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("clean_name.txt", io.BytesIO(EICAR.encode()), "text/plain")},
+            data={"request": INGEST_REQUEST},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "malware_detected"
+
+    def test_executable_upload_rejected(self, client_internal_user):
+        elf = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 40
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("doc.txt", io.BytesIO(elf), "text/plain")},
+            data={"request": INGEST_REQUEST},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "executable_not_allowed"
+
+    def test_zip_archive_upload_rejected(self, client_internal_user):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("doc.pdf", io.BytesIO(b"PK\x03\x04\x14\x00\x00\x00payload"), "application/pdf")},
+            data={"request": INGEST_REQUEST},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "archive_not_allowed"
+
+    async def test_clean_text_upload_gets_server_generated_filename(self):
+        from litellm.proxy.rag_endpoints.endpoints import parse_rag_ingest_request
+        from litellm.proxy.rag_endpoints.upload_security import EicarTestMalwareScanner
+
+        request = _multipart_ingest_request(
+            filename="../../etc/passwd",
+            content=b"benign document text\n",
+            content_type="text/plain",
+        )
+        _options, file_data, _url, _file_id = await parse_rag_ingest_request(
+            request, scanner=EicarTestMalwareScanner()
+        )
+        assert file_data is not None
+        server_filename, content_bytes, secured_content_type = file_data
+        assert server_filename != "../../etc/passwd"
+        assert "/" not in server_filename and "\\" not in server_filename
+        assert server_filename.endswith(".txt")
+        assert secured_content_type == "text/plain"
+        assert content_bytes == b"benign document text\n"

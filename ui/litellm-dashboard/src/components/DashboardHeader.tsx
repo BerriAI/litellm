@@ -1,6 +1,5 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -8,17 +7,19 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { getBreadcrumb } from "@/components/leftnav";
 import { BlogDropdown } from "@/components/Navbar/BlogDropdown/BlogDropdown";
+import { DocsLink } from "@/components/Navbar/DocsLink/DocsLink";
 import { CommunityEngagementButtons } from "@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NotificationsBell } from "@/components/Navbar/NotificationsBell/NotificationsBell";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import WorkerDropdown from "@/components/Navbar/WorkerDropdown/WorkerDropdown";
 import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
+import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 
 interface DashboardHeaderProps {
   page: string;
@@ -37,7 +38,7 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
     clearStoredReturnUrl();
     localStorage.removeItem("litellm_selected_worker_id");
     localStorage.removeItem("litellm_worker_url");
-    window.location.href = `/ui/login?worker=${encodeURIComponent(workerId)}`;
+    window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
   };
 
   return (
@@ -58,21 +59,14 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
         {showWorkerSwitch && (
           <>
             <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
-            <Separator orientation="vertical" className="mx-1.5 h-5" />
+            <ToolbarSeparator />
           </>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          nativeButton={false}
-          render={<a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" />}
-          className="text-muted-foreground"
-        >
-          Docs
-        </Button>
+        <DocsLink />
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
-        <Separator orientation="vertical" className="mx-1.5 h-5" />
+        <ToolbarSeparator />
+        <ThemeToggle />
         <NotificationsBell />
       </div>
     </header>

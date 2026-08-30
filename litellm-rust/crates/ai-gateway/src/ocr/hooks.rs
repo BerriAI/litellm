@@ -1,11 +1,11 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use litellm_core::CoreResult;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::OcrAuthStrategy;
-use litellm_core::CoreResult;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::common_utils::{
     convert_document_url_to_data_uri, has_header, ocr_provider_config, string_headers,
@@ -292,7 +292,7 @@ fn parse_ocr_pre_call_guardrail_request(
         Some(_) => {
             return Err(CoreError::InvalidRequest(
                 "OCR pre_call guardrail optional_params must be an object".to_string(),
-            ))
+            ));
         }
         None => Map::new(),
     };
@@ -324,6 +324,8 @@ fn core_error_kind(error: &CoreError) -> &'static str {
         CoreError::Http { .. } => "HttpError",
         CoreError::InvalidResponse(_) => "InvalidResponse",
         CoreError::Network(_) => "NetworkError",
+        CoreError::Connect(_) => "ConnectError",
         CoreError::Routing(_) => "RoutingError",
+        CoreError::Unsupported(_) => "UnsupportedRequest",
     }
 }

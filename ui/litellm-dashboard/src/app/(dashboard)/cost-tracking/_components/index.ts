@@ -11,7 +11,6 @@ export type {
   MarginConfig,
   CostMarginResponse,
 } from "./types";
-export type { ProviderDisplayInfo } from "./provider_display_helpers";
 export * from "./provider_display_helpers";
 export { useDiscountConfig } from "./use_discount_config";
 export { useMarginConfig } from "./use_margin_config";

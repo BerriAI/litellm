@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -27,7 +27,7 @@ def _coerce_event_hook(
 def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) -> HeadroomGuardrail:
     import litellm
 
-    _callback = HeadroomGuardrail(
+    _callback: Final = HeadroomGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         model=litellm_params.model,
@@ -42,10 +42,10 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
     return _callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.HEADROOM.value: initialize_guardrail,
 }
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.HEADROOM.value: HeadroomGuardrail,
 }

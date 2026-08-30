@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.94.0"
+version = "1.100.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -23,9 +23,11 @@ dependencies = [
     "tokenizers>=0.21.0,<1.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
-    "aiohttp>=3.10,<4.0",
+    "aiohttp>=3.14.2,<4.0",
     "pydantic>=2.10.0,<3.0.0",
+    "pydantic-settings>=2.14.1,<3.0",
     "jsonschema>=4.0.0,<5.0",
+    "boto3>=1.43.1,<2.0",
 ]
 
 [project.urls]
@@ -51,36 +53,41 @@ proxy = [
     "pyyaml>=6.0.3,<7.0",
     "rq>=2.7.0,<3.0",
     "orjson>=3.11.6,<4.0",
+    # redis-py's C response parser. It arrives with redis (via rq) either way; naming
+    # it here is what makes redis-py select _HiredisParser instead of the Python one.
+    "hiredis>=3.0.0,<4.0",
     "apscheduler>=3.11.2,<4.0",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
-    "cryptography>=48.0.1,<49.0",
+    "cryptography>=49.0.0,<51.0",
     "pynacl>=1.6.2,<2.0",
     "websockets>=15.0.1,<16.0",
     "boto3>=1.43.1,<2.0",
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
-    "mcp>=1.26.0,<2.0",
-    "litellm-proxy-extras==0.4.77",
-    "litellm-enterprise==0.1.50",
-    "RestrictedPython>=8.1,<9.0",
+    "mcp>=1.28.1,<2.0",
+    "litellm-proxy-extras==0.4.91",
+    "litellm-enterprise==0.1.62",
+    "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
     "polars>=1.38.1,<2.0",
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
-    "pydantic-settings>=2.14.1,<3.0",
     "expression>=5.6.0,<6.0",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
-# imports (fastapi, cryptography, ...) are all guarded, so it runs on the base
-# SDK plus just these four; none of the server runtime in `proxy` is pulled in.
+# imports are all guarded, so it runs on the base SDK plus just these five, and
+# none of the server runtime in `proxy` is pulled in. On Linux,
+# keyring reaches the Secret Service through secretstorage, which brings
+# cryptography with it.
 cli = [
     "rich>=13.9.4,<14.0",
     "pyyaml>=6.0.3,<7.0",
     "requests>=2.32.0,<3.0",
     "InquirerPy>=0.3.4,<1.0",
+    "keyring>=25.6.0,<26.0",
 ]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",
@@ -91,7 +98,7 @@ extra_proxy = [
     "google-cloud-iam>=2.19.1,<3.0",
     # Not in PyPI proxy extra.
     "resend>=2.23.0,<3.0",
-    "redisvl>=0.4.1,<1.0; python_version < '3.14'",
+    "redisvl>=0.4.1,<1.0",
     "a2a-sdk>=1.1.0,<2.0",
 ]
 utils = [
@@ -99,6 +106,11 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
+mcp = ["mcp>=1.28.1,<2.0"]
+# SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
+# bundle the native libxmlsec1/libxml2 libraries, so no system packages are
+# required. Kept out of the base `proxy` extra so it stays optional.
+saml = ["python3-saml>=1.16.0,<2.0"]
 semantic-router = [
     "semantic-router>=0.1.15,<1.0; python_version < '3.14'",
     "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
@@ -117,6 +129,14 @@ stt-nvidia-riva = [
     "numpy>=1.26.0",
 ]
 google = ["google-cloud-aiplatform>=1.133.0,<2.0"]
+bedrock-realtime = [
+    # Bedrock Nova Sonic realtime (speech-to-speech) uses the
+    # InvokeModelWithBidirectionalStream API, which boto3 cannot do. This
+    # experimental AWS SDK (with its smithy-* deps, pulled transitively)
+    # provides the bidirectional stream; imported lazily in the realtime
+    # handler so litellm core stays usable without it.
+    "aws-sdk-bedrock-runtime>=0.7.0,<0.8.0; python_version >= '3.12'",
+]
 proxy-runtime = [
     # Historically bundled in the proxy Docker images via requirements.txt.
     # Keep these in a dedicated extra so uv-based images preserve the same
@@ -136,7 +156,7 @@ proxy-runtime = [
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.12.0,<7.0; python_version < '3.14'",
+    "pypdf>=6.12.0,<7.0",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
@@ -149,8 +169,8 @@ litellm-proxy = "litellm.proxy.client.cli:cli"
 [dependency-groups]
 dev = [
     "diff-cover==9.7.2",
-    "flake8==7.3.0",
     "basedpyright==1.39.7",
+    "keyring==25.7.0",
     "pytest==9.0.3",
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.3.0",
@@ -181,7 +201,7 @@ dev = [
     "pytest-rerunfailures==15.1",
     "pytest-cov==5.0.0",
     "parameterized==0.9.0",
-    "openapi-core==0.22.0; python_version < '3.14'",
+    "openapi-core==0.22.0",
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
@@ -189,6 +209,8 @@ dev = [
 e2e-dev = [
     "playwright==1.61.0",
     "websockets>=15.0.1,<16.0",
+    "locust==2.45.0",
+    "mcp>=1.28.1,<2.0",
 ]
 proxy-dev = [
     "prisma==0.11.0",
@@ -263,7 +285,7 @@ exclude = [
 [tool.uv]
 constraint-dependencies = [
     "tornado>=6.5.6",
-    "aiohttp>=3.14.1,<4.0",
+    "aiohttp>=3.14.2,<4.0",
     "packaging>=24.0",
     "soupsieve>=2.8.4",
     "httplib2>=0.32.0",
@@ -272,6 +294,7 @@ constraint-dependencies = [
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
     "packaging>=24.0",
+    "cryptography>=50.0.0,<51.0",
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
@@ -288,7 +311,7 @@ members = ["enterprise", "litellm-proxy-extras"]
 profile = "black"
 
 [tool.commitizen]
-version = "1.94.0"
+version = "1.100.0"
 version_files = [
     "pyproject.toml:^version",
 ]
@@ -319,9 +342,13 @@ filterwarnings = [
 paths_to_mutate = [
     "litellm/proxy/management_endpoints/",
 ]
+# Only the unit tier that maps to paths_to_mutate. mutmut times and
+# coverage-maps this whole set once before mutating, so a tier that needs a
+# seeded database (tests/proxy_behavior/) kills the run before it starts, and
+# a mutation score is only meaningful against the tests that claim to cover
+# the mutated code anyway.
 tests_dir = [
     "tests/test_litellm/proxy/management_endpoints/",
-    "tests/proxy_behavior/management/",
 ]
 also_copy = [
     "litellm/",
@@ -338,10 +365,16 @@ mutate_only_covered_lines = true
 # - rerunning a "failed" test on a mutant would mask which mutants are killed
 #   vs. survive, so reruns are wrong for mutation testing regardless.
 # - xdist is unnecessary inside mutmut (mutmut handles its own parallelism).
+# test_saml_sso.py cannot run inside mutmut's mutants/ sandbox: the copied tree
+# re-imports cryptography's hash classes under a second identity, so x509 .sign()
+# rejects the SHA256 instance the fixture builds with "Algorithm must be a
+# registered hash algorithm". Nothing to do with mutation coverage, and one
+# erroring test is enough to end the stats phase before any mutant runs.
 pytest_add_cli_args = [
     "-p", "no:retry",
     "-p", "no:rerunfailures",
     "-p", "no:xdist",
+    "--ignore=tests/test_litellm/proxy/management_endpoints/test_saml_sso.py",
 ]
 
 [tool.coverage.run]

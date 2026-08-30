@@ -30,7 +30,7 @@ from claude_code._passthrough import run_passthrough_cell, vertex_extra_env
 
 VERTEX_MODELS = [
     "claude-haiku-4-5-vertex",
-    "claude-sonnet-4-6-vertex",
+    "claude-sonnet-4-5-vertex",
     "claude-opus-4-7-vertex",
 ]
 

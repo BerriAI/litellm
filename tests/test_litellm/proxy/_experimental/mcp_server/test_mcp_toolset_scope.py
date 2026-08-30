@@ -238,11 +238,12 @@ class TestFetchMCPToolsetsAccess:
 class TestToolsetPrefixResolution:
     """Regression for LIT-3419.
 
-    Toolsets store bare tool names; the live tools come back prefixed with the
-    server's own prefix. Reconciling them must strip exactly that prefix, not
-    chop at the first separator, otherwise tools on a server whose prefix
-    contains the separator (a hyphenated alias, or the UUID server_id used when
-    a server has no alias) are silently dropped from the toolset.
+    A toolset row names a tool on the server given by its ``server_id``, so the
+    stored name is the tool's own name. The live tools come back carrying the
+    server's wire prefix, so reconciling them strips that prefix from the LIVE
+    name only; the stored name is matched as written. Reducing the stored name
+    too renames the tool whenever a native name begins with its own server's
+    prefix, which resolves the row to a different tool on the same server.
     """
 
     # alias, server_name, server_id; the clean-alias row worked before the fix,
@@ -316,31 +317,52 @@ class TestToolsetPrefixResolution:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
-    async def test_resolve_unprefixes_stored_names_with_separator_prefix(
+    async def test_resolve_uses_the_stored_name_as_written(
         self, alias, server_name, server_id
     ):
-        from types import SimpleNamespace
+        """The row names a tool; resolution must not rewrite that name.
 
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
+        A name that merely looks prefixed is still the tool's own name, and the
+        server is already identified by ``server_id``, so there is nothing for a
+        prefix to disambiguate.
+        """
+        server = self._server(alias, server_name, server_id)
+        stored = "read_wiki_contents"
+
+        assert await self._resolve(server, server_id, stored) == {server_id: [stored]}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
+    async def test_resolve_keeps_a_name_that_looks_like_its_own_server_prefix(
+        self, alias, server_name, server_id
+    ):
         from litellm.proxy._experimental.mcp_server.utils import (
             add_server_prefix_to_name,
             get_server_prefix,
         )
 
         server = self._server(alias, server_name, server_id)
-        # A caller (e.g. the management API) may persist already-prefixed names;
-        # resolution must reduce them to the true bare name regardless of prefix.
+        # A native tool whose own name begins with what the gateway would use as
+        # this server's wire prefix.
         stored = add_server_prefix_to_name(
             "read_wiki_contents", get_server_prefix(server)
         )
+
+        assert await self._resolve(server, server_id, stored) == {server_id: [stored]}
+
+    @staticmethod
+    async def _resolve(server, server_id, stored):
+        from types import SimpleNamespace
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
         toolset = SimpleNamespace(tools=[{"server_id": server_id, "tool_name": stored}])
         cache = MagicMock(
             async_get_cache=AsyncMock(return_value=None),
             async_set_cache=AsyncMock(),
         )
-
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager."
@@ -354,11 +376,138 @@ class TestToolsetPrefixResolution:
                 new=AsyncMock(return_value=[toolset]),
             ),
         ):
-            result = await global_mcp_server_manager.resolve_toolset_tool_permissions(
+            return await global_mcp_server_manager.resolve_toolset_tool_permissions(
                 toolset_ids=["ts-1"]
             )
 
-        assert result == {server_id: ["read_wiki_contents"]}
+    @pytest.mark.asyncio
+    async def test_bare_stored_name_starting_with_server_prefix_stays_granted(self):
+        """A native tool whose own name starts with ``{prefix}{separator}``.
+
+        The dashboard persists the bare native name, so resolution must not read
+        that leading segment as the server prefix and strip it. Doing so resolves
+        the row to a different tool on the same server: the granted tool vanishes
+        from the toolset and an ungranted sibling is served under its wire name.
+        """
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_key_team_permissions,
+        )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+            strip_known_server_prefix,
+        )
+
+        server = self._server("deepwiki", None, "srv-collide")
+        prefix = get_server_prefix(server)
+        granted = add_server_prefix_to_name("contents", prefix)
+        assert strip_known_server_prefix(granted, server) != granted, (
+            "fixture must exercise the collision: the bare native name has to "
+            "start with the server's own prefix plus the separator"
+        )
+
+        resolved = await self._resolve(server, "srv-collide", granted)
+
+        sibling = "contents"
+        live_tools = [
+            MCPTool(
+                name=add_server_prefix_to_name(name, prefix),
+                inputSchema={"type": "object"},
+            )
+            for name in (granted, sibling)
+        ]
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server."
+                "MCPRequestHandler.get_allowed_tools_for_server",
+                new=AsyncMock(return_value=resolved["srv-collide"]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server."
+                "global_mcp_server_manager.get_mcp_server_by_id",
+                return_value=server,
+            ),
+        ):
+            kept = await filter_tools_by_key_team_permissions(
+                tools=live_tools,
+                server_id="srv-collide",
+                user_api_key_auth=_make_auth(),
+            )
+
+        # Exactly the granted tool. ``sibling`` is a different tool on the same
+        # server and was never selected, so it must not be reachable through
+        # this row even though the stored name is its wire name.
+        assert [t.name for t in kept] == [add_server_prefix_to_name(granted, prefix)]
+
+    @pytest.mark.asyncio
+    async def test_collision_row_grants_only_the_named_tool_when_no_sibling_exists(
+        self,
+    ):
+        """Without the stripped sibling in the catalog there is nothing to widen.
+
+        Resolution emits both readings of an ambiguous row, but a reading only
+        grants a tool that actually exists on the server. A server exposing only
+        the self-named tool therefore yields exactly that tool, which is the case
+        that used to resolve to nothing at all.
+        """
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_key_team_permissions,
+        )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+        )
+
+        server = self._server("deepwiki", None, "srv-lonely")
+        prefix = get_server_prefix(server)
+        granted = add_server_prefix_to_name("contents", prefix)
+
+        resolved = await self._resolve(server, "srv-lonely", granted)
+
+        live_tools = [
+            MCPTool(
+                name=add_server_prefix_to_name(granted, prefix),
+                inputSchema={"type": "object"},
+            )
+        ]
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server."
+                "MCPRequestHandler.get_allowed_tools_for_server",
+                new=AsyncMock(return_value=resolved["srv-lonely"]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server."
+                "global_mcp_server_manager.get_mcp_server_by_id",
+                return_value=server,
+            ),
+        ):
+            kept = await filter_tools_by_key_team_permissions(
+                tools=live_tools,
+                server_id="srv-lonely",
+                user_api_key_auth=_make_auth(),
+            )
+
+        assert [t.name for t in kept] == [add_server_prefix_to_name(granted, prefix)]
+
+    @pytest.mark.asyncio
+    async def test_bare_stored_name_without_collision_grants_only_that_tool(self):
+        """The ordinary row must stay exact; accepting both readings of an
+        ambiguous row must not widen an unambiguous one."""
+        from litellm.proxy._experimental.mcp_server.utils import get_server_prefix
+
+        server = self._server("deepwiki", None, "srv-clean")
+        assert get_server_prefix(server) == "deepwiki"
+
+        resolved = await self._resolve(server, "srv-clean", "read_wiki_contents")
+
+        assert resolved == {"srv-clean": ["read_wiki_contents"]}
 
 
 class TestMCPActiveToolsetContextVar:

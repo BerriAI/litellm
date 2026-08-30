@@ -13,6 +13,10 @@
 const RETURN_URL_COOKIE_NAME = "litellm_return_url";
 const RETURN_URL_PARAM = "redirect_to";
 
+export function getLoginUrl(baseUrl: string = ""): string {
+  return `${baseUrl}/ui/login/`;
+}
+
 /**
  * Gets the current URL with all query parameters.
  * Returns null if running on server-side.

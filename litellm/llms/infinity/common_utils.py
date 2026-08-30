@@ -1,11 +1,10 @@
-from typing import Union
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
 class InfinityError(BaseLLMException):
-    def __init__(self, status_code: int, message: str, headers: Union[dict, httpx.Headers] = {}):
+    def __init__(self, status_code: int, message: str, headers: dict | httpx.Headers = {}):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://github.com/michaelfeil/infinity")

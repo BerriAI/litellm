@@ -2,12 +2,12 @@
 
 Exists only so `run_daily.sh` can hand the version metadata + paths into
 the matrix builder without re-implementing it in bash. All real logic
-lives in `matrix_builder.py`, which has its own unit tests under
-`_builder_unit_tests/`.
+lives in `matrix_builder.py`.
 
-Invoked from the cron worktree (where `uv sync` has installed pyyaml),
-not the dev checkout — the bash script `cd`s into the worktree before
-`uv run python`-ing this file.
+The suite imports its own modules with `tests/e2e/` on sys.path (that is
+how pytest resolves them: `tests/e2e/` has no `__init__.py`, while
+`claude_code/` does), so this script bootstraps the same root — two
+levels up from this file — before importing.
 """
 
 from __future__ import annotations
@@ -19,7 +19,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from claude_code.matrix_builder import build_from_paths  # noqa: E402  # import needs the sys.path bootstrap above
+from claude_code.matrix_builder import (
+    build_from_paths,
+)  # noqa: E402  # needs the sys.path bootstrap above
 
 
 def main() -> int:
@@ -42,7 +44,7 @@ def main() -> int:
         generated_at=generated_at,
         output_path=args.output,
     )
-    print(f"wrote {args.output}")
+    print(f"wrote {args.output}")  # noqa: T201  # CLI output read by run_daily.sh
     return 0
 
 

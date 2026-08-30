@@ -17,8 +17,12 @@ vi.mock("@/utils/mcpTokenStore", () => ({
   removeToken: vi.fn(),
 }));
 
+const { toolsOAuthFlowSpy } = vi.hoisted(() => ({
+  toolsOAuthFlowSpy: vi.fn(() => ({ startOAuthFlow: vi.fn(), status: "idle", error: null })),
+}));
+
 vi.mock("@/hooks/useToolsOAuthFlow", () => ({
-  useToolsOAuthFlow: () => ({ startOAuthFlow: vi.fn(), status: "idle", error: null }),
+  useToolsOAuthFlow: toolsOAuthFlowSpy,
 }));
 
 vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
@@ -52,6 +56,27 @@ const credStatus = (overrides: Record<string, unknown> = {}) => ({
   has_credential: true,
   is_expired: false,
   ...overrides,
+});
+
+describe("MCPToolsViewer gatewayMintsClient wiring", () => {
+  // Pins the call site (not just the helper): the viewer must pass the bridge-AWARE
+  // gatewayMintsClientFor value to useToolsOAuthFlow, so the browser skips its own register exactly
+  // when the gateway mints. The oauth_delegate + dcr_bridge cell is the regression guard: with the
+  // old bridge-blind predicate it would have passed true here and dead-ended.
+  beforeEach(() => toolsOAuthFlowSpy.mockClear());
+
+  it.each([
+    { auth_type: "true_passthrough", dcr_bridge: true, gatewayMintsClient: true },
+    { auth_type: "true_passthrough", dcr_bridge: false, gatewayMintsClient: true },
+    { auth_type: "oauth_delegate", dcr_bridge: false, gatewayMintsClient: true },
+    { auth_type: "oauth_delegate", dcr_bridge: true, gatewayMintsClient: false },
+  ])(
+    "passes gatewayMintsClient=$gatewayMintsClient for $auth_type dcr_bridge=$dcr_bridge",
+    ({ auth_type, dcr_bridge, gatewayMintsClient }) => {
+      renderViewer({ auth_type, dcr_bridge, tokenUrl: null });
+      expect(toolsOAuthFlowSpy).toHaveBeenCalledWith(expect.objectContaining({ gatewayMintsClient }));
+    },
+  );
 });
 
 describe("MCPToolsViewer auth gate routing", () => {
