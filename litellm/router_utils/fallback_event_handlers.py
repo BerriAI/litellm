@@ -218,7 +218,7 @@ PRE_ROUTING_SELECTED_MODEL_KEY: Final = "pre_routing_selected_model"
 _ROUTER_METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
 
 
-def record_pre_routing_selection(request_kwargs: dict | None, selected_model: str) -> None:
+def record_pre_routing_selection(request_kwargs: Mapping[str, Any] | None, selected_model: str) -> None:
     """
     Remember which model a pre-routing hook picked, so fallback lookup can key off it.
 
