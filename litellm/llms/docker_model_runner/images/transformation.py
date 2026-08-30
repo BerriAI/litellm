@@ -62,6 +62,11 @@ class DockerModelRunnerImageGenerationConfig(BaseImageGenerationConfig):
         )
         base_url = base_url.rstrip("/")  # rebind-ok: progressively normalized into the endpoint URL
 
+        if base_url.endswith("/images/generations"):
+            return base_url
+
+        base_url = base_url.removesuffix("/engines/v1")  # rebind-ok: normalize the shared DMR base
+
         return f"{base_url}/engines/diffusers/v1/images/generations"
 
     def validate_environment(

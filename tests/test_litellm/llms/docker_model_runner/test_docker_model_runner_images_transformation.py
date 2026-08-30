@@ -91,6 +91,30 @@ class TestDockerModelRunnerImageGenerationTransformation:
         assert url == "http://localhost:12434/engines/diffusers/v1/images/generations"
         assert "//" not in url.replace("http://", "")
 
+    def test_get_complete_url_shared_engines_base(self):
+        """Test that the shared /engines/v1 base is not duplicated into the route."""
+        url = self.config.get_complete_url(
+            api_base="http://localhost:12434/engines/v1",
+            api_key=None,
+            model=self.model,
+            optional_params={},
+            litellm_params={},
+            stream=False,
+        )
+        assert url == "http://localhost:12434/engines/diffusers/v1/images/generations"
+
+    def test_get_complete_url_already_full_path(self):
+        """Test that a complete images URL is returned unchanged."""
+        url = self.config.get_complete_url(
+            api_base="http://localhost:12434/engines/diffusers/v1/images/generations",
+            api_key=None,
+            model=self.model,
+            optional_params={},
+            litellm_params={},
+            stream=False,
+        )
+        assert url == "http://localhost:12434/engines/diffusers/v1/images/generations"
+
     def test_transform_image_generation_request_basic(self):
         """Test basic image generation request transformation."""
         prompt = "A picture of a nice cat"
