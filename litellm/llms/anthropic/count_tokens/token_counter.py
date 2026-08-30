@@ -6,6 +6,7 @@ import os
 from typing import Any, Final
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import LlmProviders, TokenCountResponse
@@ -46,34 +47,32 @@ class AnthropicTokenCounter(BaseTokenCounter):
         Returns:
             TokenCountResponse with token count, or None if counting fails
         """
-        from litellm.llms.anthropic.common_utils import AnthropicError
+        from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
+        from litellm.llms.anthropic.wif import aget_anthropic_wif_token
 
         if not messages:
             return None
 
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
-
-        from litellm.llms.anthropic.wif import aget_anthropic_wif_token
-
-        static_key: Final = litellm_params.get("api_key") or os.getenv("ANTHROPIC_API_KEY")
-        # A federated deployment holds no static key by design. Without a minted one this returns
-        # None and the caller silently falls back to the local tokenizer, so a workload identity
-        # deployment would never reach Anthropic's authoritative count. The minted token is an
-        # sk-ant-oat, which get_required_headers already sends as a Bearer rather than x-api-key.
         api_base: Final = litellm_params.get("api_base")
-        api_key: Final = static_key or await aget_anthropic_wif_token(litellm_params, api_base, model_to_use)
-
-        if not api_key:
-            verbose_logger.warning("No Anthropic credential found for token counting")
-            return None
+        static_key: Final = litellm_params.get("api_key") or os.getenv("ANTHROPIC_API_KEY")
+        auth_token_configured: Final = AnthropicModelInfo.get_auth_token() is not None
 
         try:
+            api_key: Final = (
+                static_key
+                if static_key or auth_token_configured
+                else await aget_anthropic_wif_token(litellm_params, api_base, model_to_use)
+            )
+            if not api_key:
+                verbose_logger.warning("No Anthropic credential found for token counting")
+                return None
+
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
-                # The token is minted for this base, so the count has to be asked of the same host.
                 api_base=api_base,
                 tools=tools,
                 system=system,
@@ -87,8 +86,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     tokenizer_type="anthropic_api",
                     original_response=result,
                 )
-        except AnthropicError as e:
-            verbose_logger.warning("Anthropic CountTokens API error: status=%s, message=%s", e.status_code, e.message)
+        except (AnthropicError, AuthenticationError) as e:
+            verbose_logger.warning("Anthropic CountTokens error: status=%s, message=%s", e.status_code, e.message)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
