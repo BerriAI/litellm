@@ -1540,7 +1540,7 @@ def test_get_direct_access_models_expands_all_proxy_models_sentinel():
 
     result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
 
-    assert result == ["global-id-1", "global-id-2"]
+    assert result == ("global-id-1", "global-id-2")
     router.get_model_ids.assert_called_once_with(exclude_team_models=True)
     router.get_model_list.assert_not_called()
 
@@ -1555,9 +1555,170 @@ def test_get_direct_access_models_resolves_explicit_model_names():
 
     result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
 
-    assert result == ["gpt4o-id"]
+    assert result == ("gpt4o-id",)
     router.get_model_ids.assert_not_called()
     router.get_model_list.assert_called_once_with(model_name="gpt-4o")
+
+
+def test_get_direct_access_models_empty_models_grants_all_non_team_models():
+    """An empty user.models list means unrestricted access at call time
+    (can_user_call_model), so the listing must resolve it like 'all-proxy-models'
+    instead of returning nothing. Regression for a user with models=[] and no
+    teams seeing an empty Models+Endpoints page."""
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1", "global-id-2"]
+
+    user = LiteLLM_UserTable(user_id="u", models=[], teams=[])
+
+    result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
+
+    assert result == ("global-id-1", "global-id-2")
+    router.get_model_ids.assert_called_once_with(exclude_team_models=True)
+    router.get_model_list.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_grants_empty_models_user_direct_access(monkeypatch):
+    """An internal user with models=[] and no teams can call every non-team model,
+    so the Models+Endpoints page must list them instead of rendering empty."""
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1"]
+
+    user_row = LiteLLM_UserTable(
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+        teams=[],
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+
+    monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
+
+    caller = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, team_models=[])
+
+    populated = await ps._populate_team_access_on_models(
+        user_api_key_dict=caller,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[global_row],
+    )
+    visible = ps._filter_models_to_user_accessible(populated)
+
+    assert [m["model_info"]["id"] for m in visible] == ["global-id-1"]
+    assert visible[0]["model_info"]["direct_access"] is True
+
+
+def test_get_direct_access_models_restricted_key_narrows_unrestricted_user():
+    """A key scoped to one model cannot call the rest, so the listing must not show
+    every non-team model just because the user record is unrestricted."""
+    router = MagicMock()
+    router.get_model_ids.return_value = ["gpt4o-id", "sonnet-id"]
+    router.get_model_access_groups.return_value = {}
+    router.get_model_list.side_effect = lambda model_name: (
+        [{"model_info": {"id": "gpt4o-id"}}] if model_name == "gpt-4o" else []
+    )
+
+    user = LiteLLM_UserTable(user_id="u", models=[], teams=[])
+
+    result = ps.get_direct_access_models(user_db_object=user, llm_router=router, key_models=("gpt-4o",))
+
+    assert result == ("gpt4o-id",)
+
+
+def test_get_direct_access_models_all_proxy_models_key_keeps_team_scoped_user_grant():
+    """'all-proxy-models' on the key means unrestricted, so it must leave the user's
+    grant alone rather than clipping it to the non-team deployment set."""
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id"]
+    router.get_model_access_groups.return_value = {}
+    router.get_model_list.side_effect = lambda model_name: (
+        [{"model_info": {"id": "byok-id"}}] if model_name == "byok-model" else []
+    )
+
+    user = LiteLLM_UserTable(user_id="u", models=["byok-model"], teams=[])
+
+    result = ps.get_direct_access_models(
+        user_db_object=user,
+        llm_router=router,
+        key_models=(ps.SpecialModelNames.all_proxy_models.value,),
+    )
+
+    assert result == ("byok-id",)
+
+
+def test_get_direct_access_models_expands_access_group_grant():
+    """A grant naming an access group can call the group's members at call time, so the
+    listing must resolve the members instead of looking up the group name as a model."""
+    router = MagicMock()
+    router.get_model_access_groups.return_value = {"beta-models": ["gpt-4o", "sonnet"]}
+    router.get_model_list.side_effect = lambda model_name: {
+        "gpt-4o": [{"model_info": {"id": "gpt4o-id"}}],
+        "sonnet": [{"model_info": {"id": "sonnet-id"}}],
+    }.get(model_name, [])
+
+    user = LiteLLM_UserTable(user_id="u", models=["beta-models"], teams=[])
+
+    result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
+
+    assert result == ("gpt4o-id", "sonnet-id")
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_hides_models_the_calling_key_cannot_call(monkeypatch):
+    """An unrestricted user calling with a key scoped to one model must only see that
+    model as direct access; the others 403 at the key check, so listing them over-promises."""
+    allowed_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "gpt4o-id", "db_model": False},
+    }
+    blocked_row = {
+        "model_name": "sonnet",
+        "litellm_params": {"model": "sonnet"},
+        "model_info": {"id": "sonnet-id", "db_model": False},
+    }
+
+    router = MagicMock()
+    router.get_model_ids.return_value = ["gpt4o-id", "sonnet-id"]
+    router.get_model_access_groups.return_value = {}
+    router.get_model_list.side_effect = lambda model_name: (
+        [{"model_info": {"id": "gpt4o-id"}}] if model_name == "gpt-4o" else []
+    )
+
+    user_row = LiteLLM_UserTable(
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+        teams=[],
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+
+    monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
+
+    caller = UserAPIKeyAuth(
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["gpt-4o"],
+        team_models=[],
+    )
+
+    populated = await ps._populate_team_access_on_models(
+        user_api_key_dict=caller,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[allowed_row, blocked_row],
+    )
+    visible = ps._filter_models_to_user_accessible(populated)
+
+    assert [m["model_info"]["id"] for m in visible] == ["gpt4o-id"]
 
 
 @pytest.mark.asyncio
