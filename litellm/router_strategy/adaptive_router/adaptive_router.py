@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -217,13 +218,13 @@ class AdaptiveRouter:
             ),
         )
 
-    def _savings_baseline_fields(self) -> dict[str, str]:
+    def _savings_baseline_fields(self) -> Mapping[str, str]:
         if self.litellm_router_instance is None:
-            return {}
+            return {}  # mutable-ok: immutable empty result for absent router
         baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
-            return {}
-        fields = {"savings_baseline_model": baseline.model}
+            return {}  # mutable-ok: immutable empty result for unresolved baseline
+        fields = {"savings_baseline_model": baseline.model}  # mutable-ok: assemble TypedDict kwargs
         if baseline.deployment_id is not None:
             fields["savings_baseline_deployment_id"] = baseline.deployment_id
         return fields

@@ -16,6 +16,7 @@ then cheapest `model_info.input_cost_per_token`).
 """
 
 import math
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_router_logger
@@ -322,11 +323,11 @@ class QualityRouter(CustomLogger):
         if isinstance(metadata, dict):
             metadata["quality_router_decision"] = decision
 
-    def _savings_fields(self) -> dict[str, str]:
+    def _savings_fields(self) -> Mapping[str, str]:
         baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
-            return {}
-        fields = {"savings_baseline_model": baseline.model}
+            return {}  # mutable-ok: immutable empty result for unresolved baseline
+        fields = {"savings_baseline_model": baseline.model}  # mutable-ok: assemble TypedDict kwargs
         if baseline.deployment_id is not None:
             fields["savings_baseline_deployment_id"] = baseline.deployment_id
         return fields
