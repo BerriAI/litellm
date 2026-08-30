@@ -14,8 +14,8 @@ mod prepare;
 mod provider;
 mod types;
 
-pub use prepare::{prepare_ocr_request, prepare_provider_request};
-pub use types::{OcrRequest, PreparedOcrRequest, ProviderOcrRequest};
+pub use prepare::{ocr_decline_reason, prepare_ocr_request, prepare_provider_request};
+pub use types::{OcrDeclineReason, OcrRequest, PreparedOcrRequest, ProviderOcrRequest};
 
 use handler::execute_ocr_provider_call;
 

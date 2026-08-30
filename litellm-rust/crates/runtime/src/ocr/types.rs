@@ -5,6 +5,25 @@ use litellm_core::ocr::transformation::OcrProviderTransformation;
 use serde_json::{Map, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OcrDeclineReason {
+    NativeRequestFormat,
+    UnsupportedProvider,
+}
+
+impl std::fmt::Display for OcrDeclineReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NativeRequestFormat => {
+                formatter.write_str("native OCR response format requires Python")
+            }
+            Self::UnsupportedProvider => {
+                formatter.write_str("OCR provider is not supported by the Rust runtime")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrAuthStrategy {
     Bearer,
     Header(&'static str),

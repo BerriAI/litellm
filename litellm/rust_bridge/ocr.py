@@ -44,6 +44,16 @@ class RustAocr(Protocol):
         raise NotImplementedError
 
 
+class RustOcrDecline(Protocol):
+    def __call__(
+        self,
+        model: str,
+        custom_llm_provider: str | None,
+        optional_params: dict[str, object],
+    ) -> str | None:
+        raise NotImplementedError
+
+
 class _Unset:
     pass
 
@@ -63,6 +73,7 @@ def _env_enables_rust_ocr() -> bool:
 _rust_ocr_enabled = _env_enables_rust_ocr()
 _rust_ocr_impl: RustOcr | None = None
 _rust_aocr_impl: RustAocr | None = None
+_rust_ocr_decline_impl: RustOcrDecline | None = None
 
 
 def use_litellm_rust(
@@ -70,14 +81,17 @@ def use_litellm_rust(
     *,
     ocr: RustOcr | None | _Unset = _UNSET,
     aocr: RustAocr | None | _Unset = _UNSET,
+    ocr_decline: RustOcrDecline | None | _Unset = _UNSET,
     messages: RustMessages | None | _Unset = _UNSET,
     amessages: RustAmessages | None | _Unset = _UNSET,
     responses_websocket: Any | None | _Unset = _UNSET,
     transcription: Any | None | _Unset = _UNSET,
     atranscription: Any | None | _Unset = _UNSET,
 ) -> None:
-    global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
-    configuring_ocr: Final = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
+    global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl, _rust_ocr_decline_impl
+    configuring_ocr: Final = (
+        not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset) or not isinstance(ocr_decline, _Unset)
+    )
     configuring_messages: Final = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
     configuring_responses_websocket: Final = not isinstance(responses_websocket, _Unset)
     configuring_transcription: Final = not isinstance(transcription, _Unset) or not isinstance(atranscription, _Unset)
@@ -87,6 +101,8 @@ def use_litellm_rust(
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
         _rust_aocr_impl = aocr
+    if not isinstance(ocr_decline, _Unset):
+        _rust_ocr_decline_impl = ocr_decline
     if configuring_transcription:
         from litellm.rust_bridge.transcription import configure_rust_transcription
 
@@ -136,6 +152,33 @@ def load_rust_aocr() -> RustAocr | None:
     if native_bridge is None:
         return None
     return cast(RustAocr, getattr(native_bridge, "aocr", None))
+
+
+def load_rust_ocr_decline() -> RustOcrDecline | None:
+    if _rust_ocr_decline_impl is not None:
+        return _rust_ocr_decline_impl
+    from litellm.rust_bridge import get_native_bridge
+
+    native_bridge: Final = get_native_bridge()
+    if native_bridge is None:
+        return None
+    return cast(RustOcrDecline, getattr(native_bridge, "ocr_decline", None))
+
+
+def ocr_decline(
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    optional_params: dict[str, object],
+) -> str | None:
+    decline: Final = load_rust_ocr_decline()
+    if decline is None:
+        return "Rust OCR decline bridge is unavailable"
+    return decline(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        optional_params=optional_params,
+    )
 
 
 def ocr(

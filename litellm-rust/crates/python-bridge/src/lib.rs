@@ -12,7 +12,7 @@ use litellm_core::chat_completions::{
 use litellm_core::error::CoreError;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
-use litellm_runtime::ocr::{OcrRequest, ocr as run_ocr};
+use litellm_runtime::ocr::{OcrRequest, ocr as run_ocr, ocr_decline_reason};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
@@ -206,6 +206,29 @@ fn marshal_inputs(
     let timeout = optional_timeout(timeout_seconds);
 
     Ok((document, extra_headers, optional_params, timeout))
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, custom_llm_provider=None, optional_params=None))]
+fn ocr_decline(
+    py: Python<'_>,
+    model: String,
+    custom_llm_provider: Option<String>,
+    optional_params: Option<Py<PyAny>>,
+) -> PyResult<Option<String>> {
+    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
+    Ok(ocr_decline_reason(OcrRequest {
+        model: &model,
+        document: Value::Null,
+        api_key: None,
+        api_base: None,
+        custom_llm_provider: custom_llm_provider.as_deref(),
+        extra_headers: None,
+        optional_params,
+        timeout: None,
+        litellm_call_id: Some("ocr-decline"),
+    })
+    .map(|reason| reason.to_string()))
 }
 
 #[pyfunction]
@@ -613,6 +636,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
+    module.add_function(wrap_pyfunction!(ocr_decline, module)?)?;
     module.add_function(wrap_pyfunction!(transcription, module)?)?;
     module.add_function(wrap_pyfunction!(atranscription, module)?)?;
     module.add_function(wrap_pyfunction!(messages, module)?)?;

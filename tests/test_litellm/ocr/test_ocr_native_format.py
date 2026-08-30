@@ -4,39 +4,32 @@ providers that don't support a native response must reject it, and the Rust
 bridge (which only returns the normalized shape) must not serve native requests.
 """
 
-from unittest.mock import MagicMock
-
 import pytest
 
 import litellm
-from litellm.ocr.main import _PreparedOCRRequest, _rust_ocr_supported
+from litellm.rust_bridge import ocr as rust_ocr_bridge
 
 DOCUMENT = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
 
 
-def _prepared(optional_params: dict[str, object]) -> _PreparedOCRRequest:
-    return _PreparedOCRRequest(
-        model="doc-intelligence/prebuilt-layout",
-        document=dict(DOCUMENT),
-        api_key="fake-key",
-        api_base="https://example.cognitiveservices.azure.com",
-        custom_llm_provider="azure_ai",
-        extra_headers=None,
-        provider_config=MagicMock(),
-        optional_params=optional_params,
-        litellm_params={},
-        effective_timeout=60.0,
-        litellm_logging_obj=MagicMock(),
+def test_native_decline_wrapper_uses_runtime_result():
+    rust_ocr_bridge.use_litellm_rust(
+        True,
+        ocr_decline=lambda model, custom_llm_provider, optional_params: (
+            "native OCR response format requires Python" if optional_params.get("req_format") == "native" else None
+        ),
     )
-
-
-@pytest.mark.parametrize("optional_params", [{}, {"req_format": "litellm"}])
-def test_rust_ocr_serves_default_format(optional_params):
-    assert _rust_ocr_supported(_prepared(optional_params)) is True
-
-
-def test_rust_ocr_skipped_for_native_format():
-    assert _rust_ocr_supported(_prepared({"req_format": "native"})) is False
+    try:
+        assert (
+            rust_ocr_bridge.ocr_decline(
+                model="azure_ai/doc-intelligence/prebuilt-layout",
+                custom_llm_provider=None,
+                optional_params={"req_format": "native"},
+            )
+            == "native OCR response format requires Python"
+        )
+    finally:
+        rust_ocr_bridge.use_litellm_rust(False, ocr_decline=None)
 
 
 @pytest.mark.asyncio
