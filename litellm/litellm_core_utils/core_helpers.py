@@ -19,6 +19,20 @@ else:
     Span = Any
 
 
+def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
+    """
+    Put the provider prefix back on a model an agentic follow-up re-dispatches with.
+
+    Handlers are handed the provider-stripped model, and for providers that route through
+    a sub-path (``bedrock/mantle/...``, ``openrouter/openai/...``) that remainder still
+    holds a slash. Treating any slash as "already qualified" drops the prefix and leaves a
+    string no provider can be resolved from.
+    """
+    if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
     """
     Safely divide seconds by denominator, handling zero division.
