@@ -595,6 +595,52 @@ class TestOllamaFinishReasonLength:
             result.choices[0].finish_reason == "length"
         ), f"Expected 'length' when done_reason='length', got '{result.choices[0].finish_reason}'"
 
+    def test_finish_reason_tool_calls_when_split_across_chunks(self):
+        """Tool calls in an earlier chunk must still end the stream with 'tool_calls'.
+
+        Ollama commonly emits tool_calls in a chunk with done false and then a
+        separate done chunk whose message is empty and whose done_reason is
+        'stop'. Keying the override off the done chunk's own tool_calls left the
+        stream finishing as 'stop', so spec-strict OpenAI clients dropped the
+        accumulated tool_calls delta and never ran the tool.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_call_chunk = {
+            "model": "glm-4.7-flash",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "list_files",
+                            "arguments": {"path": "."},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+        done_chunk = {
+            "model": "glm-4.7-flash",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+        }
+
+        tool_call_result = iterator.chunk_parser(tool_call_chunk)
+        assert tool_call_result.choices[0].delta.tool_calls is not None
+        assert tool_call_result.choices[0].finish_reason is None
+
+        done_result = iterator.chunk_parser(done_chunk)
+        assert (
+            done_result.choices[0].finish_reason == "tool_calls"
+        ), f"Expected 'tool_calls' after a tool call earlier in the stream, got '{done_result.choices[0].finish_reason}'"
+
     def test_finish_reason_stop_streaming(self):
         """Streaming: done_reason='stop' in final chunk must produce finish_reason='stop'."""
         iterator = OllamaChatCompletionResponseIterator(
