@@ -67,25 +67,25 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
     TTS_BASE_URL = "https://tts.gandr.ai/v1"
     TTS_ENDPOINT_PATH = "/audio/speech"
     DEFAULT_OUTPUT_FORMAT = "wav"
-    SUPPORTED_MODES: ClassVar[list[str]] = ["audio_speech"]
+    SUPPORTED_MODES: ClassVar[list[str]] = ["audio_speech"]  # mutable-ok: matches the base class attribute type
 
     #: Gandr's speed range. The engine clamps speed to 0.6-1.5.
     SUPPORTED_SPEED_RANGE = (0.6, 1.5)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: matches the base interface signature
         """
         Gandr TTS supports these OpenAI parameters
         """
-        return ["voice", "response_format", "speed"]
+        return ["voice", "response_format", "speed"]  # mutable-ok: matches the base interface signature
 
     def map_openai_params(
         self,
         model: str,
-        optional_params: dict,
-        voice: str | dict | None = None,
+        optional_params: dict,  # mutable-ok: matches the base interface signature
+        voice: str | dict | None = None,  # mutable-ok: matches the base interface signature
         drop_params: bool = False,
-        kwargs: dict[str, Any] | None = None,
-    ) -> tuple[str | None, dict]:
+        kwargs: dict[str, Any] | None = None,  # mutable-ok: matches the base interface signature
+    ) -> tuple[str | None, dict]:  # mutable-ok: matches the base interface signature
         """
         Map OpenAI parameters to Gandr TTS parameters.
 
@@ -94,8 +94,12 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         preserved on the body under their OpenAI names, which means an
         unmodified client always gets audio back.
         """
-        params: Final = dict(optional_params) if optional_params else {}
-        passthrough_kwargs: Final = dict(kwargs) if kwargs is not None else {}
+        params: Final = (
+            dict(optional_params) if optional_params else {}
+        )  # mutable-ok: local working copy, keys popped below
+        passthrough_kwargs: Final = (
+            dict(kwargs) if kwargs is not None else {}
+        )  # mutable-ok: local working copy, keys popped below
 
         voice_override: Final = params.pop("voice_id", None)
         mapped_voice: Final = _resolve_voice(voice) or _as_voice_str(voice_override)
@@ -118,17 +122,21 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
             except (TypeError, ValueError):
                 params.pop("speed", None)
 
-        mapped_params: Final[dict[str, Any]] = {k: v for k, v in params.items() if v is not None}
+        mapped_params: Final[dict[str, Any]] = {
+            k: v for k, v in params.items() if v is not None
+        }  # mutable-ok: returned per the base contract
 
-        reserved_kwarg_keys: Final = set(all_litellm_params) | {
-            "voice",
-            "model",
-            "response_format",
-            "output_format",
-            "extra_body",
-            "user",
-        }
-        for key in list(passthrough_kwargs.keys()):
+        reserved_kwarg_keys: Final = frozenset(all_litellm_params) | frozenset(
+            (
+                "voice",
+                "model",
+                "response_format",
+                "output_format",
+                "extra_body",
+                "user",
+            )
+        )
+        for key in tuple(passthrough_kwargs):
             if key in reserved_kwarg_keys:
                 continue
             value = passthrough_kwargs[key]
@@ -140,11 +148,11 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: matches the base interface signature
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: matches the base interface signature
         """
         Validate the Gandr environment and set up authentication headers.
 
@@ -165,24 +173,26 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
                     "api_key when overriding api_base."
                 )
 
-        api_key = api_key or server_api_key
+        resolved_api_key: Final = api_key or server_api_key
 
-        if api_key is None:
+        if resolved_api_key is None:
             raise ValueError(
                 "Gandr API key is required. Set GANDR_API_KEY environment variable "
                 "or pass `api_key` to `litellm.speech()`."
             )
 
         headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
+            {  # mutable-ok: field type is dict upstream
+                "Authorization": f"Bearer {resolved_api_key}",
                 "Content-Type": "application/json",
             }
         )
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict | Headers
+    ) -> BaseLLMException:  # mutable-ok: matches the base interface signature
         return GandrException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_text_to_speech_request(
@@ -190,9 +200,9 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         input: str,
         voice: str | None,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict,  # mutable-ok: matches the base interface signature
+        litellm_params: dict,  # mutable-ok: matches the base interface signature
+        headers: dict,  # mutable-ok: matches the base interface signature
     ) -> TextToSpeechRequestData:
         """
         Build the Gandr TTS request payload. The body is OpenAI-shaped
@@ -200,10 +210,12 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         HTTP handler attaches the required `Authorization: Bearer` header from
         `validate_environment`.
         """
-        params: Final = dict(optional_params) if optional_params else {}
+        params: Final = (
+            dict(optional_params) if optional_params else {}
+        )  # mutable-ok: local working copy, keys popped below
         extra_body: Final = params.pop("extra_body", None)
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, Any]] = {  # mutable-ok: JSON request body consumed by the HTTP handler
             "input": input,
             "model": model,
             "voice": voice,
@@ -224,7 +236,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return TextToSpeechRequestData(
             dict_body=request_body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},  # mutable-ok: field type is dict upstream
         )
 
     def transform_text_to_speech_response(
@@ -244,7 +256,7 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: matches the base interface signature
     ) -> str:
         """
         Construct the Gandr endpoint URL.
