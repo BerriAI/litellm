@@ -754,7 +754,7 @@ def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
     assert reported > 0, "routing a cold first turn onto a cheaper model is a saving, not a loss"
 
 
-def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
+def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate(local_model_cost_map):
     """The same hole on the other bucket. A baseline whose entry has no
     `cache_read_input_token_cost` reads for 0.0, so a continuing turn priced the whole
     prompt at nothing and every switch away from it reported a loss.
