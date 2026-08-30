@@ -12,6 +12,8 @@ from litellm.router_utils.fallback_event_handlers import (
     _trigger_cooldown_for_failed_deployment,
     fallback_attempt_key,
     get_fallback_model_group,
+    get_pre_routing_selection,
+    record_pre_routing_selection,
     run_async_fallback,
 )
 
@@ -1090,3 +1092,44 @@ async def test_run_async_fallback_preserves_original_model_group_on_nested_fallb
     metadata = router.received_kwargs["metadata"]
     assert metadata["attempted_fallbacks"] == 2
     assert metadata["original_model_group"] == "primary-model"
+
+
+class TestPreRoutingSelectionCarriesToFallbacks:
+    """#38832: a complexity/auto router picks a tier behind the router name, but fallback
+    lookup kept using the router name, so the tier's configured chain never ran."""
+
+    def test_selection_is_recorded_in_the_metadata_bucket(self):
+        kwargs = {"model": "smart-router", "metadata": {}}
+        record_pre_routing_selection(kwargs, "tier1")
+        assert kwargs["metadata"]["pre_routing_selected_model"] == "tier1"
+        assert get_pre_routing_selection(kwargs) == "tier1"
+
+    def test_selection_is_recorded_in_the_litellm_metadata_bucket(self):
+        kwargs = {"model": "smart-router", "litellm_metadata": {}}
+        record_pre_routing_selection(kwargs, "tier2")
+        assert get_pre_routing_selection(kwargs) == "tier2"
+
+    def test_a_bucket_survives_the_kwargs_copy_that_fallbacks_run_on(self):
+        """The bucket is shared by reference, which is the whole reason this works."""
+        outer = {"model": "smart-router", "metadata": {}}
+        inner = {**outer}
+        record_pre_routing_selection(inner, "tier1")
+        assert get_pre_routing_selection(outer) == "tier1"
+
+    def test_no_selection_reads_as_none(self):
+        assert get_pre_routing_selection({"model": "smart-router", "metadata": {}}) is None
+        assert get_pre_routing_selection({"model": "smart-router"}) is None
+
+    def test_missing_kwargs_is_tolerated(self):
+        record_pre_routing_selection(None, "tier1")
+
+    def test_a_non_dict_bucket_is_ignored(self):
+        kwargs = {"model": "smart-router", "metadata": "not-a-dict"}
+        record_pre_routing_selection(kwargs, "tier1")
+        assert get_pre_routing_selection(kwargs) is None
+
+    def test_fallbacks_resolve_against_the_selected_tier(self):
+        """The lookup the router performs, keyed on the tier rather than the router name."""
+        fallbacks = [{"tier1": ["backup-a", "backup-b"]}, {"tier2": ["backup-c"]}]
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="tier1")[0] == ["backup-a", "backup-b"]
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="smart-router")[0] is None

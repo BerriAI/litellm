@@ -144,6 +144,8 @@ from litellm.router_utils.fallback_event_handlers import (
     AttemptedFallbackTargets,
     _check_non_standard_fallback_format,
     get_fallback_model_group,
+    get_pre_routing_selection,
+    record_pre_routing_selection,
     run_async_fallback,
 )
 from litellm.router_utils.get_retry_from_policy import (
@@ -6807,6 +6809,9 @@ class Router:
         original_exception: Final = e
         fallback_model_group = None
         original_model_group: Final[str | None] = kwargs.get("model")
+        # A pre-routing hook (complexity / auto / adaptive / quality routers) picks a tier
+        # behind the router name, and fallbacks are configured per tier, not per router.
+        fallback_lookup_group: Final[str | None] = get_pre_routing_selection(kwargs) or model_group
         fallback_failure_exception_str = ""
 
         if disable_fallbacks is True or original_model_group is None:
@@ -6851,7 +6856,7 @@ class Router:
             ]
             # Get external fallbacks — handle both standard and non-standard formats
             external_fallback_group: list | None = None
-            if fallbacks is not None and model_group is not None:
+            if fallbacks is not None and fallback_lookup_group is not None:
                 if _check_non_standard_fallback_format(fallbacks=fallbacks):
                     # Non-standard formats (e.g. ["claude-3-haiku"] or
                     # [{"model": "...", "messages": [...]}]) are passed through directly
@@ -6859,7 +6864,7 @@ class Router:
                 else:
                     external_fallback_group, generic_idx = get_fallback_model_group(
                         fallbacks=fallbacks,
-                        model_group=cast(str, model_group),
+                        model_group=cast(str, fallback_lookup_group),
                     )
                     if external_fallback_group is None and generic_idx is not None:
                         external_fallback_group = fallbacks[generic_idx]["*"]
@@ -6919,7 +6924,7 @@ class Router:
                     context_window_fallback_model_group: Final[list[str] | None] = (
                         self._get_fallback_model_group_from_fallbacks(
                             fallbacks=context_window_fallbacks,
-                            model_group=model_group,
+                            model_group=fallback_lookup_group,
                         )
                     )
                     if context_window_fallback_model_group is None:
@@ -6952,7 +6957,7 @@ class Router:
                     content_policy_fallback_model_group: Final[list[str] | None] = (
                         self._get_fallback_model_group_from_fallbacks(
                             fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
+                            model_group=fallback_lookup_group,
                         )
                     )
                     if content_policy_fallback_model_group is None:
@@ -6979,14 +6984,14 @@ class Router:
 
                     if litellm.expose_router_debug_in_errors:
                         e.message += f"\n{error_message}"
-            if fallbacks is not None and model_group is not None:
+            if fallbacks is not None and fallback_lookup_group is not None:
                 verbose_router_logger.debug("inside model fallbacks: %s", mask_sensitive_structure(fallbacks))
                 (
                     fallback_model_group,
                     generic_fallback_idx,
                 ) = get_fallback_model_group(
                     fallbacks=fallbacks,  # if fallbacks = [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
-                    model_group=cast(str, model_group),
+                    model_group=cast(str, fallback_lookup_group),
                 )
                 ## if none, check for generic fallback
                 if fallback_model_group is None and generic_fallback_idx is not None:
@@ -6996,11 +7001,11 @@ class Router:
                     masked_fallbacks: Final = mask_sensitive_structure(fallbacks)
                     verbose_router_logger.info(
                         "No fallback model group found for original model_group=%s. Fallbacks=%s",
-                        model_group,
+                        fallback_lookup_group,
                         masked_fallbacks,
                     )
                     if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
-                        original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={masked_fallbacks}"
+                        original_exception.message += f"No fallback model group found for original model_group={fallback_lookup_group}. Fallbacks={masked_fallbacks}"
                     raise original_exception
 
                 input_kwargs.update(
@@ -12026,6 +12031,7 @@ class Router:
             if pre_routing_hook_response is not None:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
+                record_pre_routing_selection(request_kwargs, model)
                 if pre_routing_hook_response.litellm_params:
                     accepted_tier_params: Final = self._tier_params_the_target_accepts(
                         model, pre_routing_hook_response.litellm_params, request_kwargs
@@ -12141,6 +12147,7 @@ class Router:
             if pre_routing_hook_response is not None:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
+                record_pre_routing_selection(request_kwargs, model)
                 if pre_routing_hook_response.litellm_params:
                     accepted_tier_params: Final = self._tier_params_the_target_accepts(
                         model, pre_routing_hook_response.litellm_params, request_kwargs

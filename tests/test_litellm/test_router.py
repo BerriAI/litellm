@@ -11595,3 +11595,76 @@ class TestTierParamsTheTargetAccepts:
         accepted = router._tier_params_the_target_accepts("no-such-group", {"reasoning_effort": "max"}, {})
 
         assert accepted == {"reasoning_effort": "max"}
+
+
+class TestPreRoutingTierDrivesFallbacks:
+    """#38832: a complexity/auto router picks a tier behind the router name, but fallback
+    lookup stayed on the router name, so the tier's configured chain never ran and a
+    provider failure on the tier's first hop was returned to the client."""
+
+    class _TierRouter(litellm.Router):
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            if model == "smart-router":
+                return PreRoutingHookResponse(model="tier1", messages=messages)
+            return None
+
+    @classmethod
+    def _router(cls, fallbacks) -> "litellm.Router":
+        return cls._TierRouter(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                },
+                {
+                    "model_name": "tier1",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "litellm.RateLimitError",
+                    },
+                },
+                {
+                    "model_name": "backup-a",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "from backup-a",
+                    },
+                },
+            ],
+            fallbacks=fallbacks,
+            num_retries=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_selected_tier_fallback_chain_runs(self):
+        router = self._router([{"tier1": ["backup-a"]}])
+
+        response = await router.acompletion(
+            model="smart-router", messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert response.choices[0].message.content == "from backup-a"
+
+    @pytest.mark.asyncio
+    async def test_a_chain_keyed_on_the_router_name_is_not_used(self):
+        """The router name has no chain of its own, so nothing should rescue this call."""
+        router = self._router([{"tier2": ["backup-a"]}])
+
+        with pytest.raises(litellm.RateLimitError):
+            await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+    @pytest.mark.asyncio
+    async def test_a_request_without_a_pre_routing_hook_still_uses_its_own_group(self):
+        router = self._router([{"tier1": ["backup-a"]}])
+
+        response = await router.acompletion(
+            model="tier1", messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert response.choices[0].message.content == "from backup-a"

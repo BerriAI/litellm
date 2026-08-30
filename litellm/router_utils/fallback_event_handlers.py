@@ -214,6 +214,38 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
+PRE_ROUTING_SELECTED_MODEL_KEY: Final = "pre_routing_selected_model"
+_ROUTER_METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
+
+
+def record_pre_routing_selection(request_kwargs: dict | None, selected_model: str) -> None:
+    """
+    Remember which model a pre-routing hook picked, so fallback lookup can key off it.
+
+    Fallback resolution runs on an outer kwargs dict that ``**kwargs`` already copied, so
+    writing the model there is invisible by the time routing picks a tier. The metadata
+    buckets are nested dicts shared by reference across those copies, which is how the
+    router already carries values back up.
+    """
+    if request_kwargs is None:
+        return
+    for bucket_name in _ROUTER_METADATA_BUCKETS:
+        bucket: Final = request_kwargs.get(bucket_name)
+        if isinstance(bucket, dict):
+            bucket[PRE_ROUTING_SELECTED_MODEL_KEY] = selected_model
+
+
+def get_pre_routing_selection(kwargs: Mapping[str, Any]) -> str | None:
+    """The model a pre-routing hook selected for this request, if one did."""
+    for bucket_name in _ROUTER_METADATA_BUCKETS:
+        bucket: Final = kwargs.get(bucket_name)
+        if isinstance(bucket, dict):
+            selected: Final = bucket.get(PRE_ROUTING_SELECTED_MODEL_KEY)
+            if isinstance(selected, str) and selected:
+                return selected
+    return None
+
+
 def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
     """
     Returns:
