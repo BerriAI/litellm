@@ -10,8 +10,8 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Final, TypedDict, cast
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, TypedDict
 
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
@@ -39,7 +39,7 @@ class _StreamOutputItem(TypedDict, total=False):
 
 
 class _StreamResponsePayload(TypedDict, total=False):
-    status: ReadOnly[str]
+    status: ReadOnly[ResponsesAPIStatus]
     error: ReadOnly[dict[str, object] | None]
     usage: ReadOnly[dict[str, object] | None]
     reasoning: ReadOnly[dict[str, object] | None]
@@ -175,7 +175,7 @@ async def background_streaming_task(
             None  # Will be set by response.completed/failed/incomplete/cancelled
         )
         terminal_error = None
-        _event_to_status: Final = {
+        _event_to_status: Final[Mapping[str, ResponsesAPIStatus]] = {
             "response.completed": "completed",
             "response.failed": "failed",
             "response.incomplete": "incomplete",
@@ -324,12 +324,9 @@ async def background_streaming_task(
                             # Terminal event - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming
                             response_data = event.get("response", {})
-                            terminal_status = cast(
-                                ResponsesAPIStatus,
-                                response_data.get(
-                                    "status",
-                                    _event_to_status.get(event_type, "completed"),
-                                ),
+                            terminal_status = response_data.get(
+                                "status",
+                                _event_to_status.get(event_type, "completed"),
                             )
 
                             # Extract error for failed and incomplete responses

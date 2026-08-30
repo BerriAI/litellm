@@ -130,7 +130,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if callback_info is None:
             return []
 
-        params: Final[list[str] | None] = getattr(callback_info, "litellm_callback_params", None)
+        params: Final[Sequence[str] | None] = getattr(callback_info, "litellm_callback_params", None)
         if not params:
             return []
 
@@ -1095,7 +1095,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     def _process_messages(
         self,
-        messages: Sequence[object],
+        messages: list[object],
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
     ) -> list[dict[str, object]]:
         filtered_messages: Final[list[dict[str, object]]] = []
