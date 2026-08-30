@@ -229,6 +229,7 @@ class ChatBody(BaseModel):
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
+    prompt_cache_key: str | None = None
     tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
