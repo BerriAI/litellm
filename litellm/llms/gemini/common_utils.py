@@ -4,11 +4,13 @@ import json
 import math
 from collections.abc import Sequence
 from typing import Any, Final
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -339,6 +341,34 @@ def _map_dimensions_to_gemini_image_size(width: int, height: int) -> str:
 
 class GeminiError(BaseLLMException):
     pass
+
+
+def assert_gemini_video_download_url(download_url: str, api_base: str) -> str:
+    """Validate Veo ``video.uri`` before credentialed download.
+
+    ``transform_video_content_request`` returns a provider-supplied URI that
+    ``llm_http_handler`` fetches with ``x-goog-api-key``. Relative file URIs
+    are resolved against ``api_base``; absolute URLs must share origin with
+    ``api_base`` so API keys are not forwarded off-origin (same class as
+    BFL polling URL / ``assert_same_origin``).
+    """
+    if not isinstance(download_url, str) or not download_url.strip():
+        raise GeminiError(
+            status_code=502,
+            message="Rejected video download URL: missing uri",
+        )
+
+    resolved: Final = (
+        download_url if urlparse(download_url).scheme else urljoin(api_base.rstrip("/") + "/", download_url.lstrip("/"))
+    )
+    try:
+        assert_same_origin(resolved, api_base)
+    except SSRFError as e:
+        raise GeminiError(
+            status_code=502,
+            message=f"Rejected video download URL: {e}",
+        ) from e
+    return resolved
 
 
 class GeminiModelInfo(BaseLLMModelInfo):

@@ -8,6 +8,7 @@ import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.gemini.common_utils import assert_gemini_video_download_url
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.gemini import (
     GeminiLongRunningOperationResponse,
@@ -456,7 +457,10 @@ class GeminiVideoConfig(BaseVideoConfig):
             raise ValueError("No response data in completed operation")
 
         generated_samples: Final = operation_response.response.generateVideoResponse.generatedSamples
-        download_url: Final = generated_samples[0].video.uri
+        download_url: Final = assert_gemini_video_download_url(
+            generated_samples[0].video.uri,
+            api_base,
+        )
 
         params: Final[dict[str, Any]] = {}
 
