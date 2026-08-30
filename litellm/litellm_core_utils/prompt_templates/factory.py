@@ -5080,7 +5080,10 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
             freeform_name = tool.get("name")
             if not (isinstance(freeform_name, str) and freeform_name.strip()):
                 continue
-            parameters = {"type": "object", "properties": {}}
+            parameters = {  # mutable-ok: Bedrock toolSpec input schemas are plain JSON dicts
+                "type": "object",
+                "properties": {},  # mutable-ok: empty JSON schema object, consumed by the request builder
+            }
             raw_name = freeform_name
             _tool_description = tool.get("description", None)
         elif isinstance(tool, dict) and "function" not in tool and "input_schema" not in tool:
