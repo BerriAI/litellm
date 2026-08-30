@@ -1126,9 +1126,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 nx=True,
                 parent_otel_span=parent_otel_span,
             )
-            current_window_value = legacy_window_value if inserted else await redis_cache.async_get_cache(
-                key=window_key,
-                parent_otel_span=parent_otel_span,
+            current_window_value = (
+                legacy_window_value
+                if inserted
+                else await redis_cache.async_get_cache(
+                    key=window_key,
+                    parent_otel_span=parent_otel_span,
+                )
             )
             if current_window_value is not None:
                 await self.internal_usage_cache.async_set_cache(
@@ -1212,9 +1216,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             # Only compute limit_remaining if current_limit is not None
             limit_remaining = (
-                current_limit - int(effective_counter_value)
-                if effective_counter_value is not None
-                else current_limit
+                current_limit - int(effective_counter_value) if effective_counter_value is not None else current_limit
             )
 
             statuses.append(

@@ -6359,10 +6359,10 @@ async def test_over_limit_mirror_does_not_reject_after_window_roll(monkeypatch, 
         )
     assert exc_info.value.status_code == 429
 
-    # After the window boundary (t=59.75, while the stale mirror entry is
-    # still cached) the key must recover immediately instead of being
+    # After the window boundary (strictly past 60s, while the stale mirror
+    # entry is still cached) the key must recover immediately instead of being
     # rejected from the stale local mirror.
-    time_controller.advance(39.75)
+    time_controller.advance(40.25)
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
     )
