@@ -5538,6 +5538,12 @@ class BaseLLMHTTPHandler:
             and k not in internal_params
         }
         kwargs_for_followup.update(patch.kwargs)
+        # A request patch can carry provider connection parameters in kwargs
+        # even when the same values already live in optional_params. Keep the
+        # optional-params value as the single source of truth so the follow-up
+        # call cannot fail with duplicate keyword arguments.
+        for key in optional_params_for_followup:
+            kwargs_for_followup.pop(key, None)
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
