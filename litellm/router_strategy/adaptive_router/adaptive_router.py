@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -204,27 +203,30 @@ class AdaptiveRouter:
         if isinstance(kwargs_metadata, dict):
             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = chosen_model
 
+        routing_decision: Final = StandardLoggingRoutingDecision(
+            router_model_name=self.router_name,
+            router_type="adaptive",
+            routed_model=chosen_model,
+            cause="bandit",
+            request_type=request_type.value,
+            conversation_continuing=conversation_is_continuing(messages),
+        )
+        routing_decision.update(self._savings_baseline_fields())
         return PreRoutingHookResponse(
             model=chosen_model,
             messages=messages,
-            routing_decision=StandardLoggingRoutingDecision(
-                router_model_name=self.router_name,
-                router_type="adaptive",
-                routed_model=chosen_model,
-                cause="bandit",
-                request_type=request_type.value,
-                conversation_continuing=conversation_is_continuing(messages),
-                **self._savings_baseline_fields(),
-            ),
+            routing_decision=routing_decision,
         )
 
-    def _savings_baseline_fields(self) -> Mapping[str, str]:
+    def _savings_baseline_fields(self) -> StandardLoggingRoutingDecision:
         if self.litellm_router_instance is None:
             return {}  # mutable-ok: immutable empty result for absent router
         baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
             return {}  # mutable-ok: immutable empty result for unresolved baseline
-        fields = {"savings_baseline_model": baseline.model}  # mutable-ok: assemble TypedDict kwargs
+        fields: StandardLoggingRoutingDecision = {
+            "savings_baseline_model": baseline.model,
+        }  # mutable-ok: assemble TypedDict kwargs
         if baseline.deployment_id is not None:
             fields["savings_baseline_deployment_id"] = baseline.deployment_id
         return fields
