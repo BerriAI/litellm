@@ -82,6 +82,25 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     @staticmethod
+    def _is_unsupported_reasoning_effort(model: str, effort: str | None) -> bool:
+        """Apply the GPT-5 reasoning-effort capability flags used by chat completions."""
+        from litellm.utils import _is_explicitly_disabled_factory, _supports_factory
+
+        if effort == "xhigh":
+            return not _supports_factory(
+                model=model,
+                custom_llm_provider=None,
+                key="supports_xhigh_reasoning_effort",
+            )
+        if effort in ("minimal", "low"):
+            return _is_explicitly_disabled_factory(
+                model=model,
+                custom_llm_provider=None,
+                key=f"supports_{effort}_reasoning_effort",
+            )
+        return False
+
+    @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
         """Raise sub-minimum max_output_tokens up to the OpenAI Responses API minimum.
 
@@ -130,46 +149,31 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
 
         if self._is_gpt_5_model(model=model):
-            reasoning: Final = params.get("reasoning") or {}
-            effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
-            if isinstance(effort, str):
-                from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+            reasoning: Final = response_api_optional_params.get("reasoning")
+            effort: Final = reasoning.get("effort") if reasoning is not None else None
+            unsupported_effort: Final = self._is_unsupported_reasoning_effort(model, effort)
+            should_drop_effort: Final = unsupported_effort and (drop_params or litellm.drop_params)
 
-                unsupported_effort: Final = (
-                    effort == "xhigh"
-                    and not OpenAIGPT5Config._supports_reasoning_effort_level(  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportCallIssue]  # shared GPT-5 capability gate
-                        model,
-                        effort,  # pyright: ignore[reportArgumentType, reportCallIssue]  # shared helper call
-                    )
-                ) or (
-                    effort in ("minimal", "low")
-                    and OpenAIGPT5Config._is_reasoning_effort_level_explicitly_disabled(  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportCallIssue]  # shared GPT-5 capability gate
-                        model,
-                        effort,  # pyright: ignore[reportArgumentType, reportCallIssue]  # shared helper call
-                    )
-                )
-                if unsupported_effort:
-                    if drop_params or litellm.drop_params:
-                        updated_reasoning: Final = dict(reasoning)  # mutable-ok: local copy
+            if unsupported_effort:
+                if should_drop_effort:
+                    if reasoning is not None:
+                        updated_reasoning: Final = reasoning.copy()  # mutable-ok: local copy
                         updated_reasoning.pop("effort", None)
                         if updated_reasoning:
                             params["reasoning"] = updated_reasoning
                         else:
                             params.pop("reasoning", None)
-                    else:
-                        raise litellm.UnsupportedParamsError(
-                            message=f"reasoning.effort={effort} is not supported for this model.",
-                            status_code=400,
-                        )
+                else:
+                    raise litellm.UnsupportedParamsError(
+                        message=f"reasoning.effort={effort} is not supported for this model.",
+                        status_code=400,
+                    )
 
             temperature: Final = params.get("temperature")
             if temperature is not None and temperature != 1:
-                transformed_reasoning: Final = params.get("reasoning") or {}  # mutable-ok: local view
-                transformed_effort: Final = (
-                    transformed_reasoning.get("effort") if isinstance(transformed_reasoning, dict) else None
-                )
+                effective_effort: Final = None if should_drop_effort else effort
                 supports_none: Final = self._supports_reasoning_effort_none(model=model)
-                if supports_none and self._effort_resolves_to_none(model, transformed_effort):
+                if supports_none and self._effort_resolves_to_none(model, effective_effort):
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
                     params.pop("temperature", None)
