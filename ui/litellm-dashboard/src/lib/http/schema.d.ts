@@ -18192,6 +18192,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/server/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Mcp Servers
+         * @description Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON
+         */
+        post: operations["import_mcp_servers_v1_mcp_server_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/server/oauth/session": {
         parameters: {
             query?: never;
@@ -30564,6 +30584,70 @@ export interface components {
              * @enum {string}
              */
             status?: "healthy" | "unhealthy";
+        };
+        /** MCPConnectorEntry */
+        MCPConnectorEntry: {
+            /** Args */
+            args?: string[];
+            /** Authorization Token */
+            authorization_token?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Env */
+            env?: {
+                [key: string]: string;
+            };
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            } | null;
+            /** Name */
+            name?: string | null;
+            /** Type */
+            type?: string | null;
+            /** Url */
+            url?: string | null;
+        };
+        /** MCPConnectorImportFailure */
+        MCPConnectorImportFailure: {
+            /** Error */
+            error: string;
+            /** Name */
+            name: string;
+        };
+        /** MCPConnectorImportRequest */
+        MCPConnectorImportRequest: {
+            /** Mcp Servers */
+            mcp_servers: {
+                [key: string]: components["schemas"]["MCPConnectorEntry"];
+            } | components["schemas"]["MCPConnectorEntry"][];
+        };
+        /** MCPConnectorImportResponse */
+        MCPConnectorImportResponse: {
+            /** Errors */
+            errors: components["schemas"]["MCPConnectorImportFailure"][];
+            /** Imported */
+            imported: components["schemas"]["MCPConnectorImportResult"][];
+            /** Skipped */
+            skipped: components["schemas"]["MCPConnectorImportSkipped"][];
+        };
+        /** MCPConnectorImportResult */
+        MCPConnectorImportResult: {
+            /** Alias */
+            alias: string;
+            /** Name */
+            name: string;
+            /** Server Id */
+            server_id: string;
+        };
+        /** MCPConnectorImportSkipped */
+        MCPConnectorImportSkipped: {
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
         };
         /** MCPCredentials */
         MCPCredentials: {
@@ -61454,6 +61538,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_mcp_servers_v1_mcp_server_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPConnectorImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConnectorImportResponse"];
                 };
             };
             /** @description Validation Error */
