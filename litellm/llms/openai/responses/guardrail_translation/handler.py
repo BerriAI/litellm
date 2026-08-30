@@ -29,6 +29,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 """
 
 from collections.abc import Mapping, Sequence
+from itertools import accumulate
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -119,33 +120,85 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
     return {**item, field: converted_value}  # mutable-ok: request input items must stay JSON-plain dicts
 
 
+def _is_function_call_item(item: object) -> bool:
+    return isinstance(item, Mapping) and item.get("type") in ("function_call", "custom_tool_call")
+
+
+def _last_message_role(messages: Sequence[object]) -> str | None:
+    if not messages:
+        return None
+    last: Final = messages[-1]
+    role: Final = last.get("role") if isinstance(last, Mapping) else getattr(last, "role", None)
+    return role if isinstance(role, str) else None
+
+
+def _provenance_unit_bounds(
+    raw_input: Sequence[object],
+    solo_conversions: Sequence[Sequence[object]],
+) -> tuple[tuple[int, int], ...]:
+    trailing_roles: Final = tuple(
+        accumulate(
+            (_last_message_role(messages) for messages in solo_conversions),
+            lambda previous, current: current if current is not None else previous,
+        )
+    )
+    start_indexes: Final = tuple(
+        index
+        for index in range(len(raw_input))
+        if index == 0 or not (_is_function_call_item(raw_input[index]) and trailing_roles[index - 1] == "assistant")
+    )
+    return tuple(zip(start_indexes, (*start_indexes[1:], len(raw_input))))
+
+
 def _input_item_provenance(
     raw_input: Sequence[object],
     expected_messages: Sequence[object],
 ) -> tuple[Mapping[int, int], frozenset[int]] | None:
     if not all(isinstance(item, Mapping) for item in raw_input):
         return None
-    prefixes: Final = tuple(
+    solo_conversions: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=cast("ResponseInputParam", raw_input[:count]),  # cast-ok: items checked as Mappings above
+            input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
         )
-        for count in range(len(raw_input) + 1)
+        for item in raw_input
     )
-    if tuple(prefixes[-1]) != tuple(expected_messages):
+    full_conversion: Final = tuple(
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
+            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+        )
+    )
+    if full_conversion != tuple(expected_messages):
         return None
+    units: Final = _provenance_unit_bounds(raw_input, solo_conversions)
+    unit_messages: Final = tuple(
+        tuple(solo_conversions[start])
+        if end - start == 1
+        else tuple(
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
+                responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            )
+        )
+        for start, end in units
+    )
+    if tuple(message for messages in unit_messages for message in messages) != full_conversion:
+        return None
+    boundaries: Final = tuple(accumulate((len(messages) for messages in unit_messages), initial=0))
     item_for_message: Final = MappingProxyType(
         {
-            message_index: item_index
-            for item_index in range(len(raw_input))
-            for message_index in range(len(prefixes[item_index]), len(prefixes[item_index + 1]))
+            message_index: start
+            for unit_index, (start, end) in enumerate(units)
+            if end - start == 1
+            for message_index in range(boundaries[unit_index], boundaries[unit_index + 1])
         }
     )
     tainted: Final = frozenset(
         message_index
-        for item_index in range(len(raw_input))
-        for message_index in range(len(prefixes[item_index]))
-        if prefixes[item_index + 1][message_index] != prefixes[item_index][message_index]
+        for unit_index, (start, end) in enumerate(units)
+        if end - start > 1
+        for message_index in range(boundaries[unit_index], boundaries[unit_index + 1])
     )
     return item_for_message, tainted
 
@@ -351,6 +404,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         original_messages: Sequence[object],
         structured_messages: Sequence[AllMessageValues],
     ) -> None:
+        if not isinstance(structured_messages, list):
+            return
         if _patch_rewritten_rows_into_input(data, original_messages, structured_messages):
             return
         input_items, instructions = (
