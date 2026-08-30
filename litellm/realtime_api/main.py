@@ -152,8 +152,6 @@ def _get_realtime_http_extra_headers(
         **(extra_headers or {})
     }
     if custom_llm_provider == "azure" and not resolved_api_key:
-        from litellm.llms.azure.common_utils import get_azure_ad_token
-
         azure_ad_token: Final = get_azure_ad_token(litellm_params)
         if azure_ad_token:
             resolved_headers["Authorization"] = f"Bearer {azure_ad_token}"
@@ -632,8 +630,6 @@ async def _arealtime(
         api_key = dynamic_api_key or litellm.api_key or litellm.openai_key or get_secret_str("AZURE_API_KEY")
         resolved_azure_ad_token = azure_ad_token or litellm_params.azure_ad_token
         if not api_key and not resolved_azure_ad_token:
-            from litellm.llms.azure.common_utils import get_azure_ad_token
-
             resolved_azure_ad_token = get_azure_ad_token(litellm_params)
 
         api_version = api_version or litellm_params.api_version or "2024-10-01-preview"

@@ -20,6 +20,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.realtime_endpoints.endpoints import (
+    _ALLOWED_SESSION_TYPES,
+    _coerce_realtime_session_type,
     _decode_realtime_token_payload,
     _encode_realtime_token_payload,
 )
@@ -1051,7 +1053,6 @@ async def test_transcription_sessions_encrypts_client_secret(
 
 
 def test_session_type_coerced_for_unknown_value():
-    """An unrecognized session_type in the token falls back to 'realtime'."""
     payload = _encode_realtime_token_payload(
         ephemeral_key="epk",
         model_id="gpt-4o",
@@ -1060,11 +1061,12 @@ def test_session_type_coerced_for_unknown_value():
         expires_at=None,
         session_type="INJECTED_TYPE",
     )
-    # Force-deserialize and check the coercion that happens in proxy_realtime_calls.
     decoded = json.loads(payload)
-    session_type = decoded.get("session_type") or "realtime"
-    if session_type not in ("realtime", "transcription"):
-        session_type = "realtime"
+    assert decoded["session_type"] == "INJECTED_TYPE"
+    assert _coerce_realtime_session_type("INJECTED_TYPE") == "realtime"
+    assert _coerce_realtime_session_type(None) == "realtime"
+    for allowed_session_type in _ALLOWED_SESSION_TYPES:
+        assert _coerce_realtime_session_type(allowed_session_type) == allowed_session_type
 
 
 @pytest.mark.parametrize(
