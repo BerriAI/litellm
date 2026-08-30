@@ -567,9 +567,7 @@ async def test_update_database_and_spend_counters_preserves_db_exception_when_re
 @pytest.mark.asyncio
 async def test_update_database_and_spend_counters_updates_counters_after_db_update():
     proxy_logging_obj = MagicMock()
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
-        return_value="chatcmpl-abc123"
-    )
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
     increment_spend_counters = AsyncMock()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
     start_time = datetime.now()
@@ -602,7 +600,6 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         budget_reservation=budget_reservation,
         end_user_id="test_end_user_id",
         tags=["tag-a"],
-        request_id="chatcmpl-abc123",
         request_started_at=start_time,
         model_access_groups=("premium",),
     )
@@ -1882,61 +1879,6 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
         assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
             1 if expect_spend_log else 0
         )
-
-
-@pytest.mark.asyncio
-async def test_update_database_and_spend_counters_forwards_the_spend_log_request_id():
-    """The budget-window flush excludes the log rows its increments already
-    cover. That only works if the id update_database recorded the row under is
-    handed to the counter update, so this seam is load-bearing."""
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
-        return_value="chatcmpl-abc123"
-    )
-    increment_spend_counters = AsyncMock()
-
-    await _update_database_and_spend_counters(
-        proxy_logging_obj=proxy_logging_obj,
-        increment_spend_counters=increment_spend_counters,
-        user_api_key="test_api_key",
-        user_id="test_user_id",
-        end_user_id=None,
-        team_id="test_team_id",
-        org_id="test_org_id",
-        kwargs={},
-        completion_response=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-        response_cost=0.2,
-        budget_reservation=None,
-    )
-
-    assert increment_spend_counters.await_args.kwargs["request_id"] == "chatcmpl-abc123"
-
-
-@pytest.mark.asyncio
-async def test_update_database_and_spend_counters_forwards_a_missing_request_id_as_none():
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(return_value=None)
-    increment_spend_counters = AsyncMock()
-
-    await _update_database_and_spend_counters(
-        proxy_logging_obj=proxy_logging_obj,
-        increment_spend_counters=increment_spend_counters,
-        user_api_key="test_api_key",
-        user_id="test_user_id",
-        end_user_id=None,
-        team_id="test_team_id",
-        org_id="test_org_id",
-        kwargs={},
-        completion_response=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-        response_cost=0.2,
-        budget_reservation=None,
-    )
-
-    assert increment_spend_counters.await_args.kwargs["request_id"] is None
 
 
 class _FakeDeploymentLookup:
