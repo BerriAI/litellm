@@ -231,21 +231,29 @@ impl FromRequestParts<AppState> for RequireValidKey {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         // 1. Extract raw key (zero-alloc borrow from headers)
-        let raw_key = extract_raw_key(parts).ok_or(AuthRejection::KeyNotFound)?;
+        let raw_key = extract_raw_key(parts).ok_or_else(|| {
+            tracing::warn!("Auth: No key extracted from headers");
+            AuthRejection::KeyNotFound
+        })?;
+        
+        tracing::info!("Auth: Extracted raw_key='{}', master_key={:?}", raw_key, state.master_key.as_deref());
 
         // 2. Check master key (constant-time)
         if is_master_key(raw_key, state.master_key.as_deref()) {
+            tracing::info!("Auth: Master key match!");
             return Ok(RequireValidKey {
                 key_object: master_key_object(),
                 hashed_token: HashedToken::hash(raw_key),
             });
         }
+        tracing::warn!("Auth: Master key mismatch, proceeding to cache/DB lookup");
 
         // 3. Hash the key (stack-allocated)
         let hashed_token = HashedToken::hash(raw_key);
 
         // 4. Look up in cache (returns Arc, zero-clone)
         if let Some(key_obj) = lookup_cache(&state.key_cache, &hashed_token) {
+            tracing::info!("Auth: Found key in cache, blocked={}", key_obj.blocked);
             if key_obj.blocked {
                 return Err(AuthRejection::Blocked.into());
             }
@@ -257,12 +265,18 @@ impl FromRequestParts<AppState> for RequireValidKey {
                 hashed_token,
             });
         }
+        tracing::debug!("Auth: Key not found in cache");
 
         // 5. Cache miss: look up in DB (returns Arc)
+        tracing::debug!("Auth: Looking up key in DB");
         let key_obj = lookup_db(state, &hashed_token)
             .await?
-            .ok_or(AuthRejection::KeyNotFound)?;
+            .ok_or_else(|| {
+                tracing::warn!("Auth: Key not found in DB, returning KeyNotFound");
+                AuthRejection::KeyNotFound
+            })?;
 
+        tracing::info!("Auth: Found key in DB, blocked={}", key_obj.blocked);
         if key_obj.blocked {
             return Err(AuthRejection::Blocked.into());
         }
