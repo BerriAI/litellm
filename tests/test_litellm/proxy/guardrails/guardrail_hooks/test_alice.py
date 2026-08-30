@@ -46,6 +46,10 @@ def test_alice_guardrail_config(monkeypatch: pytest.MonkeyPatch):
         config_file_path="",
     )
 
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, AliceGuardrail)]
+    assert len(registered) == 1
+    assert registered[0].guardrail_name == "alice"
+
 
 class TestAliceGuardrailInitialization:
     def setup_method(self):
