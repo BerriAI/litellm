@@ -2457,12 +2457,15 @@ class ProxyBaseLLMRequestProcessing:
                     logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
 
                 if route_type == "allm_passthrough_route":
-                    streaming_headers = custom_headers  # rebind-ok: initial assignment before header merge
-                    if hasattr(response, "headers"):
-                        streaming_headers = ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(  # rebind-ok: merge result replaces initial assignment
-                            response_headers=getattr(response, "headers", None),
+                    upstream_response_headers: Final = getattr(response, "headers", None)
+                    streaming_headers: Final = (
+                        ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
+                            response_headers=upstream_response_headers,
                             custom_headers=custom_headers,
                         )
+                        if upstream_response_headers is not None
+                        else custom_headers
+                    )
 
                     # Check if response is an async generator
                     if self._is_streaming_response(response):

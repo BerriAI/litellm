@@ -53,20 +53,22 @@ class GigaChatModelResponseIterator:
         finish_reason: str | None = chunk_finish_reason
 
         # Handle function_call in stream
-        if chunk_finish_reason == "function_call" and delta.get("function_call"):
-            func_call: Final = delta["function_call"]
-            args_raw: Final = func_call.get("arguments") or {}
+        raw_function_call: Final = delta.get("function_call")
+        if chunk_finish_reason == "function_call" and isinstance(raw_function_call, Mapping) and raw_function_call:
+            func_call: Final[Mapping[str, object]] = raw_function_call
+            args_raw: Final[object] = func_call.get("arguments") or {}
             args_str: str  # rebind-ok: conditionally assigned from dict or str
             if isinstance(args_raw, dict):
                 args_str = json.dumps(args_raw, ensure_ascii=False)  # rebind-ok: build from dict
             else:
                 args_str = str(args_raw)
 
+            name_raw: Final = func_call.get("name")
             tool_use = ChatCompletionToolCallChunk(
                 id=f"call_{uuid.uuid4().hex[:24]}",
                 type="function",
                 function=ChatCompletionToolCallFunctionChunk(
-                    name=func_call.get("name", ""),
+                    name=name_raw if isinstance(name_raw, str) else "",
                     arguments=args_str,
                 ),
                 index=0,
