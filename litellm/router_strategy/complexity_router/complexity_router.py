@@ -768,16 +768,37 @@ class ClassificationOutcome(NamedTuple):
     classifier_cost: float | None = None
 
 
-class _ContextWindowPlacement(NamedTuple):
-    """Where the context-window gate moved a decided placement, and to which model groups.
+def _allowed(models: tuple[str, ...], fit_filter: frozenset[str] | None) -> tuple[str, ...]:
+    return models if fit_filter is None else tuple(model for model in models if model in fit_filter)
 
-    `tier` is the classified tier when only the in-tier pick needed restricting, or the
-    lowest higher tier with a provably fitting group when the whole tier could not hold
-    the prompt. `allowed_models` is the subset of that tier's pool the pick may use.
-    """
+
+def _apply_context_placement(
+    tier: ComplexityTier | str, signals: tuple[str, ...], placement: _ContextWindowPlacement | None
+) -> tuple[ComplexityTier | str, tuple[str, ...], ComplexityTier | str | None]:
+    """(final tier, signals, original tier when the gate escalated, else None)."""
+    if placement is None:
+        return tier, signals, None
+    if _tier_name(placement.tier) == _tier_name(tier):
+        return placement.tier, signals, None
+    return placement.tier, (*signals, "context_escalation"), tier
+
+
+def _window_can_hold(window: int | None, needed: int, buffer: float) -> bool:
+    return window is None or needed <= int(window * buffer)
+
+
+def _group_provably_fits(facts: tuple[int | None, bool], needed: int, buffer: float) -> bool:
+    window, has_unknown = facts
+    return window is not None and not has_unknown and needed <= int(window * buffer)
+
+
+class _ContextWindowPlacement(NamedTuple):
+    """Where the context-window gate placed the request: the placement tier, the subset of its
+    pool the pick may use, and every configured group not provably misfit (the adaptive filter)."""
 
     tier: ComplexityTier | str
     allowed_models: tuple[str, ...]
+    holdable_models: frozenset[str]
 
 
 class _SessionAffinityPin(NamedTuple):
@@ -1796,6 +1817,7 @@ class ComplexityRouter(CustomLogger):
         request_kwargs: dict[str, Any] | None = None,
         hard_floor: ComplexityTier | str | None = None,
         hard_ceiling: ComplexityTier | str | None = None,
+        fit_filter: frozenset[str] | None = None,
     ) -> str:
         """hard_floor excludes every candidate whose tiers all sit below it, turning this pick's
         soft floors (a distance penalty a high-scoring cheap model can outweigh) into a hard
@@ -1808,7 +1830,10 @@ class ComplexityRouter(CustomLogger):
         tier because that is all it is worth, so a bandit trading cost for quality has nothing to
         win and must not reach above it. Without it the distance penalty is the only thing holding
         the tier, and a deployment that lowers tier_distance_penalty silently gets the expensive
-        model back while the routing decision still reads as the cheapest tier."""
+        model back while the routing decision still reads as the cheapest tier.
+
+        fit_filter excludes candidates the context-window gate proved cannot hold the prompt,
+        in every phase including cold start and the tier fallbacks."""
         from litellm.router_strategy.adaptive_router.bandit import (
             normalized_cost,
             thompson_sample,
@@ -1819,12 +1844,12 @@ class ComplexityRouter(CustomLogger):
         if adaptive is None or not isinstance(classified_tier, ComplexityTier):
             # Custom tier names have no severity index; adaptive is rejected alongside
             # tier_definitions, so this guard is the contract for any future caller.
-            return self.get_model_for_tier(classified_tier)
+            return self._fitting_tier_fallback(classified_tier, fit_filter)
 
         request_type: Final = classify_prompt(user_message)
         classified_idx: Final = TIER_SEVERITY_ORDER.index(classified_tier)
         pools: Final = self._tier_pools()
-        classified_candidates: Final = tuple(pools.get(_tier_name(classified_tier), ()))
+        classified_candidates: Final = _allowed(tuple(pools.get(_tier_name(classified_tier), ())), fit_filter)
         cold_start_candidates: Final = tuple(
             model for model in classified_candidates if adaptive._cells[(request_type, model)].total_samples == 0
         )
@@ -1854,9 +1879,9 @@ class ComplexityRouter(CustomLogger):
         if self.config.adaptive_eligible == "classified_tier":
             candidates = list(classified_candidates)
             if not candidates:
-                return self.get_model_for_tier(classified_tier)
+                return self._fitting_tier_fallback(classified_tier, fit_filter)
         else:
-            candidates = list(adaptive.config.available_models)
+            candidates = list(_allowed(tuple(adaptive.config.available_models), fit_filter))
 
         all_costs: Final = [adaptive.model_to_cost.get(m, 0.0) for m in candidates]
         quality_weight: Final = self.config.adaptive_weights.quality
@@ -1903,7 +1928,7 @@ class ComplexityRouter(CustomLogger):
                 best_score = score
                 best_model = model
         if best_model is None:
-            return self.get_model_for_tier(classified_tier)
+            return self._fitting_tier_fallback(classified_tier, fit_filter)
         if request_kwargs is not None:
             metadata = request_kwargs.setdefault("metadata", {})
             if isinstance(metadata, dict):
@@ -1919,6 +1944,12 @@ class ComplexityRouter(CustomLogger):
                     "candidates": candidate_scores,
                 }
         return best_model
+
+    def _fitting_tier_fallback(self, classified_tier: ComplexityTier | str, fit_filter: frozenset[str] | None) -> str:
+        fitting: Final = _allowed(tuple(self._tier_pools().get(_tier_name(classified_tier), ())), fit_filter)
+        if fit_filter is not None and fitting:
+            return self._pick_from_tier_value(fitting, _tier_name(classified_tier))
+        return self.get_model_for_tier(classified_tier)
 
     def _resolve_plan_mode_floor(self) -> ComplexityTier | str | None:
         """The configured floor as an active tier: the built-in enum member, or the defined
@@ -1991,6 +2022,23 @@ class ComplexityRouter(CustomLogger):
         return name if self.config.has_custom_tiers else ComplexityTier(name)
 
     def _deployment_window(self, group: str, deployment: Mapping[str, object]) -> int | None:
+        from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
+        deployment_model_info: Final = deployment.get("model_info")
+        declared: Final = (
+            deployment_model_info.get("max_input_tokens") if isinstance(deployment_model_info, Mapping) else None
+        )
+        if isinstance(declared, int):
+            return declared
+        litellm_params: Final = deployment.get("litellm_params")
+        params: Final = litellm_params if isinstance(litellm_params, Mapping) else EMPTY_MAPPING
+        provider_override: Final = params.get("custom_llm_provider")
+        # get_router_model_info resolves the provider, and get_llm_provider runs the OAuth device
+        # flow for github_copilot/chatgpt, so a metadata question must never reach it for those.
+        if declared_authenticating_provider(
+            str(params.get("model") or ""), provider_override if isinstance(provider_override, str) else None
+        ):
+            return None
         try:
             model_info: Final = self.litellm_router_instance.get_router_model_info(
                 deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
@@ -2002,28 +2050,23 @@ class ComplexityRouter(CustomLogger):
         return window if isinstance(window, int) else None
 
     def _group_window_facts(self, group: str) -> tuple[int | None, bool]:
-        """(largest declared context window across the group's deployments, whether any deployment
-        declares none). Windows resolve through the router's own model-info chain
-        (litellm_params.model / base_model), never the admin-facing group name."""
-        deployments: Final = self.litellm_router_instance.get_model_list(model_name=group)
+        """(smallest declared context window across the group's deployments, whether any deployment
+        declares none). The core router picks a deployment within the group without a fit check, so
+        the group is only as safe as its smallest member."""
+        list_models: Final = getattr(self.litellm_router_instance, "get_model_list", None)
+        deployments: Final = list_models(model_name=group) if callable(list_models) else None
         if not isinstance(deployments, list) or not deployments:
             return (None, True)
         windows: Final = tuple(
             window for deployment in deployments if (window := self._deployment_window(group, deployment)) is not None
         )
-        return (max(windows) if windows else None, len(windows) < len(deployments))
+        return (min(windows) if windows else None, len(windows) < len(deployments))
 
     @staticmethod
-    def _out_of_band_request_chars(request_kwargs: Mapping[str, object]) -> int:
-        """Prompt content the resolved message list never carries, in characters.
-
-        A coding agent's context is dominated by exactly these: the Responses API's
-        `instructions` kwarg, the /v1/messages top-level `system` block (which never
-        becomes a chat message before this hook), and tool definitions on every surface.
-        All of it counts against the provider's window, so a gate reading only the
-        message list dispatches a provably oversized request and reads as broken for
-        precisely the client this feature exists for.
-        """
+    def _out_of_band_request_text(request_kwargs: Mapping[str, object]) -> str:
+        """Prompt content the resolved message list never carries: the Responses API's
+        `instructions`, the /v1/messages top-level `system` block, and tool definitions.
+        A coding agent's context is dominated by these."""
         import json
 
         instructions: Final = request_kwargs.get("instructions")
@@ -2033,46 +2076,43 @@ class ComplexityRouter(CustomLogger):
         tools: Final = (
             body.get("tools") if isinstance(body, Mapping) and body.get("tools") else request_kwargs.get("tools")
         )
-        tools_chars = 0
+        tools_text = ""
         if tools:
             try:
-                tools_chars = len(json.dumps(tools, default=str))
+                tools_text = json.dumps(tools, default=str)
             except (TypeError, ValueError):
-                tools_chars = len(str(tools))
+                tools_text = str(tools)
         return (
-            (len(instructions) if isinstance(instructions, str) else 0)
-            + (len(str(system)) if system is not None else 0)
-            + tools_chars
+            (instructions if isinstance(instructions, str) else "")
+            + (str(system) if system is not None else "")
+            + tools_text
         )
 
-    def _estimated_request_chars(
+    def _request_byte_upper_bound(
         self, resolved_messages: Sequence[Mapping[str, object]] | None, request_kwargs: Mapping[str, object]
     ) -> int:
-        content_chars: Final = sum(len(str(m.get("content") or "")) for m in resolved_messages or ())
-        return content_chars + self._out_of_band_request_chars(request_kwargs)
+        """UTF-8 byte length of all prompt content. BPE emits at least one byte per token in every
+        script, so the token count never exceeds this and 'bytes fit' soundly skips counting."""
+        content_bytes: Final = sum(len(str(m.get("content") or "").encode()) for m in resolved_messages or ())
+        return content_bytes + len(self._out_of_band_request_text(request_kwargs).encode())
 
     async def _counted_request_tokens(
         self, resolved_messages: Sequence[Mapping[str, object]], request_kwargs: Mapping[str, object]
     ) -> int | None:
-        """Authoritative token count off the event loop, None when counting fails.
-
-        Counts the resolved (chat-shape) messages with the real tokenizer so all three
-        request surfaces share one path, and adds the out-of-band carriers (instructions,
-        top-level system, tools) at the chars-per-token estimate: they are not chat
-        messages, exact tool accounting is the core pre-call check's own open problem,
-        and the buffer absorbs the residual either way.
-        """
+        """Real-tokenizer count of the resolved messages plus the out-of-band carriers, off the
+        event loop; None when counting fails, and the gate then leaves the placement alone."""
         import litellm
         from litellm.litellm_core_utils.asyncify import asyncify
 
+        out_of_band: Final = self._out_of_band_request_text(request_kwargs)
         try:
             counted: Final = await asyncify(litellm.token_counter)(
                 messages=cast(list, resolved_messages)  # cast-ok: token_counter only iterates the sequence
             )
+            return counted + (await asyncify(litellm.token_counter)(text=out_of_band) if out_of_band else 0)
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.debug("ComplexityRouter: context-window token count failed. Got - %s", e)
             return None
-        return counted + self._out_of_band_request_chars(request_kwargs) // 4
 
     async def _context_window_placement(
         self,
@@ -2081,18 +2121,11 @@ class ComplexityRouter(CustomLogger):
         request_kwargs: Mapping[str, object],
         pool_override: tuple[str, ...] | None = None,
     ) -> _ContextWindowPlacement | None:
-        """Correct a decided placement whose models provably cannot hold the prompt, or None.
-
-        None means the placement stands: the gate is off, every group fits (or none declares
-        a window, which is not proof of misfit), the prompt is nowhere near a boundary, or
-        nothing configured provably fits and dispatching as decided is all that is left.
-        Escalation walks the configured tier order upward and lands only on a group whose
-        declared window fits, so an escalated request can never trade a provable misfit for
-        an unprovable one.
-        """
-        if not self.config.enable_context_window_escalation:
-            return None
-        if not resolved_messages:
+        """Correct a decided placement whose models provably cannot hold the prompt, or None
+        (the placement stands). Only a real tokenizer count ever moves a request, escalation
+        lands only on groups whose every deployment declares a fitting window, and a group
+        with no resolvable window is never moved on faith in either direction."""
+        if not self.config.enable_context_window_escalation or not resolved_messages:
             return None
         pools: Final = self._tier_pools()
         pool: Final = pool_override if pool_override is not None else tuple(pools.get(_tier_name(tier), ()))
@@ -2103,34 +2136,45 @@ class ComplexityRouter(CustomLogger):
         if not known_windows:
             return None
         buffer: Final = self.config.context_window_escalation_buffer
-
-        def usable_tokens(window: int) -> int:
-            return int(window * buffer)
-
-        estimated: Final = self._estimated_request_chars(resolved_messages, request_kwargs) // 4
-        if estimated <= usable_tokens(min(known_windows)) // 2:
+        if self._request_byte_upper_bound(resolved_messages, request_kwargs) <= int(min(known_windows) * buffer):
             return None
-        counted: Final = await self._counted_request_tokens(resolved_messages, request_kwargs)
-        needed: Final = counted if counted is not None else estimated
+        needed: Final = await self._counted_request_tokens(resolved_messages, request_kwargs)
+        if needed is None:
+            return None
+        return self._placement_for_tokens(tier=tier, pool=pool, pools=pools, facts=facts, needed=needed)
 
-        def group_can_hold(group: str) -> bool:
-            window, _ = facts[group]
-            return window is None or needed <= usable_tokens(window)
-
-        in_tier: Final = tuple(group for group in pool if group_can_hold(group))
+    def _placement_for_tokens(
+        self,
+        *,
+        tier: ComplexityTier | str,
+        pool: tuple[str, ...],
+        pools: Mapping[str, list[str]],
+        facts: Mapping[str, tuple[int | None, bool]],
+        needed: int,
+    ) -> _ContextWindowPlacement | None:
+        buffer: Final = self.config.context_window_escalation_buffer
+        in_tier: Final = tuple(group for group in pool if _window_can_hold(facts[group][0], needed, buffer))
+        if in_tier and len(in_tier) == len(pool):
+            return None
+        holdable: Final = frozenset(
+            group
+            for tier_pool in pools.values()
+            for group in tier_pool
+            if _window_can_hold(self._group_window_facts(group)[0], needed, buffer)
+        )
         if in_tier:
-            if len(in_tier) == len(pool):
-                return None
-            return _ContextWindowPlacement(tier=tier, allowed_models=in_tier)
+            return _ContextWindowPlacement(tier=tier, allowed_models=in_tier, holdable_models=holdable)
         for name in self.config.tier_names()[self._active_tier_severity(tier) + 1 :]:
             proven = tuple(
                 group
                 for group in pools.get(name, ())
-                if (window := self._group_window_facts(group)[0]) is not None and needed <= usable_tokens(window)
+                if _group_provably_fits(self._group_window_facts(group), needed, buffer)
             )
             if proven:
                 return _ContextWindowPlacement(
-                    tier=name if self.config.has_custom_tiers else ComplexityTier(name), allowed_models=proven
+                    tier=name if self.config.has_custom_tiers else ComplexityTier(name),
+                    allowed_models=proven,
+                    holdable_models=holdable,
                 )
         return None
 
@@ -2533,9 +2577,7 @@ class ComplexityRouter(CustomLogger):
                         else None
                     )
                     if pin_placement is not None and pin_context_original_tier is not None:
-                        # Per-request physics, never a re-pin: the stored pin keeps the session's
-                        # own model below, so the first turn whose prompt fits again routes
-                        # exactly as the session pinned it.
+                        # The stored pin below keeps the session's own model on purpose.
                         routed_model = self._pick_from_tier_value(
                             pin_placement.allowed_models, _tier_name(pin_placement.tier)
                         )
@@ -2779,13 +2821,7 @@ class ComplexityRouter(CustomLogger):
         if plan_floored:
             signals = (*signals, "plan_mode_floor")
         context_placement: Final = await self._context_window_placement(tier, resolved_messages, request_kwargs)
-        context_original_tier: Final = (
-            tier if context_placement is not None and _tier_name(context_placement.tier) != _tier_name(tier) else None
-        )
-        if context_placement is not None:
-            tier = context_placement.tier
-        if context_original_tier is not None:
-            signals = (*signals, "context_escalation")
+        tier, signals, context_original_tier = _apply_context_placement(tier, signals, context_placement)
         score_repr: Final = f"{score:.3f}" if score is not None else "n/a"
         fallback_model: Final = self.config.default_model if not self.config.plugins else None
         # A sentinel-carrying request skips the failure exit below, whether or not the floor
@@ -2832,15 +2868,15 @@ class ComplexityRouter(CustomLogger):
             # the cheapest tier would then contradict the floor and bound the pick below the tier
             # the decision reports.
             housekeeping_ceiling: Final = tier if outcome.cause == "housekeeping" else None
-            # The gate's placement outranks the plan floor by construction (it only ever
-            # raises the already-floored tier), and a floor the bandit can slide under is
-            # not a floor, so an escalated tier becomes the hard floor of the pick.
+            # A context-escalated tier becomes the hard floor: a floor the bandit can slide
+            # under is not a floor.
             routed_model = self._soft_floor_pick(
                 tier,
                 user_message,
                 request_kwargs,
                 hard_floor=tier if context_original_tier is not None else plan_floor,
                 hard_ceiling=housekeeping_ceiling,
+                fit_filter=context_placement.holdable_models if context_placement is not None else None,
             )
             adaptive: Final = self._ensure_adaptive_router()
             if adaptive is not None:
