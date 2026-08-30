@@ -53,11 +53,11 @@ describe("modelCreationScope", () => {
     expect(canCreateModels(VIEW_ONLY_ADMIN, { teams: [], ...noLimits })).toBe(false);
   });
 
-  // A blunt view-only gate would fail this: team-admin membership legitimately grants
-  // team-scoped creation, whatever the session role says.
-  it("still requires a team from a view-only admin who admins a team", () => {
+  // _check_proxy_admin_viewer_access (route_checks.py) 403s /model/new on the session role
+  // alone, before the team-scoped carve-out in ModelManagementAuthChecks can run.
+  it("forbids a view-only admin even when they admin a team", () => {
     expect(modelCreationScope(VIEW_ONLY_ADMIN, { teams: teamWhere("u-viewer", "admin"), ...noLimits })).toBe(
-      "team-required",
+      "forbidden",
     );
   });
 });
@@ -105,7 +105,9 @@ describe("canModifyModel", () => {
     expect(canModifyModel(VIEW_ONLY_ADMIN, null, teamRow)).toBe(false);
   });
 
-  it("lets a view-only user who admins the owning team act on its row", () => {
-    expect(canModifyModel(VIEW_ONLY_ADMIN, teamWhere("u-viewer", "admin"), teamRow)).toBe(true);
+  // The route RBAC blocks /model/update and /model/delete for the viewer role before the
+  // team-scoped carve-out runs, so team-admin membership changes nothing here either.
+  it("refuses a view-only user even when they admin the owning team", () => {
+    expect(canModifyModel(VIEW_ONLY_ADMIN, teamWhere("u-viewer", "admin"), teamRow)).toBe(false);
   });
 });
