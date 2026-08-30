@@ -1433,3 +1433,77 @@ class TestFlattenTopLevelSchemaCombinators:
         flatten_top_level_schema_combinators(schema)
 
         assert schema == snapshot
+
+
+class TestToolWithFlattenedParameters:
+    def _anyof_tool(self):
+        return {
+            "type": "function",
+            "function": {
+                "name": "automation_update",
+                "description": "Update an automation",
+                "parameters": {
+                    "type": "object",
+                    "anyOf": [
+                        {
+                            "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
+                            "required": ["id", "enabled"],
+                        },
+                        {
+                            "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
+                            "required": ["id", "schedule"],
+                        },
+                    ],
+                    "properties": {"id": {"type": "string"}},
+                    "required": ["id"],
+                },
+            },
+        }
+
+    def test_flattens_anyof_parameters_into_new_tool(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            tool_with_flattened_parameters,
+        )
+
+        tool = self._anyof_tool()
+        result = tool_with_flattened_parameters(tool)
+
+        assert result is not tool
+        parameters = result["function"]["parameters"]
+        assert "anyOf" not in parameters
+        assert parameters["type"] == "object"
+        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+        assert parameters["required"] == ["id"]
+        assert result["function"]["name"] == "automation_update"
+        assert tool == self._anyof_tool()
+
+    def test_clean_parameters_return_the_same_tool_object(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            tool_with_flattened_parameters,
+        )
+
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+            },
+        }
+
+        assert tool_with_flattened_parameters(tool) is tool
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "function"},
+            {"type": "function", "function": "not-a-dict"},
+            {"type": "function", "function": {"name": "no_params"}},
+            {"type": "function", "function": {"name": "bad_params", "parameters": "not-a-dict"}},
+        ],
+    )
+    def test_non_dict_function_or_parameters_return_the_same_tool_object(self, tool):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            tool_with_flattened_parameters,
+        )
+
+        assert tool_with_flattened_parameters(tool) is tool
