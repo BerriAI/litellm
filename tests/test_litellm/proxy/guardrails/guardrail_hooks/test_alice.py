@@ -17,13 +17,13 @@ from litellm.proxy.guardrails.guardrail_hooks.alice.alice import (
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
-def _guardrail(**overrides) -> AliceGuardrail:
-    params = {"api_key": "test-key", "guardrail_name": "alice", "event_hook": "pre_call"}
+def _guardrail(**overrides: object) -> AliceGuardrail:
+    params: dict[str, object] = {"api_key": "test-key", "guardrail_name": "alice", "event_hook": "pre_call"}
     params.update(overrides)
     return AliceGuardrail(**params)
 
 
-def _verdict(payload: dict, status_code: int = 200) -> Response:
+def _verdict(payload: dict[str, object], status_code: int = 200) -> Response:
     return Response(
         status_code=status_code,
         json=payload,
@@ -77,7 +77,9 @@ class TestAliceGuardrailInitialization:
 
 
 class TestAliceForwarding:
-    """The hook's arguments cross the wire as they were received — nothing selected, nothing renamed."""
+    """The hook's arguments cross the wire as they were received — nothing selected, nothing
+    renamed — except the caller's raw credentials, which are stripped before request_data is
+    serialized (see TestAliceCredentialStripping)."""
 
     @pytest.mark.asyncio
     async def test_forwards_the_hook_arguments_verbatim(self):
@@ -133,6 +135,41 @@ class TestAliceForwarding:
         await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type="request")
 
         assert guardrail.async_handler.post.call_count == 1
+
+
+class TestAliceCredentialStripping:
+    """request_data's raw-credential keys never leave the process."""
+
+    @pytest.mark.asyncio
+    async def test_secret_fields_and_api_key_are_stripped(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        request_data = {
+            "model": "gpt-4o",
+            "api_key": "sk-forwarded-provider-secret",
+            "secret_fields": {"raw_headers": {"authorization": "Bearer caller-virtual-key"}},
+            "metadata": {"user_api_key_alias": "payments-bot"},
+        }
+
+        await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data=request_data, input_type="request")
+
+        sent_request_data = guardrail.async_handler.post.call_args.kwargs["json"]["request_data"]
+        assert "secret_fields" not in sent_request_data
+        assert "api_key" not in sent_request_data
+        assert sent_request_data == {"model": "gpt-4o", "metadata": {"user_api_key_alias": "payments-bot"}}
+
+    @pytest.mark.asyncio
+    async def test_the_original_request_data_is_not_mutated(self):
+        """Stripping must only affect the outbound copy — api_key still has to reach the
+        provider, and secret_fields still has to reach the rest of the request pipeline."""
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        request_data = {"api_key": "sk-forwarded-provider-secret", "secret_fields": {"raw_headers": {}}}
+
+        await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data=request_data, input_type="request")
+
+        assert request_data["api_key"] == "sk-forwarded-provider-secret"
+        assert request_data["secret_fields"] == {"raw_headers": {}}
 
 
 class TestAliceVerdicts:
@@ -205,6 +242,34 @@ class TestAliceVerdicts:
             await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
     @pytest.mark.asyncio
+    async def test_mask_with_no_replacements_blocks(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "MASK", "categories": []}))
+
+        with pytest.raises(GuardrailRaisedException):
+            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    @pytest.mark.asyncio
+    async def test_mask_with_one_invalid_replacement_blocks_entirely(self):
+        """A mixed valid/invalid replacement list must not let the valid half through: that
+        would leave the content named by the invalid entry unmasked while looking like success."""
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            return_value=_verdict(
+                {
+                    "verdict": "MASK",
+                    "categories": ["pii"],
+                    "replacements": [{"index": 0, "text": "***"}, {"index": 9, "text": "***"}],
+                }
+            )
+        )
+
+        with pytest.raises(GuardrailRaisedException):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"]}, request_data={}, input_type="request"
+            )
+
+    @pytest.mark.asyncio
     async def test_mask_leaves_structured_messages_identical(self):
         """A new structured_messages object makes the translation layer skip the texts write-back."""
         guardrail = _guardrail()
@@ -273,13 +338,13 @@ class TestAliceTransportFailures:
         with pytest.raises(GuardrailRaisedException, match="unavailable"):
             await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
-    @pytest.mark.parametrize("status", [502, 503, 504])
+    @pytest.mark.parametrize("status", [500, 502, 503, 504])
     @pytest.mark.asyncio
     async def test_upstream_5xx_is_unreachable(self, status: int):
         guardrail = _guardrail(unreachable_fallback="fail_open")
         guardrail.async_handler.post = AsyncMock(
             side_effect=httpx.HTTPStatusError(
-                "bad gateway",
+                "server error",
                 request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
                 response=_verdict({}, status_code=status),
             )
@@ -288,6 +353,20 @@ class TestAliceTransportFailures:
         result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
         assert result["texts"] == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_a_500_fails_closed_by_default(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "server error",
+                request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
+                response=_verdict({}, status_code=500),
+            )
+        )
+
+        with pytest.raises(GuardrailRaisedException, match="unavailable"):
+            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
     @pytest.mark.asyncio
     async def test_a_4xx_is_not_treated_as_unreachable(self):
@@ -305,7 +384,7 @@ class TestAliceTransportFailures:
             await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
     @pytest.mark.asyncio
-    async def test_a_non_object_body_is_refused(self):
+    async def test_a_non_object_body_fails_closed_by_default(self):
         guardrail = _guardrail()
         guardrail.async_handler.post = AsyncMock(
             return_value=Response(
@@ -315,8 +394,52 @@ class TestAliceTransportFailures:
             )
         )
 
-        with pytest.raises(TypeError, match="non-object"):
+        with pytest.raises(GuardrailRaisedException, match="unavailable"):
             await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    @pytest.mark.asyncio
+    async def test_a_non_object_body_fails_open_when_configured(self):
+        guardrail = _guardrail(unreachable_fallback="fail_open")
+        guardrail.async_handler.post = AsyncMock(
+            return_value=Response(
+                status_code=200,
+                json=["not", "an", "object"],
+                request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
+            )
+        )
+
+        result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+        assert result["texts"] == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_fails_closed_by_default(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            return_value=Response(
+                status_code=200,
+                content=b"not json",
+                request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
+            )
+        )
+
+        with pytest.raises(GuardrailRaisedException, match="unavailable"):
+            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_fails_open_when_configured(self):
+        guardrail = _guardrail(unreachable_fallback="fail_open")
+        guardrail.async_handler.post = AsyncMock(
+            return_value=Response(
+                status_code=200,
+                content=b"not json",
+                request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
+            )
+        )
+
+        result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+        assert result["texts"] == ["hello"]
 
 
 class TestAliceSerialization:

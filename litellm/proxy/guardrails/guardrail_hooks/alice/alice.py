@@ -5,6 +5,7 @@
 #
 # +-------------------------------------------------------------+
 
+import json
 import os
 from collections.abc import Mapping
 from typing import (
@@ -52,6 +53,14 @@ _DEFAULT_BLOCK_MESSAGE: Final = "Blocked by your organization's content policy."
 _MAX_DEPTH: Final = 12
 _MAX_ITEMS: Final = 5000
 
+# request_data carries the caller's raw credentials under these top-level keys. LiteLLM's own
+# spend-log sanitizer excludes `secret_fields` for the same reason
+# (spend_tracking_utils._SENSITIVE_REQUEST_BODY_KEYS): `secret_fields.raw_headers` holds the
+# caller's Authorization / x-api-key in the clear, and `api_key` can carry a forwarded provider
+# credential. Posting either to a third-party guardrail endpoint would be worse than what the
+# proxy already refuses to persist in its own audit trail — so these never leave the process.
+_CREDENTIAL_KEYS_TO_STRIP: Final = frozenset({"secret_fields", "api_key"})
+
 
 class AliceReplacement(TypedDict):
     """A masked substitution, positional against the texts that were submitted."""
@@ -79,9 +88,19 @@ class AliceGuardrail(CustomGuardrail):
     Alice — policy-based guardrails for prompts and model responses.
 
     This forwards the hook's arguments as it received them and enforces the verdict that comes
-    back. It selects nothing and renames nothing: which parts of a conversation are worth
-    evaluating, and how a verdict is reached, are decided by Alice — so changing either is a
-    change on their side rather than a LiteLLM upgrade.
+    back, with one deliberate exception: the caller's raw credentials
+    (`secret_fields`, the root `api_key`) are stripped from `request_data` before it is
+    serialized, and never reach Alice. Short of that, it selects nothing and renames nothing:
+    which parts of a conversation are worth evaluating, and how a verdict is reached, are
+    decided by Alice — so changing either is a change on their side rather than a LiteLLM
+    upgrade.
+
+    Known limitation: the unified guardrail's `streaming_transform_mode` defaults to
+    `block_only`, whose streaming path discards any returned text rewrite. A MASK verdict is
+    therefore a no-op on a streamed response — the original, unmasked text still reaches the
+    caller — while BLOCK continues to function on both streamed and non-streamed responses.
+    This is `during_call`'s documented behavior generally, not specific to Alice; configure a
+    masking-aware `streaming_transform_mode` if that gap matters for your traffic.
 
     Alice evaluates against policies configured per *application*, and one proxy typically fronts
     several, so the application is named on the virtual key rather than in this config:
@@ -139,7 +158,7 @@ class AliceGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: overrides CustomGuardrail.apply_guardrail, whose contract is a plain dict
+        request_data: dict[str, object],  # mutable-ok: overrides CustomGuardrail.apply_guardrail's plain-dict contract
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -154,10 +173,18 @@ class AliceGuardrail(CustomGuardrail):
             return self._on_unreachable(e, inputs)
         except httpx.HTTPStatusError as e:
             status_code: Final = getattr(getattr(e, "response", None), "status_code", None)
-            if status_code in (502, 503, 504):
+            # Any 5xx is an outage on Alice's side, not our misconfiguration — route the whole
+            # class through the configured policy. A 4xx (rejected credential, bad request) is
+            # ours to fix and must never fail open, so it is deliberately left to propagate.
+            if isinstance(status_code, int) and 500 <= status_code < 600:
                 return self._on_unreachable(e, inputs)
             raise
         except httpx.RequestError as e:
+            return self._on_unreachable(e, inputs)
+        except (json.JSONDecodeError, TypeError) as e:
+            # A body that cannot be parsed as JSON, or that parses to something other than an
+            # object, is as unreachable as a dropped connection: this deployment's policy
+            # decides, not a raw exception.
             return self._on_unreachable(e, inputs)
 
         return self._enforce(verdict, inputs)
@@ -168,12 +195,15 @@ class AliceGuardrail(CustomGuardrail):
         request_data: Mapping[str, object],
         input_type: str,
     ) -> AliceVerdict:
+        safe_request_data: Final = {  # mutable-ok: one-shot filtered copy, discarded once serialized below
+            key: value for key, value in request_data.items() if key not in _CREDENTIAL_KEYS_TO_STRIP
+        }
         response: Final = await self.async_handler.post(
             url=self.api_base,
             json={  # mutable-ok: one-shot HTTP request body, never mutated after construction
                 "input_type": input_type,
                 "inputs": _json_safe(inputs),
-                "request_data": _json_safe(request_data),
+                "request_data": _json_safe(safe_request_data),
             },
             headers={  # mutable-ok: one-shot HTTP headers, never mutated after construction
                 "Content-Type": "application/json",
@@ -222,26 +252,35 @@ class AliceGuardrail(CustomGuardrail):
         Only `texts` is touched. The chat translation layer maps a returned `texts` list back onto
         the request positionally, but takes a different branch entirely when `structured_messages`
         comes back as a new object — which would drop these edits.
+
+        All-or-nothing: a single out-of-range or malformed replacement blocks the whole verdict
+        rather than being silently skipped, so content Alice meant to replace can never reach the
+        model unmasked alongside content that was replaced.
         """
         texts: Final = inputs.get("texts") or []  # mutable-ok: empty-list fallback, replaced wholesale below
-        applied = 0
-        for replacement in verdict.get("replacements") or []:  # mutable-ok: empty-list fallback for iteration only
+        replacements: Final = verdict.get("replacements") or []  # mutable-ok: empty-list fallback for iteration only
+
+        if not replacements:
+            raise self._mask_rejected(verdict)
+
+        for replacement in replacements:
             index = replacement.get("index")
             text = replacement.get("text")
-            if isinstance(index, int) and isinstance(text, str) and 0 <= index < len(texts):
-                texts[index] = text
-                applied += 1
+            if not (isinstance(index, int) and isinstance(text, str) and 0 <= index < len(texts)):
+                raise self._mask_rejected(verdict)
+            texts[index] = text  # mutable-ok: item assignment into the local working copy above
 
-        if applied == 0:
-            # A mask that wrote nothing is an allow wearing a mask's name. Refuse it rather than
-            # let the text through unmasked under a verdict that said it should not go.
-            raise GuardrailRaisedException(
-                guardrail_name=GUARDRAIL_NAME,
-                message=verdict.get("message") or _DEFAULT_BLOCK_MESSAGE,
-                should_wrap_with_default_message=False,
-                blocked_content=True,
-            )
         inputs["texts"] = texts
+
+    def _mask_rejected(self, verdict: AliceVerdict) -> GuardrailRaisedException:
+        """A MASK verdict that cannot be applied in full is refused outright, never partially —
+        see `_apply_replacements`."""
+        return GuardrailRaisedException(
+            guardrail_name=GUARDRAIL_NAME,
+            message=verdict.get("message") or _DEFAULT_BLOCK_MESSAGE,
+            should_wrap_with_default_message=False,
+            blocked_content=True,
+        )
 
     def _on_unreachable(self, error: Exception, inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
         """Apply the configured policy when Alice cannot be reached or cannot be understood."""
