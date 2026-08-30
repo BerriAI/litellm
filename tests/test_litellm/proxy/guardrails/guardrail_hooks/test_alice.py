@@ -260,6 +260,65 @@ class TestAliceUnreachable:
         assert result["texts"] == ["hello"]
 
 
+class TestAliceTransportFailures:
+    """Every path out of the HTTP call, since each decides whether traffic flows unscreened."""
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_is_unreachable(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            side_effect=litellm.exceptions.Timeout(message="slow", model="gpt-4o", llm_provider="openai")
+        )
+
+        with pytest.raises(GuardrailRaisedException, match="unavailable"):
+            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    @pytest.mark.parametrize("status", [502, 503, 504])
+    @pytest.mark.asyncio
+    async def test_upstream_5xx_is_unreachable(self, status: int):
+        guardrail = _guardrail(unreachable_fallback="fail_open")
+        guardrail.async_handler.post = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "bad gateway",
+                request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
+                response=_verdict({}, status_code=status),
+            )
+        )
+
+        result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+        assert result["texts"] == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_a_4xx_is_not_treated_as_unreachable(self):
+        """A rejected credential is our misconfiguration, not an outage — it must not fail open."""
+        guardrail = _guardrail(unreachable_fallback="fail_open")
+        guardrail.async_handler.post = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "unauthorized",
+                request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
+                response=_verdict({}, status_code=401),
+            )
+        )
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    @pytest.mark.asyncio
+    async def test_a_non_object_body_is_refused(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            return_value=Response(
+                status_code=200,
+                json=["not", "an", "object"],
+                request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
+            )
+        )
+
+        with pytest.raises(TypeError, match="non-object"):
+            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+
 class TestAliceSerialization:
     """`request_data` carries live objects, so it cannot be posted as it stands."""
 
@@ -277,6 +336,19 @@ class TestAliceSerialization:
 
         assert _json_safe(data) == {"a": 1, "self": None}
 
+    def test_drops_a_model_that_will_not_dump(self):
+        class Stubborn:
+            def model_dump(self, mode: str = "python") -> dict:
+                raise RuntimeError("cannot serialise")
+
+        assert _json_safe({"m": Stubborn()}) == {"m": None}
+
+    def test_drops_a_bare_unserialisable_value(self):
+        class Span:
+            pass
+
+        assert _json_safe(Span()) is None
+
     def test_dumps_pydantic_models(self):
         from pydantic import BaseModel
 
@@ -290,7 +362,7 @@ def test_config_model_is_exposed_for_the_ui():
     config_model = AliceGuardrail.get_config_model()
 
     assert config_model is not None
-    assert config_model.ui_friendly_name() == "Alice by ActiveFence"
+    assert config_model.ui_friendly_name() == "Alice"
 
 
 def test_guardrail_name_constant():

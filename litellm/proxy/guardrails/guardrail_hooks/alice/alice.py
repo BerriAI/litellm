@@ -1,11 +1,10 @@
 # +-------------------------------------------------------------+
 #
-#              Use Alice by ActiveFence for your LLM calls
-#                     https://www.activefence.com/
+#                    Use Alice for your LLM calls
+#                         https://alice.io/
 #
 # +-------------------------------------------------------------+
 
-import json
 import os
 from collections.abc import Mapping
 from typing import (
@@ -77,7 +76,7 @@ class AliceGuardrailMissingSecrets(Exception):
 
 class AliceGuardrail(CustomGuardrail):
     """
-    Alice by ActiveFence — policy-based guardrails for prompts and model responses.
+    Alice — policy-based guardrails for prompts and model responses.
 
     This forwards the hook's arguments as it received them and enforces the verdict that comes
     back. It selects nothing and renames nothing: which parts of a conversation are worth
@@ -151,8 +150,6 @@ class AliceGuardrail(CustomGuardrail):
             verdict: AliceVerdict = await self._evaluate(
                 inputs=inputs, request_data=request_data, input_type=input_type
             )
-        except GuardrailRaisedException:
-            raise
         except Timeout as e:
             return self._on_unreachable(e, inputs)
         except httpx.HTTPStatusError as e:
@@ -305,8 +302,7 @@ def _json_safe(value: object, depth: int = 0, seen: frozenset[int] = frozenset()
         except Exception:  # noqa: BLE001  # a model that will not dump is one we drop
             return None
 
-    try:
-        json.dumps(value)
-    except (TypeError, ValueError):
-        return None
-    return value
+    # Everything json.dumps handles natively — str, int, float, bool, None, dict, list — is
+    # caught above, and a dict/list subclass is caught by isinstance. So whatever reaches here
+    # (bytes, datetime, an OpenTelemetry span) cannot cross the wire.
+    return None

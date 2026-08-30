@@ -466,11 +466,11 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
   },
   {
     id: "alice",
-    name: "Alice by ActiveFence",
+    name: "Alice",
     description:
       "Policy-based guardrails for prompts and model responses, evaluated per application so one proxy can enforce a different policy set per team or product.",
     category: "partner",
-    logo: guardrailLogoMap["Alice by ActiveFence"],
+    logo: guardrailLogoMap["Alice"],
     tags: ["Content Moderation", "Prompt Injection", "PII", "Policy"],
     providerKey: "Alice",
   },

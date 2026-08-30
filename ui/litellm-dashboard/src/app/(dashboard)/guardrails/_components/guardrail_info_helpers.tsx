@@ -206,7 +206,7 @@ export const guardrailLogoMap = {
   "Qostodian Nexus": qohashLogo.src,
   "RepelloAI Argus": repelloAiLogo.src,
   Straiker: straikerLogo.src,
-  "Alice by ActiveFence": aliceLogo.src,
+  Alice: aliceLogo.src,
 } satisfies Record<string, string>;
 
 export const getGuardrailLogo = (displayName: string): string | undefined =>

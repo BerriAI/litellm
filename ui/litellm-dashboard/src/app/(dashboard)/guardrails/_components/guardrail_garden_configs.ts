@@ -314,7 +314,7 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
   },
   alice: {
     provider: "Alice",
-    guardrailNameSuggestion: "Alice by ActiveFence",
+    guardrailNameSuggestion: "Alice",
     mode: "pre_call",
     defaultOn: false,
   },
