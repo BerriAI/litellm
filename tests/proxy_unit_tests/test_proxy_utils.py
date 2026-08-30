@@ -1357,9 +1357,6 @@ async def test_default_team_settings_newrelic_resolves_traces_and_metrics():
         "newrelic_region": "eu",
     }
 
-    # The resolved callback_vars are the trusted-vars channel a request carries.
-    # Resolving "newrelic" with them must return both loggers, mirroring the
-    # dynamic team-callback path.
     logging_obj = Logging(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "hi"}],
