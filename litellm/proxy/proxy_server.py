@@ -11068,8 +11068,11 @@ async def audio_speech(
             custom_headers.update(callback_headers)
 
         requested_format: Final = data.get("response_format")
+        upstream_content_type: Final = (
+            response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
+        )
         media_type: Final = resolve_speech_media_type(
-            upstream_content_type=response.response.headers.get("content-type"),
+            upstream_content_type=upstream_content_type,
             response_format=requested_format if isinstance(requested_format, str) else None,
         )
 

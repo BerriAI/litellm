@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from litellm.proxy import proxy_server
+from litellm.types.llms.openai import HttpxBinaryResponseContent
 
 
 @pytest.fixture
@@ -38,20 +39,14 @@ def patched_speech(monkeypatch, request):
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
 
-    class _FakeBinaryResp:
-        response = httpx.Response(
-            status_code=200,
-            headers={} if upstream_content_type is None else {"content-type": upstream_content_type},
-        )
-
-        async def aiter_bytes(self, chunk_size: int = 8192):
-            async def _gen():
-                yield b"\x00\x01\x02"
-
-            return _gen()
-
     async def _llm_call():
-        return _FakeBinaryResp()
+        return HttpxBinaryResponseContent(
+            httpx.Response(
+                status_code=200,
+                headers={} if upstream_content_type is None else {"content-type": upstream_content_type},
+                content=b"\x00\x01\x02",
+            )
+        )
 
     async def _fake_route_request(*args, **kwargs):
         return _llm_call()
