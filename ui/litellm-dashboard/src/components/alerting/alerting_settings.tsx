@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from "react";
 
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
-import DynamicForm from "./dynamic_form";
+import DynamicForm, { type AlertingFieldValue, type AlertingFormValues } from "./dynamic_form";
 import { toast } from "@/lib/toast";
 interface alertingSettingsItem {
   field_name: string;
@@ -34,7 +34,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     });
   }, [accessToken]);
 
-  const handleInputChange = (fieldName: string, newValue: any) => {
+  const handleInputChange = (fieldName: string, newValue: AlertingFieldValue) => {
     // Update the value in the state
     const updatedSettings = alertingSettings.map((setting) =>
       setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
@@ -43,39 +43,27 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     setAlertingSettings(updatedSettings);
   };
 
-  const handleSubmit = (formValues: Record<string, any>) => {
+  const handleSubmit = async (formValues: AlertingFormValues) => {
     if (!accessToken) {
       return;
     }
 
-    let fieldValue = formValues;
+    const storedValues = Object.fromEntries(
+      alertingSettings.map((setting) => [setting.field_name, setting.field_value]),
+    );
+    const { slack_alerting, ...editedArgs } = { ...formValues, ...storedValues };
+    const alertingArgs = Object.fromEntries(
+      Object.entries(editedArgs).filter(([, value]) => value !== null && value !== undefined && value !== ""),
+    );
 
-    if (fieldValue == null || fieldValue == undefined) {
-      return;
-    }
-
-    const initialFormValues: Record<string, any> = {};
-
-    alertingSettings.forEach((setting) => {
-      initialFormValues[setting.field_name] = setting.field_value;
-    });
-
-    // Merge initialFormValues with actual formValues
-    const mergedFormValues = { ...formValues, ...initialFormValues };
-    const { slack_alerting, ...alertingArgs } = mergedFormValues;
     try {
-      updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
+      await updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
       if (typeof slack_alerting === "boolean") {
-        if (slack_alerting == true) {
-          updateConfigFieldSetting(accessToken, "alerting", ["slack"]);
-        } else {
-          updateConfigFieldSetting(accessToken, "alerting", []);
-        }
+        await updateConfigFieldSetting(accessToken, "alerting", slack_alerting ? ["slack"] : []);
       }
-      // update value in state
       toast.success("Wait 10s for proxy to update.");
     } catch (error) {
-      // do something
+      toast.fromError(error);
     }
   };
 
