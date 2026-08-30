@@ -12,9 +12,7 @@ class InfinityError(BaseLLMException):
     ):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url="https://github.com/michaelfeil/infinity"
-        )
+        self.request = httpx.Request(method="POST", url="https://github.com/michaelfeil/infinity")
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             status_code=status_code,
