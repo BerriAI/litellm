@@ -44879,6 +44879,21 @@
         "source": "https://docs.z.ai/guides/overview/pricing",
         "supports_vision": true
     },
+    "zai/glm-5.2": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "zai/glm-5.1": {
         "cache_creation_input_token_cost": 0,
         "cache_read_input_token_cost": 2.6e-07,
