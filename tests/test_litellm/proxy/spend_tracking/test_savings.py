@@ -455,6 +455,61 @@ def test_moving_one_token_between_cache_buckets_does_not_move_the_answer():
     assert reads_one == pytest.approx(reads_nothing, abs=1e-4)
 
 
+def test_an_explicit_zero_cache_read_rate_is_a_price_not_a_gap():
+    """A baseline deployment configured with `cache_read_input_token_cost: 0.0` has
+    reads that genuinely cost nothing. Truthiness read that configured price as a
+    missing rate, moved the cached tokens into ordinary input and charged them at the
+    full input rate, overstating savings on every continuing conversation.
+    """
+    sonnet = litellm.get_model_info("claude-sonnet-5", "anthropic")
+    free_reads = dict(sonnet)
+    free_reads["cache_read_input_token_cost"] = 0.0
+
+    usage = _usage(fresh=0, cached=20_000, written=0, out=1_000)
+    result = compute_autorouter_savings(
+        baseline_model="claude-sonnet-5",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=True,
+        baseline_info=free_reads,
+    )
+
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    paid = 20_000 * haiku["cache_read_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    reads_free = 1_000 * sonnet["output_cost_per_token"] - paid
+    reads_at_input = 20_000 * sonnet["input_cost_per_token"] + 1_000 * sonnet["output_cost_per_token"] - paid
+    assert result == pytest.approx(reads_free), "a configured $0 read rate must price reads at $0"
+    assert result != pytest.approx(reads_at_input), "reads must not fall back to the input rate"
+
+
+def test_an_explicit_zero_cache_creation_rate_is_a_price_not_a_gap():
+    """The same hole on the write bucket. A first turn against a baseline configured
+    with `cache_creation_input_token_cost: 0.0` writes for nothing; truthiness read
+    the configured price as missing and charged the write at the input rate.
+    """
+    sonnet = litellm.get_model_info("claude-sonnet-5", "anthropic")
+    free_writes = dict(sonnet)
+    free_writes["cache_creation_input_token_cost"] = 0.0
+
+    usage = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    result = compute_autorouter_savings(
+        baseline_model="claude-sonnet-5",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        baseline_info=free_writes,
+    )
+
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    writes_free = 1_000 * sonnet["output_cost_per_token"] - paid
+    writes_at_input = 20_000 * sonnet["input_cost_per_token"] + 1_000 * sonnet["output_cost_per_token"] - paid
+    assert result == pytest.approx(writes_free), "a configured $0 write rate must price writes at $0"
+    assert result != pytest.approx(writes_at_input), "writes must not fall back to the input rate"
+
+
 def test_multimodal_prompts_are_priced_on_the_baseline_too():
     """The baseline is this same request met by a warm cache, so every field it was
     priced on has to survive. Rebuilding the details from the cache buckets alone
