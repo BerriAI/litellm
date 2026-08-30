@@ -6406,7 +6406,7 @@ async def drain_spend_logs_queue(
     for _ in range(MAX_SPEND_LOG_DRAIN_ITERATIONS):
         if await _total_queued_spend_transactions(prisma_client) == 0:
             return
-        remaining_seconds: Final = deadline - time.monotonic()
+        remaining_seconds = deadline - time.monotonic()
         if remaining_seconds <= 0:
             break
         await update_spend_logs_job(
