@@ -165,26 +165,23 @@ class LeastBusyLoggingHandler(CustomLogger):
         """
         Helper to get deployments using least busy strategy
         """
-        for d in healthy_deployments:
-            ## if healthy deployment not yet used
-            if d["model_info"]["id"] not in all_deployments:
-                all_deployments[d["model_info"]["id"]] = 0
-        # map deployment to id
-        # pick least busy deployment
+        if not healthy_deployments:
+            return None
+
         min_traffic = float("inf")
-        min_deployment = None
-        for k, v in all_deployments.items():
-            if v < min_traffic:
-                min_traffic = v
-                min_deployment = k
-        if min_deployment is not None:
-            ## check if min deployment is a string, if so, cast it to int
-            for m in healthy_deployments:
-                if m["model_info"]["id"] == min_deployment:
-                    return m
-            min_deployment = random.choice(healthy_deployments)
-        else:
-            min_deployment = random.choice(healthy_deployments)
+        min_deployment = healthy_deployments[0]
+
+        for deployment in healthy_deployments:
+            dep_id = str(deployment.get("model_info", {}).get("id", ""))
+            traffic = all_deployments.get(dep_id, 0)
+
+            if traffic == 0:
+                return deployment
+
+            if traffic < min_traffic:
+                min_traffic = traffic
+                min_deployment = deployment
+
         return min_deployment
 
     def get_available_deployments(
