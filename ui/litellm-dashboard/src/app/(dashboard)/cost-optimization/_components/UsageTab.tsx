@@ -87,7 +87,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const intervalLabel = "Per day";
   const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
   const savingsSubtitle = [
-    accumulation === "cumulative" ? "Running total saved" : `Saved ${intervalLabel.toLowerCase()}`,
+    accumulation === "cumulative" ? "Running total by driver" : `Saved ${intervalLabel.toLowerCase()}`,
     rangeLabel && `${rangeLabel} (UTC)`,
   ]
     .filter(Boolean)
@@ -105,8 +105,6 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       })).filter((d) => d.usd > 0),
     [results],
   );
-  const plottedDriverTotal = useMemo(() => byDriver.reduce((sum, d) => sum + d.usd, 0), [byDriver]);
-
   const topTools = useMemo(() => topToolsBySpend(toolSpend?.by_tool ?? []), [toolSpend]);
   const topToolNames = useMemo(() => topTools.map((t) => t.tool_name), [topTools]);
   const topToolsChart = useMemo<Record<string, string | number>[]>(
@@ -180,6 +178,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <Card>
           <CardHeader>
             <CardTitle>Savings by driver</CardTitle>
+            <CardDescription>Alternative views, not parts of one total</CardDescription>
           </CardHeader>
           <CardContent>
             <DonutChart
@@ -189,8 +188,6 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
               category="usd"
               colors={byDriver.map((d) => d.color)}
               valueFormatter={usd}
-              showLabel
-              label={usd(plottedDriverTotal)}
             />
           </CardContent>
         </Card>

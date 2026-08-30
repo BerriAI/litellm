@@ -12,6 +12,7 @@ import {
   isAnthropicModel,
   localIsoDay,
   savingsSeriesOf,
+  savingsTotalsOf,
   toCumulative,
   topToolsBySpend,
   usd,
@@ -398,6 +399,38 @@ describe("usd", () => {
     expect(usd(-0.05)).toBe("-$0.0500");
     expect(usd(-0.0004)).toBe("-$0.0004");
     expect(usd(-12.4)).toBe("-$12.40");
+  });
+});
+
+describe("savingsTotalsOf", () => {
+  it("does not expose a summed total for non-additive caching and auto-router views", () => {
+    const results: DailyData[] = [
+      {
+        date: "2026-08-29",
+        metrics: metrics({
+          spend: 6,
+          compression_savings_spend: 0,
+          prompt_caching_savings_spend: 4,
+          gateway_injected_caching_savings_spend: 4,
+          autorouter_savings_spend: 6,
+        }),
+        breakdown: {
+          models: {},
+          model_groups: {},
+          mcp_servers: {},
+          providers: {},
+          entities: {},
+          api_keys: {},
+        },
+      },
+    ];
+
+    const totals = savingsTotalsOf(results);
+
+    expect(totals.compression).toBe(0);
+    expect(totals.gatewayAttributedCaching).toBe(4);
+    expect(totals.autorouter).toBe(6);
+    expect(totals).not.toHaveProperty("total");
   });
 });
 

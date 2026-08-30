@@ -138,8 +138,8 @@ describe("UsageTab", () => {
 
   it("sums compression and caching dollars across days into the summary cards", () => {
     // Total caching and the LiteLLM-injected share deliberately differ so these
-    // assertions pin which one each figure uses: the caching headline and the
-    // Total-saved tile take the injected share, the secondary keeps the total.
+    // assertions pin which one each figure uses: the caching headline takes the
+    // injected share, the secondary keeps the total. There is no combined tile.
     const firstDay: Partial<SpendMetrics> = {
       compression_savings_spend: 0.04,
       prompt_caching_savings_spend: 0.006,
@@ -152,13 +152,14 @@ describe("UsageTab", () => {
       gateway_injected_caching_savings_spend: 0.006,
       compression_saved_tokens: 100000,
     };
-    const { getByText } = renderWith([day("2026-07-12", firstDay), day("2026-07-13", secondDay)]);
+    const { getByText, queryByText } = renderWith([day("2026-07-12", firstDay), day("2026-07-13", secondDay)]);
 
-    expect(getByText("$0.1500")).toBeInTheDocument();
     expect(getByText("$0.1400")).toBeInTheDocument();
     expect(getByText("$0.0100")).toBeInTheDocument();
     expect(getByText("$0.0160")).toBeInTheDocument();
     expect(getByText("140,000 tokens compressed")).toBeInTheDocument();
+    expect(queryByText("$0.1500")).not.toBeInTheDocument();
+    expect(queryByText("Total saved")).not.toBeInTheDocument();
   });
 
   const twoDays = () => [
@@ -236,7 +237,7 @@ describe("UsageTab", () => {
   it("says what the line means and over what range", async () => {
     const { getByText, getByRole } = renderWith(twoDays());
 
-    expect(getByText("Running total saved · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
+    expect(getByText("Running total by driver · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
     await userEvent.click(getByRole("tab", { name: "Per day" }));
     expect(getByText("Saved per day · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
   });
@@ -277,7 +278,7 @@ describe("UsageTab", () => {
   });
 
   it("lays the savings header out with the card's own slots so nothing shifts between tabs", async () => {
-    // The subtitle differs in length between the tabs ("Running total saved" vs "Saved
+    // The subtitle differs in length between the tabs ("Running total by driver" vs "Saved
     // per day"). Hand-rolled rows made it compete with the legend and the toggle for
     // width, so the header grew a line on one tab and the chart moved with it. CardHeader
     // sizes the action column to its content and gives the rest to the title column.
@@ -298,7 +299,7 @@ describe("UsageTab", () => {
     expect(before.action.contains(getByRole("tablist"))).toBe(true);
     // the subtitle lives outside that slot, so its length cannot reposition the controls
     expect(before.action.contains(before.description)).toBe(false);
-    expect(before.description).toHaveTextContent(/Running total saved/);
+    expect(before.description).toHaveTextContent(/Running total by driver/);
 
     await userEvent.click(getByRole("tab", { name: "Per day" }));
 
@@ -310,11 +311,12 @@ describe("UsageTab", () => {
     expect(container).toHaveTextContent(/Savings/);
   });
 
-  it("subtracts a losing auto-router route from the total and keeps it out of the donut", () => {
+  it("keeps a losing auto-router route on its card and out of the donut", () => {
     // Switching models leaves the new one with a cold cache, so a route can cost more
-    // than the baseline would have. A negative slice is meaningless in a donut, but the
-    // total has to keep the loss or the page can only ever report good news.
-    const { getByText, getByTestId } = renderWith([
+    // than the baseline would have. A negative slice is meaningless in a donut; the
+    // auto-router card still shows the loss. The page does not add that loss into a
+    // combined headline.
+    const { getByText, queryByText, getByTestId } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.1,
         gateway_injected_caching_savings_spend: 0.02,
@@ -322,16 +324,16 @@ describe("UsageTab", () => {
       }),
     ]);
 
-    expect(getByText("$0.0700")).toBeInTheDocument();
     expect(getByText("-$0.0500")).toBeInTheDocument();
+    expect(queryByText("$0.0700")).not.toBeInTheDocument();
 
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices.map((d: { driver: string }) => d.driver)).toEqual(["Compression", "Prompt caching"]);
-    expect(getByTestId("donut-chart")).toHaveAttribute("data-label", "$0.1200");
+    expect(getByTestId("donut-chart").getAttribute("data-label")).toBeNull();
   });
 
   it("carries auto-router savings into the summary card, donut slice, and cumulative series", () => {
-    const { getByText, getByTestId } = renderWith([
+    const { getByText, queryByText, getByTestId } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.04,
         gateway_injected_caching_savings_spend: 0.006,
@@ -344,9 +346,8 @@ describe("UsageTab", () => {
       }),
     ]);
 
-    // Total saved now sums three drivers, and the auto-router card carries its own total.
-    expect(getByText("$0.2260")).toBeInTheDocument();
     expect(getByText("$0.0700")).toBeInTheDocument();
+    expect(queryByText("$0.2260")).not.toBeInTheDocument();
 
     // The driver donut gains a third slice priced from the range totals.
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");

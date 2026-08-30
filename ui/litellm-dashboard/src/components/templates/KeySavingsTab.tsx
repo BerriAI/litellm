@@ -59,7 +59,7 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
   const intervalLabel = "Per day";
   const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
   const savingsSubtitle = [
-    accumulation === "cumulative" ? "Running total saved" : `Saved ${intervalLabel.toLowerCase()}`,
+    accumulation === "cumulative" ? "Running total by driver" : `Saved ${intervalLabel.toLowerCase()}`,
     rangeLabel && `${rangeLabel} (UTC)`,
   ]
     .filter(Boolean)

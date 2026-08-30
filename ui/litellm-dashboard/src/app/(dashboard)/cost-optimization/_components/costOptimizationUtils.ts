@@ -206,6 +206,22 @@ type SavingsDriverName = (typeof SAVINGS_DRIVERS)[number]["name"];
 export const sumOverDays = (results: readonly DailyData[], of: (m: SpendMetrics) => number): number =>
   results.reduce((sum, d) => sum + of(d.metrics), 0);
 
+export type SavingsTotals = {
+  readonly compression: number;
+  readonly caching: number;
+  readonly autorouter: number;
+  readonly gatewayAttributedCaching: number;
+  readonly savedTokens: number;
+};
+
+export const savingsTotalsOf = (results: readonly DailyData[]): SavingsTotals => ({
+  compression: sumOverDays(results, compressionOf),
+  caching: sumOverDays(results, cachingOf),
+  autorouter: sumOverDays(results, autorouterOf),
+  gatewayAttributedCaching: sumOverDays(results, gatewayAttributedCachingOf),
+  savedTokens: sumOverDays(results, savedTokensOf),
+});
+
 /**
  * One point per day, each driver plotting the metric its SAVINGS_DRIVERS entry
  * names. The rollup arrives newest first, so sort on the raw ISO date before
