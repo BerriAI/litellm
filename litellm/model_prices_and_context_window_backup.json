@@ -48938,6 +48938,24 @@
         "litellm_provider": "llamagate",
         "mode": "embedding"
     },
+    "jetinfer/qwen3.8-27b": {
+        "max_tokens": 65536,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 3.4e-07,
+        "output_cost_per_token": 2.55e-06,
+        "cache_read_input_token_cost": 3.4e-08,
+        "litellm_provider": "jetinfer",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "source": "https://jetinfer.com/specs#pricing"
+    },
     "libertai/hermes-3-8b-tee": {
         "max_tokens": 16000,
         "max_input_tokens": 16000,
