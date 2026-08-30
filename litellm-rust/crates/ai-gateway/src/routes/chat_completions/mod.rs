@@ -135,6 +135,10 @@ impl IntoResponse for ChatCompletionsRouteError {
                 StatusCode::BAD_REQUEST,
                 format!("chat completions request is not supported: {reason}"),
             ),
+            CoreError::Timeout(message) => (
+                StatusCode::GATEWAY_TIMEOUT,
+                format!("chat completions request timed out: {message}"),
+            ),
         };
         (
             status,
@@ -204,6 +208,8 @@ mod tests {
             global_rate_limiter: Arc::new(crate::hardening::GlobalRateLimiter::new(10_000, 60)),
             secret_rotator: None,
             audit_log_shipper: None,
+            csrf_state: Arc::new(crate::middleware::csrf::CsrfState::new(3600)),
+            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(crate::alerting::AlertingConfig::default())),
             guardrail_runner: Arc::new(crate::integrations::custom_guardrail::CustomGuardrailRunner::new(Vec::new())),
         }
     }
