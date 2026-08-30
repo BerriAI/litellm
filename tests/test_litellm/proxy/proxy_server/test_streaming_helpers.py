@@ -517,6 +517,16 @@ def test_fast_serialize_simple_model_response_stream_with_usage_returns_none_inv
     assert _fast_serialize_simple_model_response_stream(chunk) is None
 
 
+def test_fast_serialize_simple_model_response_stream_with_reasoning_items_returns_none():
+    """``reasoning_items`` carries the provider's encrypted reasoning state, which
+    the fast path cannot emit — it must bail so the slow path serializes it."""
+    chunk = _simple_chunk(content="")
+    chunk.choices[0].delta.reasoning_items = [
+        {"id": "rs_abc", "type": "reasoning", "encrypted_content": "ENCRYPTED-BLOB"}
+    ]
+    assert _fast_serialize_simple_model_response_stream(chunk) is None
+
+
 # ---------------------------------------------------------------------------
 # _serialize_streaming_chunk
 # ---------------------------------------------------------------------------
@@ -538,6 +548,20 @@ def test_serialize_streaming_chunk_simple_uses_fast_path_bytes():
             }
         ],
     }
+
+
+def test_serialize_streaming_chunk_preserves_reasoning_items():
+    """End-to-end pin for the bug: a chunk whose only payload beside text is
+    ``reasoning_items`` must still reach the wire with those items. The fast
+    path emits ``role``/``content`` only, so it has to decline this chunk."""
+    chunk = _simple_chunk(content="")
+    chunk.choices[0].delta.reasoning_items = [
+        {"id": "rs_abc", "type": "reasoning", "encrypted_content": "ENCRYPTED-BLOB"}
+    ]
+    payload = json.loads(_serialize_streaming_chunk(chunk))
+    assert payload["choices"][0]["delta"]["reasoning_items"] == [
+        {"id": "rs_abc", "type": "reasoning", "encrypted_content": "ENCRYPTED-BLOB"}
+    ]
 
 
 def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
