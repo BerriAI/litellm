@@ -7515,9 +7515,11 @@ def create_model_info_response(
 
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
+    max_model_len: int | None = None
     if model_cost_info is not None:
         max_input_tokens = coerce_token_limit(model_cost_info.get("max_input_tokens"))
         max_output_tokens = coerce_token_limit(model_cost_info.get("max_output_tokens"))
+        max_model_len = coerce_token_limit(model_cost_info.get("max_model_len"))
         mode: Final = model_cost_info.get("mode")
         if isinstance(mode, str):
             base["mode"] = mode
@@ -7528,11 +7530,19 @@ def create_model_info_response(
             max_input_tokens = configured_input
         if configured_output is not None:
             max_output_tokens = configured_output
+        # Coerce here as well: callers with duck-typed routers (and mocks that
+        # auto-stub unknown methods) must not leak an arbitrary object into the
+        # response. get_configured_max_model_len already coerces real values.
+        configured_model_len: Final = coerce_token_limit(llm_router.get_configured_max_model_len(model_id))
+        if configured_model_len is not None:
+            max_model_len = configured_model_len
 
     if max_input_tokens is not None:
         base["max_input_tokens"] = max_input_tokens
     if max_output_tokens is not None:
         base["max_output_tokens"] = max_output_tokens
+    if max_model_len is not None:
+        base["max_model_len"] = max_model_len
 
     if not include_metadata:
         return base

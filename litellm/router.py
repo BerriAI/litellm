@@ -9543,6 +9543,25 @@ class Router:
             coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
+    def get_configured_max_model_len(self, model_name: str) -> "int | None":
+        """
+        Return max_model_len explicitly configured in a concrete deployment's
+        model_info for model_name, via O(1) index lookup.
+
+        OpenAI-compatible inference servers such as vLLM and SGLang report the
+        per-request context length of a deployment under this name, so the field
+        uses their spelling rather than a LiteLLM-specific one. Returns None for
+        wildcard-expanded or unknown names, and treats a malformed configured
+        value as absent rather than failing the listing. Like
+        get_configured_token_limits, this never triggers pattern matching or deep
+        copies, so it is safe to call per listed model on the /v1/models hot path.
+        """
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        return coerce_token_limit(deployment.model_info.get("max_model_len"))
+
     def get_deployment_credentials_with_provider(
         self, model_id: str, team_id: str | None = None
     ) -> dict[str, Any] | None:

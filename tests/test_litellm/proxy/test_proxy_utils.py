@@ -1076,6 +1076,68 @@ def test_create_model_info_response_omits_limits_when_lookup_raises():
     assert "max_output_tokens" not in response
 
 
+def test_create_model_info_response_includes_max_model_len_from_cost_map():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(max_model_len=131072),
+    )
+
+    assert response["max_model_len"] == 131072
+
+
+def test_create_model_info_response_omits_max_model_len_when_unknown():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens=8191),
+    )
+
+    assert response["max_input_tokens"] == 8191
+    assert "max_model_len" not in response
+
+
+def test_create_model_info_response_deployment_max_model_len_overrides_cost_map():
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
+    router.get_configured_max_model_len.return_value = 65536
+
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=lambda _model: _fake_model_info(max_model_len=131072),
+    )
+
+    assert response["max_model_len"] == 65536
+
+
+def test_create_model_info_response_survives_malformed_configured_max_model_len():
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-ctx-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_model_len": "131,072"},
+            }
+        ]
+    )
+
+    response = create_model_info_response(
+        model_id="bad-ctx-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["id"] == "bad-ctx-model"
+    assert "max_model_len" not in response
+
+
 def test_create_model_info_response_no_router_keeps_base_fields():
     response = create_model_info_response(
         model_id="totally-unknown-model-xyz",

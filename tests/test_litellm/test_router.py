@@ -7271,6 +7271,82 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
 
 
+def test_get_configured_max_model_len_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_model_len": 131072},
+            }
+        ]
+    )
+
+    assert router.get_configured_max_model_len("my-custom-model") == 131072
+
+
+def test_get_configured_max_model_len_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-ctx-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_max_model_len("no-ctx-model") is None
+    assert router.get_configured_max_model_len("not-a-real-model") is None
+
+
+def test_get_configured_max_model_len_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"max_model_len": 12345},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert router.get_configured_max_model_len("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0") is None
+
+
+def test_get_configured_max_model_len_treats_malformed_values_as_absent():
+    malformed = ["", "131,072", True, [131072], {"len": 131072}]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"bad-ctx-{i}",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_model_len": bad},
+            }
+            for i, bad in enumerate(malformed)
+        ]
+    )
+
+    for i in range(len(malformed)):
+        assert router.get_configured_max_model_len(f"bad-ctx-{i}") is None
+
+
+def test_get_configured_max_model_len_coerces_numeric_strings():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "quoted-ctx-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_model_len": "131072"},
+            }
+        ]
+    )
+
+    assert router.get_configured_max_model_len("quoted-ctx-model") == 131072
+
+
 @pytest.mark.asyncio
 async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
     router = litellm.Router(
