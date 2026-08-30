@@ -39,13 +39,19 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        if api_base:
-            # Remove trailing slashes and ensure clean base URL
-            api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v1/audio/transcriptions"):
-                api_base = f"{api_base}/v1/audio/transcriptions"
-            return api_base
-        raise ValueError("api_base must be provided for Hosted VLLM rerank")
+        if not api_base:
+            raise ValueError("api_base must be provided for Hosted VLLM transcriptions")
+        normalized_base: Final = api_base.rstrip("/")
+        if normalized_base.endswith("/v1/audio/transcriptions"):
+            return normalized_base
+        return super().get_complete_url(
+            api_base=normalized_base,
+            api_key=api_key,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            stream=stream,
+        )
 
     def transform_audio_transcription_request(
         self,
