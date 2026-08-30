@@ -3,14 +3,17 @@ import { Team } from "@/components/networking";
 import { isProxyAdminRole, isUserTeamAdminForAnyTeam, isUserTeamAdminForSingleTeam } from "./roles";
 
 /**
- * The dashboard's mirror of ModelManagementAuthChecks in
- * litellm/proxy/management_endpoints/model_management_endpoints.py.
+ * The dashboard's mirror of the two server layers that gate model writes: the role-level
+ * route RBAC (`_check_proxy_admin_viewer_access` in litellm/proxy/auth/route_checks.py),
+ * which 403s /model/new, /model/update, and /model/delete for every view-only session
+ * before the endpoint runs, and ModelManagementAuthChecks in
+ * litellm/proxy/management_endpoints/model_management_endpoints.py behind it.
  *
- * Both questions below are answered there by exactly two inputs: the caller's role, and
- * whether the caller admins the team named in `model_info.team_id`. `created_by` is written
- * at creation and never read by an auth check, so it is deliberately absent here; gating on
- * it hid controls from team admins the API accepts, and showed controls to former team admins
- * the API rejects.
+ * Past that route gate, both questions below are answered by exactly two inputs: the
+ * caller's role, and whether the caller admins the team named in `model_info.team_id`.
+ * `created_by` is written at creation and never read by an auth check, so it is deliberately
+ * absent here; gating on it hid controls from team admins the API accepts, and showed
+ * controls to former team admins the API rejects.
  */
 export interface ModelActor {
   userRole: string | null;
@@ -42,13 +45,18 @@ const isTeamAdminOf = (teams: Team[] | null, userID: string, teamId: string): bo
 
 /**
  * POST /model/new takes a proxy admin unconditionally, or a team admin whose payload names a
- * team; an unscoped create from anyone else is a 403. Returning the requirement rather than a
- * pair of booleans keeps "may not create" and "may create unscoped" from being confused.
+ * team; an unscoped create from anyone else is a 403. A view-only session is 403d by the
+ * route RBAC on its role alone, so team-admin membership cannot rescue it. Returning the
+ * requirement rather than a pair of booleans keeps "may not create" and "may create
+ * unscoped" from being confused.
  */
 export const modelCreationScope = (
   actor: ModelActor,
   { teams, disabledForInternalUsers }: ModelCreationLimits,
 ): ModelWriteScope => {
+  if (actor.isViewOnly) {
+    return "forbidden";
+  }
   if (isWritableProxyAdmin(actor)) {
     return "unscoped-ok";
   }
@@ -76,7 +84,7 @@ export const canModifyModel = (
   teams: Team[] | null,
   { teamId, isDbModel }: ModelRowOrigin,
 ): boolean => {
-  if (!isDbModel) {
+  if (actor.isViewOnly || !isDbModel) {
     return false;
   }
   if (isWritableProxyAdmin(actor)) {
