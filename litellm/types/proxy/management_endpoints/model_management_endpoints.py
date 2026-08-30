@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ...router import ModelGroupInfo
 
@@ -53,10 +54,42 @@ class DeleteModelGroupResponse(BaseModel):
     message: str
 
 
+class AccessGroupBudget(BaseModel):
+    budget_id: str
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+
+
+class AccessGroupBudgetRequest(BaseModel):
+    budget_id: str | None = None  # Link an existing budget instead of creating one
+    max_budget: float | None = Field(default=None, ge=0)
+    soft_budget: float | None = Field(default=None, ge=0)
+    budget_duration: str | None = None
+
+    # rejects tpm_limit/rpm_limit/max_parallel_requests: those are not enforced per access group
+    model_config = ConfigDict(extra="forbid")
+
+
+class AccessGroupBudgetResponse(BaseModel):
+    access_group: str
+    spend: float  # Shared spend accrued by every key that can reach this access group
+    budget: AccessGroupBudget | None = None
+
+
+class DeleteAccessGroupBudgetResponse(BaseModel):
+    access_group: str
+    budget_deleted: bool  # False when the access group had no budget to begin with
+    message: str
+
+
 class AccessGroupInfo(BaseModel):
     access_group: str
     model_names: list[str]  # List of model names in this access group
     deployment_count: int  # Total number of deployments with this access group
+    spend: float | None = None  # Only populated by /access_group/{access_group}/info
+    budget: AccessGroupBudget | None = None
 
 
 class ListAccessGroupsResponse(BaseModel):

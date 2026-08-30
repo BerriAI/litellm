@@ -580,9 +580,17 @@ class TestRetrieveBatchCostPassesModelIdentity:
 
         captured: dict[str, object] = {}
 
-        async def fake_handle_completed_batch(**kwargs: object) -> tuple[float, Usage, list[str]]:
+        from litellm.batches.batch_utils import BatchCostUsageResult
+
+        async def fake_handle_completed_batch(**kwargs: object) -> BatchCostUsageResult:
             captured.update(kwargs)
-            return 1.25, Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800), ["m"]
+            return BatchCostUsageResult(
+                cost=1.25,
+                usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
+                models=["m"],
+                successful_requests=1,
+                failed_requests=0,
+            )
 
         monkeypatch.setattr(logging_module, "_handle_completed_batch", fake_handle_completed_batch)
 
@@ -3725,6 +3733,60 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
 
     assert payload is not None
     assert payload["litellm_call_id"] == call_id
+
+
+def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
+    """Access groups stamped at auth time reach the logging payload, so integrations see what a request billed."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-4o",
+            "messages": [],
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_matched_model_access_groups": ["premium-pool", "shared-pool"]
+                },
+                "proxy_server_request": {"body": {}},
+            },
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["request_model_access_groups"] == ("premium-pool", "shared-pool")
+
+
+def test_get_standard_logging_object_payload_has_no_access_groups_when_unstamped(
+    logging_obj,
+):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"model": "gpt-4o", "messages": []},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["request_model_access_groups"] == ()
 
 
 def test_get_standard_logging_object_payload_preserves_absent_end_user_as_none(logging_obj):
