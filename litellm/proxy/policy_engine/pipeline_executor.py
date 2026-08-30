@@ -57,16 +57,14 @@ def _tool_call_shape(tool_call: object) -> tuple[object, object]:
     return (function.get("name"), function.get("arguments"))
 
 
-def _rewrote_texts(sent: Sequence[str] | None, returned: Sequence[str] | None) -> bool:
-    return sent is not None and returned is not None and tuple(returned) != tuple(sent)
+def _texts_snapshot(texts: Sequence[str] | None) -> tuple[str, ...] | None:
+    return None if texts is None else tuple(texts)
 
 
-def _rewrote_tool_calls(sent: Sequence[object] | None, returned: Sequence[object] | None) -> bool:
-    if sent is None or returned is None:
-        return False
-    return tuple(_tool_call_shape(tool_call) for tool_call in returned) != tuple(
-        _tool_call_shape(tool_call) for tool_call in sent
-    )
+def _tool_call_shapes_snapshot(
+    tool_calls: Sequence[object] | None,
+) -> tuple[tuple[object, object], ...] | None:
+    return None if tool_calls is None else tuple(_tool_call_shape(tc) for tc in tool_calls)
 
 
 class _StreamRewriteObserver(CustomGuardrail):
@@ -90,14 +88,28 @@ class _StreamRewriteObserver(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
+        # Snapshot inputs *before* dispatching. Guardrails that rewrite in
+        # place (``inputs["texts"] = masked; return inputs`` or mutating the
+        # same list/tool-call objects) leave the pre and post views pointing
+        # at the already-rewritten values, which would hide the rewrite from
+        # a post-call diff and let the original buffered chunks reach the
+        # client unredacted.
+        sent_texts: Final = _texts_snapshot(inputs.get("texts"))
+        sent_tool_call_shapes: Final = _tool_call_shapes_snapshot(inputs.get("tool_calls"))
         outputs: Final = await self.inner.apply_guardrail(
             inputs=inputs, request_data=request_data, input_type=input_type, logging_obj=logging_obj
         )
-        self.rewrote = (
-            self.rewrote
-            or _rewrote_texts(inputs.get("texts"), outputs.get("texts"))
-            or _rewrote_tool_calls(inputs.get("tool_calls"), outputs.get("tool_calls"))
+        returned_texts: Final = _texts_snapshot(outputs.get("texts"))
+        returned_tool_call_shapes: Final = _tool_call_shapes_snapshot(outputs.get("tool_calls"))
+        texts_rewrote: Final = (
+            sent_texts is not None and returned_texts is not None and returned_texts != sent_texts
         )
+        tool_calls_rewrote: Final = (
+            sent_tool_call_shapes is not None
+            and returned_tool_call_shapes is not None
+            and returned_tool_call_shapes != sent_tool_call_shapes
+        )
+        self.rewrote = self.rewrote or texts_rewrote or tool_calls_rewrote
         return outputs
 
 

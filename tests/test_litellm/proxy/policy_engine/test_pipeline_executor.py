@@ -872,3 +872,73 @@ async def test_streaming_step_unchanged_texts_in_another_container_allow(monkeyp
 
     assert result.terminal_action == "allow"
     assert [step.outcome for step in result.step_results] == ["pass"]
+
+
+class _InPlaceTextRewritingGuardrail(CustomGuardrail):
+    """Rewrites ``inputs["texts"]`` in place and returns the same dict, the common
+    pattern the stream-rewrite observer must catch."""
+
+    def __init__(self, replacement_texts):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+        self.replacement_texts = replacement_texts
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        inputs["texts"] = self.replacement_texts
+        return inputs
+
+
+class _InPlaceListMutatingTextGuardrail(CustomGuardrail):
+    """Mutates the same texts list in place (``texts[i] = masked``) and returns
+    the original inputs dict, exercising the observer's snapshot logic against
+    guardrails that never rebind the ``texts`` key at all."""
+
+    def __init__(self, replacement_texts):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+        self.replacement_texts = list(replacement_texts)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        texts = inputs["texts"]
+        for i, replacement in enumerate(self.replacement_texts):
+            texts[i] = replacement
+        return inputs
+
+
+class _MutableInputsTextTranslation:
+    """Sends a mutable ``texts`` list to the guardrail so an in-place rewrite is
+    visible on the same object the observer holds a reference to."""
+
+    async def process_output_streaming_response(
+        self, responses_so_far, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None, request_data=None
+    ):
+        await guardrail_to_apply.apply_guardrail(
+            inputs={"texts": ["hello world"]},
+            request_data=request_data or {},
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        return responses_so_far
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_detects_in_place_texts_assignment(monkeypatch):
+    """Regression: a guardrail that assigns ``inputs["texts"] = masked; return inputs``
+    must still trip the observer, since after the call ``inputs.get("texts")`` and
+    ``outputs.get("texts")`` point at the same rewritten value."""
+    monkeypatch.setattr(litellm, "callbacks", [_InPlaceTextRewritingGuardrail(["hello [MASKED]"])])
+
+    with pytest.raises(UndeliverableStreamRewrite) as info:
+        await _run_streaming_step(["hello [MASKED]"], _MutableInputsTextTranslation())
+
+    assert info.value.guardrail_name == "masker"
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_detects_in_place_texts_list_mutation(monkeypatch):
+    """Regression: a guardrail that mutates the same ``texts`` list in place must
+    still trip the observer, since the ``texts`` key is never rebound."""
+    monkeypatch.setattr(litellm, "callbacks", [_InPlaceListMutatingTextGuardrail(["hello [MASKED]"])])
+
+    with pytest.raises(UndeliverableStreamRewrite) as info:
+        await _run_streaming_step(["hello [MASKED]"], _MutableInputsTextTranslation())
+
+    assert info.value.guardrail_name == "masker"
