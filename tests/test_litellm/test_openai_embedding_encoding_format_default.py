@@ -94,7 +94,11 @@ def test_openai_embedding_encoding_format_none_keeps_request_kwargs_out_of_body(
     options instead of being serialized into the JSON body."""
     monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", "none")
 
-    with patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client") as mock_get_client:
+    # Same seam as the neighbouring tests in this file: the interesting boundary
+    # is what the OpenAI client is asked to send, not the HTTP transport.
+    with patch(  # test-quality-ok: matches the file's established client-factory seam
+        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
+    ) as mock_get_client:
         mock_client_instance = MagicMock()
         mock_get_client.return_value = mock_client_instance
         mock_client_instance.post.return_value = MagicMock(
@@ -128,7 +132,11 @@ def test_openai_aembedding_encoding_format_env_none_omits_param(monkeypatch):
 
     monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", "none")
 
-    with patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client") as mock_get_client:
+    # Same seam as the neighbouring tests in this file; AsyncMock covers the
+    # coroutine the async path awaits.
+    with patch(  # test-quality-ok: matches the file's established client-factory seam
+        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
+    ) as mock_get_client:
         from unittest.mock import AsyncMock
 
         mock_client_instance = MagicMock()
