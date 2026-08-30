@@ -1039,7 +1039,7 @@ async def list_organization(
         # MissingRequiredValueError, which surfaces as HTTP 500. Such a key is a
         # member of no organization, so the correct response is an empty list.
         if user_api_key_dict.user_id is None:
-            return []
+            return []  # mutable-ok: empty response body for a caller that belongs to no organization
         org_memberships: Final = await _table(OrganizationMembershipRepository(prisma_client)).find_many(
             where={"user_id": user_api_key_dict.user_id}
         )
