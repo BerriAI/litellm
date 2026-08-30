@@ -1195,7 +1195,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             # This counter belongs to a window that has already rolled over;
             # it must not reject the request that starts the new window.
-            effective_counter_value: Final[CacheCounterValue | None] = 0 if window_expired else counter_value
+            effective_counter_value: CacheCounterValue | None = 0 if window_expired else counter_value
 
             # Determine which limit to use for current_limit and limit_remaining
             current_limit: int | None = None
@@ -1903,7 +1903,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # windows independently, so a roll on one can never leave the
             # sibling counter's stale value stranded under a fresh window
             # (issue #24677).
-            window_key: Final = descriptor_window_key(descriptor_key, descriptor_value, rlt)
+            window_key = descriptor_window_key(descriptor_key, descriptor_value, rlt)
             # Counter-key TTL and window_size are conceptually distinct
             # ("how long the counter Redis key lives" vs "how long the
             # sliding window is"). Kept as separate values so a future
