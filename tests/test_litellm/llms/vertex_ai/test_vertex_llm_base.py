@@ -2083,3 +2083,33 @@ class TestVertexBase:
 
             assert token == "cached-token"
             assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+    @pytest.mark.asyncio
+    async def test_missing_google_auth_raises_actionable_import_error(self):
+        """Test that a missing google-auth surfaces the install hint, not a raw ModuleNotFoundError"""
+        vertex_base = VertexBase()
+
+        with patch.dict("sys.modules", {"google.auth.credentials": None}):
+            with pytest.raises(ImportError, match="Google Cloud SDK not found"):
+                await vertex_base._ensure_access_token_async(
+                    credentials={"type": "service_account", "project_id": "project-1"},
+                    project_id="project-1",
+                    custom_llm_provider="vertex_ai",
+                )
+
+    @pytest.mark.parametrize(
+        "call_helper",
+        [
+            lambda vb: vb._try_get_cached_token(("key", None), "project-1"),
+            lambda vb: vb._try_get_usable_cached_token(("key", None), "project-1"),
+            lambda vb: vb._get_token_state(MagicMock()),
+        ],
+        ids=["try_get_cached_token", "try_get_usable_cached_token", "get_token_state"],
+    )
+    def test_token_state_helpers_raise_actionable_import_error(self, call_helper):
+        """Test that every TokenState call site surfaces the install hint"""
+        vertex_base = VertexBase()
+
+        with patch.dict("sys.modules", {"google.auth.credentials": None}):
+            with pytest.raises(ImportError, match="Google Cloud SDK not found"):
+                call_helper(vertex_base)
