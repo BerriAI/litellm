@@ -28,6 +28,7 @@ def test_openai_function_web_search_shapes_are_detected(tool: dict[str, Any]):
     [
         {"type": "function", "function": {"name": "web_search_helper"}},
         {"type": "function", "function": {"name": "search"}},
+        {"type": "function", "function": None},
     ],
 )
 def test_unrelated_openai_function_tools_are_not_detected(tool: dict[str, Any]):
