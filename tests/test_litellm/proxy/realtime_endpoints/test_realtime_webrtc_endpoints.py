@@ -12,7 +12,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-
 from litellm.proxy._types import ConfigGeneralSettings, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -24,6 +23,14 @@ from litellm.proxy.realtime_endpoints.endpoints import (
     _coerce_realtime_session_type,
     _decode_realtime_token_payload,
     _encode_realtime_token_payload,
+    _prepare_client_secret_session,
+)
+from litellm.types.realtime import (
+    RealtimeAudioInputConfig,
+    RealtimeAudioTranscriptionConfig,
+    RealtimeClientSecretRequest,
+    RealtimeSessionAudioConfig,
+    RealtimeSessionConfig,
 )
 
 # --- Unit tests: token encode/decode helpers ---
@@ -1067,6 +1074,61 @@ def test_session_type_coerced_for_unknown_value():
     assert _coerce_realtime_session_type(None) == "realtime"
     for allowed_session_type in _ALLOWED_SESSION_TYPES:
         assert _coerce_realtime_session_type(allowed_session_type) == allowed_session_type
+
+
+@pytest.mark.asyncio
+async def test_translation_client_secret_rejects_disallowed_nested_transcription_model() -> None:
+    req = RealtimeClientSecretRequest(
+        model="gpt-realtime-translate",
+        session=RealtimeSessionConfig(
+            type="translation",
+            model="gpt-realtime-translate",
+            audio=RealtimeSessionAudioConfig(
+                input=RealtimeAudioInputConfig(
+                    transcription=RealtimeAudioTranscriptionConfig(model="gpt-live-transcribe"),
+                )
+            ),
+        ),
+    )
+
+    with pytest.raises(Exception, match="Tried to access gpt-live-transcribe"):
+        await _prepare_client_secret_session(
+            req=req,
+            user_api_key_dict=UserAPIKeyAuth(models=["gpt-realtime-translate"]),
+            llm_model_list=None,
+            llm_router=None,
+            forced_session_type="translation",
+        )
+
+
+@pytest.mark.asyncio
+async def test_translation_client_secret_binds_authorized_nested_transcription_model() -> None:
+    req = RealtimeClientSecretRequest(
+        model="gpt-realtime-translate",
+        session=RealtimeSessionConfig(
+            type="translation",
+            model="gpt-realtime-translate",
+            audio=RealtimeSessionAudioConfig(
+                input=RealtimeAudioInputConfig(
+                    transcription=RealtimeAudioTranscriptionConfig(model="gpt-realtime-whisper"),
+                )
+            ),
+        ),
+    )
+
+    model, session_data, session_type = await _prepare_client_secret_session(
+        req=req,
+        user_api_key_dict=UserAPIKeyAuth(models=["gpt-realtime-translate", "gpt-realtime-whisper"]),
+        llm_model_list=None,
+        llm_router=None,
+        forced_session_type="translation",
+    )
+
+    assert model == "gpt-realtime-translate"
+    assert session_type == "translation"
+    assert session_data is not None
+    assert session_data["model"] == "gpt-realtime-translate"
+    assert session_data["audio"]["input"]["transcription"]["model"] == "gpt-realtime-whisper"
 
 
 @pytest.mark.parametrize(
