@@ -1,4 +1,5 @@
 import base64
+from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -257,6 +258,37 @@ class TestVertexAILyriaTextToSpeechConfig:
         assert url == (
             "https://europe-west4-aiplatform.googleapis.com/v1/projects/music-project/"
             "locations/europe-west4/publishers/google/models/lyria-002:predict"
+        )
+
+    def test_get_complete_url_encodes_injected_predict_path_segments(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        injected: Final = (
+            "victim-project/locations/us-central1/publishers/google/models/other-model:predict?ignored="
+        )
+        encoded: Final = (
+            "victim-project%2Flocations%2Fus-central1%2Fpublishers%2Fgoogle"
+            "%2Fmodels%2Fother-model%3Apredict%3Fignored%3D"
+        )
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"vertex_ai/{injected}",
+            {
+                "vertex_ai_audio_api": "lyria_predict",
+                "supported_audio_formats": ["wav"],
+            },
+        )
+
+        url: Final = VertexAILyriaTextToSpeechConfig().get_complete_url(
+            model=injected,
+            api_base="https://us-central1-aiplatform.googleapis.com",
+            litellm_params={
+                "vertex_project": injected,
+                "vertex_location": injected,
+            },
+        )
+
+        assert url == (
+            "https://us-central1-aiplatform.googleapis.com"
+            f"/v1/projects/{encoded}/locations/{encoded}/publishers/google/models/{encoded}:predict"
         )
 
     def test_get_complete_url_for_lyria_3(self):
