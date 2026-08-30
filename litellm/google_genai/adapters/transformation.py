@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import Any, Final, TypedDict, cast
 
 from typing_extensions import ReadOnly
@@ -47,6 +47,7 @@ class _GenAIPart(TypedDict, total=False):
 class _GenAIFunctionDeclaration(TypedDict, total=False):
     name: ReadOnly[str]
     description: ReadOnly[str]
+    parameters: ReadOnly[Mapping[str, object]]
     parametersJsonSchema: ReadOnly[dict[str, object]]
 
 
@@ -359,6 +360,8 @@ class GoogleGenAIAdapter:
                         function_chunk["description"] = func_decl["description"]
                     if "parametersJsonSchema" in func_decl:
                         function_chunk["parameters"] = func_decl["parametersJsonSchema"]
+                    elif "parameters" in func_decl:
+                        function_chunk["parameters"] = func_decl["parameters"]
 
                     openai_tool: dict[str, object] = {"type": "function", "function": function_chunk}
                     openai_tools.append(openai_tool)
