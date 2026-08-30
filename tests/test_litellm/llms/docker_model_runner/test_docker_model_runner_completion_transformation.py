@@ -5,12 +5,7 @@ This test verifies that the DockerModelRunnerCompletionConfig correctly transfor
 text completion requests and handles URL generation for the Docker Model Runner API.
 """
 
-import os
-import sys
-
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.docker_model_runner.completion.transformation import (
     DockerModelRunnerCompletionConfig,

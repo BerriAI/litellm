@@ -7,14 +7,10 @@ parameter mapping, and request/response transformation.
 """
 
 import json
-import os
-import sys
 from typing import List
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.docker_model_runner.chat.transformation import (
     DockerModelRunnerChatConfig,

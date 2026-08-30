@@ -1,10 +1,6 @@
 """Tests for the Docker Model Runner dispatch wiring in litellm/main.py."""
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
-
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.main import _complete_docker_model_runner
@@ -51,7 +47,9 @@ def test_complete_docker_model_runner_uses_shared_http_handler():
     ctx = _make_ctx()
     sentinel = MagicMock(name="response")
 
-    with patch("litellm.main.base_llm_http_handler.completion", return_value=sentinel) as mock_completion:
+    with patch(  # test-quality-ok: the dispatch's only injection seam is the shared handler sink
+        "litellm.main.base_llm_http_handler.completion", return_value=sentinel
+    ) as mock_completion:
         result = _complete_docker_model_runner(ctx)
 
     assert result is sentinel
@@ -66,8 +64,12 @@ def test_complete_docker_model_runner_respects_env_api_base(monkeypatch):
     """DOCKER_MODEL_RUNNER_API_BASE is picked up when no explicit api_base is set."""
     monkeypatch.setenv("DOCKER_MODEL_RUNNER_API_BASE", "http://model-runner.docker.internal:12434/engines/v1")
     ctx = _make_ctx()
+    sentinel = MagicMock(name="response")
 
-    with patch("litellm.main.base_llm_http_handler.completion", return_value=MagicMock()) as mock_completion:
-        _complete_docker_model_runner(ctx)
+    with patch(  # test-quality-ok: the dispatch's only injection seam is the shared handler sink
+        "litellm.main.base_llm_http_handler.completion", return_value=sentinel
+    ) as mock_completion:
+        result = _complete_docker_model_runner(ctx)
 
+    assert result is sentinel
     assert mock_completion.call_args.kwargs["api_base"] == "http://model-runner.docker.internal:12434/engines/v1"
