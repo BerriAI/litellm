@@ -149,6 +149,31 @@ class TestPostHogBatchFlush:
 
         assert handler.log_queue == [_queue_item("a")]
 
+    async def test_async_send_batch_noop_when_queue_empty(self, handler):
+        """An empty queue must not attempt any network call."""
+        handler.log_queue = []
+        handler.async_client = AsyncMock()
+
+        await handler.async_send_batch()
+
+        handler.async_client.post.assert_not_called()
+
+    async def test_async_send_batch_mock_mode_logs_and_sends(self, handler):
+        """Mock mode takes the same send path, just with extra debug logging -
+        exercise it so both mock-mode branches (pre-send and post-success) run."""
+        handler.is_mock_mode = True
+        handler.log_queue = [_queue_item("a")]
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        handler.async_client = AsyncMock()
+        handler.async_client.post = AsyncMock(return_value=mock_response)
+
+        await handler.async_send_batch()
+
+        handler.async_client.post.assert_called_once()
+
     async def test_flush_queue_preserves_events_added_during_failed_send(self, handler):
         """Combined case: a send that both fails AND has a concurrent append
         mid-flight must preserve both the original snapshot and the new event."""
