@@ -1035,6 +1035,156 @@ def test_get_config_callbacks_redacts_email_alerting_vars_for_view_only_admin(
     assert admin_email["SMTP_HOST"] == "smtp.resend.com"
 
 
+def test_get_config_callbacks_appends_runtime_only_callbacks(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """Runtime-registered callbacks (not in config) are appended as read_only rows."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": ["langfuse"]},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    # Mock runtime callbacks: register otel in addition to langfuse in config.
+    import litellm
+
+    original = litellm.callbacks
+    try:
+        litellm.callbacks = ["otel"]
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            response = client.get("/get/config/callbacks")
+        assert response.status_code == 200
+        body = response.json()
+
+        callbacks = body["callbacks"]
+        callback_names = [cb["name"] for cb in callbacks]
+
+        # Both should be present
+        assert "langfuse" in callback_names
+        assert "otel" in callback_names
+
+        # Configured callback should NOT be marked read_only
+        langfuse_cb = next(cb for cb in callbacks if cb["name"] == "langfuse")
+        assert langfuse_cb.get("read_only") != True
+
+        # Runtime-only callback should be marked read_only
+        otel_cb = next(cb for cb in callbacks if cb["name"] == "otel")
+        assert otel_cb["read_only"] is True
+        assert otel_cb["type"] == "success_and_failure"
+    finally:
+        litellm.callbacks = original
+
+
+def test_get_config_callbacks_deduplicates_configured_and_runtime(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """When same callback is in both config and runtime, show only once as configured."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": ["langfuse"]},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    # Mock runtime: same callback registered that is also in config
+    import litellm
+
+    original = litellm.success_callback
+    try:
+        litellm.success_callback = ["langfuse"]
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            response = client.get("/get/config/callbacks")
+        assert response.status_code == 200
+        body = response.json()
+
+        callbacks = body["callbacks"]
+        langfuse_rows = [cb for cb in callbacks if cb["name"] == "langfuse"]
+
+        # Should appear exactly once, not duplicated
+        assert len(langfuse_rows) == 1
+        # And it should NOT be marked read_only (it's in config)
+        assert langfuse_rows[0].get("read_only") != True
+    finally:
+        litellm.success_callback = original
+
+
+def test_get_config_callbacks_redacts_runtime_only_row_secrets_for_view_only_admin(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """Runtime-only callback rows are subject to the same redaction gate as configured."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": []},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    # Mock runtime: register otel
+    import litellm
+
+    original = litellm.callbacks
+    try:
+        litellm.callbacks = ["otel"]
+        # View-only admin
+        with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+            response = client.get("/get/config/callbacks")
+        assert response.status_code == 200
+        body = response.json()
+
+        callbacks = body["callbacks"]
+        otel_cb = next((cb for cb in callbacks if cb["name"] == "otel"), None)
+        assert otel_cb is not None
+
+        # Secret env vars must be redacted
+        assert otel_cb["variables"]["OTEL_HEADERS"] == "REDACTED"
+        # Non-secret vars should pass through
+        assert otel_cb["variables"]["OTEL_ENDPOINT"] == _CALLBACK_ENV_FIXTURE["OTEL_ENDPOINT"]
+
+        # Full admin sees secrets
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            admin_response = client.get("/get/config/callbacks")
+        assert admin_response.status_code == 200
+        admin_body = admin_response.json()
+        admin_otel = next(
+            (cb for cb in admin_body["callbacks"] if cb["name"] == "otel"), None
+        )
+        assert admin_otel is not None
+        assert admin_otel["variables"]["OTEL_HEADERS"] == _CALLBACK_ENV_FIXTURE["OTEL_HEADERS"]
+    finally:
+        litellm.callbacks = original
+
+
 # ---------------------------------------------------------------------------
 # GET /config/yaml
 # ---------------------------------------------------------------------------

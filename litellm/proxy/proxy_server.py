@@ -16992,6 +16992,22 @@ async def delete_callback(
         )
 
 
+def _normalize_callback_alias(callback_name: str) -> str:
+    """
+    Normalize callback name aliases to their canonical form for deduplication.
+    Examples: opentelemetry → otel, s3_v2 → s3, aws_sqs → sqs, custom_callback_api → generic_api.
+    """
+    if not isinstance(callback_name, str):
+        return str(callback_name)
+    _alias_map: Final[dict[str, str]] = {
+        "opentelemetry": "otel",
+        "s3_v2": "s3",
+        "aws_sqs": "sqs",
+        "custom_callback_api": "generic_api",
+    }
+    return _alias_map.get(callback_name, callback_name)
+
+
 @router.get(
     "/get/config/callbacks",
     tags=["config.yaml"],
@@ -17057,6 +17073,41 @@ async def get_config(
 
         for _callback in _success_and_failure_callbacks:
             _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+
+        # Append runtime-only callbacks (registered but not in config).
+        # Build a set of configured callback names (normalized for alias matching).
+        _configured_callback_names_normalized: Final[set] = set()
+        for _cb in _success_callbacks + _failure_callbacks + _success_and_failure_callbacks:
+            _normalized = _normalize_callback_alias(_cb)
+            _configured_callback_names_normalized.add(_normalized)
+
+        # Collect runtime-registered callbacks from LoggingCallbackManager.
+        try:
+            _runtime_callbacks_by_type = litellm.logging_callback_manager.get_callbacks_by_type()
+            # Flatten all runtime callbacks with their types.
+            _runtime_items: Final[list[tuple[str, str]]] = []
+            for _cb_name in _runtime_callbacks_by_type.get("success", []):
+                _runtime_items.append((_cb_name, "success"))
+            for _cb_name in _runtime_callbacks_by_type.get("failure", []):
+                _runtime_items.append((_cb_name, "failure"))
+            for _cb_name in _runtime_callbacks_by_type.get("success_and_failure", []):
+                _runtime_items.append((_cb_name, "success_and_failure"))
+
+            # Track normalized names of rows already added to avoid duplicates.
+            _added_normalized_names: Final[set] = set(_configured_callback_names_normalized)
+
+            # Append runtime-only rows (those not in config).
+            for _runtime_cb_name, _runtime_cb_type in _runtime_items:
+                _normalized_runtime = _normalize_callback_alias(_runtime_cb_name)
+                # Skip if this callback is in config or already appended.
+                if _normalized_runtime not in _added_normalized_names:
+                    _added_normalized_names.add(_normalized_runtime)
+                    _runtime_row = process_callback(_runtime_cb_name, _runtime_cb_type, environment_variables)
+                    _runtime_row["read_only"] = True
+                    _data_to_return.append(_runtime_row)
+        except Exception as _e:
+            # If runtime callback discovery fails, log but don't block the response.
+            verbose_proxy_logger.warning("Failed to append runtime callbacks to get_config response: %s", _e)
 
         _data_to_return = _apply_callback_role_gate(_data_to_return, is_full_admin)
 
