@@ -2,6 +2,37 @@ import os
 
 import pytest
 
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    global_mcp_server_manager,
+)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_mcp_server_registry():
+    """Snapshot and restore the global manager's server-registry state around every test.
+
+    ``global_mcp_server_manager`` is a module-global singleton, and many tests in this
+    package seed ``registry``/``config_mcp_servers`` (or clear them) without cleaning up.
+    In a shared CI shard the leaked entries poison later tests in the same worker, e.g.
+    the ``all_proxy_servers`` sentinel expansion in ``auth/`` suddenly sees a bridge
+    server registered by a discovery test, so the outcome depends on xdist scheduling.
+    Restoring the state here makes ordering irrelevant.
+    """
+    saved_registry = dict(global_mcp_server_manager.registry)
+    saved_config_servers = dict(global_mcp_server_manager.config_mcp_servers)
+    saved_tool_mapping = dict(global_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
+    saved_oauth_slots = global_mcp_server_manager._oauth_discovery_slots
+    try:
+        yield
+    finally:
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.registry.update(saved_registry)
+        global_mcp_server_manager.config_mcp_servers.clear()
+        global_mcp_server_manager.config_mcp_servers.update(saved_config_servers)
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.update(saved_tool_mapping)
+        global_mcp_server_manager._oauth_discovery_slots = saved_oauth_slots
+
 
 @pytest.fixture(autouse=True)
 def _hermetic_server_root_path():
