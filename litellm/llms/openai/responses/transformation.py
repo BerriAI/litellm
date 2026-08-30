@@ -138,12 +138,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 unsupported_effort: Final = (
                     effort == "xhigh"
                     and not OpenAIGPT5Config._supports_reasoning_effort_level(  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportCallIssue]  # shared GPT-5 capability gate
-                        model, effort
+                        model, effort  # pyright: ignore[reportArgumentType, reportCallIssue]  # shared helper call
                     )
                 ) or (
                     effort in ("minimal", "low")
                     and OpenAIGPT5Config._is_reasoning_effort_level_explicitly_disabled(  # pyright: ignore[reportPrivateUsage, reportArgumentType, reportCallIssue]  # shared GPT-5 capability gate
-                        model, effort
+                        model, effort  # pyright: ignore[reportArgumentType, reportCallIssue]  # shared helper call
                     )
                 )
                 if unsupported_effort:
