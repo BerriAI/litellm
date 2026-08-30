@@ -1,0 +1,9 @@
+model_list:
+  - model_name: nvidia/nemotron-3.5-lightning:free
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3.5-lightning:free
+      api_key: sk-or-v1-REDACTED
+      api_base: https://openrouter.ai/api/v1
+
+general_settings:
+  master_key: sk-test-key

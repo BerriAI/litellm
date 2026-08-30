@@ -2068,6 +2068,7 @@ dependencies = [
  "rand 0.8.7",
  "regex",
  "reqwest",
+ "rustls 0.23.42",
  "serde",
  "serde_json",
  "serde_yaml",

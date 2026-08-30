@@ -84,6 +84,7 @@ async fn main() {
             .map(Arc::from))
     };
 
+    eprintln!("master_key loaded: {:?}", master_key.as_deref());
     if master_key.is_none() {
         eprintln!(
             "warning: LITELLM_MASTER_KEY is not set; /v1/realtime will reject all requests (fail closed)"
