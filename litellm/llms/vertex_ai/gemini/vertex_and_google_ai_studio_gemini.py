@@ -406,7 +406,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ]
 
     @staticmethod
-    def _deduplicate_tools(optional_params: dict) -> None:
+    def _deduplicate_tools(
+        optional_params: dict,  # mutable-ok: optional parameters use the existing request shape
+    ) -> None:
         tools: Final = optional_params.get("tools")
         if not isinstance(tools, list):
             return
@@ -415,7 +417,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for tool in tools:
             if tool not in deduplicated:
                 deduplicated.append(tool)
-        optional_params["tools"] = deduplicated
+        optional_params["tools"] = deduplicated  # rebind-ok: normalize request payload before serialization
 
     def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
         """
