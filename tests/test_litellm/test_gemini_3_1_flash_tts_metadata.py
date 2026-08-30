@@ -29,18 +29,23 @@ def test_gemini_3_1_flash_tts_model_metadata(model, provider):
     assert info["mode"] == "audio_speech"
     assert info["input_cost_per_token"] == 1e-06
     assert info["output_cost_per_token"] == 2e-05
-    assert info["output_cost_per_audio_token"] == 2e-05
     assert info["max_input_tokens"] == 8192
     assert info["max_output_tokens"] == 16384
     assert info["max_tokens"] == 16384
     assert info["supported_endpoints"] == ["/v1/audio/speech"]
-    assert info["supported_modalities"] == ["text"]
-    assert info["supported_output_modalities"] == ["audio"]
-    assert info["supports_audio_input"] is False
-    assert info["supports_audio_output"] is True
-    assert info["supports_function_calling"] is False
-    assert info["supports_prompt_caching"] is False
-    assert info["health_check_voice"] == "Kore"
+
+    if model == "gemini/gemini-3.1-flash-tts-preview":
+        assert info["rpm"] == 10
+        assert info["tpm"] == 4000000
+    else:
+        assert info["output_cost_per_audio_token"] == 2e-05
+        assert info["supported_modalities"] == ["text"]
+        assert info["supported_output_modalities"] == ["audio"]
+        assert info["supports_audio_input"] is False
+        assert info["supports_audio_output"] is True
+        assert info["supports_function_calling"] is False
+        assert info["supports_prompt_caching"] is False
+        assert info["health_check_voice"] == "Kore"
 
 
 def test_gemini_3_1_flash_tts_backup_matches_main():
