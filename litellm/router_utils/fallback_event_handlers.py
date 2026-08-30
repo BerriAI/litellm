@@ -237,9 +237,7 @@ def record_pre_routing_selection(request_kwargs: Mapping[str, Any] | None, selec
 def get_pre_routing_selection(kwargs: Mapping[str, Any]) -> str | None:
     """The model a pre-routing hook selected for this request, if one did."""
     buckets: Final = (kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS)
-    selections: Final = (
-        bucket.get(PRE_ROUTING_SELECTED_MODEL_KEY) for bucket in buckets if isinstance(bucket, dict)
-    )
+    selections: Final = (bucket.get(PRE_ROUTING_SELECTED_MODEL_KEY) for bucket in buckets if isinstance(bucket, dict))
     return next((selected for selected in selections if isinstance(selected, str) and selected), None)
 
 
