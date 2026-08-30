@@ -455,6 +455,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     providerKey: "Repelloai",
   },
   {
+    id: "levo",
+    name: "Levo AI Gateway",
+    description:
+      "Self-hosted AI gateway: PII and secret detection, prompt-injection heuristics, CEL access control and MCP tool policies, with streamed responses buffered until moderated",
+    category: "partner",
+    logo: guardrailLogoMap["Levo AI Gateway"],
+    tags: ["PII", "Secrets", "Prompt Injection", "MCP", "Self-hosted"],
+    providerKey: "Levo AI Gateway",
+  },
+  {
     id: "straiker",
     name: "Straiker",
     description:

@@ -84,6 +84,7 @@ class SupportedGuardrailIntegrations(Enum):
     DYNAMOAI = "dynamoai"
     GUARDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
+    LEVO = "levo"
     LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
