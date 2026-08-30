@@ -61,15 +61,11 @@ def test_embedding_dimensions_drop_params_for_openai_compatible_provider(provide
     ],
 )
 def test_embedding_dimensions_preserved_for_provider_mappings(provider, model):
-    previous_drop_params = litellm.drop_params
-    try:
-        litellm.drop_params = True
-        optional_params = litellm.utils.get_optional_params_embeddings(
-            model=model,
-            custom_llm_provider=provider,
-            dimensions=128,
-        )
-    finally:
-        litellm.drop_params = previous_drop_params
+    optional_params = litellm.utils.get_optional_params_embeddings(
+        model=model,
+        custom_llm_provider=provider,
+        dimensions=128,
+        drop_params=True,
+    )
 
     assert optional_params["dimensions"] == 128
