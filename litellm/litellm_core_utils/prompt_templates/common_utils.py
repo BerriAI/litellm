@@ -1246,6 +1246,19 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
 
 
+def tool_with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
+    function: Final = tool.get("function")
+    if not isinstance(function, dict):
+        return tool
+    parameters: Final = function.get("parameters")
+    if not isinstance(parameters, dict):
+        return tool
+    flattened: Final = flatten_top_level_schema_combinators(parameters)
+    if flattened is parameters:
+        return tool
+    return {**tool, "function": {**function, "parameters": flattened}}  # mutable-ok: request tools are JSON dicts
+
+
 def _get_image_mime_type_from_url(url: str) -> str | None:
     """
     Get mime type for common image URLs
