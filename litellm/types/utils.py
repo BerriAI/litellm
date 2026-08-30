@@ -919,6 +919,14 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
         CallTypes.agenerate_content_stream,
         CallTypes.generate_content_stream,
     ],
+    "/v1beta/models/{model}:generateContent": (
+        CallTypes.agenerate_content,
+        CallTypes.generate_content,
+    ),
+    "/v1beta/models/{model}:streamGenerateContent": (
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ),
     # MCP (Model Context Protocol)
     "/mcp/call_tool": [CallTypes.call_mcp_tool],
     # A2A (Agent-to-Agent)
@@ -926,12 +934,12 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
-        CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
+        CallTypes.llm_passthrough_route,
     ],
     "/v1/llm_passthrough": [
-        CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
+        CallTypes.llm_passthrough_route,
     ],
     "/v1/messages": [CallTypes.anthropic_messages],
     # OCR
