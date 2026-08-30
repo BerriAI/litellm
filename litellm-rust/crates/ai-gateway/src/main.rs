@@ -54,13 +54,36 @@ async fn main() {
 
     tracing::info!("starting litellm-ai-gateway");
 
-    // Trim before storing so it matches the trimmed bearer token in `auth`
-    // (avoids a silent auth failure when the env var has surrounding whitespace).
-    let master_key: Option<Arc<str>> = std::env::var("LITELLM_MASTER_KEY")
-        .ok()
-        .map(|key| key.trim().to_string())
-        .filter(|key| !key.is_empty())
-        .map(Arc::from);
+    // Load config from YAML if specified, otherwise use env vars
+    let (router, master_key) = if let Ok(config_path) = std::env::var("LITELLM_YAML_CONFIG") {
+        match litellm_ai_gateway::config::load_config_from_yaml(&config_path) {
+            Ok(config) => {
+                eprintln!("loaded config from {config_path}");
+                // Use master_key from config if set, otherwise fall back to env var
+                let master_key = config.general_settings.master_key
+                    .or_else(|| std::env::var("LITELLM_MASTER_KEY").ok())
+                    .map(|key| key.trim().to_string())
+                    .filter(|key| !key.is_empty())
+                    .map(Arc::from);
+                (Arc::new(config.router), master_key)
+            }
+            Err(err) => {
+                eprintln!("YAML config load failed ({err}); falling back to env deployment");
+                (Arc::new(build_router()), std::env::var("LITELLM_MASTER_KEY")
+                    .ok()
+                    .map(|key| key.trim().to_string())
+                    .filter(|key| !key.is_empty())
+                    .map(Arc::from))
+            }
+        }
+    } else {
+        (Arc::new(build_router()), std::env::var("LITELLM_MASTER_KEY")
+            .ok()
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty())
+            .map(Arc::from))
+    };
+
     if master_key.is_none() {
         eprintln!(
             "warning: LITELLM_MASTER_KEY is not set; /v1/realtime will reject all requests (fail closed)"
@@ -73,7 +96,6 @@ async fn main() {
     let proxy_logger = LiteLLMPythonProxyAPILogger::from_env();
     let loggers: Vec<Arc<dyn CustomLogger>> = vec![proxy_logger];
 
-    let router = Arc::new(build_router());
     eprintln!("router has {} deployments:", router.deployments().len());
     for d in router.deployments() {
         eprintln!(
