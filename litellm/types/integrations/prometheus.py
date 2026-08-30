@@ -270,6 +270,10 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_deployment_rpm_limit",
     "litellm_remaining_api_key_requests_for_model",
     "litellm_remaining_api_key_tokens_for_model",
+    "litellm_remaining_team_requests_for_model",
+    "litellm_remaining_team_tokens_for_model",
+    "litellm_team_rpm_limit",
+    "litellm_team_tpm_limit",
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
@@ -775,6 +779,18 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
+    litellm_remaining_team_requests_for_model: ClassVar[Sequence[str]] = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_remaining_team_tokens_for_model = litellm_remaining_team_requests_for_model
+
+    litellm_team_rpm_limit = litellm_remaining_team_requests_for_model
+
+    litellm_team_tpm_limit = litellm_remaining_team_requests_for_model
+
     litellm_llm_api_failed_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -1072,6 +1088,9 @@ class NoOpMetric:
 
     def labels(self, *args, **kwargs):
         return self
+
+    def remove(self, *labelvalues: object) -> None:
+        pass
 
     def inc(self, *args, **kwargs) -> None:
         pass
