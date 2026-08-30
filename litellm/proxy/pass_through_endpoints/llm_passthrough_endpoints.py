@@ -2824,7 +2824,6 @@ async def gigachat_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
     """
-    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -2876,55 +2875,35 @@ async def gigachat_proxy_route(
             version=version,
         )
 
-    # Fall back to existing implementation for direct GigaChat models
     verbose_proxy_logger.debug(
         "Gigachat passthrough: Using direct Gigachat model '%s' for endpoint '%s'", model, endpoint
     )
 
-    data: dict[
-        str, Any
-    ] = {}  # mutable-ok: request body mutated in place by proxy pipeline; pyright: ignore[reportExplicitAny]  # Any needed for proxy pipeline flexibility
+    from litellm.llms.gigachat.authenticator import get_access_token
+    from litellm.llms.gigachat.utils import GIGACHAT_BASE_URL
 
-    data["method"] = request.method
-    data["endpoint"] = endpoint
-    data["json"] = request_body
-    data["custom_llm_provider"] = "gigachat"
+    base_target_url: Final = get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+    request_path: Final = httpx.URL(endpoint).path
+    encoded_endpoint: Final = request_path if request_path.startswith("/") else f"/{request_path}"
 
-    client: Final = get_async_httpx_client(
-        llm_provider=LlmProviders.GIGACHAT,
-        params={  # mutable-ok: httpx client params
-            "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
-            "ssl_verify": False,
-        },
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
-    data["client"] = client
 
-    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    is_streaming_request: Final = await is_streaming_request_fn(request)
 
-    try:
-        return await base_llm_response_processor.base_passthrough_process_llm_request(
-            request=request,
-            fastapi_response=fastapi_response,
-            user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
-            llm_router=llm_router,
-            general_settings=general_settings,
-            proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
-            model=model,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            version=version,
-        )
-    except Exception as e:  # noqa: BLE001 # Safe catch-all for handle exception
-        raise await base_llm_response_processor._handle_llm_api_exception(
-            e=e,
-            user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={"Authorization": f"Bearer {get_access_token()}"},
+        is_streaming_request=is_streaming_request,
+    )
+    return await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+    )
 
 
 async def handle_gigachat_passthrough_router_model(

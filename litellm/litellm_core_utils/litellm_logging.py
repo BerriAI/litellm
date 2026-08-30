@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 from httpx import Response
 from pydantic import BaseModel
@@ -86,7 +86,6 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_streaming_responses_for_custom_logger,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
@@ -1603,24 +1602,26 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _response_cost_calculator(
         self,
-        result: ModelResponse
-        | ModelResponseStream
-        | EmbeddingResponse
-        | ImageResponse
-        | TranscriptionResponse
-        | TextCompletionResponse
-        | HttpxBinaryResponseContent
-        | RerankResponse
-        | Batch
-        | FineTuningJob
-        | ResponsesAPIResponse
-        | ResponseCompletedEvent
-        | OpenAIFileObject
-        | LiteLLMRealtimeStreamLoggingObject
-        | OpenAIModerationResponse
-        | SearchResponse
-        | dict
-        | list,
+        result: Union[
+            ModelResponse,
+            ModelResponseStream,
+            EmbeddingResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            TextCompletionResponse,
+            HttpxBinaryResponseContent,
+            RerankResponse,
+            Batch,
+            FineTuningJob,
+            ResponsesAPIResponse,
+            ResponseCompletedEvent,
+            OpenAIFileObject,
+            LiteLLMRealtimeStreamLoggingObject,
+            OpenAIModerationResponse,
+            "SearchResponse",
+            dict,
+            list,
+        ],
         cache_hit: bool | None = None,
         litellm_model_name: str | None = None,
         router_model_id: str | None = None,
@@ -6262,7 +6263,7 @@ def _get_traceback_str_for_error(error_str: str) -> str:
 from decimal import Decimal
 
 # used for unit testing
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 
 def create_dummy_standard_logging_payload() -> StandardLoggingPayload:

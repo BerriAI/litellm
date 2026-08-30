@@ -92,16 +92,19 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             if provider_chat_config is None:
                 raise ValueError(f"No provider config found for model: {model}")
 
+            raw_messages: Final = request_data.get("messages")
             litellm_model_response: Final = provider_chat_config.transform_response(
                 model=model,
-                messages=request_data.get("messages", []),  # mutable-ok: empty list default for transform_response
+                messages=list(raw_messages)
+                if isinstance(raw_messages, list)
+                else [],  # mutable-ok: transform_response wants a list
                 raw_response=httpx_response,
                 model_response=ModelResponse(),
                 logging_obj=logging_obj,
                 optional_params={},  # mutable-ok: empty dict kwarg for transform_response
                 litellm_params={},  # mutable-ok: empty dict kwarg for transform_response
                 api_key="",
-                request_data=request_data,
+                request_data=dict(request_data),  # mutable-ok: transform_response wants a dict
                 encoding=encoding,
             )
 
@@ -124,7 +127,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
                     logging_obj=logging_obj,
                     optional_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
                     api_key="",
-                    request_data=request_data,
+                    request_data=dict(request_data),  # mutable-ok: transform_embedding_response wants a dict
                     litellm_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
                 )
             )
@@ -172,7 +175,9 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             )
             translated_chunk = gigachat_iterator.chunk_parser(chunk=message)
 
-            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(translated_chunk):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime guard for patched chunk_parser
+            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime guard for patched chunk_parser
+                dict(translated_chunk)
+            ):
                 chunk_obj = convert_generic_chunk_to_model_response_stream(
                     translated_chunk  # pyright: ignore[reportArgumentType]  # validated TypedDict
                 )

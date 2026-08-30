@@ -167,19 +167,21 @@ class GigaChatConfig(BaseConfig):
                 pass
             elif param == "tools":
                 # Convert tools to functions format
-                optional_params["functions"] = self._convert_tools_to_functions(value)
+                if isinstance(value, Sequence):
+                    optional_params["functions"] = self._convert_tools_to_functions(value)
             elif param == "tool_choice":
                 # Map OpenAI tool_choice to GigaChat function_call
-                mapped_choice = self._map_tool_choice(value)
-                if mapped_choice is not None:
-                    optional_params["function_call"] = mapped_choice
+                if isinstance(value, (str, Mapping)):
+                    mapped_choice = self._map_tool_choice(value)
+                    if mapped_choice is not None:
+                        optional_params["function_call"] = mapped_choice
             elif param == "functions":
                 optional_params["functions"] = value
             elif param == "function_call":
                 optional_params["function_call"] = value
             elif param == "response_format":
                 # Handle structured output via function calling
-                if value.get("type") == "json_schema":
+                if isinstance(value, Mapping) and value.get("type") == "json_schema":
                     json_schema = value.get("json_schema", {})
                     schema_name = json_schema.get("name", "structured_output")
                     schema = json_schema.get("schema", {})
@@ -190,9 +192,15 @@ class GigaChatConfig(BaseConfig):
                         "parameters": schema,
                     }
 
-                    if "functions" not in optional_params:
-                        optional_params["functions"] = []  # mutable-ok: list for httpx
-                    optional_params["functions"].append(function_def)
+                    existing_functions = optional_params.get("functions")
+                    optional_params["functions"] = [
+                        *(
+                            existing_functions
+                            if isinstance(existing_functions, Sequence) and not isinstance(existing_functions, str)
+                            else ()
+                        ),
+                        function_def,
+                    ]
                     optional_params["function_call"] = {"name": schema_name}  # mutable-ok: request payload
                     optional_params["_structured_output"] = True
 
@@ -246,8 +254,9 @@ class GigaChatConfig(BaseConfig):
             # OpenAI format: {"type": "function", "function": {"name": "func_name"}}
             # GigaChat format: {"name": "func_name"}
             if tool_choice.get("type") == "function":
-                func_name: Final = tool_choice.get("function", {}).get("name")
-                if func_name:
+                function_spec: Final = tool_choice.get("function")
+                func_name: Final = function_spec.get("name") if isinstance(function_spec, Mapping) else None
+                if isinstance(func_name, str) and func_name:
                     return {"name": func_name}
 
         # Default to None (don't set function_call)
@@ -317,7 +326,7 @@ class GigaChatConfig(BaseConfig):
         giga_messages: Final = self._transform_messages(messages)
 
         # Build request
-        request_data: Final = {
+        request_data: Final[dict[str, object]] = {
             "model": model.replace("gigachat/", ""),
             "messages": giga_messages,
         }
@@ -407,7 +416,7 @@ class GigaChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: tiktoken.Encoding | None,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

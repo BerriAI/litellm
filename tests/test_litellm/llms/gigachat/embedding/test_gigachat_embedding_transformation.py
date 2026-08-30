@@ -92,7 +92,8 @@ class TestGetOpenaiCompatibleProviderInfo:
         assert api_base == "https://api.example.com"
         assert api_key == "test-key"
 
-    def test_resolves_api_base_when_none(self):
+    def test_resolves_api_base_when_none(self, monkeypatch):
+        monkeypatch.delenv("GIGACHAT_API_BASE", raising=False)
         provider, api_base, api_key = self.config._get_openai_compatible_provider_info(
             api_base=None, api_key="key"
         )

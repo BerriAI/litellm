@@ -2133,37 +2133,101 @@ class TestGigachatProxyRoute:
         return_value=False,
     )
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
-        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_passthrough_process_llm_request",
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
         new_callable=AsyncMock,
+        return_value=False,
     )
-    async def test_gigachat_proxy_route_fallback_to_http_pass_through(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.llms.gigachat.authenticator.get_access_token",
+        return_value="gigachat-test-token",
+    )
+    async def test_gigachat_proxy_route_fallback_forwards_to_gigachat_api(
         self,
-        mock_base_passthrough,
+        mock_get_token,
+        mock_is_streaming,
         mock_is_router,
         mock_get_body,
+        monkeypatch,
     ):
+        monkeypatch.delenv("GIGACHAT_API_BASE", raising=False)
         mock_request = MagicMock(spec=Request)
         mock_fastapi_response = MagicMock(spec=Response)
         mock_user_api_key_dict = MagicMock()
 
-        expected_response = Response(
-            content=b'{"response": "success"}',
-            status_code=200,
-            media_type="application/json",
-        )
-        mock_base_passthrough.return_value = expected_response
+        captured_kwargs = {}
 
-        result = await gigachat_proxy_route(
-            endpoint="/chat/completions",
-            request=mock_request,
-            fastapi_response=mock_fastapi_response,
-            user_api_key_dict=mock_user_api_key_dict,
-        )
+        async def fake_endpoint(request, fastapi_response, user_api_key_dict):
+            return Response(content=b'{"response": "success"}', status_code=200)
+
+        def fake_create_pass_through_route(**kwargs):
+            captured_kwargs.update(kwargs)
+            return fake_endpoint
+
+        with patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            side_effect=fake_create_pass_through_route,
+        ):
+            result = await gigachat_proxy_route(
+                endpoint="/chat/completions",
+                request=mock_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
 
         assert isinstance(result, Response)
         assert result.status_code == 200
-        assert result.body == b'{"response": "success"}'
-        mock_base_passthrough.assert_awaited_once()
+        assert captured_kwargs["target"] == "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+        assert captured_kwargs["custom_headers"] == {"Authorization": "Bearer gigachat-test-token"}
+
+    @pytest.mark.asyncio
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={},
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+        new_callable=AsyncMock,
+        return_value=False,
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.llms.gigachat.authenticator.get_access_token",
+        return_value="gigachat-test-token",
+    )
+    async def test_gigachat_proxy_route_models_endpoint_without_model(
+        self,
+        mock_get_token,
+        mock_is_streaming,
+        mock_get_body,
+        monkeypatch,
+    ):
+        monkeypatch.delenv("GIGACHAT_API_BASE", raising=False)
+        mock_request = MagicMock(spec=Request)
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        captured_kwargs = {}
+
+        async def fake_endpoint(request, fastapi_response, user_api_key_dict):
+            return Response(content=b'{"data": []}', status_code=200)
+
+        def fake_create_pass_through_route(**kwargs):
+            captured_kwargs.update(kwargs)
+            return fake_endpoint
+
+        with patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            side_effect=fake_create_pass_through_route,
+        ):
+            result = await gigachat_proxy_route(
+                endpoint="models",
+                request=mock_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        assert isinstance(result, Response)
+        assert result.status_code == 200
+        assert captured_kwargs["target"] == "https://gigachat.devices.sberbank.ru/api/v1/models"
 
     @pytest.mark.asyncio
     async def test_allm_passthrough_streaming_preserves_upstream_headers(self):
