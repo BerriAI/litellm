@@ -1683,6 +1683,34 @@ class TestCommonRequestProcessingHelpers:
 
         assert _serialize_http_exception_detail(42) == ("42", None)
 
+    async def test_proxy_exception_from_http_exception_helper(self):
+        """The shared HTTPException -> ProxyException conversion keeps a clean
+        message, merges structured detail over existing provider_specific_fields,
+        and passes headers through."""
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        exc = HTTPException(
+            status_code=400,
+            detail={"error": "Content blocked", "guardrail": "keyword-block"},
+        )
+        exc.provider_specific_fields = {"existing": "field", "guardrail": "stale"}
+        result = proxy_exception_from_http_exception(exc, {"x-litellm-call-id": "abc"})
+        assert result.message == "Content blocked"
+        assert result.code == "400"
+        assert result.provider_specific_fields == {
+            "existing": "field",
+            "error": "Content blocked",
+            "guardrail": "keyword-block",
+        }
+        assert result.headers == {"x-litellm-call-id": "abc"}
+
+        plain = proxy_exception_from_http_exception(HTTPException(status_code=429, detail="slow down"), {})
+        assert plain.message == "slow down"
+        assert plain.code == "429"
+        assert plain.provider_specific_fields is None
+
     async def test_create_streaming_response_first_chunk_error_string_code(self):
         """
         Test that when the first chunk contains a string error code, a JSON error response is returned

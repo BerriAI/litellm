@@ -58,15 +58,15 @@ def _tool_call_shape(tool_call: object) -> tuple[object, object]:
 
 
 def _rewrote_texts(sent: Sequence[str] | None, returned: Sequence[str] | None) -> bool:
-    return sent is not None and returned is not None and list(returned) != list(sent)
+    return sent is not None and returned is not None and tuple(returned) != tuple(sent)
 
 
 def _rewrote_tool_calls(sent: Sequence[object] | None, returned: Sequence[object] | None) -> bool:
     if sent is None or returned is None:
         return False
-    return [_tool_call_shape(tool_call) for tool_call in returned] != [
+    return tuple(_tool_call_shape(tool_call) for tool_call in returned) != tuple(
         _tool_call_shape(tool_call) for tool_call in sent
-    ]
+    )
 
 
 class _StreamRewriteObserver(CustomGuardrail):
@@ -103,7 +103,7 @@ class _StreamRewriteObserver(CustomGuardrail):
 
 def _prepare_hook_input(
     step: PipelineStep,
-    callback: CustomLogger,
+    callback: CustomGuardrail,
     data: dict,  # mutable-ok: same request-payload shape the hooks mutate
     raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
 ) -> tuple[dict, bool]:  # mutable-ok: returns that same request-payload dict
@@ -113,15 +113,17 @@ def _prepare_hook_input(
     pipeline may have already rewritten), same reason the normal sequential/parallel
     guardrail loops do this."""
     if "metadata" not in data:
-        data["metadata"] = {}
-    data["metadata"]["guardrails"] = [step.guardrail]
+        data["metadata"] = {}  # mutable-ok: request metadata bucket, hooks mutate it
+    data["metadata"]["guardrails"] = [
+        step.guardrail
+    ]  # mutable-ok: guardrails list is part of the request-payload shape
 
-    scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+    scans_raw_request: Final = callback.scan_raw_request
     hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
         independent_snapshot(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
     )
     if hook_input is not data:
-        hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
+        hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]  # mutable-ok: request metadata shape
     return hook_input, scans_raw_request
 
 
@@ -342,7 +344,12 @@ class PipelineExecutor:
             if response is None or scans_raw_request:
                 return ("pass", None, None, None)
             if mode == "post_call":
-                return ("pass", {"response": response}, None, None)
+                return (
+                    "pass",
+                    {"response": response},
+                    None,
+                    None,
+                )  # mutable-ok: modified-data contract is a plain dict
             return ("pass", response if isinstance(response, dict) else None, None, None)
 
         except UndeliverableStreamRewrite:
