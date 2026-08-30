@@ -464,6 +464,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                     guardrail_name=GUARDRAIL_NAME,
                     message=error_message,
                     should_wrap_with_default_message=False,
+                    blocked_content=True,
                 )
 
             return self._build_guardrail_return_inputs(

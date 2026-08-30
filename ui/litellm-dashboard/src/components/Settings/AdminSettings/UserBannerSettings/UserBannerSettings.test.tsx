@@ -16,10 +16,6 @@ vi.mock("@/app/(dashboard)/hooks/userBanner/useUpdateUserBanner", () => ({
   useUpdateUserBanner: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 import { useUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUserBanner";
 import { useUpdateUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUpdateUserBanner";
 
@@ -81,5 +77,16 @@ describe("UserBannerSettings", () => {
     renderWithProviders(<UserBannerSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Save banner" }));
     expect(mutate).toHaveBeenCalledWith({ enabled: false, message: "", severity: "info" }, expect.anything());
+  });
+
+  it.each([
+    ["info", "Info"],
+    ["warning", "Warning"],
+    ["error", "Error"],
+  ])("shows the %s severity by its human label", (severity, label) => {
+    mockHooks({ ...publishedBanner, severity: severity as UserBanner["severity"] });
+    renderWithProviders(<UserBannerSettings />);
+
+    expect(screen.getByRole("combobox", { name: "Banner severity" })).toHaveTextContent(label);
   });
 });

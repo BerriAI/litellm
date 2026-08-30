@@ -1,4 +1,9 @@
-from typing import Annotated, Any, Final
+from typing import (
+    Annotated,
+    Any,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
+    Final,
+    cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
+)
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -591,7 +596,11 @@ async def index_create(
     index_data: Final = index_create_request.model_dump(exclude_none=True)
     index_data["created_by"] = user_api_key_dict.user_id
     index_data["updated_by"] = user_api_key_dict.user_id
-    new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(data=jsonify_object(index_data))
+    new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(
+        data=cast(  # cast-ok: jsonify_object deep-copies a model_dump, so keys are str and values plain objects
+            "dict[str, object]", jsonify_object(index_data)
+        )
+    )
 
     return new_index.model_dump()
 

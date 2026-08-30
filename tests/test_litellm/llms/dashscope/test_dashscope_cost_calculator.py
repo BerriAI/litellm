@@ -10,12 +10,10 @@ Tests the cost calculation for Dashscope models including:
 
 import math
 import os
-import sys
 
 import pytest
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.llms.dashscope.cost_calculator import (
@@ -270,6 +268,47 @@ class TestDashscopeCostCalculator:
         )
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+
+    def test_dashscope_nested_cache_creation_input_tokens_bill_at_cache_write_rate(self):
+        """
+        Regression (LIT-5757): DashScope nests cache_creation_input_tokens inside
+        prompt_tokens_details; those tokens must bill at the tier's cache-creation
+        rate instead of being folded into text tokens at the input rate.
+        """
+        self._register_tiered_model(
+            "dashscope/qwen-nested-cache-write-test",
+            [
+                {
+                    "range": [0, 128000],
+                    "input_cost_per_token": 4e-07,
+                    "cache_read_input_token_cost": 1.6e-07,
+                    "cache_creation_input_token_cost": 5e-07,
+                    "output_cost_per_token": 1.6e-06,
+                }
+            ],
+        )
+
+        usage = Usage(
+            prompt_tokens=2059,
+            completion_tokens=201,
+            total_tokens=2260,
+            prompt_tokens_details={
+                "cached_tokens": 0,
+                "text_tokens": 2059,
+                "cache_type": "ephemeral",
+                "cache_creation_input_tokens": 2048,
+                "cache_creation": {"ephemeral_5m_input_tokens": 2048},
+            },
+            completion_tokens_details={"reasoning_tokens": 170},
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="qwen-nested-cache-write-test", usage=usage
+        )
+
+        assert math.isclose(
+            prompt_cost, (2048 * 5e-07) + (11 * 4e-07), rel_tol=1e-10
+        )
 
     def test_dashscope_tiered_cache_creation_falls_back_to_tier_input_rate(self):
         """

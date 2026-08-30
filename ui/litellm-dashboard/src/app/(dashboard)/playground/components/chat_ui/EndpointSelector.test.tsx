@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import EndpointSelector from "./EndpointSelector";
@@ -21,7 +21,7 @@ describe("EndpointSelector", () => {
     const input = screen.getByRole("combobox");
     await user.click(input);
     await user.clear(input);
-    await user.type(input, "audio");
+    fireEvent.change(input, { target: { value: "audio" } });
 
     expect(await screen.findByText("/v1/audio/speech")).toBeInTheDocument();
     expect(await screen.findByText("/v1/audio/transcriptions")).toBeInTheDocument();

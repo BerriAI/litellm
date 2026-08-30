@@ -1,15 +1,18 @@
 import asyncio
-import os
-import sys
 from typing import Any, AsyncIterator, Dict, List
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
+
+import datetime
 
 import litellm
 from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.llms.anthropic.experimental_pass_through.messages import handler
+from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+    AnthropicMessagesStreamCacheWriter,
+)
 
 STREAM_EVENTS: List[bytes] = [
     b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_stream_1", "type": "message", '
@@ -265,3 +268,25 @@ async def test_cached_stream_replay_logs_once_when_polled_after_exhaustion():
         await asyncio.sleep(0)
 
     mock_route.assert_called_once()
+class _HeldBackStream:
+    has_buffered_provider_output = True
+
+    def __aiter__(self) -> "_HeldBackStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        raise StopAsyncIteration
+
+
+def test_cache_writer_forwards_has_buffered_provider_output(request_kwargs):
+    caching_handler = LLMCachingHandler(
+        original_function=handler.anthropic_messages,
+        request_kwargs=dict(request_kwargs),
+        start_time=datetime.datetime.now(),
+    )
+    held_back = AnthropicMessagesStreamCacheWriter(stream=_HeldBackStream(), caching_handler=caching_handler)
+    assert held_back.has_buffered_provider_output is True
+    replayable = AnthropicMessagesStreamCacheWriter(
+        stream=_byte_stream(STREAM_EVENTS), caching_handler=caching_handler
+    )
+    assert replayable.has_buffered_provider_output is False

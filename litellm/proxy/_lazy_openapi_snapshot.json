@@ -461,6 +461,145 @@
   "access_groups": {
     "components": {
       "schemas": {
+        "AccessGroupBudget": {
+          "properties": {
+            "budget_duration": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Duration"
+            },
+            "budget_id": {
+              "title": "Budget Id",
+              "type": "string"
+            },
+            "budget_reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Reset At"
+            },
+            "max_budget": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Budget"
+            },
+            "soft_budget": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Soft Budget"
+            }
+          },
+          "required": [
+            "budget_id"
+          ],
+          "title": "AccessGroupBudget",
+          "type": "object"
+        },
+        "AccessGroupBudgetRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_duration": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Duration"
+            },
+            "budget_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Id"
+            },
+            "max_budget": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Budget"
+            },
+            "soft_budget": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Soft Budget"
+            }
+          },
+          "title": "AccessGroupBudgetRequest",
+          "type": "object"
+        },
+        "AccessGroupBudgetResponse": {
+          "properties": {
+            "access_group": {
+              "title": "Access Group",
+              "type": "string"
+            },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AccessGroupBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "access_group",
+            "spend"
+          ],
+          "title": "AccessGroupBudgetResponse",
+          "type": "object"
+        },
         "AccessGroupCreateRequest": {
           "properties": {
             "access_agent_ids": {
@@ -561,6 +700,16 @@
               "title": "Access Group",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AccessGroupBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "deployment_count": {
               "title": "Deployment Count",
               "type": "integer"
@@ -571,6 +720,17 @@
               },
               "title": "Model Names",
               "type": "array"
+            },
+            "spend": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spend"
             }
           },
           "required": [
@@ -780,6 +940,29 @@
             }
           },
           "title": "AccessGroupUpdateRequest",
+          "type": "object"
+        },
+        "DeleteAccessGroupBudgetResponse": {
+          "properties": {
+            "access_group": {
+              "title": "Access Group",
+              "type": "string"
+            },
+            "budget_deleted": {
+              "title": "Budget Deleted",
+              "type": "boolean"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "access_group",
+            "budget_deleted",
+            "message"
+          ],
+          "title": "DeleteAccessGroupBudgetResponse",
           "type": "object"
         },
         "DeleteModelGroupResponse": {
@@ -1000,7 +1183,7 @@
     "paths": {
       "/access_group/list": {
         "get": {
-          "description": "List all access groups.\n\nReturns a list of all access groups with their model names and deployment counts.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
+          "description": "List all access groups.\n\nReturns a list of all access groups with their model names, deployment counts, shared budget\nand the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
           "operationId": "list_access_groups_access_group_list_get",
           "responses": {
             "200": {
@@ -1072,6 +1255,156 @@
           ]
         }
       },
+      "/access_group/{access_group}/budget": {
+        "delete": {
+          "description": "Clear the shared budget of an access group, leaving the group itself in place.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear\n\nRaises:\n- HTTPException 404: If access group not found",
+          "operationId": "delete_access_group_budget_access_group__access_group__budget_delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group",
+              "required": true,
+              "schema": {
+                "title": "Access Group",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DeleteAccessGroupBudgetResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Access Group Budget",
+          "tags": [
+            "access_groups"
+          ]
+        },
+        "get": {
+          "description": "Get the shared budget of an access group, and the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupBudgetResponse; budget is null when the group has no budget set\n\nRaises:\n- HTTPException 404: If access group not found",
+          "operationId": "get_access_group_budget_access_group__access_group__budget_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group",
+              "required": true,
+              "schema": {
+                "title": "Access Group",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AccessGroupBudgetResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Access Group Budget",
+          "tags": [
+            "access_groups"
+          ]
+        },
+        "put": {
+          "description": "Set or replace the shared budget of an access group. Idempotent.\n\nEvery key that can reach a model in the group draws from this one budget.\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"max_budget\": 100.0,\n    \"budget_duration\": \"30d\"\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this\n- soft_budget: Optional[float] - Fires an alert when reached; requests still succeed\n- budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')\n- budget_id: Optional[str] - Link an existing budget instead of creating one\n\nReturns:\n- AccessGroupBudgetResponse with the stored budget and current spend\n\nRaises:\n- HTTPException 400: If no budget field is given, or budget_duration cannot be parsed\n- HTTPException 404: If access group not found",
+          "operationId": "set_access_group_budget_access_group__access_group__budget_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group",
+              "required": true,
+              "schema": {
+                "title": "Access Group",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGroupBudgetRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AccessGroupBudgetResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Set Access Group Budget",
+          "tags": [
+            "access_groups"
+          ]
+        }
+      },
       "/access_group/{access_group}/delete": {
         "delete": {
           "description": "Delete an access group.\n\nRemoves the access group from all deployments that have it.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteModelGroupResponse with deletion details\n\nRaises:\n- HTTPException 404: If access group not found",
@@ -1122,7 +1455,7 @@
       },
       "/access_group/{access_group}/info": {
         "get": {
-          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details, its shared budget and its spend\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "get_access_group_info_access_group__access_group__info_get",
           "parameters": [
             {
@@ -2377,6 +2710,17 @@
               ],
               "title": "Rpm Limit"
             },
+            "search_score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search Score"
+            },
             "session_rpm_limit": {
               "anyOf": [
                 {
@@ -2687,6 +3031,11 @@
             "total_flat_cost": {
               "default": 0.0,
               "title": "Total Flat Cost",
+              "type": "number"
+            },
+            "total_gateway_injected_caching_savings_spend": {
+              "default": 0.0,
+              "title": "Total Gateway Injected Caching Savings Spend",
               "type": "number"
             },
             "total_pages": {
@@ -3175,6 +3524,11 @@
               "title": "Flat Cost",
               "type": "number"
             },
+            "gateway_injected_caching_savings_spend": {
+              "default": 0.0,
+              "title": "Gateway Injected Caching Savings Spend",
+              "type": "number"
+            },
             "prompt_caching_savings_spend": {
               "default": 0.0,
               "title": "Prompt Caching Savings Spend",
@@ -3404,7 +3758,7 @@
       },
       "/v1/agents": {
         "get": {
-          "description": "Example usage:\n```\ncurl -X GET \"http://localhost:4000/v1/agents\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?health_check=true` to filter out agents whose URL is unreachable:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?health_check=true\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nReturns: List[AgentResponse]",
+          "description": "Example usage:\n```\ncurl -X GET \"http://localhost:4000/v1/agents\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?health_check=true` to filter out agents whose URL is unreachable:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?health_check=true\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?query=<task>` to get the best matching agents ranked by semantic similarity:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?query=translate+a+PDF+document&top_k=5\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nReturns: List[AgentResponse]",
           "operationId": "get_agents_v1_agents_get",
           "parameters": [
             {
@@ -3417,6 +3771,39 @@
                 "description": "When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out.",
                 "title": "Health Check",
                 "type": "boolean"
+              }
+            },
+            {
+              "description": "Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model.",
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model.",
+                "title": "Query"
+              }
+            },
+            {
+              "description": "With query: the maximum number of ranked agents to return.",
+              "in": "query",
+              "name": "top_k",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "description": "With query: the maximum number of ranked agents to return.",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Top K",
+                "type": "integer"
               }
             }
           ],
@@ -5263,7 +5650,7 @@
           ]
         },
         "post": {
-          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "register_plugin_claude_code_plugins_post",
           "requestBody": {
             "content": {
@@ -5310,7 +5697,7 @@
       },
       "/claude-code/plugins/{plugin_name}": {
         "delete": {
-          "description": "Delete a plugin from the marketplace.\n\nParameters:\n    - plugin_name: The name of the plugin to delete",
+          "description": "Delete a plugin from the marketplace.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: The name of the plugin to delete",
           "operationId": "delete_plugin_claude_code_plugins__plugin_name__delete",
           "parameters": [
             {
@@ -5398,7 +5785,7 @@
           ]
         },
         "put": {
-          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "update_plugin_claude_code_plugins__plugin_name__put",
           "parameters": [
             {
@@ -5456,7 +5843,7 @@
       },
       "/claude-code/plugins/{plugin_name}/disable": {
         "post": {
-          "description": "Disable a plugin without deleting it.\n\nParameters:\n    - plugin_name: The name of the plugin to disable",
+          "description": "Disable a plugin without deleting it.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: The name of the plugin to disable",
           "operationId": "disable_plugin_claude_code_plugins__plugin_name__disable_post",
           "parameters": [
             {
@@ -5502,7 +5889,7 @@
       },
       "/claude-code/plugins/{plugin_name}/enable": {
         "post": {
-          "description": "Enable a disabled plugin.\n\nParameters:\n    - plugin_name: The name of the plugin to enable",
+          "description": "Enable a disabled plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: The name of the plugin to enable",
           "operationId": "enable_plugin_claude_code_plugins__plugin_name__enable_post",
           "parameters": [
             {
@@ -6405,6 +6792,109 @@
           "title": "ConfigOverrideSettingsResponse",
           "type": "object"
         },
+        "CyberArkConfig": {
+          "description": "Configuration for CyberArk Conjur secret manager integration.",
+          "properties": {
+            "client_cert": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Path to the client TLS certificate for certificate-based authentication",
+              "title": "Client Cert"
+            },
+            "client_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Path to the client TLS private key for certificate-based authentication",
+              "title": "Client Key"
+            },
+            "cyberark_account": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Conjur organization account name",
+              "title": "Cyberark Account"
+            },
+            "cyberark_api_base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The address of the CyberArk Conjur server (e.g., https://conjur.example.com)",
+              "title": "Cyberark Api Base"
+            },
+            "cyberark_api_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "API key for Conjur API-key authentication",
+              "title": "Cyberark Api Key"
+            },
+            "cyberark_username": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Conjur username (login) to authenticate as",
+              "title": "Cyberark Username"
+            },
+            "refresh_interval": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Auth token cache TTL in seconds (default: 300)",
+              "title": "Refresh Interval"
+            },
+            "ssl_verify": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Set to false to disable SSL verification (e.g., for self-signed certificates)",
+              "title": "Ssl Verify"
+            }
+          },
+          "title": "CyberArkConfig",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -6600,6 +7090,192 @@
       }
     },
     "paths": {
+      "/config_overrides/cyberark": {
+        "delete": {
+          "description": "Delete CyberArk Conjur configuration. Idempotent.",
+          "operationId": "delete_cyberark_config_config_overrides_cyberark_delete",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Delete Cyberark Config Config Overrides Cyberark Delete",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Cyberark Config",
+          "tags": [
+            "config_overrides"
+          ]
+        },
+        "get": {
+          "description": "Get current CyberArk Conjur configuration.\nReturns decrypted values from DB, or falls back to current env vars.\nSensitive fields are masked before leaving the server.",
+          "operationId": "get_cyberark_config_config_overrides_cyberark_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ConfigOverrideSettingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Cyberark Config",
+          "tags": [
+            "config_overrides"
+          ]
+        },
+        "post": {
+          "description": "Update CyberArk Conjur secret manager configuration.\nSets environment variables, encrypts sensitive fields, and stores in DB.\nReinitializes the secret manager on this pod.",
+          "operationId": "update_cyberark_config_config_overrides_cyberark_post",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CyberArkConfig"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Update Cyberark Config Config Overrides Cyberark Post",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Cyberark Config",
+          "tags": [
+            "config_overrides"
+          ]
+        }
+      },
+      "/config_overrides/cyberark/test_connection": {
+        "post": {
+          "description": "Test the connection to the currently configured CyberArk Conjur server.\nUses the already-initialized secret manager client. Does not modify any state.",
+          "operationId": "test_cyberark_connection_config_overrides_cyberark_test_connection_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Test Cyberark Connection Config Overrides Cyberark Test Connection Post",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Test Cyberark Connection",
+          "tags": [
+            "config_overrides"
+          ]
+        }
+      },
       "/config_overrides/hashicorp_vault": {
         "delete": {
           "description": "Delete Hashicorp Vault configuration. Idempotent.",
@@ -8744,7 +9420,7 @@
                 }
               ],
               "default": true,
-              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
+              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
             "guard_name": {
@@ -8963,6 +9639,18 @@
               ],
               "description": "When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.",
               "title": "Scan Only Tool Results"
+            },
+            "scan_raw_request": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
+              "title": "Scan Raw Request"
             },
             "sensitive_data_route_to_model": {
               "anyOf": [
@@ -10014,6 +10702,18 @@
               "description": "Additional provider-specific parameters for generic guardrail APIs",
               "title": "Additional Provider Specific Params"
             },
+            "advisory_system_message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
+              "title": "Advisory System Message"
+            },
             "akto_account_id": {
               "anyOf": [
                 {
@@ -10237,6 +10937,18 @@
               ],
               "description": "AWS Bedrock runtime endpoint URL",
               "title": "Aws Bedrock Runtime Endpoint"
+            },
+            "aws_external_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "External ID required by the target role's trust policy on sts:AssumeRole",
+              "title": "Aws External Id"
             },
             "aws_profile_name": {
               "anyOf": [
@@ -10753,7 +11465,7 @@
                 }
               ],
               "default": true,
-              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
+              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
             "grounding_check": {
@@ -11056,7 +11768,8 @@
                 {
                   "enum": [
                     "block",
-                    "monitor"
+                    "monitor",
+                    "inject_system_message"
                   ],
                   "type": "string"
                 },
@@ -11065,7 +11778,7 @@
                 }
               ],
               "default": "block",
-              "description": "Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+              "description": "Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
               "title": "On Flagged"
             },
             "on_flagged_action": {
@@ -11352,6 +12065,18 @@
               "description": "Path to a JSON file containing ad-hoc recognizers for Presidio",
               "title": "Presidio Ad Hoc Recognizers"
             },
+            "presidio_analyze_chunk_size_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. Longer texts are split into overlapping chunks of at most this size and the merged results are remapped onto the original text. Defaults to 500000; set it below your analyzer deployment's request body limit, leaving headroom for the rest of the analyze payload.",
+              "title": "Presidio Analyze Chunk Size Bytes"
+            },
             "presidio_analyzer_api_base": {
               "anyOf": [
                 {
@@ -11562,6 +12287,18 @@
               ],
               "description": "When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.",
               "title": "Scan Only Tool Results"
+            },
+            "scan_raw_request": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
+              "title": "Scan Raw Request"
             },
             "send_user_api_key_alias": {
               "anyOf": [
@@ -12388,6 +13125,40 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "usage_units": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usage Units",
+              "type": "object"
+            },
+            "usage_units_by_key": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Usage Units By Key",
+              "type": "object"
+            },
+            "usage_units_by_team": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Usage Units By Team",
+              "type": "object"
+            },
+            "usage_units_daily": {
+              "items": {
+                "$ref": "#/components/schemas/UsageUnitsDailyPoint"
+              },
+              "title": "Usage Units Daily",
+              "type": "array"
             }
           },
           "required": [
@@ -12402,7 +13173,11 @@
             "status",
             "trend",
             "description",
-            "time_series"
+            "time_series",
+            "usage_units",
+            "usage_units_daily",
+            "usage_units_by_team",
+            "usage_units_by_key"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
@@ -12560,6 +13335,13 @@
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totalusageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -12567,7 +13349,8 @@
             "chart",
             "totalRequests",
             "totalBlocked",
-            "passRate"
+            "passRate",
+            "totalUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -12627,6 +13410,13 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "usageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -12639,9 +13429,31 @@
             "avgScore",
             "avgLatency",
             "status",
-            "trend"
+            "trend",
+            "usageUnits"
           ],
           "title": "UsageOverviewRow",
+          "type": "object"
+        },
+        "UsageUnitsDailyPoint": {
+          "properties": {
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "units": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Units",
+              "type": "object"
+            }
+          },
+          "required": [
+            "date",
+            "units"
+          ],
+          "title": "UsageUnitsDailyPoint",
           "type": "object"
         },
         "ValidationError": {
@@ -15000,6 +15812,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -15574,6 +16397,134 @@
       }
     },
     "paths": {
+      "/mcp": {
+        "delete": {
+          "description": "Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the\n``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks\nMCP clients behind TLS-terminating proxies.",
+          "operationId": "aggregate_mcp_route_mcp_delete",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Aggregate Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "get": {
+          "description": "Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the\n``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks\nMCP clients behind TLS-terminating proxies.",
+          "operationId": "aggregate_mcp_route_mcp_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Aggregate Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "head": {
+          "description": "Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the\n``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks\nMCP clients behind TLS-terminating proxies.",
+          "operationId": "aggregate_mcp_route_mcp_head",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Aggregate Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "options": {
+          "description": "Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the\n``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks\nMCP clients behind TLS-terminating proxies.",
+          "operationId": "aggregate_mcp_route_mcp_options",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Aggregate Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "patch": {
+          "description": "Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the\n``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks\nMCP clients behind TLS-terminating proxies.",
+          "operationId": "aggregate_mcp_route_mcp_patch",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Aggregate Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "post": {
+          "description": "Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the\n``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks\nMCP clients behind TLS-terminating proxies.",
+          "operationId": "aggregate_mcp_route_mcp_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Aggregate Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "put": {
+          "description": "Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the\n``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks\nMCP clients behind TLS-terminating proxies.",
+          "operationId": "aggregate_mcp_route_mcp_put",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Aggregate Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        }
+      },
       "/mcp-rest/test/connection": {
         "post": {
           "description": "Test if we can connect to the provided MCP server before adding it",
@@ -16219,6 +17170,17 @@
       "schemas": {
         "Body_authorize_complete_authorize_complete_post": {
           "properties": {
+            "decision": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Decision"
+            },
             "delivery": {
               "anyOf": [
                 {
@@ -16233,12 +17195,54 @@
             "flow": {
               "title": "Flow",
               "type": "string"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
             }
           },
           "required": [
             "flow"
           ],
           "title": "Body_authorize_complete_authorize_complete_post",
+          "type": "object"
+        },
+        "Body_introspect_endpoint_introspect_post": {
+          "properties": {
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token"
+          ],
+          "title": "Body_introspect_endpoint_introspect_post",
+          "type": "object"
+        },
+        "Body_revoke_endpoint_revoke_post": {
+          "properties": {
+            "client_id": {
+              "title": "Client Id",
+              "type": "string"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token",
+            "client_id"
+          ],
+          "title": "Body_revoke_endpoint_revoke_post",
           "type": "object"
         },
         "Body_token_endpoint__mcp_server_name__token_post": {
@@ -16284,6 +17288,17 @@
                 }
               ],
               "title": "Refresh Token"
+            },
+            "resource": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource"
             },
             "scope": {
               "anyOf": [
@@ -16347,6 +17362,17 @@
                 }
               ],
               "title": "Refresh Token"
+            },
+            "resource": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource"
             },
             "scope": {
               "anyOf": [
@@ -17290,6 +18316,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -17962,6 +18999,26 @@
           ]
         }
       },
+      "/.well-known/litellm-cli-auth": {
+        "get": {
+          "description": "The versioned contract a native client (``lite login --pkce``, or a CLI in any other\nlanguage) reads to sign a user in through the browser and obtain a proxy credential.",
+          "operationId": "native_client_auth_discovery__well_known_litellm_cli_auth_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Native Client Auth Discovery",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
       "/.well-known/oauth-authorization-server": {
         "get": {
           "description": "OAuth authorization server discovery endpoint.\n\nSupports both legacy pattern (/{server_name}) and root endpoint.",
@@ -18454,6 +19511,22 @@
                 ],
                 "title": "Scope"
               }
+            },
+            {
+              "in": "query",
+              "name": "resource",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Resource"
+              }
             }
           ],
           "responses": {
@@ -18484,7 +19557,7 @@
       },
       "/authorize/complete": {
         "post": {
-          "description": "Finish an aggregate connect flow: mint the gateway authorization code for the\nsigned-in user and hand it back to the DCR client, by 303 redirect (default) or, for\na loopback client on a different machine, as a copyable callback URL\n(``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an\nanonymous or bad-flow request just 400s.",
+          "description": "Finish an aggregate connect flow: mint the gateway authorization code for the\nsigned-in user and hand it back to the DCR client, by 303 redirect (default) or, for\na loopback client on a different machine, as a copyable callback URL\n(``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an\nanonymous or bad-flow request just 400s. The native-client consent page adds\n``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.",
           "operationId": "authorize_complete_authorize_complete_post",
           "requestBody": {
             "content": {
@@ -18733,6 +19806,51 @@
           ]
         }
       },
+      "/introspect": {
+        "post": {
+          "description": "RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /\n``llm_srefresh_``), so an external gateway can validate them without the signing\nsecret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by\nthe route dependency); any token the gateway cannot vouch for answers\n``{\"active\": false}`` with no further detail.",
+          "operationId": "introspect_endpoint_introspect_post",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_introspect_endpoint_introspect_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Introspect Endpoint",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
       "/register": {
         "post": {
           "operationId": "register_client_register_post",
@@ -18775,6 +19893,46 @@
             }
           },
           "summary": "Register Client",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/revoke": {
+        "post": {
+          "description": "RFC 7009 revocation for the gateway's refresh tokens (``lite logout``): 200 for a known\nclient whatever the token's state, 503 when the shared single-use record cannot be written;\naccess tokens expire on their own.",
+          "operationId": "revoke_endpoint_revoke_post",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_revoke_endpoint_revoke_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Revoke Endpoint",
           "tags": [
             "mcp_discoverable"
           ]
@@ -19002,6 +20160,22 @@
                   }
                 ],
                 "title": "Scope"
+              }
+            },
+            {
+              "in": "query",
+              "name": "resource",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Resource"
               }
             }
           ],
@@ -19768,6 +20942,223 @@
           "title": "LiteLLM_MCPServerTable",
           "type": "object"
         },
+        "MCPConnectorEntry": {
+          "properties": {
+            "args": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Args",
+              "type": "array"
+            },
+            "authorization_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization Token"
+            },
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Command"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Env",
+              "type": "object"
+            },
+            "headers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Headers"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Url"
+            }
+          },
+          "title": "MCPConnectorEntry",
+          "type": "object"
+        },
+        "MCPConnectorImportFailure": {
+          "properties": {
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "error"
+          ],
+          "title": "MCPConnectorImportFailure",
+          "type": "object"
+        },
+        "MCPConnectorImportRequest": {
+          "properties": {
+            "mcp_servers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/MCPConnectorEntry"
+                  },
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPConnectorEntry"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "Mcp Servers"
+            }
+          },
+          "required": [
+            "mcp_servers"
+          ],
+          "title": "MCPConnectorImportRequest",
+          "type": "object"
+        },
+        "MCPConnectorImportResponse": {
+          "properties": {
+            "errors": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportFailure"
+              },
+              "title": "Errors",
+              "type": "array"
+            },
+            "imported": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportResult"
+              },
+              "title": "Imported",
+              "type": "array"
+            },
+            "skipped": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportSkipped"
+              },
+              "title": "Skipped",
+              "type": "array"
+            }
+          },
+          "required": [
+            "imported",
+            "skipped",
+            "errors"
+          ],
+          "title": "MCPConnectorImportResponse",
+          "type": "object"
+        },
+        "MCPConnectorImportResult": {
+          "properties": {
+            "alias": {
+              "title": "Alias",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "server_id",
+            "alias"
+          ],
+          "title": "MCPConnectorImportResult",
+          "type": "object"
+        },
+        "MCPConnectorImportSkipped": {
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "reason"
+          ],
+          "title": "MCPConnectorImportSkipped",
+          "type": "object"
+        },
         "MCPCredentials": {
           "properties": {
             "audience": {
@@ -20032,6 +21423,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -21996,6 +23398,53 @@
           ]
         }
       },
+      "/v1/mcp/server/import": {
+        "post": {
+          "description": "Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON",
+          "operationId": "import_mcp_servers_v1_mcp_server_import_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConnectorImportRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPConnectorImportResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Import Mcp Servers",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
       "/v1/mcp/server/oauth/session": {
         "post": {
           "description": "Temporarily cache an MCP server in memory without writing to the database",
@@ -23379,6 +24828,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -24867,7 +26327,17 @@
                 },
                 {
                   "items": {
-                    "$ref": "#/components/schemas/ChatCompletionTextObject"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionTextObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionImageObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionToolReferenceObject"
+                      }
+                    ]
                   },
                   "type": "array"
                 }
@@ -24951,6 +26421,26 @@
             "name"
           ],
           "title": "ChatCompletionToolParamFunctionChunk",
+          "type": "object"
+        },
+        "ChatCompletionToolReferenceObject": {
+          "description": "Anthropic tool-search result block, carried through untouched so it survives a round trip.",
+          "properties": {
+            "tool_name": {
+              "title": "Tool Name",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_reference",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool_name"
+          ],
+          "title": "ChatCompletionToolReferenceObject",
           "type": "object"
         },
         "ChatCompletionUserMessage": {
@@ -27323,6 +28813,13 @@
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totalusageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -27330,7 +28827,8 @@
             "chart",
             "totalRequests",
             "totalBlocked",
-            "passRate"
+            "passRate",
+            "totalUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -27390,6 +28888,13 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "usageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -27402,7 +28907,8 @@
             "avgScore",
             "avgLatency",
             "status",
-            "trend"
+            "trend",
+            "usageUnits"
           ],
           "title": "UsageOverviewRow",
           "type": "object"
@@ -29275,7 +30781,7 @@
     "paths": {
       "/prompts": {
         "post": {
-          "description": "Create a new prompt\n\n\ud83d\udc49 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/prompts\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"prompt_id\": \"my_prompt\",\n        \"litellm_params\": {\n            \"prompt_id\": \"json_prompt\",\n            \"prompt_integration\": \"dotprompt\",\n            ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED\n            \"prompt_directory\": \"/path/to/dotprompt/folder\",\n            \"prompt_data\": {\"json_prompt\": {\"content\": \"This is a prompt\", \"metadata\": {\"model\": \"gpt-4\"}}}\n        },\n        \"prompt_info\": {\n            \"prompt_type\": \"config\"\n        }\n    }'\n```",
+          "description": "Create a new prompt\n\n\ud83d\udc49 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/prompts\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"prompt_id\": \"my_prompt\",\n        \"litellm_params\": {\n            \"prompt_id\": \"my_prompt\",\n            \"prompt_integration\": \"dotprompt\",\n            \"prompt_data\": {\"content\": \"This is a prompt\", \"metadata\": {\"model\": \"gpt-4\"}}\n        },\n        \"prompt_info\": {\n            \"prompt_type\": \"config\"\n        }\n    }'\n```",
           "operationId": "create_prompt_prompts_post",
           "requestBody": {
             "content": {

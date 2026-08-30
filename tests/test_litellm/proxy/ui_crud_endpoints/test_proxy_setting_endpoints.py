@@ -1,13 +1,9 @@
 import json
 import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
 from litellm.proxy.proxy_server import app
@@ -1064,11 +1060,15 @@ class TestProxySettingEndpoints:
         assert mock_proxy_config["save_call_count"]() == 1
 
         # env vars are persisted through the dedicated per-key path, and ONLY
-        # the two keys this endpoint owns are touched. The unrelated SSO env
+        # the keys this endpoint owns are touched. The unrelated SSO env
         # vars in the merged config are never snapshotted.
         env_updates = mock_proxy_config["env_updates"]()
         assert env_updates == [
-            {"UI_LOGO_PATH": "https://example.com/new-logo.png", "LITELLM_FAVICON_URL": None}
+            {
+                "UI_LOGO_PATH": "https://example.com/new-logo.png",
+                "UI_LOGO_PATH_DARK": None,
+                "LITELLM_FAVICON_URL": None,
+            }
         ]
 
     def test_update_ui_theme_settings_with_favicon(
@@ -1097,13 +1097,89 @@ class TestProxySettingEndpoints:
 
         assert os.environ["UI_LOGO_PATH"] == "https://example.com/new-logo.png"
         assert os.environ["LITELLM_FAVICON_URL"] == "https://example.com/custom-favicon.ico"
-        # Only the two owned keys are persisted, both with their new values
+        # Only the owned keys are persisted, each with its new value
         assert mock_proxy_config["env_updates"]() == [
             {
                 "UI_LOGO_PATH": "https://example.com/new-logo.png",
+                "UI_LOGO_PATH_DARK": None,
                 "LITELLM_FAVICON_URL": "https://example.com/custom-favicon.ico",
             }
         ]
+
+    def test_update_ui_theme_settings_with_dark_logo(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """A dark-mode logo is stored and applied to the live process like the light one."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        new_theme = {
+            "logo_url": "https://example.com/logo.png",
+            "logo_url_dark": "https://example.com/logo-dark.png",
+        }
+
+        response = client.patch("/update/ui_theme_settings", json=new_theme)
+
+        assert response.status_code == 200
+        assert response.json()["theme_config"]["logo_url_dark"] == "https://example.com/logo-dark.png"
+        assert os.environ["UI_LOGO_PATH_DARK"] == "https://example.com/logo-dark.png"
+        assert mock_proxy_config["env_updates"]() == [
+            {
+                "UI_LOGO_PATH": "https://example.com/logo.png",
+                "UI_LOGO_PATH_DARK": "https://example.com/logo-dark.png",
+                "LITELLM_FAVICON_URL": None,
+            }
+        ]
+
+    def test_update_ui_theme_settings_rejects_local_path_dark_logo(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """The dark logo is served by the unauthenticated /get_image, so a local
+        filesystem path must be refused exactly as it is for the light logo."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        response = client.patch(
+            "/update/ui_theme_settings",
+            json={"logo_url_dark": "/etc/passwd"},
+        )
+
+        assert response.status_code == 400
+        assert "logo_url_dark" in str(response.json())
+
+    def test_update_ui_theme_settings_persists_every_env_var_it_resolves(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Read and write must cover the same env vars.
+
+        /get/ui_theme_settings resolves each field through _UI_THEME_FIELD_ENV_VARS,
+        so a var missing from the update path would read back from an env value the
+        save never cleared, and the settings page would show a field it cannot unset.
+        """
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            _UI_THEME_FIELD_ENV_VARS,
+        )
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        response = client.patch("/update/ui_theme_settings", json={})
+
+        assert response.status_code == 200
+        persisted = mock_proxy_config["env_updates"]()
+        assert len(persisted) == 1
+        assert set(persisted[0]) == set(_UI_THEME_FIELD_ENV_VARS.values())
+
+    def test_get_ui_theme_settings_surfaces_dark_logo_from_process_env(
+        self, mock_proxy_config, monkeypatch
+    ):
+        """A dark logo supplied only as a process env var must surface in the read."""
+        monkeypatch.setenv("UI_LOGO_PATH_DARK", "https://cdn.example.com/logo-dark.png")
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["logo_url_dark"] == "https://cdn.example.com/logo-dark.png"
 
     def test_update_ui_theme_settings_clear_favicon(
         self, mock_proxy_config, mock_auth, monkeypatch
@@ -2694,7 +2770,7 @@ def mock_team_lookup(monkeypatch):
 
     existing_team_ids: set = set()
 
-    async def _find_many(where):
+    async def _find_many(where, **_):
         requested = where["team_id"]["in"]
         return [{"team_id": team_id} for team_id in requested if team_id in existing_team_ids]
 

@@ -1,11 +1,12 @@
 # litellm/proxy/guardrails/guardrail_registry.py
 
+import asyncio
 import importlib
 import os
 from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime, timezone
 from itertools import chain, count
-from typing import Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
 
 from pydantic import ValidationError
 
@@ -38,6 +39,7 @@ from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
 )
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
@@ -60,11 +62,19 @@ from .guardrail_initializers import (
     initialize_tool_permission,
 )
 
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
 
 class _GuardrailRowLike(Protocol):
     @property
     def guardrail_id(self) -> str: ...
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+
+def _guardrail_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_GuardrailsTable]":
+    """Typed view of the guardrails table actions exposed by the Prisma repository."""
+    return GuardrailsRepository(prisma_client).table
 
 
 guardrail_initializer_registry: Final = {
@@ -278,7 +288,7 @@ class GuardrailRegistry:
         try:
             guardrail_name: Final = guardrail.get("guardrail_name")
             # Properly serialize LitellmParams Pydantic model to dict
-            litellm_params_obj: Final[Any] = guardrail.get("litellm_params", {})
+            litellm_params_obj: Final = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, "model_dump"):
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
@@ -287,7 +297,7 @@ class GuardrailRegistry:
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
-            created_guardrail: Final[_GuardrailRowLike] = await GuardrailsRepository(prisma_client).table.create(
+            created_guardrail: Final[_GuardrailRowLike] = await _guardrail_table(prisma_client).create(
                 data={
                     "guardrail_name": guardrail_name,
                     "litellm_params": litellm_params,
@@ -311,7 +321,7 @@ class GuardrailRegistry:
         """
         try:
             # Delete from DB
-            await GuardrailsRepository(prisma_client).table.delete(where={"guardrail_id": guardrail_id})
+            await _guardrail_table(prisma_client).delete(where={"guardrail_id": guardrail_id})
 
             return {"message": f"Guardrail {guardrail_id} deleted successfully"}
         except Exception as e:
@@ -324,7 +334,7 @@ class GuardrailRegistry:
         try:
             guardrail_name: Final = guardrail.get("guardrail_name")
             # Properly serialize LitellmParams Pydantic model to dict
-            litellm_params_obj: Final[Any] = guardrail.get("litellm_params", {})
+            litellm_params_obj: Final = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, "model_dump"):
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
@@ -333,7 +343,7 @@ class GuardrailRegistry:
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
-            updated_guardrail: Final[_GuardrailRowLike] = await GuardrailsRepository(prisma_client).table.update(
+            updated_guardrail: Final[_GuardrailRowLike | None] = await _guardrail_table(prisma_client).update(
                 where={"guardrail_id": guardrail_id},
                 data={
                     "guardrail_name": guardrail_name,
@@ -342,6 +352,8 @@ class GuardrailRegistry:
                     "updated_at": datetime.now(timezone.utc),
                 },
             )
+            if updated_guardrail is None:
+                raise ValueError(f"Guardrail not found, passed guardrail_id={guardrail_id}")
 
             # Convert to dict and return
             return dict(updated_guardrail)
@@ -357,7 +369,7 @@ class GuardrailRegistry:
         Only rows with status == "active" are returned (pending_review and rejected are excluded).
         """
         try:
-            guardrails_from_db: Final = await GuardrailsRepository(prisma_client).table.find_many(
+            guardrails_from_db: Final = await _guardrail_table(prisma_client).find_many(
                 where={"status": "active"},
                 order={"created_at": "desc"},
             )
@@ -375,9 +387,7 @@ class GuardrailRegistry:
         Get a guardrail by its ID from the database
         """
         try:
-            guardrail: Final = await GuardrailsRepository(prisma_client).table.find_unique(
-                where={"guardrail_id": guardrail_id}
-            )
+            guardrail: Final = await _guardrail_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
 
             if not guardrail:
                 return None
@@ -391,7 +401,7 @@ class GuardrailRegistry:
         Get a guardrail by its name from the database
         """
         try:
-            guardrail: Final = await GuardrailsRepository(prisma_client).table.find_unique(
+            guardrail: Final = await _guardrail_table(prisma_client).find_unique(
                 where={"guardrail_name": guardrail_name}
             )
 
@@ -401,6 +411,17 @@ class GuardrailRegistry:
             return Guardrail(**(dict(guardrail)))
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
+
+
+def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: LitellmParams) -> None:
+    """Override the parallel/raw-scan flags only when ``litellm_params`` explicitly
+    sets them, preserving whatever default the guardrail's own constructor chose
+    otherwise (its constructor default may be True, so blindly copying an
+    absent/None config value would silently clobber it back to False)."""
+    if litellm_params.run_in_parallel is not None:
+        instance.run_in_parallel = bool(litellm_params.run_in_parallel)
+    if litellm_params.scan_raw_request is not None:
+        instance.scan_raw_request = bool(litellm_params.scan_raw_request)
 
 
 class InMemoryGuardrailHandler:
@@ -524,9 +545,7 @@ class InMemoryGuardrailHandler:
                     "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
                     "scanning, so no request content would ever be scanned. Remove one of the two."
                 )
-            configured_run_in_parallel: Final[bool | None] = getattr(litellm_params, "run_in_parallel", None)
-            if configured_run_in_parallel is not None:
-                custom_guardrail_callback.run_in_parallel = bool(configured_run_in_parallel)
+            _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
         parsed_guardrail: Final = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
@@ -768,18 +787,44 @@ class InMemoryGuardrailHandler:
         """
         Force re-initialization of a guardrail even if it exists in memory.
         Removes old callback from litellm.callbacks and creates fresh instance.
+
+        If the new config fails to initialize (e.g. an invalid on_flagged
+        combination), the previous instance is restored rather than left
+        deleted: initialize_guardrail's own ValueError/TypeError propagate
+        uncaught, so a caller reaching this point after already deleting the
+        old instance would otherwise leave the guardrail providing no
+        protection at all, not merely "still enforcing the old config."
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
         if not guardrail_id:
             verbose_proxy_logger.error("Cannot reinitialize guardrail without guardrail_id")
             return None
 
-        # Remove from memory if exists (also removes from callbacks)
+        previous_guardrail: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
+        previous_source: Final = self._sources.get(guardrail_id, source)
+
         if guardrail_id in self.IN_MEMORY_GUARDRAILS:
             self.delete_in_memory_guardrail(guardrail_id)
 
-        # Initialize fresh (will add new callback to litellm.callbacks)
-        return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
+        # Initialize fresh (will add new callback to litellm.callbacks). If the new
+        # params are invalid (a raising guardrail __init__), restore the previous
+        # instance instead of leaving the guardrail silently removed: a guardrail
+        # that was enforcing must never fail open because an update was bad.
+        try:
+            return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
+        except Exception:
+            if previous_guardrail is not None:
+                verbose_proxy_logger.exception(
+                    "Reinitializing guardrail %s with updated params failed; restoring the previous configuration",
+                    guardrail_id,
+                )
+                try:
+                    self.initialize_guardrail(
+                        guardrail=previous_guardrail, config_file_path=config_file_path, source=previous_source
+                    )
+                except Exception:  # noqa: BLE001  # the original failure must propagate even if the restore breaks
+                    verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
+            raise
 
     def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
         """
@@ -813,4 +858,6 @@ class InMemoryGuardrailHandler:
 # In Memory Guardrail Handler for LiteLLM Proxy
 ########################################################
 IN_MEMORY_GUARDRAIL_HANDLER: Final = InMemoryGuardrailHandler()
+
+GUARDRAIL_RECONCILE_LOCK: Final = asyncio.Lock()
 ########################################################

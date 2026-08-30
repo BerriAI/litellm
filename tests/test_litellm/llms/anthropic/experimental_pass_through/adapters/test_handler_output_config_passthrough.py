@@ -230,3 +230,10 @@ class TestEmptyExtraKwargsPath:
         # dict-like result.
         completion_kwargs = result[0] if isinstance(result, tuple) else result
         assert isinstance(completion_kwargs, dict)
+
+
+class TestPromptCacheOptionsForwarded:
+    def test_prompt_cache_options_reaches_completion_kwargs(self):
+        result = _call_prepare(extra_kwargs={"prompt_cache_options": {"mode": "explicit"}}, model="gpt-5.6")
+        completion_kwargs = result[0] if isinstance(result, tuple) else result
+        assert completion_kwargs["prompt_cache_options"] == {"mode": "explicit"}

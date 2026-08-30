@@ -11,6 +11,7 @@ import pytest
 REPO_ROOT = Path(__file__).parents[2]
 GENERATOR_PATH = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
+BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 SCHEMA_PATH = REPO_ROOT / "model_prices_and_context_window.schema.json"
 
 
@@ -116,6 +117,31 @@ def test_schema_accepts_cache_creation_cost_inside_a_pricing_tier(committed_sche
         ],
     }
     assert validator.is_valid({"some-model": entry})
+
+
+def find_duplicate_keys(path: Path) -> list[str]:
+    duplicates: list[str] = []
+
+    def record_duplicates(pairs):
+        seen: set[str] = set()
+        for key, _ in pairs:
+            if key in seen:
+                duplicates.append(key)
+            seen.add(key)
+        return dict(pairs)
+
+    json.loads(path.read_text(), object_pairs_hook=record_duplicates)
+    return duplicates
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_price_map_has_no_duplicate_keys(path: Path):
+    assert find_duplicate_keys(path) == [], (
+        f"{path.name} defines the same key twice; JSON parsers keep only the last "
+        "occurrence, so the earlier entry's fields are silently dropped. This is what "
+        "a clean text merge of two branches that both added a model looks like: "
+        "deduplicate the keys into one entry"
+    )
 
 
 DATED_VARIANT = re.compile(r"^(.*?)-(\d{4}-\d{2}-\d{2})$")

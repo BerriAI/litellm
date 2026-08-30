@@ -1,5 +1,5 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,12 +9,9 @@ import { STATUS_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
 const mockModelDeleteCall = vi.fn().mockResolvedValue({});
 const mockModelPatchUpdateCall = vi.fn().mockResolvedValue({});
 vi.mock("@/components/networking", () => ({
+  serverRootPath: "/",
   modelDeleteCall: (...args: unknown[]) => mockModelDeleteCall(...args),
   modelPatchUpdateCall: (...args: unknown[]) => mockModelPatchUpdateCall(...args),
-}));
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
 }));
 
 vi.mock("@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal", () => ({
@@ -36,6 +33,7 @@ interface ModelsInfoArgs {
   teamId?: string;
   sortBy?: string;
   sortOrder?: string;
+  modelName?: string;
 }
 
 const modelsInfoCalls: ModelsInfoArgs[] = [];
@@ -50,12 +48,14 @@ type UseModelsInfoArgs = [
   teamId?: string,
   sortBy?: string,
   sortOrder?: string,
+  excludeAutoRouters?: boolean,
+  modelName?: string,
 ];
 
 vi.mock("../../hooks/models/useModels", () => ({
   useModelsInfo: (...args: UseModelsInfoArgs) => {
-    const [page, size, search, , teamId, sortBy, sortOrder] = args;
-    const call: ModelsInfoArgs = { page, size, search, teamId, sortBy, sortOrder };
+    const [page, size, search, , teamId, sortBy, sortOrder, , modelName] = args;
+    const call: ModelsInfoArgs = { page, size, search, teamId, sortBy, sortOrder, modelName };
     modelsInfoCalls.push(call);
     return { ...modelsInfoResult, refetch: mockRefetch };
   },
@@ -233,7 +233,7 @@ describe("AllModelsTab", () => {
     const user = userEvent.setup();
     render(<AllModelsTab {...defaultProps} />);
 
-    await user.type(screen.getByTestId("datatable-search"), "claude");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "claude" } });
 
     await waitFor(() => {
       expect(lastModelsInfoCall().search).toBe("claude");
@@ -261,6 +261,28 @@ describe("AllModelsTab", () => {
     const table = screen.getByRole("table");
     expect(within(table).getByText("claude-opus")).toBeInTheDocument();
     expect(within(table).queryByText("gpt-4")).not.toBeInTheDocument();
+  });
+
+  it("asks the server for the exact selected model group so deployments beyond the first page are found", () => {
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
+
+    expect(lastModelsInfoCall().modelName).toBe("claude-opus");
+    expect(lastModelsInfoCall().search).toBeUndefined();
+  });
+
+  it.each(["all", "wildcard"])("sends no exact model name for the %s pseudo group", (group) => {
+    render(<AllModelsTab {...defaultProps} selectedModelGroup={group} />);
+
+    expect(lastModelsInfoCall().modelName).toBeUndefined();
+  });
+
+  it("keeps the exact model group alongside a typed search", async () => {
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
+
+    fireEvent.change(screen.getByPlaceholderText("Search model names…"), { target: { value: "opus" } });
+
+    await waitFor(() => expect(lastModelsInfoCall().search).toBe("opus"));
+    expect(lastModelsInfoCall().modelName).toBe("claude-opus");
   });
 
   it("resets search, filters, team and sorting from the drawer reset button", async () => {
@@ -337,6 +359,23 @@ describe("AllModelsTab", () => {
       render(<AllModelsTab {...defaultProps} />);
 
       expect(screen.getByText(/create a Virtual Key without selecting a team/i)).toBeInTheDocument();
+    });
+
+    it("links the Virtual Keys page through the migrated /ui route", () => {
+      render(<AllModelsTab {...defaultProps} />);
+
+      expect(screen.getByRole("link", { name: "Virtual Keys page" })).toHaveAttribute("href", "/ui/api-keys");
+    });
+
+    it("links the team hint's Virtual Keys page through the migrated /ui route", async () => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
+
+      await user.click(screen.getByTestId("models-team-select"));
+      await user.click(await screen.findByRole("option", { name: "Engineering" }));
+
+      await screen.findByText(/select Team as "Engineering"/i);
+      expect(screen.getByRole("link", { name: "Virtual Keys page" })).toHaveAttribute("href", "/ui/api-keys");
     });
 
     it("names the selected team in the hint", async () => {

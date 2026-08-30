@@ -82,10 +82,10 @@ def test_spend_log_cleanup_cron_scheduling():
     assert trigger_weekly is not None
 
     # Invalid cron expression should raise ValueError
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Wrong number of fields; got'):
         CronTrigger.from_crontab("invalid cron")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='is higher than the maximum value'):
         CronTrigger.from_crontab("60 25 * * *")  # Invalid minute and hour
 
 
@@ -793,6 +793,7 @@ async def test_spend_logs_retention_alone_does_not_touch_the_session_rollup():
     tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
     assert any('"LiteLLM_SpendLogs"' in sql for sql in tables)
     assert not any('"LiteLLM_AutoRouterSession"' in sql for sql in tables)
+    assert not any('"LiteLLM_HealthCheckTable"' in sql for sql in tables)
 
 
 @pytest.mark.asyncio
@@ -807,25 +808,47 @@ async def test_session_retention_alone_cleans_only_the_session_rollup():
 
 
 @pytest.mark.asyncio
-async def test_each_retention_key_cuts_off_at_its_own_horizon():
-    from datetime import datetime, timezone
+async def test_health_check_retention_alone_cleans_only_the_health_check_table():
+    client = _mock_prisma_for_retention([0])
+    cleaner = SpendLogCleanup(general_settings={"maximum_health_check_retention_period": "30d"})
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(client)
+    tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
+    assert len(tables) == 1
+    assert '"LiteLLM_HealthCheckTable"' in tables[0]
+    assert '"health_check_id"' in tables[0]
+    assert '"checked_at"' in tables[0]
+    cutoff_date = client.db.execute_raw.call_args[0][1]
+    expected_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    assert abs((cutoff_date - expected_cutoff).total_seconds()) < 1
 
-    client = _mock_prisma_for_retention([0, 0, 0])
+
+@pytest.mark.asyncio
+async def test_each_retention_key_cuts_off_at_its_own_horizon():
+    client = _mock_prisma_for_retention([0, 0, 0, 0])
     cleaner = SpendLogCleanup(
         general_settings={
             "maximum_spend_logs_retention_period": "7d",
             "maximum_autorouter_session_retention_period": "365d",
+            "maximum_health_check_retention_period": "30d",
         }
     )
     cleaner.pod_lock_manager = None
     await cleaner.cleanup_old_spend_logs(client)
     cutoffs = {
-        ("LiteLLM_AutoRouterSession" if '"LiteLLM_AutoRouterSession"' in call[0][0] else "logs"): call[0][1]
+        (
+            "LiteLLM_AutoRouterSession"
+            if '"LiteLLM_AutoRouterSession"' in call[0][0]
+            else "LiteLLM_HealthCheckTable"
+            if '"LiteLLM_HealthCheckTable"' in call[0][0]
+            else "logs"
+        ): call[0][1]
         for call in client.db.execute_raw.call_args_list
     }
     now = datetime.now(timezone.utc)
     assert (now - cutoffs["logs"]).days == 7
     assert (now - cutoffs["LiteLLM_AutoRouterSession"]).days == 365
+    assert (now - cutoffs["LiteLLM_HealthCheckTable"]).days == 30
 
 
 @pytest.mark.asyncio
@@ -908,6 +931,32 @@ async def test_run_budget_is_shared_across_tables_not_granted_per_table():
     assert elapsed < 2.5, f"budget was granted per table, not per run: {elapsed}s"
     tables_touched = {call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list}
     assert "LiteLLM_SpendLogs" in tables_touched
+
+
+@pytest.mark.asyncio
+async def test_cleanup_groups_share_budget_so_health_checks_still_get_a_delete():
+    mock_prisma_client = MagicMock()
+    _wire_tx(mock_prisma_client.db)
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=1000)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(
+        general_settings={
+            "maximum_spend_logs_retention_period": "7d",
+            "maximum_health_check_retention_period": "30d",
+            "maximum_spend_logs_cleanup_max_batches": 50,
+            "maximum_spend_logs_cleanup_run_budget": "1s",
+        }
+    )
+    cleaner.pod_lock_manager = None
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    tables_touched = {call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list}
+    assert "LiteLLM_SpendLogs" in tables_touched
+    assert "LiteLLM_HealthCheckTable" in tables_touched
 
 
 @pytest.mark.asyncio

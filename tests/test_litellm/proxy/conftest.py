@@ -18,6 +18,7 @@ from prisma.errors import ClientNotConnectedError
 _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
     "prisma_client",
+    "llm_router",
 )
 
 
@@ -56,7 +57,10 @@ def pytest_runtest_setup(item):
 
     Without this, a leaked value (e.g. master_key set by a sibling test)
     flips the auth short-circuit in user_api_key_auth and causes unrelated
-    tests in the same xdist worker to return 401 instead of 200.
+    tests in the same xdist worker to return 401 instead of 200. A leaked
+    llm_router does the same to anything that reads the running router out
+    of sys.modules, such as the PTU rollup's deployment scan, which then
+    counts a sibling test's deployments as if the proxy owned them.
 
     This must be a hook pair, not an autouse fixture: an autouse fixture in
     the root conftest requests monkeypatch, so monkeypatch's undo stack

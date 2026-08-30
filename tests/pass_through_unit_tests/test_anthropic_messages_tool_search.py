@@ -13,10 +13,7 @@ Supported providers:
 Reference: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 from base_anthropic_messages_tool_search_test import (

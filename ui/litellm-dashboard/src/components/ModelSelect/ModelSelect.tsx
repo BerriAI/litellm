@@ -40,6 +40,7 @@ export const MODEL_SENTINEL_OPTIONS = [
 const MAX_VISIBLE_MODEL_CHIPS = 5;
 
 export interface ModelSelectProps {
+  id?: string;
   teamID?: string;
   organizationID?: string;
   options?: {
@@ -122,7 +123,7 @@ const filterModels = (
 
 export const ModelSelect = (props: ModelSelectProps) => {
   const anchor = useComboboxAnchor();
-  const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
+  const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
   const { data: team, isLoading: isLoadingTeam } = useTeam(teamID);
@@ -256,7 +257,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
               </>
             )}
           </ComboboxValue>
-          <ComboboxChipsInput placeholder="Select Models" aria-label="Select Models" className="min-w-24" />
+          <ComboboxChipsInput id={id} placeholder="Select Models" aria-label="Select Models" className="min-w-24" />
         </ComboboxChips>
         <ComboboxContent anchor={anchor}>
           <ComboboxEmpty>No models found</ComboboxEmpty>

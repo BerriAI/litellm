@@ -482,6 +482,16 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
     )
+    presidio_analyze_chunk_size_bytes: int | None = Field(
+        default=None,
+        description=(
+            "Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. "
+            "Longer texts are split into overlapping chunks of at most this size "
+            "and the merged results are remapped onto the original text. "
+            "Defaults to 500000; set it below your analyzer deployment's request "
+            "body limit, leaving headroom for the rest of the analyze payload."
+        ),
+    )
     mock_redacted_text: dict | None = Field(default=None, description="Mock redacted text for testing")
 
 
@@ -586,6 +596,9 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_role_name: str | None = Field(default=None, description="AWS role name for assuming roles")
     aws_web_identity_token: str | None = Field(default=None, description="Web identity token for AWS role assumption")
     aws_sts_endpoint: str | None = Field(default=None, description="AWS STS endpoint URL")
+    aws_external_id: str | None = Field(
+        default=None, description="External ID required by the target role's trust policy on sts:AssumeRole"
+    )
     aws_bedrock_runtime_endpoint: str | None = Field(default=None, description="AWS Bedrock runtime endpoint URL")
     checks: BedrockChecksConfigModel | None = Field(
         default=None,
@@ -640,9 +653,15 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
-    on_flagged: Literal["block", "monitor"] | None = Field(
+    on_flagged: Literal["block", "monitor", "inject_system_message"] | None = Field(
         default="block",
-        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+        description="Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), "
+        "or 'inject_system_message' (append an advisory system message and let the LLM decide)",
+    )
+    advisory_system_message: str | None = Field(
+        default=None,
+        description="Custom advisory message template used when on_flagged='inject_system_message'. "
+        "Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
     )
 
 
@@ -932,7 +951,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=True,
         description=(
             "Whether to fail the request if the guardrail encounters an error. "
-            "Implemented by guardrail='model_armor' and 'generic_guardrail_api'. "
+            "Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. "
             "True (default) raises the error. False logs a critical error and lets the request proceed, "
             "so only a valid guardrail response can block or modify it."
         ),
@@ -1028,6 +1047,17 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    scan_raw_request: bool | None = Field(
+        default=None,
+        description=(
+            "When True, this pre_call guardrail always evaluates the request as it was before any "
+            "guardrail in this hook ran, regardless of its position in the guardrails list -- so the "
+            "YAML order of guardrails can never change whether this one blocks. Use only for "
+            "block-only guardrails: any data this guardrail returns is discarded, same contract as "
+            "run_in_parallel, since an earlier guardrail's masking must not be undone by this one."
+        ),
+    )
+
     @field_validator(
         "mode",
         "default_action",
@@ -1060,7 +1090,7 @@ class Mode(BaseModel):
     default: str | list[str] | None = Field(default=None, description="Default mode when no tags match")
 
 
-class LitellmParams(
+class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # on_flagged literal diverges across mixins
     CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,

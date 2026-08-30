@@ -96,7 +96,7 @@ class DotpromptManager(CustomPromptManagement):
         if prompt_id is None:
             return False
         try:
-            return prompt_id in self.prompt_manager.list_prompts()
+            return self.prompt_manager.get_prompt(prompt_id) is not None
         except Exception:
             # If there's any error accessing prompts, don't run prompt management
             return False
@@ -209,6 +209,8 @@ class DotpromptManager(CustomPromptManagement):
             prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     async def async_get_chat_completion_prompt(

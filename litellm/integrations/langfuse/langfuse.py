@@ -1,11 +1,13 @@
 #### What this does ####
 #    On success, logs events to Langfuse
+import inspect
 import os
 import traceback
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
+from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 from packaging.version import Version
 
@@ -20,6 +22,9 @@ from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
     reconstruct_model_name,
     safe_deep_copy,
+)
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_langfuse_environment_value,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -49,8 +54,19 @@ else:
 
 
 _DENIED_STEERING_KEYS: Final = frozenset({"headers", "endpoint", "caching_groups", "previous_models"})
-_NO_METADATA: Final[Mapping[str, Any]] = MappingProxyType({})
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _REDACTED_PROXY_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "cookie", "referer"})
+
+
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    """Return ``value`` as an opaque mapping when it is a dict."""
+    return value if isinstance(value, dict) else None
+
+
+class _UsageObject(Protocol):
+    """Token-count surface the Langfuse logger reads off a response usage payload."""
+
+    def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
 
 
 def _extract_cache_read_input_tokens(usage_obj) -> int:
@@ -80,6 +96,11 @@ def _extract_cache_read_input_tokens(usage_obj) -> int:
                 cache_read_input_tokens = cached_tokens
 
     return cache_read_input_tokens
+
+
+def _logging_id(start_time: datetime | None, response_obj: object) -> str | None:
+    """Typed view of the timestamped response id Langfuse uses as the generation id."""
+    return litellm.utils.get_logging_id(start_time, response_obj)
 
 
 def _as_steering_flag(value: object) -> bool:
@@ -117,6 +138,16 @@ def resolve_langfuse_credentials(
     return public_key, secret_key, resolved_host
 
 
+@lru_cache(maxsize=8)
+def _warn_invalid_deployment_environment(raw_value: str, error: str) -> None:
+    verbose_logger.warning(
+        "Ignoring invalid LANGFUSE_TRACING_ENVIRONMENT=%r for the langfuse callback: %s. "
+        "Traces will be sent to Langfuse's default environment.",
+        raw_value,
+        error,
+    )
+
+
 class LangFuseLogger:
     # Class variables or attributes
     def __init__(
@@ -124,6 +155,7 @@ class LangFuseLogger:
         langfuse_public_key=None,
         langfuse_secret=None,
         langfuse_host=None,
+        langfuse_environment: str | None = None,
         flush_interval=1,
         allow_env_credentials: bool = True,
     ):
@@ -143,6 +175,12 @@ class LangFuseLogger:
         if not (self.langfuse_host.startswith("http://") or self.langfuse_host.startswith("https://")):
             # add http:// if unset, assume communicating over private network - e.g. render
             self.langfuse_host = "http://" + self.langfuse_host
+        _env_override: Final = str(langfuse_environment).strip() if langfuse_environment is not None else None
+        if _env_override:
+            validate_langfuse_environment_value(_env_override)
+            self.langfuse_environment: str | None = _env_override
+        else:
+            self.langfuse_environment = self.resolve_deployment_environment()
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(flush_interval)
@@ -166,6 +204,8 @@ class LangFuseLogger:
         }
         self.langfuse_sdk_version: str = langfuse.version.__version__
 
+        if "environment" in inspect.signature(Langfuse.__init__).parameters:
+            parameters["environment"] = self.langfuse_environment
         if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
             parameters["sdk_integration"] = "litellm"
         self.Langfuse: Langfuse = self.safe_init_langfuse_client(parameters)
@@ -222,7 +262,7 @@ class LangFuseLogger:
         return langfuse_client
 
     @staticmethod
-    def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
+    def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict[str, object]:
         """
         Adds metadata from proxy request headers to Langfuse logging if keys start with "langfuse_"
         and overwrites litellm_params.metadata if already included.
@@ -494,7 +534,7 @@ class LangFuseLogger:
     def _log_langfuse_v2(
         self,
         user_id: str | None,
-        metadata: dict,
+        metadata: dict[str, object],
         litellm_params: dict,
         output: str | dict | list | None,
         start_time: datetime | None,
@@ -519,7 +559,7 @@ class LangFuseLogger:
                 else []
             )
 
-            allowlisted_metadata: Final[StandardLoggingMetadata | dict[str, Any]] = (
+            allowlisted_metadata: Final[StandardLoggingMetadata | Mapping[str, object]] = (
                 standard_logging_object["metadata"] if standard_logging_object is not None else _NO_METADATA
             )
             end_user_id: Final = allowlisted_metadata.get("user_api_key_end_user_id", None)
@@ -531,11 +571,12 @@ class LangFuseLogger:
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
             # we clean out all extra litellm metadata params before logging
-            clean_metadata: dict[str, Any] = {}
+            clean_metadata: dict[str, object] = {}
             if prompt_management_metadata is not None:
                 clean_metadata["prompt_management_metadata"] = prompt_management_metadata
-            if isinstance(metadata, dict):
-                for key, value in metadata.items():
+            metadata_entries: Final = _object_mapping(metadata)
+            if metadata_entries is not None:
+                for key, value in metadata_entries.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
                     if (
                         litellm.langfuse_default_tags is not None
@@ -705,8 +746,8 @@ class LangFuseLogger:
             usage_details = None
             if response_obj is not None:
                 if hasattr(response_obj, "id") and response_obj.get("id", None) is not None:
-                    generation_id = litellm.utils.get_logging_id(start_time, response_obj)
-                _usage_obj: Final = getattr(response_obj, "usage", None)
+                    generation_id = _logging_id(start_time, response_obj)
+                _usage_obj: Final[_UsageObject | None] = getattr(response_obj, "usage", None)
 
                 if _usage_obj:
                     # Safely get usage values, defaulting None to 0 for Langfuse compatibility.
@@ -811,7 +852,7 @@ class LangFuseLogger:
     @staticmethod
     def _get_chat_content_for_langfuse(
         response_obj: ModelResponse,
-    ):
+    ) -> str | None:
         """
         Get the chat content for Langfuse logging
         """
@@ -924,6 +965,20 @@ class LangFuseLogger:
         except Exception as e:
             verbose_logger.warning("Failed to apply masking function: %s. Returning original data.", e)
             return data
+
+    @staticmethod
+    def resolve_deployment_environment() -> str | None:
+        """Resolve LANGFUSE_TRACING_ENVIRONMENT: stripped value, "default" plus a warning when invalid, None when unset."""
+        raw: Final = os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
+        if not raw:
+            return None
+        value: Final = raw.strip()
+        try:
+            validate_langfuse_environment_value(value)
+        except ValueError as e:
+            _warn_invalid_deployment_environment(raw, str(e))
+            return "default"
+        return value
 
     @staticmethod
     def _get_langfuse_flush_interval(flush_interval: int) -> int:
@@ -1078,7 +1133,7 @@ def log_provider_specific_information_as_span(
         None
     """
 
-    _hidden_params: Final = clean_metadata.get("hidden_params", None)
+    _hidden_params: Final[Mapping[str, object] | None] = clean_metadata.get("hidden_params", None)
     if _hidden_params is None:
         return
 

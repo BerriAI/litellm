@@ -41,7 +41,7 @@ describe("MessageInput", () => {
     render(<MessageInput value="hello" onChange={vi.fn()} onSend={onSend} />);
 
     const send = screen.getByRole("button");
-    expect(send).not.toBeDisabled();
+    expect(send).toBeEnabled();
 
     await user.click(send);
     expect(onSend).toHaveBeenCalledTimes(1);
@@ -63,7 +63,7 @@ describe("MessageInput", () => {
     expect(screen.getByTestId("upload-component")).toBeInTheDocument();
 
     const send = screen.getByRole("button");
-    expect(send).not.toBeDisabled();
+    expect(send).toBeEnabled();
 
     await user.click(send);
     expect(onSend).toHaveBeenCalledTimes(1);

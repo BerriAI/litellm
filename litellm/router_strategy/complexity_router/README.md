@@ -53,6 +53,21 @@ model_list:
           REASONING: o1-preview
 ```
 
+Each tier can also use a model entry with request parameter overrides. A tier value may be
+a model string, a single object, or a list mixing strings and objects. Object entries must
+contain a model name and may contain any LiteLLM request parameters. The model name must
+still resolve to a deployment in `model_list`; this configuration does not create one
+
+```yaml
+        tiers:
+          COMPLEX: opus
+          REASONING:
+            - model_name: opus
+              litellm_params:
+                reasoning_effort: xhigh
+            - abc
+```
+
 ### Renaming the tiers
 
 `tier_labels` puts your own vocabulary on the four tiers:
@@ -163,9 +178,53 @@ response = litellm.completion(
 
 ## Special Behaviors
 
+### Heuristic-first chaining
+
+`classifier_type: heuristic_first` runs the local scorer on every request and only calls the LLM
+classifier for the ones the scorer could not place cheaply. It takes the same classifier settings as
+`classifier_type: llm`, plus `heuristic_first_max_tier`:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: heuristic_first
+        heuristic_first_max_tier: SIMPLE
+        classifier_llm_config:
+          model: gpt-4o-mini
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet-4
+          REASONING: o1-preview
+```
+
+A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
+two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least
+one signal. Everything else goes to the classifier, which then decides as it normally would.
+
+The signal requirement is what keeps this from quietly routing everything to your cheapest model.
+A prompt where no dimension fires scores exactly 0.0, which is below `simple_medium`, so the score
+to tier mapping calls it SIMPLE by default rather than by evidence. Around half of general traffic
+scores that way. Those requests reach the classifier instead, which is the whole reason to configure
+one. Note the converse too: the score is not a confidence, and a prompt that fires a single weak
+signal and still lands under the boundary does short-circuit, so a lower threshold buys accuracy and
+a higher one buys savings.
+
+`heuristic_first_max_tier` names a built-in tier and may not name the highest one, since that would
+short-circuit everything and leave the classifier unreachable. Operator-defined tier sets
+(`tier_definitions`) are not supported here, because the scorer only produces the built-in tiers.
+When the classifier call fails, the fallback works exactly as it does under `classifier_type: llm`,
+except that the heuristic outcome is the one already computed rather than a second scoring pass.
+
+Spend logs record `routing_decision.cause` as `heuristic_first_short_circuit` when the classifier
+was skipped, and `llm_classifier` when it ran, so the two are told apart per request.
+
 ### Reasoning Override
 
-If 2+ reasoning markers are detected in the user message, the request is automatically routed to the REASONING tier regardless of the weighted score. This ensures complex reasoning tasks get the appropriate model.
+If 2+ reasoning markers are detected in the user message, the request is promoted to the REASONING tier even when the weighted score maps lower, so complex reasoning tasks get the appropriate model. The promotion requires the score to reach `reasoning_override_min_score`, which tracks `tier_boundaries.simple_medium` unless set, so stock phrases on an otherwise trivial prompt cannot buy the top tier. Set it to `0` to promote on the markers alone.
 
 ### System Prompt Handling
 

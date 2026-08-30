@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { TagRateLimitEditor, TagRateLimitEntry, tagLimitsToRows, tagRowsToLimits } from "./TagRateLimitEditor";
@@ -40,7 +40,7 @@ describe("TagRateLimitEditor", () => {
     const user = userEvent.setup();
     render(<Harness initial={rowsWith("", null)} />);
 
-    await user.type(screen.getByRole("textbox", { name: "Tag" }), "cell-2");
+    fireEvent.change(screen.getByRole("textbox", { name: "Tag" }), { target: { value: "cell-2" } });
 
     expect(screen.getByRole("textbox", { name: "Tag" })).toHaveValue("cell-2");
   });
@@ -50,7 +50,7 @@ describe("TagRateLimitEditor", () => {
     const seen: TagRateLimitEntry[][] = [];
     render(<Harness initial={rowsWith("cell-1", null)} onValue={(v: TagRateLimitEntry[]) => seen.push(v)} />);
 
-    await user.type(screen.getByRole("spinbutton", { name: "RPM limit" }), "60");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "RPM limit" }), { target: { value: "60" } });
 
     const latest = seen[seen.length - 1][0];
     expect(latest.rpm_limit).toBe(60);

@@ -35,6 +35,31 @@ class TestCanonicalModel:
     def test_returns_none_for_a_name_no_provider_claims(self):
         assert canonical_model("") is None
 
+    @pytest.mark.parametrize(
+        "model, provider, expected",
+        [
+            ("github_copilot/gpt-4o", None, "github_copilot/gpt-4o"),
+            ("chatgpt/gpt-5", None, "chatgpt/gpt-5"),
+            ("gpt-4o", "github_copilot", "github_copilot/gpt-4o"),
+        ],
+    )
+    def test_never_resolves_a_provider_whose_lookup_authenticates(self, model, provider, expected, monkeypatch):
+        """Resolving github_copilot or chatgpt runs their OAuth device flow, so the baseline must
+        qualify these by string alone. A raising sentinel cannot prove the lookup was skipped,
+        because canonical_model swallows resolver errors into None."""
+        import litellm
+
+        lookups: list = []
+
+        def _record(*args, **kwargs):
+            lookups.append((args, kwargs))
+            raise RuntimeError("provider resolution must not run for an authenticating provider")
+
+        monkeypatch.setattr(litellm, "get_llm_provider", _record)
+
+        assert canonical_model(model, provider) == expected
+        assert lookups == []
+
 
 class TestModelsForGroup:
     def test_resolves_a_group_to_the_models_its_deployments_call(self, parent):

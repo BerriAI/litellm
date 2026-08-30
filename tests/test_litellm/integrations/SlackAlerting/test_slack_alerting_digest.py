@@ -10,11 +10,9 @@ Verifies that:
 """
 
 import os
-import sys
 import unittest
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import AlertType

@@ -63,7 +63,7 @@ describe("TopModelView", () => {
     expect(screen.getByText("100")).toBeInTheDocument();
     const failedRequestsCell = screen
       .getAllByText("5")
-      .find((el) => el.closest("span")?.classList.contains("text-red-600"));
+      .find((el) => el.closest("span")?.classList.contains("text-destructive"));
     expect(failedRequestsCell).toBeDefined();
     expect(screen.getByText("50,000")).toBeInTheDocument();
   });
@@ -237,7 +237,7 @@ describe("TopModelView", () => {
     );
     const successfulCell = screen
       .getAllByText("50")
-      .find((el) => el.closest("span")?.classList.contains("text-green-600"));
+      .find((el) => el.closest("span")?.classList.contains("text-success"));
     expect(successfulCell).toBeDefined();
   });
 
@@ -257,7 +257,9 @@ describe("TopModelView", () => {
         setTopModelsLimit={mockSetTopModelsLimit}
       />,
     );
-    const failedCell = screen.getAllByText("5").find((el) => el.closest("span")?.classList.contains("text-red-600"));
+    const failedCell = screen
+      .getAllByText("5")
+      .find((el) => el.closest("span")?.classList.contains("text-destructive"));
     expect(failedCell).toBeDefined();
   });
 

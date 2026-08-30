@@ -58,7 +58,7 @@ def test_model_info_accepts_valid_ptu_fields():
 
 
 def test_model_info_rejects_non_positive_count():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='value_error, input_value'):
         ModelInfo(
             id="x",
             team_id="t",
@@ -69,7 +69,7 @@ def test_model_info_rejects_non_positive_count():
 
 
 def test_model_info_rejects_negative_rate():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='value_error, input_value'):
         ModelInfo(
             id="x",
             team_id="t",
@@ -82,7 +82,7 @@ def test_model_info_rejects_negative_rate():
 def test_model_info_rejects_a_count_beyond_the_cap():
     """flat cost multiplies the count by a float, and an unbounded int overflows that
     conversion, which aborted the rollup for every team rather than skipping one model."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", team_id="t", ptu_count=10**400, cost_per_ptu_per_hour=2.0)
 
 
@@ -95,12 +95,12 @@ def test_model_info_accepts_a_count_at_the_cap():
 def test_model_info_rejects_a_non_finite_rate(rate):
     """NaN compares False against every bound, so a bare `< 0` check let it through and the
     deployment then accrued a flat cost of nan."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='value_error, input_value'):
         ModelInfo(id="x", team_id="t", ptu_count=5, cost_per_ptu_per_hour=rate)
 
 
 def test_model_info_rejects_a_rate_beyond_the_cap():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", team_id="t", ptu_count=5, cost_per_ptu_per_hour=ModelInfo.MAX_COST_PER_PTU_PER_HOUR * 2)
 
 
@@ -148,7 +148,7 @@ def test_validate_helper_passes_full_config():
 def test_model_info_rejects_effective_to_before_from():
     import datetime
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(
             id="x",
             team_id="t",
@@ -186,7 +186,7 @@ def test_model_info_compares_mixed_naive_and_aware_timestamps():
     )
     assert info.ptu_effective_to is not None
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(
             id="x",
             team_id="t",
@@ -698,7 +698,7 @@ class TestAddNewModelPtuGate:
         with ExitStack() as stack:
             for active_patch in patches:
                 stack.enter_context(active_patch)
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(Exception, match='PTU cost attribution is disabled, so ptu_count') as exc:
                 await add_new_model(model_params=self._ptu_deployment("ptu-gate-model"), user_api_key_dict=admin)
 
         assert PTU_COST_ATTRIBUTION_ENV_VAR in str(exc.value)
@@ -1273,7 +1273,7 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         with ExitStack() as stack:
             for active_patch in patches:
                 stack.enter_context(active_patch)
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(Exception, match='A PTU deployment bills by reserved capacity, so') as exc:
                 await add_new_model(model_params=deployment, user_api_key_dict=admin)
 
         assert "input_cost_per_token" in str(exc.value)

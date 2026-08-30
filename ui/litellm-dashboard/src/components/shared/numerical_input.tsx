@@ -22,17 +22,13 @@ interface NumericalInputProps {
  * @param {Function} [props.onChange] - On change handler
  * @param {any} props.rest - Additional props passed to Input
  */
-const NumericalInput: React.FC<NumericalInputProps> = ({
-  step = 0.01,
-  style = { width: "100%" },
-  placeholder = "Enter a numerical value",
-  min,
-  max,
-  onChange,
-  ...rest
-}) => {
-  return (
+const NumericalInput = React.forwardRef<HTMLInputElement, NumericalInputProps>(
+  (
+    { step = 0.01, style = { width: "100%" }, placeholder = "Enter a numerical value", min, max, onChange, ...rest },
+    ref,
+  ) => (
     <Input
+      ref={ref}
       type="number"
       onWheel={(event) => event.currentTarget.blur()}
       step={step}
@@ -43,7 +39,8 @@ const NumericalInput: React.FC<NumericalInputProps> = ({
       onChange={onChange}
       {...rest}
     />
-  );
-};
+  ),
+);
+NumericalInput.displayName = "NumericalInput";
 
 export default NumericalInput;

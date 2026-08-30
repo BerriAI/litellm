@@ -2,8 +2,8 @@
 #    On success, logs events to Promptlayer
 import re
 import traceback
-from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
 
@@ -60,6 +60,26 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
+
+    enforces_request_content: bool = False
+    """
+    Whether this hook's ``async_pre_call_hook`` judges the request payload itself.
+
+    False for the accounting hooks, which count a request rather than read it: rate limits,
+    parallel slots, budgets, cache lookups. Those must run once per request and never once per
+    record of a batch upload, which would charge a caller once for every line of their file.
+
+    Set it to True on a hook that inspects or rejects content, so that scanning a payload which
+    is not itself a request, such as one record of a batch input file, still reaches it. A
+    ``CustomGuardrail`` does not need it; guardrails are dispatched by their own branch.
+
+    Judging content is necessary but not sufficient. A hook that also rewrites the payload for
+    routing, as the managed-files and managed-vector-store hooks do, stays False: a per-record
+    rewrite would read as a redaction and ship embedded in the record. Only the leaf class is
+    consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
+    """
+
     def __init__(
         self,
         turn_off_message_logging: bool = False,
@@ -103,11 +123,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             return []
 
         callbacks: Final = AllCallbacks()
-        callback_info: Final = getattr(callbacks, lookup_name, None)
+        callback_info: Final[object] = getattr(callbacks, lookup_name, None)
         if callback_info is None:
             return []
 
-        params: Final = getattr(callback_info, "litellm_callback_params", None)
+        params: Final[Sequence[str] | None] = getattr(callback_info, "litellm_callback_params", None)
         if not params:
             return []
 
@@ -271,6 +291,54 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> LLMResponseTypes | None:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
+        """
+
+    async def async_post_call_failure_deployment_hook(
+        self,
+        request_data: Mapping[str, object],
+        exception: Exception,
+        call_type: CallTypes | None,
+        fallback_depth: int | None = None,
+    ) -> None:
+        """
+        Called once per failed deployment attempt - attempt 1, every retry, and
+        every fallback chain step - because the router re-invokes the wrapped
+        function on each attempt, re-entering this hook's call site fresh
+        every time.
+
+        This is a DEPLOYMENT-LEVEL signal, distinct from the REQUEST-LEVEL
+        ``async_log_failure_event``, which fires once per logical client
+        request behind a dedup gate. ``request_data`` is mostly this
+        attempt's own kwargs, with one exception: it omits
+        ``attempted_targets``, the router's own bookkeeping of which fallback
+        targets this request has already tried, since that one object *is*
+        shared by reference across every hop of the live fallback walk.
+
+        Pairs with ``async_pre_call_deployment_hook`` and
+        ``async_post_call_success_deployment_hook`` to complete the
+        pre-call/success/failure lifecycle for a single deployment attempt.
+
+        ``fallback_depth`` is best-effort: ``None`` on the first attempt and on
+        any call made without a ``Router`` (a bare SDK call has no fallback
+        chain to be at a depth in), ``1`` on the first fallback hop, ``2`` on
+        the second, and so on. It reflects ``Router``'s own internal fallback
+        bookkeeping (``kwargs["fallback_depth"]``), not a value this hook
+        computes or guarantees the shape of across versions. It tracks
+        fallback hops only, not retries within the same model group - a
+        retry-only failure (no fallback yet) also reports ``None``. If an
+        override predates this field it's simply never passed, rather than
+        raising - safe to leave off an override written before it existed.
+
+        ``exception`` is a same-class snapshot, not the exact object about to
+        be re-raised to the real caller: read it freely, but setting an
+        attribute on it (e.g. ``status_code``) has no effect on what the
+        caller actually receives.
+
+        Default: no-op. Opt in by overriding. Keep overrides fast - this
+        runs on the request's exception path, so a slow implementation
+        delays error propagation to the caller. The reported failure
+        duration is captured before this hook runs, so a slow override
+        doesn't inflate that metric, but the caller still waits for it.
         """
 
     async def async_post_call_streaming_deployment_hook(
@@ -783,7 +851,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             - Converting to string and then truncating the logged content catches this
         2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
         """
-        field_value: Final = standard_logging_object.get(field_name)
+        field_value: Final[object] = standard_logging_object.get(field_name)
         if field_value:
             str_value: Final = str(field_value)
             if len(str_value) > max_length:
@@ -937,8 +1005,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
           • Keep untyped or text content.
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
-        raw_messages: Final[Any] = payload.get("messages", [])
-        messages: Final[list[Any]] = raw_messages if isinstance(raw_messages, list) else []
+        raw_messages: Final[object] = payload.get("messages", [])
+        messages: Final[list[object]] = raw_messages if isinstance(raw_messages, list) else []
         verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
 
         if messages:
@@ -969,8 +1037,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
           • Keep untyped or text content.
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
-        raw_messages: Final[Any] = payload.get("messages", [])
-        messages: Final[list[Any]] = raw_messages if isinstance(raw_messages, list) else []
+        raw_messages: Final[object] = payload.get("messages", [])
+        messages: Final[list[object]] = raw_messages if isinstance(raw_messages, list) else []
         verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
 
         if messages:
@@ -991,7 +1059,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         value: Any,
         depth: int = 0,
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
-    ) -> Any:
+    ) -> object:
         """Recursively redact inline base64 from any nested structure with a max recursion depth limit."""
         if depth > max_depth:
             verbose_logger.warning("[CustomLogger] Max recursion depth %s reached while redacting base64", max_depth)
@@ -1022,16 +1090,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     def _process_messages(
         self,
-        messages: list[Any],
+        messages: list[object],
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
-    ) -> list[dict[str, Any]]:
-        filtered_messages: Final[list[dict[str, Any]]] = []
+    ) -> list[dict[str, object]]:
+        filtered_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
-            contents: Any = msg.get("content")
+            contents: object = msg.get("content")
             if isinstance(contents, list):
-                cleaned: list[Any] = []
+                cleaned: list[object] = []
                 for c in contents:
                     if self._should_keep_content(content=c):
                         cleaned.append(self._redact_base64(value=c, max_depth=max_depth))

@@ -44,23 +44,26 @@ export const estimateTooltips = (canEdit: boolean, entity: "key" | "team" = "key
     : ADMIN_ONLY_TOOLTIP,
 });
 
-export const estimateRules = {
+export const estimateChecks = {
   perModel: {
-    validator: (_: unknown, value: unknown) => {
-      if (typeof value !== "string" || value.trim() === "") return Promise.resolve();
-      return parsePerModelEstimates(value) === null
-        ? Promise.reject(new Error(INVALID_PER_MODEL_MESSAGE))
-        : Promise.resolve();
-    },
+    isValid: (value: unknown): boolean =>
+      typeof value !== "string" || value.trim() === "" ? true : parsePerModelEstimates(value) !== null,
+    message: INVALID_PER_MODEL_MESSAGE,
   },
   positive: {
-    validator: (_: unknown, value: unknown) => {
-      if (value === "" || value === null || value === undefined) return Promise.resolve();
-      return isPositiveInteger(Number(value))
-        ? Promise.resolve()
-        : Promise.reject(new Error("Enter a positive integer"));
-    },
+    isValid: (value: unknown): boolean =>
+      value === "" || value === null || value === undefined ? true : isPositiveInteger(Number(value)),
+    message: "Enter a positive integer",
   },
+};
+
+const asValidatorRule = ({ isValid, message }: { isValid: (value: unknown) => boolean; message: string }) => ({
+  validator: (_: unknown, value: unknown) => (isValid(value) ? Promise.resolve() : Promise.reject(new Error(message))),
+});
+
+export const estimateRules = {
+  perModel: asValidatorRule(estimateChecks.perModel),
+  positive: asValidatorRule(estimateChecks.positive),
 };
 
 export const withNormalizedEstimates = <T extends FormValues>(values: T): FormValues => {

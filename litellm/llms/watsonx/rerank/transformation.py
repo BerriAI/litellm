@@ -5,6 +5,7 @@ Docs - https://cloud.ibm.com/apidocs/watsonx-ai#text-rerank
 """
 
 import uuid
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 import httpx
@@ -60,6 +61,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         optional_params = optional_params or {}
 

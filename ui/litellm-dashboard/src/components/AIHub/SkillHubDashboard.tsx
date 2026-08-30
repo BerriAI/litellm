@@ -101,24 +101,24 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
     <div className="space-y-6">
       {/* Stats row */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="border border-gray-200 rounded-lg p-4">
-          <div className="text-xs text-gray-500 mb-1">Total Skills</div>
-          <div className="text-2xl font-semibold text-gray-900">{totalSkills}</div>
+        <div className="border border-border rounded-lg p-4">
+          <div className="text-xs text-muted-foreground mb-1">Total Skills</div>
+          <div className="text-2xl font-semibold text-foreground">{totalSkills}</div>
         </div>
-        <div className="border border-gray-200 rounded-lg p-4">
-          <div className="text-xs text-gray-500 mb-1">Namespaces</div>
-          <div className="text-2xl font-semibold text-gray-900">{namespaces.length}</div>
+        <div className="border border-border rounded-lg p-4">
+          <div className="text-xs text-muted-foreground mb-1">Namespaces</div>
+          <div className="text-2xl font-semibold text-foreground">{namespaces.length}</div>
         </div>
-        <div className="border border-gray-200 rounded-lg p-4">
-          <div className="text-xs text-gray-500 mb-1">Domains</div>
-          <div className="text-2xl font-semibold text-gray-900">{domains.length}</div>
+        <div className="border border-border rounded-lg p-4">
+          <div className="text-xs text-muted-foreground mb-1">Domains</div>
+          <div className="text-2xl font-semibold text-foreground">{domains.length}</div>
         </div>
       </div>
 
       {/* Search + filters + table */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-700">All {publicPage ? "Public " : ""}Skills</h3>
+          <h3 className="text-sm font-semibold text-foreground">All {publicPage ? "Public " : ""}Skills</h3>
           <div className="flex items-center gap-2">
             <Select
               items={domainItems}
@@ -173,7 +173,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           size="compact"
         />
         <div className="mt-3 text-center">
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted-foreground">
             Showing {filteredSkills.length} of {totalSkills} skill{totalSkills !== 1 ? "s" : ""}
           </p>
         </div>

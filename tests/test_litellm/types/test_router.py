@@ -87,5 +87,5 @@ def test_pricing_strings_are_coerced_to_float():
 
 
 def test_invalid_pricing_is_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", input_cost_per_token="free")

@@ -46,6 +46,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/.well-known/litellm-cli-auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Native Client Auth Discovery
+         * @description The versioned contract a native client (``lite login --pkce``, or a CLI in any other
+         *     language) reads to sign a user in through the browser and obtain a proxy credential.
+         */
+        get: operations["native_client_auth_discovery__well_known_litellm_cli_auth_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/litellm-ui-config": {
         parameters: {
             query?: never;
@@ -411,7 +432,8 @@ export interface paths {
          * List Access Groups
          * @description List all access groups.
          *
-         *     Returns a list of all access groups with their model names and deployment counts.
+         *     Returns a list of all access groups with their model names, deployment counts, shared budget
+         *     and the spend drawn against it.
          *
          *     Example:
          *     ```bash
@@ -476,6 +498,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/access_group/{access_group}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Access Group Budget
+         * @description Get the shared budget of an access group, and the spend drawn against it.
+         *
+         *     Example:
+         *     ```bash
+         *     curl -X GET 'http://localhost:4000/access_group/production-models/budget' \
+         *       -H 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Parameters:
+         *     - access_group: str - The access group name (URL path parameter)
+         *
+         *     Returns:
+         *     - AccessGroupBudgetResponse; budget is null when the group has no budget set
+         *
+         *     Raises:
+         *     - HTTPException 404: If access group not found
+         */
+        get: operations["get_access_group_budget_access_group__access_group__budget_get"];
+        /**
+         * Set Access Group Budget
+         * @description Set or replace the shared budget of an access group. Idempotent.
+         *
+         *     Every key that can reach a model in the group draws from this one budget.
+         *
+         *     Example:
+         *     ```bash
+         *     curl -X PUT 'http://localhost:4000/access_group/production-models/budget' \
+         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H 'Content-Type: application/json' \
+         *       -d '{
+         *         "max_budget": 100.0,
+         *         "budget_duration": "30d"
+         *       }'
+         *     ```
+         *
+         *     Parameters:
+         *     - access_group: str - The access group name (URL path parameter)
+         *     - max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this
+         *     - soft_budget: Optional[float] - Fires an alert when reached; requests still succeed
+         *     - budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')
+         *     - budget_id: Optional[str] - Link an existing budget instead of creating one
+         *
+         *     Returns:
+         *     - AccessGroupBudgetResponse with the stored budget and current spend
+         *
+         *     Raises:
+         *     - HTTPException 400: If no budget field is given, or budget_duration cannot be parsed
+         *     - HTTPException 404: If access group not found
+         */
+        put: operations["set_access_group_budget_access_group__access_group__budget_put"];
+        post?: never;
+        /**
+         * Delete Access Group Budget
+         * @description Clear the shared budget of an access group, leaving the group itself in place.
+         *
+         *     Example:
+         *     ```bash
+         *     curl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \
+         *       -H 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Parameters:
+         *     - access_group: str - The access group name (URL path parameter)
+         *
+         *     Returns:
+         *     - DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear
+         *
+         *     Raises:
+         *     - HTTPException 404: If access group not found
+         */
+        delete: operations["delete_access_group_budget_access_group__access_group__budget_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/access_group/{access_group}/delete": {
         parameters: {
             query?: never;
@@ -534,7 +641,7 @@ export interface paths {
          *     - access_group: str - The access group name (URL path parameter)
          *
          *     Returns:
-         *     - AccessGroupInfo with the access group details
+         *     - AccessGroupInfo with the access group details, its shared budget and its spend
          *
          *     Raises:
          *     - HTTPException 404: If access group not found
@@ -1052,7 +1159,8 @@ export interface paths {
          *     signed-in user and hand it back to the DCR client, by 303 redirect (default) or, for
          *     a loopback client on a different machine, as a copyable callback URL
          *     (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
-         *     anonymous or bad-flow request just 400s.
+         *     anonymous or bad-flow request just 400s. The native-client consent page adds
+         *     ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.
          */
         post: operations["authorize_complete_authorize_complete_post"];
         delete?: never;
@@ -1078,6 +1186,11 @@ export interface paths {
          *     overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
+         *
+         *     The rollup supplies the measures, never the list. Which routers appear comes from the
+         *     model registry, so one shows up as soon as it is configured and reads zero until it
+         *     serves traffic, and `routers_in_scope` counts those too rather than only the routers the
+         *     window recorded.
          */
         get: operations["get_auto_router_benchmarks_auto_router_benchmarks_get"];
         put?: never;
@@ -1101,7 +1214,11 @@ export interface paths {
          */
         get: operations["get_auto_router_classifier_default_prompt_auto_router_classifier_default_prompt_get"];
         put?: never;
-        post?: never;
+        /**
+         * Preview Auto Router Classifier Prompt
+         * @description Get the system prompt an auto-router's LLM classifier sends for an edited tier set
+         */
+        post: operations["preview_auto_router_classifier_prompt_auto_router_classifier_default_prompt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1117,7 +1234,8 @@ export interface paths {
         };
         /**
          * List Shadow Eval Jobs
-         * @description List shadow eval jobs, newest first. Counts and results ride the detail endpoint only.
+         * @description List shadow eval jobs, newest first, each key with its attempt count so status is
+         *     accurate. Judged counts, spend, and results ride the detail endpoint only.
          */
         get: operations["list_shadow_eval_jobs_auto_router_shadow_eval_get"];
         put?: never;
@@ -1139,20 +1257,22 @@ export interface paths {
         put?: never;
         /**
          * Start Shadow Eval
-         * @description Start a shadow eval: duplicate a sampled slice of a key's live traffic against a second
-         *     arm, judge the two responses blind, and stratify win rates by tier and by the model that
-         *     served the real arm.
+         * @description Start a shadow eval: duplicate a sampled slice of one or more keys' live traffic against
+         *     a second arm, judge the two responses blind, and stratify win rates by tier, by the model
+         *     that served the real arm, and by key.
          *
-         *     A forward job answers whether the key should adopt router_name: it samples the requests
+         *     A forward job answers whether the keys should adopt router_name: it samples the requests
          *     the router did not serve and duplicates them through it. A reverse job answers whether a
          *     key already on the router still gains from it: it samples the requests the router did
          *     serve and duplicates them against baseline_model. A key can hold one active job per
          *     direction, so both questions can run at once.
          *
-         *     Shadow responses are never served to users. The job samples until it has judged
-         *     max_turns turns, reaches the end of its window, or is stopped; sampling changes
-         *     propagate to pods within about 10 seconds. Shadow and judge calls bill to the
-         *     shadowed key but are excluded from request counts and auto-router adoption metrics.
+         *     Shadow responses are never served to users. Each key samples until its recorded eval
+         *     spend, the shadow and judge calls' own cost, reaches max_budget dollars, the job's
+         *     window ends, or the job is stopped, so one key running out of budget does not end
+         *     sampling for the others; sampling changes propagate to pods within about 10 seconds.
+         *     Shadow and judge calls bill to the shadowed key but are excluded from request counts
+         *     and auto-router adoption metrics.
          */
         post: operations["start_shadow_eval_auto_router_shadow_eval_start_post"];
         delete?: never;
@@ -1192,7 +1312,12 @@ export interface paths {
         put?: never;
         /**
          * Stop Shadow Eval Job
-         * @description Stop an active shadow eval job. Attempts are kept; sampling halts within ~10s.
+         * @description Stop an active shadow eval job, every key it scopes at once. Attempts are kept;
+         *     sampling halts within ~10s. Keys that already stopped on their own budget keep the
+         *     stopped_at they earned. The statement is the whole state machine: it claims the job
+         *     only while a leg still samples inside the window with no stop recorded, so a racing
+         *     operator, a same-instant budget spend, and a repeat stop all read the same 400 with
+         *     the status the job actually holds.
          */
         post: operations["stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post"];
         delete?: never;
@@ -1212,19 +1337,30 @@ export interface paths {
         put?: never;
         /**
          * Preview Auto Router Routing
-         * @description Route a single prompt through a complexity-router config and report where it landed.
+         * @description Route a single request through a complexity-router config and report where it landed.
          *
-         *     Answers "which model would this prompt get?" for a config that only exists in a form,
-         *     so an auto router can be checked before it is created. The prompt is classified by the
-         *     same pre-routing hook a live request runs, then dropped: nothing is sent to the model it
-         *     routed to, and no auto router is created. A heuristic config therefore spends nothing, while
-         *     an `llm` classifier or semantic keyword matching bills its classifier/embedding call to the
-         *     calling key, like Test Connection does.
+         *     Answers "which model would this request get?" for a config that only exists in a form,
+         *     so an auto router can be checked before it is created. The request is classified by the
+         *     same pre-routing hook a live request runs, over the same messages, system prompt and tool
+         *     definitions, then dropped: nothing is sent to the model it routed to, and no auto router is
+         *     created. A heuristic config therefore spends nothing, while an `llm` classifier or semantic
+         *     keyword matching bills its classifier/embedding call to the calling key, like Test Connection
+         *     does.
+         *
+         *     Send `messages` to classify a real turn, with `system` and `tools` beside it when the surface
+         *     carries them top level, as Anthropic /v1/messages does. `prompt` is the single-ask shorthand and
+         *     routes as one user turn with nothing around it.
          *
          *     **Example Request:**
          *     ```json
          *     {
-         *         "prompt": "think step by step about how to shard this table",
+         *         "messages": [
+         *             {"role": "system", "content": "You are a database migration assistant"},
+         *             {"role": "user", "content": "the index is not unique"},
+         *             {"role": "assistant", "content": "Then two workers can both insert. Add a unique index"},
+         *             {"role": "user", "content": "ok do it"}
+         *         ],
+         *         "tools": [{"type": "function", "function": {"name": "Bash", "description": "Run a command"}}],
          *         "complexity_router_config": {
          *             "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["o3"]},
          *             "classifier_type": "heuristic"
@@ -1233,6 +1369,31 @@ export interface paths {
          *     ```
          */
         post: operations["preview_auto_router_routing_auto_router_test_routing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/validate_complexity_router_config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Complexity Router Config
+         * @description Validate a complexity-router config without saving it.
+         *
+         *     Runs the same check every write path runs (the router's own pydantic model), so a form can
+         *     show the backend's exact verdict while the operator is still editing rather than after a
+         *     rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
+         *     naming their own team. Nothing is created, routed, or billed.
+         */
+        post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1971,6 +2132,8 @@ export interface paths {
          *     the same name already exists it returns 409 Conflict; use
          *     PUT /claude-code/plugins/{plugin_name} to update an existing plugin.
          *
+         *     Requires a proxy admin API key.
+         *
          *     Parameters:
          *         - name: Plugin name (kebab-case)
          *         - source: Git source reference (github, url, or git-subdir format)
@@ -2035,6 +2198,8 @@ export interface paths {
          *     Returns 404 if no plugin with the given name exists; use
          *     POST /claude-code/plugins to create a new plugin.
          *
+         *     Requires a proxy admin API key.
+         *
          *     Parameters:
          *         - plugin_name: Name of the plugin to update (path parameter)
          *         - source: Git source reference (github, url, or git-subdir format)
@@ -2066,6 +2231,8 @@ export interface paths {
          * Delete Plugin
          * @description Delete a plugin from the marketplace.
          *
+         *     Requires a proxy admin API key.
+         *
          *     Parameters:
          *         - plugin_name: The name of the plugin to delete
          */
@@ -2087,6 +2254,8 @@ export interface paths {
         /**
          * Disable Plugin
          * @description Disable a plugin without deleting it.
+         *
+         *     Requires a proxy admin API key.
          *
          *     Parameters:
          *         - plugin_name: The name of the plugin to disable
@@ -2110,6 +2279,8 @@ export interface paths {
         /**
          * Enable Plugin
          * @description Enable a disabled plugin.
+         *
+         *     Requires a proxy admin API key.
          *
          *     Parameters:
          *         - plugin_name: The name of the plugin to enable
@@ -2394,6 +2565,73 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/comprehendmedical": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Comprehend Medical Sdk Proxy Route
+         * @description AWS-SDK-shaped pass-through for Amazon Comprehend Medical: point the SDK's
+         *     `endpoint_url` at `/comprehendmedical` and the operation is read from the
+         *     `X-Amz-Target` header, per the AWS JSON 1.1 protocol.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+         */
+        post: operations["comprehend_medical_sdk_proxy_route_comprehendmedical_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/comprehendmedical/{operation}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Comprehend Medical Proxy Route
+         * @description Pass-through for Amazon Comprehend Medical, e.g. `POST /comprehendmedical/DetectEntitiesV2`.
+         *
+         *     The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
+         *     using the proxy's AWS credentials.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+         */
+        post: operations["comprehend_medical_proxy_route_comprehendmedical__operation__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/block_requests_for_models_without_pricing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Block Requests For Models Without Pricing */
+        get: operations["get_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Block Requests For Models Without Pricing */
+        patch: operations["update_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_patch"];
         trace?: never;
     };
     "/config/callback/delete": {
@@ -2700,6 +2938,59 @@ export interface paths {
         get: operations["config_yaml_endpoint_config_yaml_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config_overrides/cyberark": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cyberark Config
+         * @description Get current CyberArk Conjur configuration.
+         *     Returns decrypted values from DB, or falls back to current env vars.
+         *     Sensitive fields are masked before leaving the server.
+         */
+        get: operations["get_cyberark_config_config_overrides_cyberark_get"];
+        put?: never;
+        /**
+         * Update Cyberark Config
+         * @description Update CyberArk Conjur secret manager configuration.
+         *     Sets environment variables, encrypts sensitive fields, and stores in DB.
+         *     Reinitializes the secret manager on this pod.
+         */
+        post: operations["update_cyberark_config_config_overrides_cyberark_post"];
+        /**
+         * Delete Cyberark Config
+         * @description Delete CyberArk Conjur configuration. Idempotent.
+         */
+        delete: operations["delete_cyberark_config_config_overrides_cyberark_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config_overrides/cyberark/test_connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Cyberark Connection
+         * @description Test the connection to the currently configured CyberArk Conjur server.
+         *     Uses the already-initialized secret manager client. Does not modify any state.
+         */
+        post: operations["test_cyberark_connection_config_overrides_cyberark_test_connection_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6822,6 +7113,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/introspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Introspect Endpoint
+         * @description RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /
+         *     ``llm_srefresh_``), so an external gateway can validate them without the signing
+         *     secret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by
+         *     the route dependency); any token the gateway cannot vouch for answers
+         *     ``{"active": false}`` with no further detail.
+         */
+        post: operations["introspect_endpoint_introspect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/invitation/delete": {
         parameters: {
             query?: never;
@@ -7954,6 +8269,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/spend_logs/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spend Log Users
+         * @description The distinct internal users appearing in spend logs the caller can read.
+         */
+        get: operations["list_spend_log_users_management_v1_spend_logs_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp": {
         parameters: {
             query?: never;
@@ -8301,6 +8636,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/info": {
         parameters: {
             query?: never;
@@ -8319,6 +8696,15 @@ export interface paths {
          *         - When litellm_model_id is not passed, it will return the info for all models
          *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
          *         - teamId: Filter to models accessible by the given team.
+         *         - healthy_only: When true, hide models whose backing deployments are all marked
+         *           unhealthy by background health checks, matching `/v1/models?healthy_only=true`.
+         *           Set `general_settings.model_list_healthy_only: true` to apply this to every
+         *           caller without the query parameter. Requires `background_health_checks: true`,
+         *           plus either `model_list_healthy_only` or `enable_health_check_routing` to keep
+         *           deployment health state cached; without health state the listing is returned
+         *           unfiltered (fail open). Ignored when `litellm_model_id` is passed, since that
+         *           is a direct lookup of one deployment rather than a listing. Hiding is
+         *           presentation-only: a hidden model can still be called directly.
          *
          *     Each model in the list response includes `model_info.access_via_team_ids` and
          *     `model_info.direct_access` when the proxy database is connected.
@@ -8772,9 +9158,13 @@ export interface paths {
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
          *     - healthy_only: When true, hide models whose backing deployments are all marked
-         *                     unhealthy by background health checks. Requires
-         *                     `background_health_checks: true` in general_settings; without
-         *                     health state the listing is returned unfiltered (fail open).
+         *                     unhealthy by background health checks. Set
+         *                     `general_settings.model_list_healthy_only: true` to apply this
+         *                     to every caller without the query parameter. Requires
+         *                     `background_health_checks: true` in general_settings, plus
+         *                     either `model_list_healthy_only` or `enable_health_check_routing`
+         *                     to keep deployment health state cached; without health state
+         *                     the listing is returned unfiltered (fail open).
          *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
          *                     filtered, and nothing is hidden when `allowed_fails_policy` is
          *                     configured (cooldown remains the sole exclusion mechanism).
@@ -8939,6 +9329,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_ocr_post"];
         delete?: never;
@@ -8991,6 +9386,26 @@ export interface paths {
          *     - Pass in user_email if set
          */
         get: operations["onboarding_onboarding_get_token_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openai/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: openai_websocket_proxy_route
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_openai_websocket_proxy_route_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9521,6 +9936,26 @@ export interface paths {
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
         patch: operations["openai_proxy_route_openai__endpoint__patch"];
+        trace?: never;
+    };
+    "/openai_passthrough/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: openai_websocket_proxy_route
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_openai_websocket_proxy_route_get_2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/openai_passthrough/{endpoint}": {
@@ -11178,11 +11613,9 @@ export interface paths {
          *         -d '{
          *             "prompt_id": "my_prompt",
          *             "litellm_params": {
-         *                 "prompt_id": "json_prompt",
+         *                 "prompt_id": "my_prompt",
          *                 "prompt_integration": "dotprompt",
-         *                 ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED
-         *                 "prompt_directory": "/path/to/dotprompt/folder",
-         *                 "prompt_data": {"json_prompt": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}}
+         *                 "prompt_data": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}
          *             },
          *             "prompt_info": {
          *                 "prompt_type": "config"
@@ -11597,6 +12030,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/complexity_router/scorer_defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Complexity Scorer Defaults
+         * @description Return the complexity router's shipped heuristic scorer defaults, for the dashboard to prefill with.
+         */
+        get: operations["get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/endpoints": {
         parameters: {
             query?: never;
@@ -11767,6 +12220,36 @@ export interface paths {
          * @description Return enabled (public) Claude Code skills — no auth required.
          */
         get: operations["public_skill_hub_public_skill_hub_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/v1/model_hub": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Model Hub List
+         * @description The public model groups this proxy publishes, paged, sortable, searchable and
+         *     filterable, for the public Model Hub page. No authentication.
+         *
+         *     A rejected request answers with the parameters, sort fields and filter operators
+         *     it would have accepted, so the accepted set stays discoverable from the endpoint
+         *     itself rather than from a copy of the spec kept here.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff         'http://0.0.0.0:4000/public/v1/model_hub?sort=-input_cost_per_token&filter[mode][in]=chat&page_size=25'
+         *     ```
+         */
+        get: operations["public_model_hub_list_public_v1_model_hub_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12232,6 +12715,28 @@ export interface paths {
         get: operations["get_response_input_items_responses__response_id__input_items_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Endpoint
+         * @description RFC 7009 revocation for the gateway's refresh tokens (``lite logout``): 200 for a known
+         *     client whatever the token's state, 503 when the shared single-use record cannot be written;
+         *     access tokens expire on their own.
+         */
+        post: operations["revoke_endpoint_revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -13335,6 +13840,8 @@ export interface paths {
          * @description [DEPRECATED] This endpoint is not paginated and can cause performance issues.
          *     Please use `/spend/logs/v2` instead for paginated access to spend logs.
          *
+         *     Row results are capped at 10,000 most recent entries per response.
+         *
          *     View all spend logs, if request_id is provided, only logs for that request_id will be returned
          *
          *     When start_date and end_date are provided:
@@ -14284,6 +14791,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Daily Activity Aggregated
+         * @description Aggregated daily activity for teams without pagination, including per-team breakdown.
+         *
+         *     One SQL GROUPING SETS pass returns every day in the range regardless of row
+         *     volume, so callers never reassemble pages. Same response shape as the
+         *     paginated endpoint with page metadata pinned to a single page.
+         *
+         *     Args:
+         *         team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+         *         start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+         *         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+         *         model (Optional[str]): Filter by model name.
+         *         api_key (Optional[str]): Filter by API key.
+         *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+         *         timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+         *     Returns:
+         *         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
+         */
+        get: operations["get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -14973,6 +15515,7 @@ export interface paths {
          *         - langfuse_secret_key: The secret key for the Langfuse callback
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
+         *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -14993,6 +15536,48 @@ export interface paths {
          */
         post: operations["add_team_callbacks_team__team_id__callback_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/{team_id}/callback/{callback_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Team Callback
+         * @description Remove a single callback from a team
+         *
+         *     The team's other callbacks stay registered and keep firing. Use this instead of
+         *     POST /team/{team_id}/disable_logging, which clears every callback on the team at once.
+         *
+         *     Every entry registered under this callback_name is removed, across callback types, so a
+         *     callback registered for both "success" and "failure" is deregistered by one call.
+         *
+         *     Parameters:
+         *     - team_id (str, required): The unique identifier for the team
+         *     - callback_name (str, required): The name of the callback to remove, matched exactly as it was
+         *       registered with POST /team/{team_id}/callback (e.g. "langfuse", "langsmith", "gcs")
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI. Teams still
+         *     on the deprecated callback_settings metadata shape hold no such entries, so this returns 404 for
+         *     them; POST /team/{team_id}/disable_logging remains the way to clear those.
+         *
+         *     Returns 404 if the team does not exist, or if callback_name is not registered for the team.
+         */
+        delete: operations["delete_team_callback_team__team_id__callback__callback_name__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -15023,6 +15608,33 @@ export interface paths {
          *     ```
          */
         post: operations["disable_team_logging_team__team_id__disable_logging_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/{team_id}/member/{user_id}/reset_spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Team Member Spend Fn
+         * @description Reset a team member's tracked spend against their per-member budget.
+         *
+         *     A member's spend is tracked separately from both their own personal
+         *     budget and the team's own budget (LiteLLM_TeamMembership.spend), so
+         *     neither /user/update nor /team/update can clear it: this is the only
+         *     endpoint that does. The cross-pod spend counter and cached membership
+         *     reads are invalidated so the reset takes effect on the member's next
+         *     request rather than waiting on the membership cache's TTL.
+         */
+        post: operations["reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16170,6 +16782,10 @@ export interface paths {
          *     Pass `?health_check=true` to filter out agents whose URL is unreachable:
          *     ```
          *     curl -X GET "http://localhost:4000/v1/agents?health_check=true"       -H "Content-Type: application/json"       -H "Authorization: Bearer your-key"     ```
+         *
+         *     Pass `?query=<task>` to get the best matching agents ranked by semantic similarity:
+         *     ```
+         *     curl -X GET "http://localhost:4000/v1/agents?query=translate+a+PDF+document&top_k=5"       -H "Content-Type: application/json"       -H "Authorization: Bearer your-key"     ```
          *
          *     Returns: List[AgentResponse]
          */
@@ -17577,6 +18193,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/server/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Mcp Servers
+         * @description Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON
+         */
+        post: operations["import_mcp_servers_v1_mcp_server_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/server/oauth/session": {
         parameters: {
             query?: never;
@@ -18020,6 +18656,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_v1_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/model/info": {
         parameters: {
             query?: never;
@@ -18038,6 +18716,15 @@ export interface paths {
          *         - When litellm_model_id is not passed, it will return the info for all models
          *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
          *         - teamId: Filter to models accessible by the given team.
+         *         - healthy_only: When true, hide models whose backing deployments are all marked
+         *           unhealthy by background health checks, matching `/v1/models?healthy_only=true`.
+         *           Set `general_settings.model_list_healthy_only: true` to apply this to every
+         *           caller without the query parameter. Requires `background_health_checks: true`,
+         *           plus either `model_list_healthy_only` or `enable_health_check_routing` to keep
+         *           deployment health state cached; without health state the listing is returned
+         *           unfiltered (fail open). Ignored when `litellm_model_id` is passed, since that
+         *           is a direct lookup of one deployment rather than a listing. Hiding is
+         *           presentation-only: a hidden model can still be called directly.
          *
          *     Each model in the list response includes `model_info.access_via_team_ids` and
          *     `model_info.direct_access` when the proxy database is connected.
@@ -18095,9 +18782,13 @@ export interface paths {
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
          *     - healthy_only: When true, hide models whose backing deployments are all marked
-         *                     unhealthy by background health checks. Requires
-         *                     `background_health_checks: true` in general_settings; without
-         *                     health state the listing is returned unfiltered (fail open).
+         *                     unhealthy by background health checks. Set
+         *                     `general_settings.model_list_healthy_only: true` to apply this
+         *                     to every caller without the query parameter. Requires
+         *                     `background_health_checks: true` in general_settings, plus
+         *                     either `model_list_healthy_only` or `enable_health_check_routing`
+         *                     to keep deployment health state cached; without health state
+         *                     the listing is returned unfiltered (fail open).
          *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
          *                     filtered, and nothing is hidden when `allowed_fails_policy` is
          *                     configured (cooldown remains the sole exclusion mechanism).
@@ -18197,6 +18888,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_v1_ocr_post"];
         delete?: never;
@@ -21669,6 +22365,38 @@ export interface components {
              */
             type: "restricted_sso_group";
         };
+        /** AccessGroupBudget */
+        AccessGroupBudget: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id: string;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+        };
+        /** AccessGroupBudgetRequest */
+        AccessGroupBudgetRequest: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+        };
+        /** AccessGroupBudgetResponse */
+        AccessGroupBudgetResponse: {
+            /** Access Group */
+            access_group: string;
+            budget?: components["schemas"]["AccessGroupBudget"] | null;
+            /** Spend */
+            spend: number;
+        };
         /** AccessGroupCreateRequest */
         AccessGroupCreateRequest: {
             /** Access Agent Ids */
@@ -21690,10 +22418,13 @@ export interface components {
         AccessGroupInfo: {
             /** Access Group */
             access_group: string;
+            budget?: components["schemas"]["AccessGroupBudget"] | null;
             /** Deployment Count */
             deployment_count: number;
             /** Model Names */
             model_names: string[];
+            /** Spend */
+            spend?: number | null;
         };
         /** AccessGroupResponse */
         AccessGroupResponse: {
@@ -22023,6 +22754,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Search Score */
+            search_score?: number | null;
             /** Session Rpm Limit */
             session_rpm_limit?: number | null;
             /** Session Tpm Limit */
@@ -22069,7 +22802,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -22282,9 +23015,15 @@ export interface components {
              * @description Window end day, YYYY-MM-DD UTC, inclusive
              */
             end_date: string;
-            /** Groups */
+            /**
+             * Groups
+             * @description One entry per auto-router, listed from the model registry rather than from the rollup, so a router appears as soon as it is configured and reads zero until it serves traffic. Semantic auto-routers are absent: they record no routing decision, so no session can ever be attributed to them
+             */
             groups: components["schemas"]["AutoRouterBenchmarkGroup"][];
-            /** Routers In Scope */
+            /**
+             * Routers In Scope
+             * @description How many groups this response carries. Every auto-router configured on the proxy counts, whether or not it served anything in the window. To count only the routers that did serve traffic, filter `groups` to the entries whose `sessions` is above zero
+             */
             routers_in_scope: number;
             /**
              * Start Date
@@ -22379,8 +23118,29 @@ export interface components {
             system_prompt: string;
         };
         /**
+         * AutoRouterClassifierPromptPreviewRequest
+         * @description A POST rather than query params: classification_prompt is the operator's own text, which must
+         *     not reach access logs through a URL.
+         */
+        AutoRouterClassifierPromptPreviewRequest: {
+            /** Classification Prompt */
+            classification_prompt?: string | null;
+            /**
+             * Context Window Size
+             * @default 3
+             */
+            context_window_size: number;
+            /** Tier Definitions */
+            tier_definitions: components["schemas"]["TierDefinition"][];
+        };
+        /**
          * AutoRouterRoutingTestRequest
-         * @description A single prompt to classify against a complexity-router config that need not be saved yet.
+         * @description A single request to classify against a complexity-router config that need not be saved yet.
+         *
+         *     Carries the same fields the serving path carries, so a dry run classifies what a real turn
+         *     would classify. `messages`, `system` and `tools` are forwarded to the routing hook untranslated,
+         *     which is why they are typed loosely: the hook reads whatever dialect the surface produced, and
+         *     validating them against one surface's schema would reject the others.
          */
         AutoRouterRoutingTestRequest: {
             /** @description The complexity router config to route against, in the shape /model/new accepts */
@@ -22391,10 +23151,17 @@ export interface components {
              */
             default_model?: string | null;
             /**
-             * Prompt
-             * @description The prompt to route, as an end user would send it
+             * Messages
+             * @description The full message list to route, exactly as the serving path would receive it. Mutually exclusive with prompt
              */
-            prompt: string;
+            messages?: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Prompt
+             * @description A single ask to route, as an end user would send it. Mutually exclusive with messages
+             */
+            prompt?: string | null;
             /**
              * Router Name
              * @description Name reported as the router in the routing decision. Display only
@@ -22402,10 +23169,24 @@ export interface components {
              */
             router_name: string;
             /**
+             * System
+             * @description The top-level system prompt an Anthropic /v1/messages body carries beside its messages
+             */
+            system?: string | {
+                [key: string]: unknown;
+            }[] | null;
+            /**
              * Team Id
              * @description Team the router is being created for. Required for a team admin, who may only test their own team's routers
              */
             team_id?: string | null;
+            /**
+             * Tools
+             * @description The tool definitions the request advertises, which decide whether the plan-mode floor applies
+             */
+            tools?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /**
          * AutoRouterRoutingTestResponse
@@ -22419,7 +23200,7 @@ export interface components {
             routed_model: string;
             /**
              * Routed Model Configured
-             * @description Whether routed_model is a model group this proxy actually serves
+             * @description Whether routed_model is a model group available to the caller, scoped to team_id when given. Never confirms models the caller could not use
              */
             routed_model_configured: boolean;
             /** @description The decision record this request would have written to its log row */
@@ -22506,7 +23287,7 @@ export interface components {
             extra_headers?: string[] | null;
             /**
              * Fail On Error
-             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
+             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
              * @default true
              */
             fail_on_error: boolean | null;
@@ -22597,6 +23378,11 @@ export interface components {
              * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
+            /**
+             * Scan Raw Request
+             * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
+             */
+            scan_raw_request?: boolean | null;
             /**
              * Sensitive Data Route To Model
              * @description Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.
@@ -22721,6 +23507,16 @@ export interface components {
             /** Team Id */
             team_id: string;
         };
+        /** BlockUnpricedModelsRequest */
+        BlockUnpricedModelsRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** BlockUnpricedModelsResponse */
+        BlockUnpricedModelsResponse: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** BlockUsers */
         BlockUsers: {
             /** User Ids */
@@ -22777,10 +23573,14 @@ export interface components {
         };
         /** Body_authorize_complete_authorize_complete_post */
         Body_authorize_complete_authorize_complete_post: {
+            /** Decision */
+            decision?: string | null;
             /** Delivery */
             delivery?: string | null;
             /** Flow */
             flow: string;
+            /** Team Id */
+            team_id?: string | null;
         };
         /** Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post */
         Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post: {
@@ -22892,6 +23692,18 @@ export interface components {
             /** Mask[] */
             "mask[]"?: string[] | null;
         };
+        /** Body_introspect_endpoint_introspect_post */
+        Body_introspect_endpoint_introspect_post: {
+            /** Token */
+            token: string;
+        };
+        /** Body_revoke_endpoint_revoke_post */
+        Body_revoke_endpoint_revoke_post: {
+            /** Client Id */
+            client_id: string;
+            /** Token */
+            token: string;
+        };
         /** Body_test_model_connection_health_test_connection_post */
         Body_test_model_connection_health_test_connection_post: {
             /**
@@ -22905,7 +23717,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -22930,6 +23742,8 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Resource */
+            resource?: string | null;
             /** Scope */
             scope?: string | null;
         };
@@ -22949,6 +23763,8 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Resource */
+            resource?: string | null;
             /** Scope */
             scope?: string | null;
         };
@@ -23276,6 +24092,17 @@ export interface components {
             /** Total Requested */
             total_requested: number;
         };
+        /** CacheActivityErrorBucket */
+        CacheActivityErrorBucket: {
+            /** Call Type */
+            call_type: string;
+            /** Count */
+            count: number;
+            /** Error Class */
+            error_class: string;
+            /** Error Code */
+            error_code: string;
+        };
         /** CacheActivityFilterOptions */
         CacheActivityFilterOptions: {
             /** Key Aliases */
@@ -23300,6 +24127,8 @@ export interface components {
         };
         /** CacheActivityResponse */
         CacheActivityResponse: {
+            /** Error Breakdown */
+            error_breakdown: components["schemas"]["CacheActivityErrorBucket"][];
             filter_options: components["schemas"]["CacheActivityFilterOptions"];
             /** Groups */
             groups: components["schemas"]["CacheActivityGroup"][];
@@ -23420,7 +24249,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -23845,7 +24674,7 @@ export interface components {
         /** ChatCompletionToolMessage */
         ChatCompletionToolMessage: {
             /** Content */
-            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"])[];
+            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionToolReferenceObject"])[];
             /**
              * Role
              * @constant
@@ -23875,6 +24704,19 @@ export interface components {
             };
             /** Strict */
             strict?: boolean;
+        };
+        /**
+         * ChatCompletionToolReferenceObject
+         * @description Anthropic tool-search result block, carried through untouched so it survives a round trip.
+         */
+        ChatCompletionToolReferenceObject: {
+            /** Tool Name */
+            tool_name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_reference";
         };
         /** ChatCompletionUserMessage */
         ChatCompletionUserMessage: {
@@ -24027,16 +24869,16 @@ export interface components {
         };
         /**
          * ClassificationRubric
-         * @description Which calibration examples the built-in classifier rubric carries.
+         * @description Which calibration examples, and for BUSINESS which tier criteria, the built-in classifier rubric carries.
          * @enum {string}
          */
-        ClassificationRubric: "legacy" | "agentic" | "chat";
+        ClassificationRubric: "legacy" | "agentic" | "chat" | "business";
         /**
          * ClassifierLLMConfig
          * @description Configuration for the LLM-based complexity classifier.
          */
         ClassifierLLMConfig: {
-            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
+            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
              * Model
@@ -24188,11 +25030,64 @@ export interface components {
             timezone?: string | null;
         };
         /**
+         * ComplexityRouterConfigValidationRequest
+         * @description A complexity-router config to validate without saving, so a form can surface the
+         *     backend's own verdict inline instead of a raw 400 at write time.
+         */
+        ComplexityRouterConfigValidationRequest: {
+            /** Complexity Router Config */
+            complexity_router_config: {
+                [key: string]: unknown;
+            };
+            /**
+             * Team Id
+             * @description Team the router is being created for. Required for a team admin, who may only validate their own team's routers
+             */
+            team_id?: string | null;
+        };
+        /** ComplexityRouterConfigValidationResponse */
+        ComplexityRouterConfigValidationResponse: {
+            /** Error */
+            error?: string | null;
+            /** Valid */
+            valid: boolean;
+        };
+        /**
+         * ComplexityScorerDefaults
+         * @description The complexity router's shipped heuristic scorer defaults.
+         *
+         *     The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so
+         *     a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+         */
+        ComplexityScorerDefaults: {
+            /** Dimension Weights */
+            dimension_weights: {
+                [key: string]: number;
+            };
+            /** Tier Boundaries */
+            tier_boundaries: {
+                [key: string]: number;
+            };
+            /** Token Thresholds */
+            token_thresholds: {
+                [key: string]: number;
+            };
+        };
+        /**
          * ComplexityTier
          * @description Complexity tiers for routing decisions.
          * @enum {string}
          */
         ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+        /** ComplexityTierModel */
+        ComplexityTierModel: {
+            /** Litellm Params */
+            litellm_params?: {
+                [key: string]: unknown;
+            };
+            /** Model Name */
+            model_name: string;
+        };
         /**
          * ComplianceCheckRequest
          * @description Request payload for compliance check endpoints.
@@ -24318,6 +25213,11 @@ export interface components {
              */
             apply_user_budget_to_team_keys?: boolean | null;
             /**
+             * Background Health Check Model Groups
+             * @description Opt-in allowlist of model group names for background health checks and health-check routing. When set, the background loop probes only deployments whose model_name is listed, and enable_health_check_routing filters unhealthy deployments only within the listed groups; every other group, including newly added deployments, is skipped and keeps its configured routing strategy. When unset, all deployments participate (opt out per deployment via model_info.disable_background_health_check).
+             */
+            background_health_check_model_groups?: string[] | null;
+            /**
              * Background Health Checks
              * @description run health checks in background
              */
@@ -24407,6 +25307,11 @@ export interface components {
              */
             enable_public_model_hub: boolean;
             /**
+             * Enforce Fallback Model Access
+             * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.
+             */
+            enforce_fallback_model_access?: boolean | null;
+            /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
              */
@@ -24446,6 +25351,11 @@ export interface components {
              */
             master_key?: string | null;
             /**
+             * Max Batch File Size Mb
+             * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
+             */
+            max_batch_file_size_mb?: number | null;
+            /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
              */
@@ -24465,6 +25375,11 @@ export interface components {
              * @description Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.
              */
             maximum_autorouter_session_retention_period?: string | null;
+            /**
+             * Maximum Health Check Retention Period
+             * @description Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Set this well above health_check_interval because /health and the UI read the latest row per model.
+             */
+            maximum_health_check_retention_period?: string | null;
             /**
              * Maximum Spend Logs Cleanup Batch Size
              * @description Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.
@@ -24510,6 +25425,11 @@ export interface components {
              * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
              */
             mcp_xff_num_trusted_hops?: number | null;
+            /**
+             * Model List Healthy Only
+             * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
+             */
+            model_list_healthy_only?: boolean | null;
             /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
@@ -25115,6 +26035,52 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /**
+         * CyberArkConfig
+         * @description Configuration for CyberArk Conjur secret manager integration.
+         */
+        CyberArkConfig: {
+            /**
+             * Client Cert
+             * @description Path to the client TLS certificate for certificate-based authentication
+             */
+            client_cert?: string | null;
+            /**
+             * Client Key
+             * @description Path to the client TLS private key for certificate-based authentication
+             */
+            client_key?: string | null;
+            /**
+             * Cyberark Account
+             * @description The Conjur organization account name
+             */
+            cyberark_account?: string | null;
+            /**
+             * Cyberark Api Base
+             * @description The address of the CyberArk Conjur server (e.g., https://conjur.example.com)
+             */
+            cyberark_api_base?: string | null;
+            /**
+             * Cyberark Api Key
+             * @description API key for Conjur API-key authentication
+             */
+            cyberark_api_key?: string | null;
+            /**
+             * Cyberark Username
+             * @description The Conjur username (login) to authenticate as
+             */
+            cyberark_username?: string | null;
+            /**
+             * Refresh Interval
+             * @description Auth token cache TTL in seconds (default: 300)
+             */
+            refresh_interval?: string | null;
+            /**
+             * Ssl Verify
+             * @description Set to false to disable SSL verification (e.g., for self-signed certificates)
+             */
+            ssl_verify?: string | null;
+        };
         /** DailySpendData */
         DailySpendData: {
             breakdown?: components["schemas"]["BreakdownMetrics"];
@@ -25182,6 +26148,11 @@ export interface components {
              * @default 0
              */
             total_flat_cost: number;
+            /**
+             * Total Gateway Injected Caching Savings Spend
+             * @default 0
+             */
+            total_gateway_injected_caching_savings_spend: number;
             /**
              * Total Pages
              * @default 1
@@ -25301,6 +26272,15 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** DeleteAccessGroupBudgetResponse */
+        DeleteAccessGroupBudgetResponse: {
+            /** Access Group */
+            access_group: string;
+            /** Budget Deleted */
+            budget_deleted: boolean;
+            /** Message */
+            message: string;
         };
         /**
          * DeleteCustomerRequest
@@ -26622,7 +27602,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -26711,8 +27691,11 @@ export interface components {
              * @description Keywords/phrases that trigger this rule (lexical or semantic match)
              */
             keywords: string[];
-            /** @description Tier to route to when this rule matches */
-            tier: components["schemas"]["ComplexityTier"];
+            /**
+             * Tier
+             * @description Tier to route to when this rule matches: a built-in tier name, or with tier_definitions set, one of the defined tier names
+             */
+            tier: string;
         };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
@@ -26810,6 +27793,13 @@ export interface components {
         ListResponse_BudgetListItem_: {
             /** Data */
             data: components["schemas"]["BudgetListItem"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
+        /** ListResponse[ModelGroupInfoProxy] */
+        ListResponse_ModelGroupInfoProxy_: {
+            /** Data */
+            data: components["schemas"]["ModelGroupInfoProxy"][];
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
@@ -26958,7 +27948,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -26998,7 +27988,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -27028,7 +28018,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -27811,6 +28801,8 @@ export interface components {
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
             cache_creation_input_token_cost_priority?: number | null;
+            /** Cache Creation Input Token Cost Ultrafast */
+            cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -27831,6 +28823,8 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Cache Read Input Token Cost Ultrafast */
+            cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -27849,6 +28843,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Google Maps Grounding Cost Per Query */
+            google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -27895,6 +28891,8 @@ export interface components {
             input_cost_per_token_flex?: number | null;
             /** Input Cost Per Token Priority */
             input_cost_per_token_priority?: number | null;
+            /** Input Cost Per Token Ultrafast */
+            input_cost_per_token_ultrafast?: number | null;
             /** Input Cost Per Video Per Second */
             input_cost_per_video_per_second?: number | null;
             /** Input Cost Per Video Per Second Above 128K Tokens */
@@ -27970,6 +28968,10 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 480P */
+            output_cost_per_second_480p?: number | null;
+            /** Output Cost Per Second 4K */
+            output_cost_per_second_4k?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -27992,6 +28994,8 @@ export interface components {
             output_cost_per_token_flex?: number | null;
             /** Output Cost Per Token Priority */
             output_cost_per_token_priority?: number | null;
+            /** Output Cost Per Token Ultrafast */
+            output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -28006,6 +29010,8 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Endpoint Uplift Multiplier */
+            regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
@@ -28056,6 +29062,18 @@ export interface components {
              * @default false
              */
             use_xai_oauth: boolean | null;
+            /** Valkey Embedding Field */
+            valkey_embedding_field?: string | null;
+            /** Valkey Host */
+            valkey_host?: string | null;
+            /** Valkey Password */
+            valkey_password?: string | null;
+            /** Valkey Port */
+            valkey_port?: number | null;
+            /** Valkey Ssl */
+            valkey_ssl?: boolean | null;
+            /** Valkey Text Field */
+            valkey_text_field?: string | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -28181,6 +29199,8 @@ export interface components {
              * @default 0
              */
             completion_tokens: number | null;
+            /** Created At */
+            created_at?: string | null;
             /** Endtime */
             endTime: string | null;
             /** Messages */
@@ -28224,6 +29244,8 @@ export interface components {
              * @default 0
              */
             total_tokens: number | null;
+            /** Updated At */
+            updated_at?: string | null;
             /**
              * User
              * @default
@@ -28259,7 +29281,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -28289,7 +29311,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -28319,7 +29341,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -28745,6 +29767,11 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Advisory System Message
+             * @description Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.
+             */
+            advisory_system_message?: string | null;
+            /**
              * Akto Account Id
              * @description Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.
              */
@@ -28837,6 +29864,11 @@ export interface components {
              * @description AWS Bedrock runtime endpoint URL
              */
             aws_bedrock_runtime_endpoint?: string | null;
+            /**
+             * Aws External Id
+             * @description External ID required by the target role's trust policy on sts:AssumeRole
+             */
+            aws_external_id?: string | null;
             /**
              * Aws Profile Name
              * @description AWS profile name for credential retrieval
@@ -29050,7 +30082,7 @@ export interface components {
             extra_headers?: string[] | null;
             /**
              * Fail On Error
-             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
+             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
              * @default true
              */
             fail_on_error: boolean | null;
@@ -29186,10 +30218,10 @@ export interface components {
             on_disallowed_action: "block" | "rewrite";
             /**
              * On Flagged
-             * @description Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)
+             * @description Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)
              * @default block
              */
-            on_flagged: ("block" | "monitor") | null;
+            on_flagged: ("block" | "monitor" | "inject_system_message") | null;
             /**
              * On Flagged Action
              * @description Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)
@@ -29299,6 +30331,11 @@ export interface components {
              */
             presidio_ad_hoc_recognizers?: string | null;
             /**
+             * Presidio Analyze Chunk Size Bytes
+             * @description Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. Longer texts are split into overlapping chunks of at most this size and the merged results are remapped onto the original text. Defaults to 500000; set it below your analyzer deployment's request body limit, leaving headroom for the rest of the analyze payload.
+             */
+            presidio_analyze_chunk_size_bytes?: number | null;
+            /**
              * Presidio Analyzer Api Base
              * @description Base URL for the Presidio analyzer API
              */
@@ -29378,6 +30415,11 @@ export interface components {
              * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
+            /**
+             * Scan Raw Request
+             * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
+             */
+            scan_raw_request?: boolean | null;
             /**
              * Send User Api Key Alias
              * @description Whether to send user_API_key_alias in headers
@@ -29544,6 +30586,70 @@ export interface components {
              */
             status?: "healthy" | "unhealthy";
         };
+        /** MCPConnectorEntry */
+        MCPConnectorEntry: {
+            /** Args */
+            args?: string[];
+            /** Authorization Token */
+            authorization_token?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Env */
+            env?: {
+                [key: string]: string;
+            };
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            } | null;
+            /** Name */
+            name?: string | null;
+            /** Type */
+            type?: string | null;
+            /** Url */
+            url?: string | null;
+        };
+        /** MCPConnectorImportFailure */
+        MCPConnectorImportFailure: {
+            /** Error */
+            error: string;
+            /** Name */
+            name: string;
+        };
+        /** MCPConnectorImportRequest */
+        MCPConnectorImportRequest: {
+            /** Mcp Servers */
+            mcp_servers: {
+                [key: string]: components["schemas"]["MCPConnectorEntry"];
+            } | components["schemas"]["MCPConnectorEntry"][];
+        };
+        /** MCPConnectorImportResponse */
+        MCPConnectorImportResponse: {
+            /** Errors */
+            errors: components["schemas"]["MCPConnectorImportFailure"][];
+            /** Imported */
+            imported: components["schemas"]["MCPConnectorImportResult"][];
+            /** Skipped */
+            skipped: components["schemas"]["MCPConnectorImportSkipped"][];
+        };
+        /** MCPConnectorImportResult */
+        MCPConnectorImportResult: {
+            /** Alias */
+            alias: string;
+            /** Name */
+            name: string;
+            /** Server Id */
+            server_id: string;
+        };
+        /** MCPConnectorImportSkipped */
+        MCPConnectorImportSkipped: {
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
+        };
         /** MCPCredentials */
         MCPCredentials: {
             /** Audience */
@@ -29592,6 +30698,8 @@ export interface components {
             token_exchange_profile?: string | null;
             /** Upstream Resource */
             upstream_resource?: string | null;
+            /** Upstream Token Header */
+            upstream_token_header?: string | null;
         };
         /**
          * MCPEnvVar
@@ -29975,6 +31083,70 @@ export interface components {
                 [key: string]: string | string[];
             };
         };
+        /** ModelDeprecationInfo */
+        ModelDeprecationInfo: {
+            /**
+             * Days Until Deprecation
+             * @description Days remaining until the deprecation date. Negative if the model is already deprecated.
+             */
+            days_until_deprecation: number;
+            /**
+             * Deprecation Date
+             * Format: date
+             * @description The date (UTC) when the model becomes deprecated.
+             */
+            deprecation_date: string;
+            /**
+             * Litellm Model
+             * @description The underlying litellm model string the deprecation date is sourced from.
+             */
+            litellm_model?: string | null;
+            /**
+             * Litellm Provider
+             * @description The provider this model belongs to.
+             */
+            litellm_provider?: string | null;
+            /**
+             * Model Name
+             * @description The public name of the model on the proxy (model_group).
+             */
+            model_name: string;
+            /**
+             * Status
+             * @description 'deprecated' if the date has passed, 'imminent' if it falls within warn_within_days, 'upcoming' otherwise.
+             * @enum {string}
+             */
+            status: "upcoming" | "imminent" | "deprecated";
+        };
+        /** ModelDeprecationResponse */
+        ModelDeprecationResponse: {
+            /**
+             * Checked At
+             * Format: date-time
+             * @description UTC timestamp when the deprecation snapshot was generated.
+             */
+            checked_at: string;
+            /**
+             * Deprecated
+             * @description Models whose deprecation date has already passed.
+             */
+            deprecated?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Imminent
+             * @description Models whose deprecation date is within warn_within_days from today and require immediate migration planning.
+             */
+            imminent?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Upcoming
+             * @description Models with a future deprecation date outside the warn window.
+             */
+            upcoming?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Warn Within Days
+             * @description The window (in days) used to bucket 'imminent' models.
+             */
+            warn_within_days: number;
+        };
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
@@ -30020,6 +31192,8 @@ export interface components {
              * @default []
              */
             supported_openai_params: string[] | null;
+            /** Supported Reasoning Efforts */
+            supported_reasoning_efforts?: string[] | null;
             /**
              * Supports Function Calling
              * @default false
@@ -30447,9 +31621,17 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Itpm Limit */
+            model_itpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Otpm Limit */
+            model_otpm_limit?: {
+                [key: string]: number;
             } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
@@ -30555,7 +31737,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /** Allowed Passthrough Routes */
             allowed_passthrough_routes?: unknown[] | null;
             /** Allowed Vector Store Indexes */
@@ -30599,7 +31781,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -30625,7 +31807,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -32988,17 +34170,27 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Prompt
+             * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
+             */
+            classification_prompt?: string | null;
+            /**
+             * Classifier Context Budget Chars
+             * @description Maximum characters of prior-turn text quoted to the LLM classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and the caller's system prompt sit outside this budget and are always sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Only applies when classifier_type is 'llm'.
+             * @default 8000
+             */
+            classifier_context_budget_chars: number;
+            /**
              * Classifier Context Include Assistant Turns
-             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
+             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
              * @default false
              */
             classifier_context_include_assistant_turns: boolean;
             /**
              * Classifier Context Per Turn Chars
-             * @description Maximum character length for each prior turn's text in the classifier context window. Turns exceeding this are truncated. Only applies when classifier_type is 'llm'.
-             * @default 200
+             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Only applies when classifier_type is 'llm'.
              */
-            classifier_context_per_turn_chars: number;
+            classifier_context_per_turn_chars?: number | null;
             /**
              * Classifier Context Window Size
              * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call already carries the current user ask and the caller's system prompt in full. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
@@ -33007,20 +34199,31 @@ export interface components {
             classifier_context_window_size: number;
             /**
              * Classifier Fallback
-             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm'.
+             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm', 'custom', or 'heuristic_first'.
              * @default heuristic
              * @enum {string}
              */
             classifier_fallback: "heuristic" | "default_model";
-            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' */
+            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' or 'heuristic_first' */
             classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
             /**
+             * Classifier Plugin
+             * @description Not settable over HTTP; the classifier plugin is a runtime object
+             */
+            classifier_plugin?: null;
+            /**
+             * Classifier Plugin Timeout Ms
+             * @description Timeout budget for the classifier plugin call, in milliseconds. On expiry the fallback path decides the tier. Only applies when classifier_type is 'custom'.
+             * @default 3000
+             */
+            classifier_plugin_timeout_ms: number;
+            /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, or an LLM call
+             * @description Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "llm";
+            classifier_type: "heuristic" | "llm" | "custom" | "heuristic_first";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -33060,6 +34263,21 @@ export interface components {
              */
             escalation_keywords?: string[] | null;
             /**
+             * Fallback Tier
+             * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
+             */
+            fallback_tier?: string | null;
+            /**
+             * Heuristic First Max Tier
+             * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence, which is how a chained router would silently send unclassified traffic to the cheapest model. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
+             */
+            heuristic_first_max_tier?: string | null;
+            /**
+             * Housekeeping Patterns
+             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
+             */
+            housekeeping_patterns?: string[] | null;
+            /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
              */
@@ -33071,6 +34289,16 @@ export interface components {
              */
             match_threshold: number;
             /**
+             * Plan Mode Min Tier
+             * @description When set, requests carrying a coding-agent plan-mode sentinel (Claude Code plan mode, VS Code Copilot Plan mode, Copilot CLI's exit_plan_mode tool) are routed to at least this tier: the classified tier still wins when it is higher, and the floor also overrides a session-affinity pin to a lower tier for exactly the turns carrying the sentinel, without rewriting the pin -- the first turn after plan mode exits routes as if plan mode had never happened. Names a built-in tier, or with tier_definitions set, one of the defined tier names (list order is ascending severity, same as keyword_tier_rules). Unset disables detection entirely. The sentinels ride in client-injected prompt text, so a caller who pastes one can spend up to this tier's models -- never down, and never outside the configured pools.
+             */
+            plan_mode_min_tier?: string | null;
+            /**
+             * Plan Mode Patterns
+             * @description Additional case-sensitive literal sentinels that mark a request as plan mode, on top of the built-in Claude Code and Copilot ones. For clients whose plan-mode wording the built-ins don't cover, or after a client release changes its strings.
+             */
+            plan_mode_patterns?: string[] | null;
+            /**
              * Plugins
              * @description Not settable over HTTP; routing plugins are runtime objects
              */
@@ -33080,6 +34308,11 @@ export interface components {
              * @description Keywords indicating reasoning-required content
              */
             reasoning_keywords?: string[] | null;
+            /**
+             * Reasoning Override Min Score
+             * @description Minimum weighted score a request must reach before 2+ reasoning markers may promote it to the reasoning tier. Unset tracks tier_boundaries.simple_medium, so the override never rescues a request the scorer placed in the cheapest tier; 0 restores the unconditional override
+             */
+            reasoning_override_min_score?: number | null;
             /**
              * Reminder Markers
              * @description Override the delimiter pairs used to recognize and strip harness-injected reminder blocks before classification. A harness that wraps injected context differently per agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than adds to, the built-in default of ('<system-reminder>', '</system-reminder>'), so a harness that also emits that pair lists it too. Matching is case-insensitive.
@@ -33091,6 +34324,12 @@ export interface components {
              * @default false
              */
             return_raw_model_name: boolean;
+            /**
+             * Route Housekeeping To Cheapest Tier
+             * @description Route a coding agent's own housekeeping calls to the cheapest configured tier without classifying them. A client names the conversation by quoting the whole session and asking for a title, so the ask reads as the session's engineering work and lands on the most expensive tier, which is the reverse of what the call is worth. Detection is a literal match against client-owned sentinels on the newest ask only, so it cannot fire on an earlier turn, and it never lowers what anyone else asked for: a keyword_tier_rule or a session pin still decides instead, and an escalation keyword or the plan-mode floor still raises the tier from here. Only the classifier is displaced, and its call is skipped, so a matched request costs nothing to route. Set false to classify these calls like any other.
+             * @default true
+             */
+            route_housekeeping_to_cheapest_tier: boolean;
             /**
              * Semantic Keyword Matching
              * @description Match keyword_tier_rules by embedding similarity instead of literal text
@@ -33127,6 +34366,11 @@ export interface components {
                 [key: string]: number;
             };
             /**
+             * Tier Definitions
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             */
+            tier_definitions?: components["schemas"]["TierDefinition"][] | null;
+            /**
              * Tier Distance Penalty
              * @description Score penalty per tier-step away from the classified tier when adaptive=True
              * @default 0.5
@@ -33138,6 +34382,10 @@ export interface components {
              */
             tier_labels?: {
                 [key: string]: string;
+            };
+            /** Tier Model Configs */
+            tier_model_configs?: {
+                [key: string]: components["schemas"]["ComplexityTierModel"][];
             };
             /**
              * Tiers
@@ -33847,18 +35095,59 @@ export interface components {
             timeout?: number | null;
         };
         /**
-         * ShadowEvalJobResponse
-         * @description A shadow-eval job. Validates directly from the prisma record (job_id reads the
-         *     row's id); status is derived from stopped_at and ends_at, never stored, so no writer
-         *     anywhere can produce an inconsistent one. Aggregate fields are populated by the
-         *     detail endpoint only and stay None on list responses.
+         * ShadowEvalJobKeyResponse
+         * @description One key a job shadows, with its own budget and stop state.
          */
-        ShadowEvalJobResponse: {
+        ShadowEvalJobKeyResponse: {
             /**
              * Api Key Id
-             * @description The hashed virtual key whose traffic this job evaluates, and only that key's
+             * @description The hashed virtual key whose traffic this entry scopes
              */
             api_key_id: string;
+            /**
+             * Attempt Count
+             * @description This key's sampled attempts so far, judged and errored alike, the same count the sampler budgets against max_turns; populated on list and detail responses. Frozen at stopped_at once the key is stamped, so in-flight attempts landing after a stop never reclassify it
+             */
+            attempt_count?: number | null;
+            /**
+             * Key Alias
+             * @description Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted
+             */
+            key_alias?: string | null;
+            /**
+             * Key Name
+             * @description Masked display name (sk-...) of the shadowed key, resolved at read time like key_alias
+             */
+            key_name?: string | null;
+            /**
+             * Max Budget
+             * @description This key's own USD budget for the eval's shadow and judge spend, independent of its siblings'; None on jobs created before spend budgets existed, which max_turns alone bounds
+             */
+            max_budget?: number | null;
+            /**
+             * Max Turns
+             * @description This key's sample-count ceiling: the whole budget for jobs created before max_budget existed, and the error-loop safety valve otherwise
+             */
+            max_turns: number;
+            /**
+             * Spend
+             * @description This key's recorded shadow plus judge spend in USD, the same figure the sampler budgets against max_budget; populated on list and detail responses and frozen at stopped_at exactly like attempt_count
+             */
+            spend?: number | null;
+            /**
+             * Stopped At
+             * @description When this key's slot was stamped free, whether its own budget ran out, the window closed, or an operator stopped the job; status is derived, so a spent budget reads completed even while this is still unset
+             */
+            stopped_at?: string | null;
+        };
+        /**
+         * ShadowEvalJobResponse
+         * @description A shadow-eval job over one or more keys, each with its own budget and stop state;
+         *     status is derived from stopped_by, the keys' stop and budget state, and ends_at,
+         *     never stored, so no writer anywhere can produce an inconsistent one. Aggregate
+         *     fields are populated by the detail endpoint only and stay None on list responses.
+         */
+        ShadowEvalJobResponse: {
             /** Baseline Model */
             baseline_model?: string | null;
             /**
@@ -33897,12 +35186,15 @@ export interface components {
              */
             judged_count?: number | null;
             /**
+             * Keys
+             * @description The keys whose traffic this job evaluates, and only those keys', each with its own budget
+             */
+            keys: components["schemas"]["ShadowEvalJobKeyResponse"][];
+            /**
              * Last Error
              * @description Most recent attempt error; detail endpoint only
              */
             last_error?: string | null;
-            /** Max Turns */
-            max_turns: number;
             /** @description Stratified verdicts; detail endpoint only */
             results?: components["schemas"]["ShadowEvalResult"] | null;
             /** Router Name */
@@ -33911,13 +35203,19 @@ export interface components {
             shadow_percentage: number;
             /**
              * Status
-             * @description A job whose window has passed reads completed even if a later sweep stamped
-             *     stopped_at; stopped means sampling ended before the window did.
+             * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
+             *     backfills it for every job that displayed stopped when the column arrived, so the
+             *     pre-column population is closed), completion is the window passing or every key
+             *     spending its budget, and anything else is running. The all-keys-stamped fallback
+             *     covers only stops written by pre-column pods during a rolling deploy.
              * @enum {string}
              */
             readonly status: "running" | "completed" | "stopped";
-            /** Stopped At */
-            stopped_at?: string | null;
+            /**
+             * Stopped By
+             * @description The operator who stopped the job early, recorded by the stop endpoint; 'unknown' backfilled by migration for jobs that displayed stopped when the column arrived; None when the job ended on its own. Its presence is what makes a job read stopped rather than completed
+             */
+            stopped_by?: string | null;
         };
         /**
          * ShadowEvalResult
@@ -33926,15 +35224,52 @@ export interface components {
         ShadowEvalResult: {
             /**
              * By Current Model
-             * @description Sliced by the model that served the real arm: the key's incumbent models in forward mode, and in reverse the models the router itself picked
+             * @description Sliced by the model that served the real arm: the keys' incumbent models in forward mode, and in reverse the models the router itself picked
              */
             by_current_model: components["schemas"]["ShadowEvalSlice"][];
+            /**
+             * By Key
+             * @description One slice per scoped key that has judged verdicts, grouped on the raw key hash. Keys the job scopes but has not judged a turn for yet are absent rather than reported as zero
+             */
+            by_key: components["schemas"]["ShadowEvalSlice"][];
             /** By Tier */
             by_tier: components["schemas"]["ShadowEvalSlice"][];
+            /**
+             * Not Sampled Count
+             * @description Eligible requests the sampling dice skipped, summed over legs: the judged rows stand for judged + this many requests. None for jobs from before the funnel existed
+             */
+            not_sampled_count?: number | null;
             /** Overall Shadow Win Rate Pct */
             overall_shadow_win_rate_pct: number;
             /** Overall Tie Rate Pct */
             overall_tie_rate_pct: number;
+            /**
+             * Sampled Real Spend
+             * @description USD the real arm billed across all judged turns, cache-served turns excluded
+             * @default 0
+             */
+            sampled_real_spend: number;
+            /**
+             * Sampled Shadow Spend
+             * @description USD the shadow arm billed across the same turns, judge excluded, like for like
+             * @default 0
+             */
+            sampled_shadow_spend: number;
+            /**
+             * Shed Count
+             * @description Sampled requests dropped by the per-pod concurrency cap, so quiet periods are overweighted
+             */
+            shed_count?: number | null;
+            /**
+             * Unjudgeable Count
+             * @description Sampled requests whose shape could not be judged (tool-final turn, empty text)
+             */
+            unjudgeable_count?: number | null;
+            /**
+             * Withheld Count
+             * @description Sampled requests the pipeline declined to spend on: no database to record into, an over-budget key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job crosses max_budget lands here rather than vanishing from coverage)
+             */
+            withheld_count?: number | null;
         };
         /**
          * ShadowEvalSlice
@@ -33944,13 +35279,31 @@ export interface components {
         ShadowEvalSlice: {
             /** Avg Judge Confidence */
             avg_judge_confidence: number;
+            /**
+             * Cache Hit Turns
+             * @description Judged turns litellm's response cache served, excluded from both spends: an adopted router would be served by the same cache, so those turns cost the same either way
+             * @default 0
+             */
+            cache_hit_turns: number;
             /** Group */
             group: string;
+            /**
+             * Real Spend
+             * @description USD the real arm billed on this slice's judged turns, completion plus its own routing classifier when it routed, excluding turns litellm's response cache served for free
+             * @default 0
+             */
+            real_spend: number;
             /**
              * Real Win Rate Pct
              * @description Share of judged turns the real arm won, meaning the response the caller actually received: the key's own model in forward mode, the router's pick in reverse
              */
             real_win_rate_pct: number;
+            /**
+             * Shadow Spend
+             * @description USD the shadow arm billed on the same turns, completion plus its own routing classifier, excluding the judge and the same cache-served turns, so the two spends compare like for like
+             * @default 0
+             */
+            shadow_spend: number;
             /**
              * Shadow Win Rate Pct
              * @description Share of judged turns the shadow arm won, meaning the duplicated response nobody was served: the router's pick in forward mode, baseline_model in reverse
@@ -34049,6 +35402,11 @@ export interface components {
              */
             flat_cost: number;
             /**
+             * Gateway Injected Caching Savings Spend
+             * @default 0
+             */
+            gateway_injected_caching_savings_spend: number;
+            /**
              * Prompt Caching Savings Spend
              * @default 0
              */
@@ -34083,7 +35441,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -34096,6 +35454,8 @@ export interface components {
             escalation_keyword?: string;
             /** Matched Keyword */
             matched_keyword?: string;
+            /** Reasoning Override Min Score */
+            reasoning_override_min_score?: number;
             /** Request Type */
             request_type?: string;
             /** Routed Model */
@@ -34120,6 +35480,10 @@ export interface components {
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
             /** Tier Label */
             tier_label?: string;
+            /** Tier Litellm Params */
+            tier_litellm_params?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * StandardLoggingRoutingDecisionTierBoundaries
@@ -34136,14 +35500,14 @@ export interface components {
         };
         /**
          * StartShadowEvalRequest
-         * @description Start duplicating a key's traffic for blind comparison against an auto-router.
+         * @description Start duplicating one or more keys' traffic for blind comparison against an auto-router.
          */
         StartShadowEvalRequest: {
             /**
-             * Api Key Id
-             * @description The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this key's traffic; requests made with any other key are not sampled.
+             * Api Key Ids
+             * @description The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these keys' traffic; requests made with any other key are not sampled. Each key carries its own max_budget spend budget, so one key exhausting its budget leaves the others sampling. At most 100 keys per job, which also bounds every read the job's endpoints make.
              */
-            api_key_id: string;
+            api_key_ids: string[];
             /**
              * Baseline Model
              * @description Required when direction is reverse and rejected otherwise: the fixed model the router's own responses are judged against. Must be a plain model rather than another auto-router
@@ -34169,11 +35533,11 @@ export interface components {
              */
             judge_model: string;
             /**
-             * Max Turns
-             * @description Sample budget: the job judges at most this many turns, then completes. This is also the spend bound; expected judge cost is roughly max_turns times one judge call
-             * @default 200
+             * Max Budget
+             * @description Per-key USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped key samples until its recorded eval spend reaches this, so a job over N keys spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window
+             * @default 10
              */
-            max_turns: number;
+            max_budget: number;
             /**
              * Router Name
              * @description The auto-router under evaluation, in either direction
@@ -34356,7 +35720,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -34386,7 +35750,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -34416,7 +35780,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -34449,6 +35813,26 @@ export interface components {
             /** Updated Users */
             updated_users: components["schemas"]["LiteLLM_UserTable"][];
         };
+        /** TeamCallbackDeleteResponse */
+        TeamCallbackDeleteResponse: {
+            data: components["schemas"]["TeamCallbackDeleteResponseData"];
+            /** Message */
+            message: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "success";
+        };
+        /** TeamCallbackDeleteResponseData */
+        TeamCallbackDeleteResponseData: {
+            /** Failure Callbacks */
+            failure_callbacks: string[];
+            /** Success Callbacks */
+            success_callbacks: string[];
+            /** Team Id */
+            team_id: string;
+        };
         /**
          * TeamListItem
          * @description A team item in the paginated list response, enriched with computed fields.
@@ -34466,7 +35850,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -34501,7 +35885,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members Count
              * @default 0
@@ -34536,7 +35920,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -34913,6 +36297,22 @@ export interface components {
             };
         };
         /**
+         * TierDefinition
+         * @description An operator-defined tier: the name the LLM classifier must return and its rubric description.
+         */
+        TierDefinition: {
+            /**
+             * Description
+             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which inherits the built-in criteria when omitted
+             */
+            description?: string | null;
+            /**
+             * Name
+             * @description Tier name; becomes a value the LLM classifier can return and a key of `tiers`
+             */
+            name: string;
+        };
+        /**
          * TokenCountDetailsResponse
          * @description Response structure for token count details with modality breakdown.
          *
@@ -35218,6 +36618,11 @@ export interface components {
              * @description URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL
              */
             logo_url?: string | null;
+            /**
+             * Logo Url Dark
+             * @description URL or path to a custom logo image for dark mode. Can be a local file path or HTTP/HTTPS URL. Leave unset to reuse logo_url in dark mode
+             */
+            logo_url_dark?: string | null;
         };
         /**
          * UIThemeSettingsResponse
@@ -35666,9 +37071,17 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Itpm Limit */
+            model_itpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Otpm Limit */
+            model_otpm_limit?: {
+                [key: string]: number;
             } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
@@ -36166,6 +37579,24 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /** Usage Units */
+            usage_units: {
+                [key: string]: number;
+            };
+            /** Usage Units By Key */
+            usage_units_by_key: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Usage Units By Team */
+            usage_units_by_team: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Usage Units Daily */
+            usage_units_daily: components["schemas"]["UsageUnitsDailyPoint"][];
         };
         /** UsageLogEntry */
         UsageLogEntry: {
@@ -36211,6 +37642,10 @@ export interface components {
             totalBlocked: number;
             /** Totalrequests */
             totalRequests: number;
+            /** Totalusageunits */
+            totalUsageUnits: {
+                [key: string]: number;
+            };
         };
         /** UsageOverviewRow */
         UsageOverviewRow: {
@@ -36234,6 +37669,19 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /** Usageunits */
+            usageUnits: {
+                [key: string]: number;
+            };
+        };
+        /** UsageUnitsDailyPoint */
+        UsageUnitsDailyPoint: {
+            /** Date */
+            date: string;
+            /** Units */
+            units: {
+                [key: string]: number;
+            };
         };
         /**
          * UserAPIKeyAuth
@@ -36503,6 +37951,10 @@ export interface components {
             user_id?: string | null;
             /** User Max Budget */
             user_max_budget?: number | null;
+            /** User Model Max Budget */
+            user_model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             user_role?: components["schemas"]["LitellmUserRoles"] | null;
             /** User Rpm Limit */
             user_rpm_limit?: number | null;
@@ -36606,6 +38058,16 @@ export interface components {
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget Usage */
+            model_max_budget_usage?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
             } | null;
             /**
              * Models
@@ -37073,6 +38535,8 @@ export interface components {
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
             cache_creation_input_token_cost_priority?: number | null;
+            /** Cache Creation Input Token Cost Ultrafast */
+            cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -37093,6 +38557,8 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Cache Read Input Token Cost Ultrafast */
+            cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -37111,6 +38577,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Google Maps Grounding Cost Per Query */
+            google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -37157,6 +38625,8 @@ export interface components {
             input_cost_per_token_flex?: number | null;
             /** Input Cost Per Token Priority */
             input_cost_per_token_priority?: number | null;
+            /** Input Cost Per Token Ultrafast */
+            input_cost_per_token_ultrafast?: number | null;
             /** Input Cost Per Video Per Second */
             input_cost_per_video_per_second?: number | null;
             /** Input Cost Per Video Per Second Above 128K Tokens */
@@ -37232,6 +38702,10 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 480P */
+            output_cost_per_second_480p?: number | null;
+            /** Output Cost Per Second 4K */
+            output_cost_per_second_4k?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -37254,6 +38728,8 @@ export interface components {
             output_cost_per_token_flex?: number | null;
             /** Output Cost Per Token Priority */
             output_cost_per_token_priority?: number | null;
+            /** Output Cost Per Token Ultrafast */
+            output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -37268,6 +38744,8 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Endpoint Uplift Multiplier */
+            regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
@@ -37318,6 +38796,18 @@ export interface components {
              * @default false
              */
             use_xai_oauth: boolean | null;
+            /** Valkey Embedding Field */
+            valkey_embedding_field?: string | null;
+            /** Valkey Host */
+            valkey_host?: string | null;
+            /** Valkey Password */
+            valkey_password?: string | null;
+            /** Valkey Port */
+            valkey_port?: number | null;
+            /** Valkey Ssl */
+            valkey_ssl?: boolean | null;
+            /** Valkey Text Field */
+            valkey_text_field?: string | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -37363,6 +38853,26 @@ export interface operations {
         };
     };
     jwks_json__well_known_jwks_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    native_client_auth_discovery__well_known_litellm_cli_auth_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -37843,6 +39353,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewModelGroupResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_access_group_budget_access_group__access_group__budget_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                access_group: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGroupBudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_access_group_budget_access_group__access_group__budget_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                access_group: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGroupBudgetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGroupBudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_access_group_budget_access_group__access_group__budget_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                access_group: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteAccessGroupBudgetResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38736,6 +40343,7 @@ export interface operations {
                 code_challenge_method?: string | null;
                 response_type?: string | null;
                 scope?: string | null;
+                resource?: string | null;
             };
             header?: never;
             path?: never;
@@ -38863,10 +40471,43 @@ export interface operations {
             };
         };
     };
+    preview_auto_router_classifier_prompt_auto_router_classifier_default_prompt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRouterClassifierPromptPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_shadow_eval_jobs_auto_router_shadow_eval_get: {
         parameters: {
             query?: {
-                /** @description Filter to jobs shadowing this key */
+                /** @description Filter to jobs that shadow this key, alone or alongside others */
                 api_key_id?: string | null;
                 /** @description Newest jobs to return */
                 limit?: number;
@@ -39012,6 +40653,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterRoutingTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_complexity_router_config_auto_router_validate_complexity_router_config_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComplexityRouterConfigValidationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplexityRouterConfigValidationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -40915,6 +42589,110 @@ export interface operations {
             };
         };
     };
+    comprehend_medical_sdk_proxy_route_comprehendmedical_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    comprehend_medical_proxy_route_comprehendmedical__operation__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockUnpricedModelsResponse"];
+                };
+            };
+        };
+    };
+    update_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockUnpricedModelsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockUnpricedModelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_callback_config_callback_delete_post: {
         parameters: {
             query?: never;
@@ -41414,6 +43192,120 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cyberark_config_config_overrides_cyberark_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigOverrideSettingsResponse"];
+                };
+            };
+        };
+    };
+    update_cyberark_config_config_overrides_cyberark_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CyberArkConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_cyberark_config_config_overrides_cyberark_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_cyberark_connection_config_overrides_cyberark_test_connection_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };
@@ -43808,6 +45700,8 @@ export interface operations {
                 provider?: string | null;
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path?: never;
@@ -44492,7 +46386,9 @@ export interface operations {
     };
     get_image_get_image_get: {
         parameters: {
-            query?: never;
+            query?: {
+                theme?: ("light" | "dark") | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -44506,6 +46402,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -46039,7 +47944,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Specify the service being hit. */
-                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "sqs") | string;
+                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "sqs") | string;
             };
             header?: never;
             path?: never;
@@ -46278,6 +48183,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    introspect_endpoint_introspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_introspect_endpoint_introspect_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -47445,6 +49383,46 @@ export interface operations {
             };
         };
     };
+    list_spend_log_users_management_v1_spend_logs_users_get: {
+        parameters: {
+            query: {
+                /** @description Window start (UTC when no offset is given) */
+                "filter[startTime][gte]": string;
+                /** @description Window end (UTC when no offset is given) */
+                "filter[startTime][lte]": string;
+                /** @description Case-insensitive partial match on the internal user id */
+                q?: string | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     aggregate_mcp_route_mcp_get: {
         parameters: {
             query?: never;
@@ -48150,6 +50128,37 @@ export interface operations {
             };
         };
     };
+    model_deprecations_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     model_info_v1_model_info_get: {
         parameters: {
             query?: {
@@ -48158,6 +50167,7 @@ export interface operations {
                 include_team_models?: boolean | null;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -48843,6 +50853,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_openai_websocket_proxy_route_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -49722,6 +51750,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_openai_websocket_proxy_route_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -51874,6 +53920,26 @@ export interface operations {
             };
         };
     };
+    get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplexityScorerDefaults"];
+                };
+            };
+        };
+    };
     get_supported_endpoints_public_endpoints_get: {
         parameters: {
             query?: never;
@@ -52050,6 +54116,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    public_model_hub_list_public_v1_model_hub_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_ModelGroupInfoProxy_"];
                 };
             };
         };
@@ -52455,6 +54541,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_endpoint_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_revoke_endpoint_revoke_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -53771,6 +55890,8 @@ export interface operations {
                 page_size?: number;
                 /** @description Filter logs by status (e.g., success, failure) */
                 status_filter?: string | null;
+                /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
+                cache_hit_filter?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -53789,6 +55910,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Exclude LiteLLM internal health check requests from results */
+                exclude_internal_health_checks?: boolean;
             };
             header?: never;
             path?: never;
@@ -53879,6 +56002,8 @@ export interface operations {
                 page_size?: number;
                 /** @description Filter logs by status (e.g., success, failure) */
                 status_filter?: string | null;
+                /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
+                cache_hit_filter?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -53897,6 +56022,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Exclude LiteLLM internal health check requests from results */
+                exclude_internal_health_checks?: boolean;
             };
             header?: never;
             path?: never;
@@ -54831,6 +56958,43 @@ export interface operations {
             };
         };
     };
+    get_team_daily_activity_aggregated_team_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_team_team_delete_post: {
         parameters: {
             query?: never;
@@ -55541,6 +57705,41 @@ export interface operations {
             };
         };
     };
+    delete_team_callback_team__team_id__callback__callback_name__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path: {
+                team_id: string;
+                callback_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamCallbackDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     disable_team_logging_team__team_id__disable_logging_post: {
         parameters: {
             query?: never;
@@ -55554,6 +57753,42 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetSpendRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -56460,6 +58695,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
                 timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
             };
             header?: never;
             path?: never;
@@ -57133,6 +59370,10 @@ export interface operations {
             query?: {
                 /** @description When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out. */
                 health_check?: boolean;
+                /** @description Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model. */
+                query?: string | null;
+                /** @description With query: the maximum number of ranked agents to return. */
+                top_k?: number;
             };
             header?: never;
             path?: never;
@@ -58612,6 +60853,8 @@ export interface operations {
                 provider?: string | null;
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path?: never;
@@ -59296,6 +61539,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_mcp_servers_v1_mcp_server_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPConnectorImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConnectorImportResponse"];
                 };
             };
             /** @description Validation Error */
@@ -60209,6 +62485,37 @@ export interface operations {
             };
         };
     };
+    model_deprecations_v1_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     model_info_v1_v1_model_info_get: {
         parameters: {
             query?: {
@@ -60217,6 +62524,7 @@ export interface operations {
                 include_team_models?: boolean | null;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -64783,6 +67091,7 @@ export interface operations {
                 code_challenge_method?: string | null;
                 response_type?: string | null;
                 scope?: string | null;
+                resource?: string | null;
             };
             header?: never;
             path: {
@@ -65231,6 +67540,8 @@ export interface operations {
             query?: {
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path: {

@@ -109,6 +109,6 @@ describe("ChatComposer", () => {
 
     fireEvent.click(addonOf(container));
 
-    expect(document.activeElement).toBe(screen.getByTestId("chat-composer-input"));
+    expect(screen.getByTestId("chat-composer-input")).toHaveFocus();
   });
 });

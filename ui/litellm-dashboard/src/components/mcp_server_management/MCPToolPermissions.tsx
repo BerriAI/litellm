@@ -117,12 +117,12 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const viewMode = viewModes[server.server_id] ?? "crud";
 
         return (
-          <div key={server.server_id} className="border rounded-lg bg-gray-50">
+          <div key={server.server_id} className="border rounded-lg bg-muted">
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b bg-white rounded-t-lg">
+            <div className="flex items-center justify-between p-4 border-b bg-card rounded-t-lg">
               <div>
-                <p className="text-sm font-semibold text-gray-900">{serverName}</p>
-                {server.description && <p className="text-sm text-gray-500">{server.description}</p>}
+                <p className="text-sm font-semibold text-foreground">{serverName}</p>
+                {server.description && <p className="text-sm text-muted-foreground">{server.description}</p>}
               </div>
               <div className="flex items-center gap-3">
                 {!disabled && tools.length > 0 && (
@@ -147,7 +147,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                   <>
                     <button
                       type="button"
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      className="text-sm text-info hover:text-info/80 font-medium"
                       onClick={() => handleSelectAll(server.server_id)}
                       disabled={isLoading}
                     >
@@ -155,7 +155,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     </button>
                     <button
                       type="button"
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      className="text-sm text-info hover:text-info/80 font-medium"
                       onClick={() => handleDeselectAll(server.server_id)}
                       disabled={isLoading}
                     >
@@ -172,15 +172,15 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {isLoading && (
                 <div className="flex items-center justify-center py-8">
                   <UiLoadingSpinner />
-                  <p className="ml-3 text-sm text-gray-500">Loading tools...</p>
+                  <p className="ml-3 text-sm text-muted-foreground">Loading tools...</p>
                 </div>
               )}
 
               {/* Error */}
               {error && !isLoading && (
-                <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-center">
-                  <p className="text-sm text-red-600 font-medium">Unable to load tools</p>
-                  <p className="text-sm text-red-500 mt-1">{error}</p>
+                <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg text-center">
+                  <p className="text-sm text-destructive font-medium">Unable to load tools</p>
+                  <p className="text-sm text-destructive mt-1">{error}</p>
                 </div>
               )}
 
@@ -217,8 +217,8 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <p className="text-sm font-medium text-gray-900">{tool.name}</p>
-                            <p className="text-sm text-gray-500">- {tool.description || "No description"}</p>
+                            <p className="text-sm font-medium text-foreground">{tool.name}</p>
+                            <p className="text-sm text-muted-foreground">- {tool.description || "No description"}</p>
                           </div>
                         </div>
                       </div>
@@ -230,7 +230,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {/* Empty State */}
               {!isLoading && !error && tools.length === 0 && (
                 <div className="text-center py-6">
-                  <p className="text-sm text-gray-500">No tools available</p>
+                  <p className="text-sm text-muted-foreground">No tools available</p>
                 </div>
               )}
             </div>

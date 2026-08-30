@@ -4,7 +4,7 @@ import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import { buildMcpToolBlocks } from "@/components/llm_calls/mcp_tool_blocks";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 
 export async function makeAnthropicMessagesRequest(
@@ -118,9 +118,7 @@ export async function makeAnthropicMessagesRequest(
   } catch (error) {
     if (signal?.aborted) {
     } else {
-      NotificationManager.fromBackend(
-        `Error occurred while generating model response. Please try again. Error: ${error}`,
-      );
+      toast.fromError(`Error occurred while generating model response. Please try again. Error: ${error}`);
     }
     throw error;
   }

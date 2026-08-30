@@ -11,6 +11,13 @@ from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 
+def strip_version_suffix(prompt_id: str) -> str | None:
+    base, separator, version = prompt_id.rpartition(".v")
+    if separator and base and version.isdigit():
+        return base
+    return None
+
+
 class PromptTemplate:
     """Represents a single prompt template with metadata and content."""
 
@@ -124,11 +131,13 @@ class PromptManager:
             "content": "template content",
             "metadata": {"model": "gpt-4", "temperature": 0.7, ...}
         } + prompt_id
-        """
-        if prompt_id:
-            prompt_data = {prompt_id: prompt_data}
 
-        for prompt_id, prompt_info in prompt_data.items():
+        A dict carrying a "content" key is a single flat template registered under
+        prompt_id; anything else is treated as already keyed by template ID.
+        """
+        keyed_prompts: Final = {prompt_id: prompt_data} if prompt_id and "content" in prompt_data else prompt_data
+
+        for template_id, prompt_info in keyed_prompts.items():
             try:
                 content = prompt_info.get("content", "")
                 metadata = prompt_info.get("metadata", {})
@@ -136,11 +145,10 @@ class PromptManager:
                 template = PromptTemplate(
                     content=content,
                     metadata=metadata,
-                    template_id=prompt_id,
+                    template_id=template_id,
                 )
-                self.prompts[prompt_id] = template
+                self.prompts[template_id] = template
             except Exception:
-                # Optional: print(f"Error loading prompt from JSON: {prompt_id}")
                 pass
 
     def _load_prompt_file(self, file_path: str | Path, prompt_id: str) -> PromptTemplate:
@@ -272,8 +280,12 @@ class PromptManager:
             if versioned_id in self.prompts:
                 return self.prompts[versioned_id]
 
-        # Fall back to base prompt_id
-        return self.prompts.get(prompt_id)
+        direct_match: Final = self.prompts.get(prompt_id)
+        if direct_match is not None:
+            return direct_match
+
+        base_prompt_id: Final = strip_version_suffix(prompt_id)
+        return self.prompts.get(base_prompt_id) if base_prompt_id else None
 
     def list_prompts(self) -> list[str]:
         """Get a list of all available prompt IDs."""

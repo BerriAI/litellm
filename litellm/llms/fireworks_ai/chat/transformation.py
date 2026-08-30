@@ -1,6 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 
@@ -44,6 +44,9 @@ from ..common_utils import (
     FireworksAIMixin,
     resolve_fireworks_resource_name,
 )
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -504,6 +507,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 m = cast(dict, message)
                 m.pop("provider_specific_fields", None)
                 m.pop("thinking_blocks", None)
+                m.pop("reasoning_content", None)
 
         return messages
 
@@ -690,7 +694,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

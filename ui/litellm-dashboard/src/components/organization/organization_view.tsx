@@ -15,7 +15,7 @@ import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import MemberTable, { type MemberTableColumn } from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   Member,
   organizationMemberAddCall,
@@ -70,11 +70,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       };
       await organizationMemberAddCall(accessToken, organizationId, member);
 
-      NotificationsManager.success("Organization member added successfully");
+      toast.success("Organization member added successfully");
       setIsAddMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to add organization member");
+      toast.fromError("Failed to add organization member");
       console.error("Error adding organization member:", error);
     }
   };
@@ -90,11 +90,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       };
 
       await organizationMemberUpdateCall(accessToken, organizationId, member);
-      NotificationsManager.success("Organization member updated successfully");
+      toast.success("Organization member updated successfully");
       setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update organization member");
+      toast.fromError("Failed to update organization member");
       console.error("Error updating organization member:", error);
     }
   };
@@ -104,11 +104,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       if (!accessToken) return;
 
       await organizationMemberDeleteCall(accessToken, organizationId, values.user_id);
-      NotificationsManager.success("Organization member deleted successfully");
+      toast.success("Organization member deleted successfully");
       setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to delete organization member");
+      toast.fromError("Failed to delete organization member");
       console.error("Error deleting organization member:", error);
     }
   };
@@ -206,8 +206,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               <CardContent>
                 <p className="text-sm text-muted-foreground">Rate Limits</p>
                 <div className="mt-2 text-sm text-foreground">
-                  <p>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</p>
-                  <p>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</p>
+                  <p>TPM: {orgData.litellm_budget_table.tpm_limit ?? "Unlimited"}</p>
+                  <p>RPM: {orgData.litellm_budget_table.rpm_limit ?? "Unlimited"}</p>
                   {orgData.litellm_budget_table.max_parallel_requests && (
                     <p>Max Parallel Requests: {orgData.litellm_budget_table.max_parallel_requests}</p>
                   )}
@@ -311,8 +311,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Rate Limits</p>
-                    <div>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</div>
-                    <div>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</div>
+                    <div>TPM: {orgData.litellm_budget_table.tpm_limit ?? "Unlimited"}</div>
+                    <div>RPM: {orgData.litellm_budget_table.rpm_limit ?? "Unlimited"}</div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Budget</p>

@@ -106,10 +106,10 @@ export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProp
       {!sessionEvent && responseEvents.length === 0 && (
         <div
           style={{
-            border: "1px solid #f0f0f0",
+            border: "1px solid var(--color-border)",
             borderRadius: 6,
             padding: "16px",
-            color: "#8c8c8c",
+            color: "var(--color-muted-foreground)",
             fontStyle: "italic",
             fontSize: 13,
           }}
@@ -127,7 +127,7 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
   return (
     <div
       style={{
-        border: "1px solid #f0f0f0",
+        border: "1px solid var(--color-border)",
         borderRadius: 6,
         marginBottom: 8,
         overflow: "hidden",
@@ -140,16 +140,16 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
           alignItems: "center",
           justifyContent: "space-between",
           padding: "10px 16px",
-          borderBottom: isCollapsed ? "none" : "1px solid #f0f0f0",
-          background: "#fafafa",
+          borderBottom: isCollapsed ? "none" : "1px solid var(--color-border)",
+          background: "var(--color-muted)",
           cursor: "pointer",
           transition: "background 0.15s ease",
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.background = "#f5f5f5";
+          e.currentTarget.style.background = "var(--color-accent)";
         }}
         onMouseLeave={(e) => {
-          e.currentTarget.style.background = "#fafafa";
+          e.currentTarget.style.background = "var(--color-muted)";
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -236,11 +236,11 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
                 style={{
                   fontSize: 12,
                   lineHeight: 1.6,
-                  color: "#595959",
-                  background: "#fafafa",
+                  color: "var(--color-muted-foreground)",
+                  background: "var(--color-muted)",
                   padding: "8px 12px",
                   borderRadius: 4,
-                  border: "1px solid #f0f0f0",
+                  border: "1px solid var(--color-border)",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
                   maxHeight: 120,
@@ -282,7 +282,7 @@ function ConversationCard({
   return (
     <div
       style={{
-        border: "1px solid #f0f0f0",
+        border: "1px solid var(--color-border)",
         borderRadius: 6,
         overflow: "hidden",
       }}
@@ -324,7 +324,7 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
       style={{
         marginBottom: 12,
         paddingBottom: 12,
-        borderBottom: "1px solid #f5f5f5",
+        borderBottom: "1px solid var(--color-border)",
       }}
     >
       {/* Turn header */}
@@ -425,7 +425,7 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
               style={{
                 fontSize: 13,
                 lineHeight: 1.7,
-                color: "#262626",
+                color: "var(--color-foreground)",
                 whiteSpace: "pre-wrap",
                 wordBreak: "break-word",
               }}
@@ -484,7 +484,7 @@ function ConfigRow({ label, value }: { label: string; value: any }) {
       <span className="text-muted-foreground" style={{ fontSize: 11 }}>
         {label}
       </span>
-      <div style={{ fontSize: 13, color: "#262626" }}>{String(value)}</div>
+      <div style={{ fontSize: 13, color: "var(--color-foreground)" }}>{String(value)}</div>
     </div>
   );
 }
