@@ -101,32 +101,14 @@ def patched_speech_provider_rejection(monkeypatch, patched_speech_error):
 
 
 @pytest.fixture
-def patched_speech_provider_error(monkeypatch):
-    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
-    monkeypatch.setattr(
-        proxy_server,
-        "proxy_logging_obj",
-        MagicMock(
-            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
-            post_call_failure_hook=AsyncMock(),
-            post_call_response_headers_hook=AsyncMock(return_value={}),
-            update_request_status=AsyncMock(),
-        ),
-    )
-
-    async def _add_data(data, **kwargs):
-        return data
-
-    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
-
-    class _ProviderBadRequestError(Exception):
-        status_code = 400
-        message = "Unsupported audio encoding."
-        type = "invalid_request_error"
-        param = None
-
+def patched_speech_proxy_error(monkeypatch, patched_speech):
     async def _raise(*args, **kwargs):
-        raise _ProviderBadRequestError("Unsupported audio encoding.")
+        raise proxy_server.ProxyException(
+            message="Unsupported audio encoding.",
+            type="invalid_request_error",
+            param=None,
+            code=400,
+        )
 
     monkeypatch.setattr(proxy_server, "route_request", _raise)
     yield
@@ -136,21 +118,6 @@ def patched_speech_provider_error(monkeypatch):
 def patched_speech_http_error(monkeypatch, patched_speech):
     async def _raise(*args, **kwargs):
         raise HTTPException(status_code=422, detail="Provider rejected the speech request.")
-
-    monkeypatch.setattr(proxy_server, "route_request", _raise)
-    yield
-
-
-@pytest.fixture
-def patched_speech_null_status_code(monkeypatch, patched_speech):
-    class _ProviderError(Exception):
-        status_code = None
-        message = "speech failed"
-        type = "api_error"
-        param = None
-
-    async def _raise(*args, **kwargs):
-        raise _ProviderError("speech failed")
 
     monkeypatch.setattr(proxy_server, "route_request", _raise)
     yield
@@ -292,7 +259,13 @@ def test_audio_speech_error(client, auth_as, patched_speech_error, path):
     with auth_as():
         response = client.post(path, json=payload)
     assert response.status_code == 500
-    assert len(response.content) > 0
+    assert response.json() == {
+        "error": {
+            "message": "Internal server error",
+            "type": "internal_server_error",
+        }
+    }
+    assert "speech boom" not in response.text
 
 
 def test_audio_speech_bad_request_maps_to_400(client, auth_as, patched_speech_provider_rejection):
@@ -308,10 +281,10 @@ def test_audio_speech_bad_request_maps_to_400(client, auth_as, patched_speech_pr
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
-def test_audio_speech_provider_error_preserves_status_and_message(
+def test_audio_speech_proxy_error_preserves_status_and_message(
     client,
     auth_as,
-    patched_speech_provider_error,
+    patched_speech_proxy_error,
     path,
 ):
     payload = {"model": "tts-1", "input": "Hi", "voice": "alloy"}
@@ -328,15 +301,6 @@ def test_audio_speech_http_error_preserves_detail(client, auth_as, patched_speec
         response = client.post(path, json=payload)
     assert response.status_code == 422
     assert response.json()["error"]["message"] == "Provider rejected the speech request."
-
-
-@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
-def test_audio_speech_null_status_code_defaults_to_500(client, auth_as, patched_speech_null_status_code, path):
-    payload = {"model": "tts-1", "input": "Hi", "voice": "alloy"}
-    with auth_as():
-        response = client.post(path, json=payload)
-    assert response.status_code == 500
-    assert response.json()["error"]["code"] == "500"
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
