@@ -3186,3 +3186,51 @@ async def test_async_container_list_handler_transforms_success_response():
 
     assert [container.id for container in response.data] == ["cntr_a"]
     assert response.has_more is True
+
+
+class TestAgenticFollowUpKeepsTheProviderPrefix:
+    """#38829: the follow-up re-dispatched the provider-stripped model. For a provider that
+    routes through a sub-path the remainder still holds a slash, so the old
+    "a slash means already qualified" test dropped the prefix and the follow-up raised
+    "LLM Provider NOT provided"."""
+
+    @staticmethod
+    def _plan():
+        from litellm.types.integrations.custom_logger import (
+            AgenticLoopPlan,
+            AgenticLoopRequestPatch,
+        )
+
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(messages=[{"role": "user", "content": "hi"}]),
+        )
+
+    async def _run_followup(self, model: str, custom_llm_provider: str):
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        return await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
+            plan=self._plan(),
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"mock_response": "ok from followup"},
+            kwargs={},
+            custom_llm_provider=custom_llm_provider,
+            depth=0,
+            max_loops=2,
+            fingerprints=[],
+            fingerprint="fp",
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_sub_path_model_still_resolves_a_provider(self):
+        """bedrock/mantle/... reaches the handler as mantle/..., which alone is unroutable."""
+        response = await self._run_followup("mantle/anthropic.claude-sonnet-5", "bedrock")
+
+        assert response.choices[0].message.content == "ok from followup"
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_model_still_resolves_a_provider(self):
+        response = await self._run_followup("gpt-4o-mini", "openai")
+
+        assert response.choices[0].message.content == "ok from followup"
