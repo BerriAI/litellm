@@ -5,10 +5,10 @@ import os
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Final, cast
+from unittest.mock import patch
 
 from dotenv import load_dotenv
 from hypothesis import strategies as st
-from hypothesis.strategies import SearchStrategy
 
 import litellm
 from tests.route_parity.fixture_generator import (
@@ -28,21 +28,6 @@ FIXTURE_DIR_ENV: Final = "LITELLM_CHAT_COMPLETIONS_FIXTURE_DIR"
 _MODEL: Final = "anthropic/claude-sonnet-4-6"
 
 ChatCompletionFixtureTarget = FixtureTarget[AnthropicChatCompletionSdkInput]
-
-
-def chat_completion_input_strategy() -> SearchStrategy[AnthropicChatCompletionSdkInput]:
-    message: Final = ChatMessage(role="user", content="Reply with exactly: parity works")
-    return st.sampled_from(
-        tuple(
-            AnthropicChatCompletionSdkInput(
-                model=_MODEL,
-                messages=(message,),
-                max_tokens=16,
-                stream=stream,
-            )
-            for stream in (False, True)
-        )
-    )
 
 
 def _anthropic_upstream_base(environ: Mapping[str, str]) -> str:
@@ -67,7 +52,17 @@ def _anthropic_target(
     return ChatCompletionFixtureTarget(
         name="anthropic-chat-completions",
         provider_spec=ProviderSpec(upstream_base=_anthropic_upstream_base(environ)),
-        strategy=chat_completion_input_strategy(),
+        strategy=st.sampled_from(
+            tuple(
+                AnthropicChatCompletionSdkInput(
+                    model=_MODEL,
+                    messages=(ChatMessage(role="user", content="Reply with exactly: parity works"),),
+                    max_tokens=16,
+                    stream=stream,
+                )
+                for stream in (False, True)
+            )
+        ),
         invoke=invoke,
     )
 
@@ -100,9 +95,9 @@ def main() -> None:
         os.environ.get(FIXTURE_DIR_ENV),
         Path(__file__).with_name("chat_completions_fixtures"),
     )
-    os.environ["LITELLM_RUST"] = "0"
-    for target in targets:
-        generate_target_fixtures(target, root, args.examples, args.concurrency, ChatCompletionParityCase)
+    with patch.dict(os.environ, {"LITELLM_RUST": "0"}):
+        for target in targets:
+            generate_target_fixtures(target, root, args.examples, args.concurrency, ChatCompletionParityCase)
 
 
 if __name__ == "__main__":

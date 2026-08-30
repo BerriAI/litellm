@@ -49,7 +49,7 @@ class _ResponseGap:
     rust_value: JsonValue | _Missing
 
 
-NONSTREAMING_RESPONSE_GAPS: Final = (
+STATIC_RESPONSE_GAPS: Final = (
     _ResponseGap(
         path=("choices", 0, "message", "provider_specific_fields"),
         python_value={"citations": None, "thinking_blocks": None},
@@ -70,19 +70,6 @@ NONSTREAMING_RESPONSE_GAPS: Final = (
         python_value=0,
         rust_value=_MISSING,
     ),
-    _ResponseGap(
-        path=("usage", "completion_tokens_details"),
-        python_value={
-            "accepted_prediction_tokens": None,
-            "audio_tokens": None,
-            "reasoning_tokens": 0,
-            "rejected_prediction_tokens": None,
-            "text_tokens": 3,
-            "image_tokens": None,
-            "video_tokens": None,
-        },
-        rust_value=None,
-    ),
     _ResponseGap(path=("usage", "inference_geo"), python_value=None, rust_value=_MISSING),
     _ResponseGap(path=("usage", "iterations"), python_value=None, rust_value=_MISSING),
     _ResponseGap(path=("usage", "service_tier"), python_value=None, rust_value=_MISSING),
@@ -95,25 +82,32 @@ class SDKRoute(str, Enum):
     ACOMPLETION = "acompletion"
 
 
-def _call_kwargs(sdk_input: AnthropicChatCompletionSdkInput, mock_url: str, route: SDKRoute) -> dict[str, object]:
+def _call_kwargs(sdk_input: AnthropicChatCompletionSdkInput, mock_url: str) -> dict[str, object]:
     return {
         **sdk_input.as_sdk_kwargs(),
         "api_base": mock_url,
         "api_key": API_KEY,
-        "extra_headers": {"x-litellm-parity-route": route.value},
     }
 
 
 def _normalized_response(response: ModelResponse | ModelResponseStream) -> JsonObject:
     payload: Final = cast(JsonObject, BaseModel.model_dump(response, mode="json"))
-    return {key: value for key, value in payload.items() if key not in {"id", "created"}}
+    response_id: Final = payload.get("id")
+    created: Final = payload.get("created")
+    assert isinstance(response_id, str) and response_id
+    assert isinstance(created, int) and not isinstance(created, bool)
+    return {**payload, "id": "<generated>", "created": 0}
+
+
+def _nonstreaming_report(response: object) -> SDKReport:
+    if not isinstance(response, ModelResponse):
+        raise TypeError(f"expected ModelResponse, got {type(response).__name__}")
+    return SDKReport(response=_normalized_response(response))
 
 
 def _sync_report(response: object, stream: bool) -> SDKReport:
     if not stream:
-        if not isinstance(response, ModelResponse):
-            raise TypeError(f"expected ModelResponse, got {type(response).__name__}")
-        return SDKReport(response=_normalized_response(response))
+        return _nonstreaming_report(response)
     if not isinstance(response, CustomStreamWrapper):
         raise TypeError(f"expected CustomStreamWrapper, got {type(response).__name__}")
     chunks: Final[list[JsonValue]] = [cast(JsonValue, _normalized_response(chunk)) for chunk in response]
@@ -122,9 +116,7 @@ def _sync_report(response: object, stream: bool) -> SDKReport:
 
 async def _async_report(response: object, stream: bool) -> SDKReport:
     if not stream:
-        if not isinstance(response, ModelResponse):
-            raise TypeError(f"expected ModelResponse, got {type(response).__name__}")
-        return SDKReport(response=_normalized_response(response))
+        return _nonstreaming_report(response)
     if not isinstance(response, CustomStreamWrapper):
         raise TypeError(f"expected CustomStreamWrapper, got {type(response).__name__}")
     chunks: Final[list[JsonValue]] = [cast(JsonValue, _normalized_response(chunk)) async for chunk in response]
@@ -139,7 +131,7 @@ def _execute_sdk_case(
 ) -> SDKReport:
     import litellm
 
-    call_kwargs: Final = _call_kwargs(sdk_input, mock_url, route)
+    call_kwargs: Final = _call_kwargs(sdk_input, mock_url)
     if route is SDKRoute.COMPLETION:
         sync_route: Final = cast(Callable[..., object], litellm.completion)
         return _sync_report(sync_route(**call_kwargs), sdk_input.stream)
@@ -160,16 +152,23 @@ def sdk_workers() -> Generator[tuple[PythonScriptWorker, PythonScriptWorker]]:
         yield workers
 
 
-def _assert_streaming_gap(python: Execution, accelerated: Execution) -> None:
-    assert python.request.user_agent == PYTHON_HTTP_SENTINEL
-    assert accelerated.request.user_agent == PYTHON_HTTP_SENTINEL
-    assert python.request.model_copy(update={"user_agent": None}) == accelerated.request.model_copy(
-        update={"user_agent": None}
-    )
-    assert python.report.response == accelerated.report.response
+def _json_values_equal(left: JsonValue | _Missing, right: JsonValue | _Missing) -> bool:
+    if isinstance(left, _Missing) or isinstance(right, _Missing):
+        return left is right
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(_json_values_equal(left[key], right[key]) for key in left)
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            _json_values_equal(left_value, right_value) for left_value, right_value in zip(left, right, strict=True)
+        )
+    return left == right
 
 
 def _json_difference_paths(left: JsonValue, right: JsonValue, path: str = "$") -> tuple[str, ...]:
+    if type(left) is not type(right):
+        return (path,)
     if isinstance(left, dict) and isinstance(right, dict):
         keys: Final = frozenset(left) | frozenset(right)
         return tuple(
@@ -189,7 +188,12 @@ def _json_difference_paths(left: JsonValue, right: JsonValue, path: str = "$") -
             for index in range(len(left))
             for difference in _json_difference_paths(left[index], right[index], f"{path}[{index}]")
         )
-    return () if left == right else (path,)
+    return () if _json_values_equal(left, right) else (path,)
+
+
+def test_json_comparison_preserves_scalar_types() -> None:
+    assert _json_values_equal(False, 0) is False
+    assert _json_difference_paths(False, 0) == ("$",)
 
 
 def _json_value_at(value: JsonValue, path: JsonPath) -> JsonValue | _Missing:
@@ -208,27 +212,69 @@ def _format_json_path(path: JsonPath) -> str:
     return "$" + "".join(f"[{segment}]" if isinstance(segment, int) else f".{segment}" for segment in path)
 
 
-def _assert_nonstreaming_gap(python: Execution, accelerated: Execution) -> None:
+def _assert_request_parity(python: Execution, accelerated: Execution) -> None:
+    python_request: Final = cast(
+        JsonObject,
+        python.request.model_copy(update={"user_agent": None}).model_dump(mode="json"),
+    )
+    accelerated_request: Final = cast(
+        JsonObject,
+        accelerated.request.model_copy(update={"user_agent": None}).model_dump(mode="json"),
+    )
+    assert _json_values_equal(python_request, accelerated_request)
+
+
+def _assert_streaming_fallback(python: Execution, accelerated: Execution) -> None:
+    assert python.request.user_agent == PYTHON_HTTP_SENTINEL
+    assert accelerated.request.user_agent == PYTHON_HTTP_SENTINEL
+    _assert_request_parity(python, accelerated)
+    assert _json_values_equal(python.report.response, accelerated.report.response)
+
+
+def _assert_known_response_gaps(python: Execution, accelerated: Execution) -> None:
     validate_harness(python, accelerated, PYTHON_HTTP_SENTINEL)
-    assert python.request.model_copy(update={"user_agent": None}) == accelerated.request.model_copy(
-        update={"user_agent": None}
+    _assert_request_parity(python, accelerated)
+    completion_tokens: Final = _json_value_at(python.report.response, ("usage", "completion_tokens"))
+    assert isinstance(completion_tokens, int) and not isinstance(completion_tokens, bool)
+    response_gaps: Final = (
+        *STATIC_RESPONSE_GAPS,
+        _ResponseGap(
+            path=("usage", "completion_tokens_details"),
+            python_value={
+                "accepted_prediction_tokens": None,
+                "audio_tokens": None,
+                "reasoning_tokens": 0,
+                "rejected_prediction_tokens": None,
+                "text_tokens": completion_tokens,
+                "image_tokens": None,
+                "video_tokens": None,
+            },
+            rust_value=None,
+        ),
     )
     differences: Final = frozenset(_json_difference_paths(python.report.response, accelerated.report.response))
-    expected_differences: Final = frozenset(_format_json_path(gap.path) for gap in NONSTREAMING_RESPONSE_GAPS)
+    expected_differences: Final = frozenset(_format_json_path(gap.path) for gap in response_gaps)
     assert differences == expected_differences
     actual_values: Final = tuple(
         (
             _json_value_at(python.report.response, gap.path),
             _json_value_at(accelerated.report.response, gap.path),
         )
-        for gap in NONSTREAMING_RESPONSE_GAPS
+        for gap in response_gaps
     )
-    expected_values: Final = tuple((gap.python_value, gap.rust_value) for gap in NONSTREAMING_RESPONSE_GAPS)
-    assert actual_values == expected_values
+    expected_values: Final = tuple((gap.python_value, gap.rust_value) for gap in response_gaps)
+    assert all(
+        _json_values_equal(actual_python, expected_python) and _json_values_equal(actual_rust, expected_rust)
+        for (actual_python, actual_rust), (expected_python, expected_rust) in zip(
+            actual_values,
+            expected_values,
+            strict=True,
+        )
+    )
 
 
 @pytest.mark.parametrize("route", tuple(SDKRoute), ids=tuple(route.value for route in SDKRoute))
-def test_recorded_chat_completion_sdk_parity(
+def test_recorded_chat_completion_sdk_behavior(
     chat_completion_fixture: ChatCompletionParityCase,
     route: SDKRoute,
     tmp_path: Path,
@@ -242,10 +288,9 @@ def test_recorded_chat_completion_sdk_parity(
     rust: Final = run_execution(rust_worker, case_file, route.value, response)
 
     if chat_completion_fixture.litellm_input.stream:
-        _assert_streaming_gap(python, rust)
-        pytest.xfail("native Rust chat completions does not support streaming")
-    _assert_nonstreaming_gap(python, rust)
-    pytest.xfail("native Rust chat completion responses are not yet SDK-shape equivalent")
+        _assert_streaming_fallback(python, rust)
+        return
+    _assert_known_response_gaps(python, rust)
 
 
 def _execute_worker_command(
