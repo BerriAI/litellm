@@ -157,8 +157,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
             temperature: Final = params.get("temperature")
             if temperature is not None and temperature != 1:
+                transformed_reasoning: Final = params.get("reasoning") or {}
+                transformed_effort: Final = (
+                    transformed_reasoning.get("effort") if isinstance(transformed_reasoning, dict) else None
+                )
                 supports_none: Final = self._supports_reasoning_effort_none(model=model)
-                if supports_none and self._effort_resolves_to_none(model, effort):
+                if supports_none and self._effort_resolves_to_none(model, transformed_effort):
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
                     params.pop("temperature", None)
