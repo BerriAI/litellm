@@ -97,6 +97,7 @@ impl AppState {
             .pool_idle_timeout(Duration::from_secs(90))
             .pool_max_idle_per_host(100)
             .tcp_keepalive(Duration::from_secs(60))
+            .tcp_nodelay(true) // Disable Nagle's algorithm for lower latency
             .timeout(Duration::from_secs(300))
             .build()
             .expect("failed to build HTTP client")
