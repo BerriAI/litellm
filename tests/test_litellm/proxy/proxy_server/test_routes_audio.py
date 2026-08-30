@@ -87,6 +87,24 @@ def patched_speech_error(monkeypatch):
 
 
 @pytest.fixture
+def patched_speech_provider_rejection(monkeypatch, patched_speech_error):
+    import litellm
+
+    async def _raise(*args, **kwargs):
+        raise litellm.BadRequestError(
+            message=(
+                "Gemini TTS only produces raw PCM16 audio, so response_format='mp3' is not supported."
+                " Supported response formats: pcm, wav."
+            ),
+            model="gemini-3.1-flash-tts-preview",
+            llm_provider="gemini",
+        )
+
+    monkeypatch.setattr(proxy_server, "route_request", _raise)
+    yield
+
+
+@pytest.fixture
 def patched_transcription(monkeypatch):
     router = MagicMock()
     router.model_names = ["whisper-1"]
@@ -196,6 +214,18 @@ def test_audio_speech_error(client, auth_as, patched_speech_error, path):
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+def test_audio_speech_bad_request_maps_to_400(client, auth_as, patched_speech_provider_rejection):
+    """Regression for LIT-6501: a BadRequestError from the speech path surfaced as a generic 500."""
+    payload = {"model": "gemini-tts", "input": "Hi", "voice": "Kore", "response_format": "mp3"}
+    with auth_as():
+        response = client.post("/v1/audio/speech", json=payload)
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert "response_format='mp3'" in error["message"]
+    assert "pcm" in error["message"]
+    assert "wav" in error["message"]
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
