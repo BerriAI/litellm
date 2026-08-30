@@ -1,6 +1,7 @@
 import pytest
 
 import litellm
+from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
 
@@ -38,3 +39,20 @@ def test_drop_params_removes_only_unsupported_effort() -> None:
     )
 
     assert result["reasoning"] == {"summary": "detailed"}
+
+
+def test_drop_params_revalidates_temperature_after_effort_drop(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = OpenAIResponsesAPIConfig()
+
+    monkeypatch.setattr(OpenAIGPT5Config, "_supports_reasoning_effort_level", lambda model, level: False)
+    monkeypatch.setattr(config, "_supports_reasoning_effort_none", lambda model: True)
+    monkeypatch.setattr(config, "_effort_resolves_to_none", lambda model, effort: effort is None)
+
+    result = config.map_openai_params(
+        response_api_optional_params={"reasoning": {"effort": "xhigh"}, "temperature": 0.5},
+        model="gpt-5-test",
+        drop_params=True,
+    )
+
+    assert "reasoning" not in result
+    assert result["temperature"] == 0.5
