@@ -87,7 +87,7 @@ class TestMCPClient:
 
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.stdio_client")
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch("litellm.experimental_mcp_client.client.TolerantClientSession")
     async def test_mcp_client_stdio_connect_success(self, mock_session, mock_stdio_client):
         """Test successful stdio connection"""
         # Setup mocks - create proper async context manager
@@ -139,7 +139,7 @@ class TestMCPClient:
         mock_streamable_http_client.return_value = mock_http_ctx
 
         # Mock the session
-        with patch("litellm.experimental_mcp_client.client.ClientSession") as mock_session:
+        with patch("litellm.experimental_mcp_client.client.TolerantClientSession") as mock_session:
             mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
             mock_session_ctx = AsyncMock()
@@ -185,7 +185,7 @@ class TestMCPClient:
         mock_sse_client.return_value = mock_sse_ctx
 
         # Mock the session
-        with patch("litellm.experimental_mcp_client.client.ClientSession") as mock_session:
+        with patch("litellm.experimental_mcp_client.client.TolerantClientSession") as mock_session:
             mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
             mock_session_ctx = AsyncMock()
@@ -237,7 +237,7 @@ class TestMCPClient:
         mock_streamable_http_client.return_value = mock_http_ctx
 
         # Mock the session
-        with patch("litellm.experimental_mcp_client.client.ClientSession") as mock_session:
+        with patch("litellm.experimental_mcp_client.client.TolerantClientSession") as mock_session:
             mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
             mock_session_ctx = AsyncMock()
@@ -377,7 +377,7 @@ class TestMCPClientInstructionsCapture:
         assert client._last_initialize_instructions is None
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch("litellm.experimental_mcp_client.client.TolerantClientSession")
     async def test_captures_instructions_from_initialize(self, mock_session_cls):
         """Instructions from upstream initialize() are captured and stripped."""
         client = MCPClient(
@@ -406,7 +406,7 @@ class TestMCPClientInstructionsCapture:
         assert client._last_initialize_instructions == "upstream says hello"
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch("litellm.experimental_mcp_client.client.TolerantClientSession")
     async def test_none_instructions_stays_none(self, mock_session_cls):
         """When upstream returns no instructions the field stays None."""
         client = MCPClient(
@@ -496,7 +496,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
         return transport_ctx
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch("litellm.experimental_mcp_client.client.TolerantClientSession")
     async def test_surfaces_connect_error_over_cancelled(self, mock_session_cls):
         client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
         self._make_session(
@@ -513,7 +513,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
             await client._execute_session_operation(transport_ctx, _op)
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch("litellm.experimental_mcp_client.client.TolerantClientSession")
     async def test_genuine_cancellation_is_not_replaced(self, mock_session_cls):
         client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
         self._make_session(mock_session_cls, AsyncMock(side_effect=asyncio.CancelledError()))
@@ -526,7 +526,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
             await client._execute_session_operation(transport_ctx, _op)
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch("litellm.experimental_mcp_client.client.TolerantClientSession")
     async def test_cleanup_error_after_success_is_swallowed(self, mock_session_cls):
         client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
         init_result = MagicMock()
@@ -740,8 +740,15 @@ class _ScriptedUpstream:
     error, the shape an upstream application uses to report its own failure.
     """
 
-    def __init__(self, tools_list_error: ErrorData | None = None):
+    def __init__(
+        self,
+        tools_list_error: ErrorData | None = None,
+        tools_call_result: dict | None = None,
+        tools_list_result: dict | None = None,
+    ):
         self._tools_list_error = tools_list_error
+        self._tools_call_result = tools_call_result
+        self._tools_list_result = tools_list_result
         self._to_client_tx, self._to_client_rx = anyio.create_memory_object_stream(10)
         self._from_client_tx, self._from_client_rx = anyio.create_memory_object_stream(10)
         self._task_group = None
@@ -778,18 +785,106 @@ class _ScriptedUpstream:
                 )
             elif method == "tools/list" and self._tools_list_error is not None:
                 await self._send(JSONRPCError(jsonrpc="2.0", id=request.id, error=self._tools_list_error))
+            elif method == "tools/list" and self._tools_list_result is not None:
+                await self._send(JSONRPCResponse(jsonrpc="2.0", id=request.id, result=self._tools_list_result))
+            elif method == "tools/call" and self._tools_call_result is not None:
+                # Sent as a raw dict, not built from CallToolResult, so a non-compliant upstream's
+                # actual wire bytes reach the client exactly as they would over a real connection.
+                await self._send(JSONRPCResponse(jsonrpc="2.0", id=request.id, result=self._tools_call_result))
 
 
 class _ScriptedClient(MCPClient):
     """An MCPClient whose transport is a scripted in-memory upstream instead of a real connection,
     so the real ``ClientSession`` and its real timeout machinery are what run."""
 
-    def __init__(self, *, timeout: float, tools_list_error: ErrorData | None = None):
+    def __init__(
+        self,
+        *,
+        timeout: float,
+        tools_list_error: ErrorData | None = None,
+        tools_call_result: dict | None = None,
+        tools_list_result: dict | None = None,
+    ):
         super().__init__(server_url="http://upstream.local/mcp", timeout=timeout)
-        self._upstream = _ScriptedUpstream(tools_list_error=tools_list_error)
+        self._upstream = _ScriptedUpstream(
+            tools_list_error=tools_list_error,
+            tools_call_result=tools_call_result,
+            tools_list_result=tools_list_result,
+        )
 
     def _create_transport_context(self):
         return self._upstream, None
+
+
+# A real payload captured from an upstream Azure DevOps MCP server's ``repo_file`` tool: an
+# ``EmbeddedResource`` with a repo-relative ``uri`` (the MCP spec requires a URI with a scheme) and
+# ``text/plain`` content shipped as a base64 ``blob`` instead of ``text``. mcp==1.28.1's
+# ``CallToolResult.model_validate`` raises a 14-error ``ValidationError`` on this exact payload.
+_MALFORMED_TOOLS_CALL_RESULT = {
+    "content": [
+        {
+            "type": "resource",
+            "resource": {
+                "uri": "/templates/ev.job/template/docker-compose.yml",
+                "mimeType": "text/plain",
+                "blob": "dmVyc2lvbjogJzIuNCcK",
+            },
+        }
+    ],
+    "isError": False,
+}
+
+
+# call_tool's private _validate_tool_result fetches the tool list (once per tool name, cached
+# after) to check the result's structuredContent against the tool's output schema. An empty list
+# means the tool isn't found, which _validate_tool_result treats as "nothing to validate against"
+# rather than an error, so it doesn't affect the content-degradation behavior under test here.
+_EMPTY_TOOLS_LIST_RESULT = {"tools": []}
+
+
+class TestCallToolToleratesMalformedContentBlocks:
+    """A single content block that fails MCP-SDK validation must not fail the whole ``tools/call``
+    result. Driven through ``_ScriptedClient`` over real anyio streams and the real session class
+    the client actually wires in, so a change to which class gets constructed (not just the
+    validator logic in isolation) fails this test too.
+    """
+
+    @pytest.mark.asyncio
+    async def test_relative_uri_resource_degrades_to_text_instead_of_raising(self):
+        from mcp.types import CallToolRequestParams
+
+        client = _ScriptedClient(
+            timeout=5,
+            tools_call_result=_MALFORMED_TOOLS_CALL_RESULT,
+            tools_list_result=_EMPTY_TOOLS_LIST_RESULT,
+        )
+        params = CallToolRequestParams(name="repo_file", arguments={"action": "get_content"})
+
+        result = await asyncio.wait_for(client.call_tool(params, raise_on_error=True), timeout=10)
+
+        assert result.isError is False
+        assert len(result.content) == 1
+        assert result.content[0].type == "text"
+        assert result.content[0].text == "version: '2.4'\n"
+
+    @pytest.mark.asyncio
+    async def test_well_formed_result_is_unaffected(self):
+        from mcp.types import CallToolRequestParams
+
+        well_formed = {"content": [{"type": "text", "text": "ok"}], "isError": False}
+        client = _ScriptedClient(
+            timeout=5,
+            tools_call_result=well_formed,
+            tools_list_result=_EMPTY_TOOLS_LIST_RESULT,
+        )
+        params = CallToolRequestParams(name="some_tool", arguments={})
+
+        result = await asyncio.wait_for(client.call_tool(params, raise_on_error=True), timeout=10)
+
+        assert result.isError is False
+        assert len(result.content) == 1
+        assert result.content[0].type == "text"
+        assert result.content[0].text == "ok"
 
 
 @pytest.mark.asyncio

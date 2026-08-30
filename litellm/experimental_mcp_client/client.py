@@ -48,6 +48,7 @@ from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
+from litellm.experimental_mcp_client.tolerant_result import TolerantClientSession
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -431,7 +432,7 @@ class MCPClient:
                 session_kwargs["logging_callback"] = self._logging_callback
             # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
             # ever fails the request.
-            session_ctx: Final = ClientSession(
+            session_ctx: Final = TolerantClientSession(
                 read_stream,
                 write_stream,
                 read_timeout_seconds=timedelta(seconds=self.timeout),

@@ -114,7 +114,7 @@ class TestMCPClientUnitTests:
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
-    @patch.object(mcp_client_module, "ClientSession")
+    @patch.object(mcp_client_module, "TolerantClientSession")
     async def test_run_with_session(self, mock_session_class, mock_transport):
         """Test run_with_session establishes session with auth headers."""
         # Setup mocks
@@ -149,7 +149,7 @@ class TestMCPClientUnitTests:
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
-    @patch.object(mcp_client_module, "ClientSession")
+    @patch.object(mcp_client_module, "TolerantClientSession")
     async def test_list_tools(self, mock_session_class, mock_transport):
         """Test listing tools from the server."""
         # Setup mocks
@@ -187,7 +187,7 @@ class TestMCPClientUnitTests:
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
-    @patch.object(mcp_client_module, "ClientSession")
+    @patch.object(mcp_client_module, "TolerantClientSession")
     async def test_call_tool(self, mock_session_class, mock_transport):
         """Test calling a tool."""
         from mcp.types import CallToolRequestParams
