@@ -4466,3 +4466,71 @@ class TestEnforceRpmTpmOnModelAdd:
             _raise_if_rate_limits_required_but_missing(litellm_params=params, enforced=True)
         assert expected_missing in str(exc_info.value.message)
         assert exc_info.value.code == "400"
+
+
+class TestBlockModelResponseSerialization:
+    """POST /model/block and /model/unblock return the raw prisma row through this
+    route's `LiteLLM_ProxyModelTable | None` response validation. The row is not a
+    dict, so the dict-assuming before-validator used to raise AttributeError inside
+    FastAPI's serialization layer: a 500 for the caller after the DB write already
+    landed. The routes must serialize the row to a 200 with the updated blocked flag."""
+
+    @pytest.mark.parametrize(
+        ("route", "blocked"), [("/model/block", True), ("/model/unblock", False)]
+    )
+    def test_block_routes_serialize_prisma_row_to_200(self, route, blocked):
+        from datetime import datetime, timezone
+
+        from prisma import models as prisma_models
+
+        import litellm.proxy.proxy_server as ps
+        from litellm.proxy.proxy_server import app
+
+        written_at = datetime(2026, 8, 29, tzinfo=timezone.utc)
+        row_fields = {
+            "model_id": "m-block-1",
+            "model_name": "gpt-4o-mini",
+            "litellm_params": json.dumps({"model": "openai/gpt-4o-mini", "api_key": "encrypted-value"}),
+            "model_info": json.dumps({"id": "m-block-1"}),
+            "created_at": written_at,
+            "created_by": "admin",
+            "updated_at": written_at,
+            "updated_by": "admin",
+        }
+        existing_row = prisma_models.LiteLLM_ProxyModelTable(blocked=not blocked, **row_fields)
+        updated_row = prisma_models.LiteLLM_ProxyModelTable(blocked=blocked, **row_fields)
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=updated_row)
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        app.dependency_overrides[ps.user_api_key_auth] = lambda: admin
+        try:
+            with (
+                patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                    "litellm.proxy.proxy_server.llm_router",
+                    MagicMock(**{"get_model_ids.return_value": ["m-block-1"]}),
+                ),
+                patch("litellm.proxy.proxy_server.redis_usage_cache", None),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                patch(  # test-quality-ok: stubs the cache write so the test observes only response serialization
+                    "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                    new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+                ),
+                patch(  # test-quality-ok: audit logging is a background side effect outside this test's contract
+                    "litellm.proxy.management_endpoints.model_management_endpoints.create_object_audit_log",
+                    new=AsyncMock(return_value=None),
+                ),
+            ):
+                client = TestClient(app)
+                response = client.post(route, json={"model_id": "m-block-1"})
+        finally:
+            app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["model_id"] == "m-block-1"
+        assert body["blocked"] is blocked
+        assert body["litellm_params"] == {"model": "openai/gpt-4o-mini", "api_key": "encrypted-value"}

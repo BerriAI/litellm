@@ -271,8 +271,8 @@ class TestModelRoutes:
             assert response.blocked is expected
             _ = _poll(
                 client.proxy,
-                lambda: True
-                if _model_blocked_flag(client, model_id) is expected
+                lambda want=expected: True
+                if _model_blocked_flag(client, model_id) is want
                 else None,
                 f"/model/info never reported blocked={expected} for {model_name!r} "
                 f"after /model/{action}",
