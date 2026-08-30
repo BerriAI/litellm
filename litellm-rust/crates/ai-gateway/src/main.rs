@@ -37,6 +37,11 @@ const DEFAULT_PORT: u16 = 4001;
 
 #[tokio::main]
 async fn main() {
+    // Initialize rustls crypto provider (required for HTTPS requests)
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     // Initialize structured logging (JSON format for log aggregation)
     // Set RUST_LOG env var to control log level (e.g., RUST_LOG=info)
     tracing_subscriber::fmt()
