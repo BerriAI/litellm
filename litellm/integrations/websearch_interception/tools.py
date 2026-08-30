@@ -160,7 +160,9 @@ def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
 
     Detects ONLY:
     - LiteLLM standard: name == "litellm_web_search" (Anthropic format)
-    - OpenAI format: type == "function" with function.name == "litellm_web_search" or "web_search"
+    - OpenAI format: type == "function" with function.name == "litellm_web_search"
+      or a bare function definition whose name is "web_search"
+      or a bare function definition whose name is "web_search"
 
     Args:
         tool: Tool dictionary to check
@@ -184,8 +186,15 @@ def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
     # Check for OpenAI format: {"type": "function", "function": {"name": "litellm_web_search"}}
     if tool_type == "function" and "function" in tool:
         function_def: Final = tool.get("function", {})
+        if not isinstance(function_def, dict):
+            return False
         function_name: Final = function_def.get("name", "")
-        if function_name in (LITELLM_WEB_SEARCH_TOOL_NAME, "web_search"):
+        if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+            return True
+        # The conventional name is only recognized for the name-only shape.
+        # A user-defined function may also be named ``web_search``; preserving
+        # any additional definition fields lets that tool pass through intact.
+        if function_name == "web_search" and set(function_def) == {"name"}:
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
@@ -268,8 +277,14 @@ def is_web_search_tool(tool: dict[str, Any]) -> bool:
     # Check for OpenAI format: {"type": "function", "function": {"name": "..."}}
     if tool_type == "function" and "function" in tool:
         function_def: Final = tool.get("function", {})
+        if not isinstance(function_def, dict):
+            return False
         function_name: Final = function_def.get("name", "")
-        if function_name in (LITELLM_WEB_SEARCH_TOOL_NAME, "web_search"):
+        if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+            return True
+        # Do not hijack a user-defined function that happens to use the
+        # conventional name and carries its own schema or description.
+        if function_name == "web_search" and set(function_def) == {"name"}:
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
