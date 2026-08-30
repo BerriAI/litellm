@@ -428,6 +428,38 @@ def test_handle_db_exception_with_non_db_error():
         PrismaDBExceptionHandler.handle_db_exception(regular_error)
 
 
+# Regression test for https://github.com/BerriAI/litellm/issues/35457
+#
+# On a master-key-only proxy (no DATABASE_URL) the optional `prisma` dependency
+# is never installed. These classifiers are reached on EVERY auth failure via
+# `_user_api_key_auth_builder`, so an unconditional `import prisma` inside them
+# raised ModuleNotFoundError and surfaced a 500 where a 401 was expected. With
+# prisma unavailable they must instead return False (not a DB error) and not
+# raise, so auth failures stay 401.
+@pytest.mark.parametrize(
+    "classifier",
+    [
+        PrismaDBExceptionHandler.is_database_connection_error,
+        PrismaDBExceptionHandler.is_prisma_data_error,
+        PrismaDBExceptionHandler.is_database_transport_error,
+        PrismaDBExceptionHandler.is_prisma_engine_internal_error,
+    ],
+)
+def test_classifiers_return_false_when_prisma_unavailable(monkeypatch, classifier):
+    """
+    When prisma is not installed (master-key-only deployment), the classifiers
+    must return False without raising ModuleNotFoundError.
+    """
+    monkeypatch.setattr(
+        "litellm.proxy.db.exception_handler.PRISMA_AVAILABLE", False
+    )
+
+    # A plain auth failure carries no prisma types; the classifier must handle
+    # it without touching the (absent) prisma module.
+    auth_error = Exception("Authentication Error, invalid api key")
+    assert classifier(auth_error) is False
+
+
 def _permanent_prisma_faults():
     """Every prisma error class that is not a transient outage and not a
     data-layer error, built by enumeration so the list cannot drift out of sync
