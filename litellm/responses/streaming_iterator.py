@@ -691,6 +691,8 @@ class BaseResponsesAPIStreamingIterator:
                 kwargs=request_payload,
                 start_time=self.start_time,
                 end_time=end_time,
+                # the provider call was timed to first byte, so the whole stream minus it is not overhead
+                include_overhead=False,
             )
         except Exception:
             # Non-blocking

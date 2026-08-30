@@ -1,8 +1,8 @@
 import copy
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
 from typing_extensions import assert_never
 
@@ -30,8 +30,6 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
 )
-
-_CallbackMetadataT: Final = TypeVar("_CallbackMetadataT")
 
 _CALLBACK_VAR_MASKER: Final = SensitiveDataMasker()
 # Compound names that are credential-bearing but don't contain any of the
@@ -527,8 +525,8 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
 
 
 def sanitize_openai_provider_metadata(
-    metadata: dict[str, object] | None,
-) -> dict[str, str] | None:
+    metadata: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
     """
     Keep only provider-safe OpenAI metadata entries (string keys -> string values).
 
@@ -676,9 +674,7 @@ def decrypt_callback_vars(metadata: Any) -> Any:
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
 
 
-def _transform_callback_vars(
-    metadata: _CallbackMetadataT, transform: Callable[[str, object], object]
-) -> _CallbackMetadataT:
+def _transform_callback_vars(metadata: object, transform: Callable[[str, Any], Any]) -> object:
     if not isinstance(metadata, dict):
         return metadata
     out: Final = copy.deepcopy(metadata)

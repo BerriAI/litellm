@@ -302,13 +302,15 @@ class CodeExecutionHandler:
 
                         verbose_logger.debug("CodeExecutionHandler: Execution result: %s", exec_result)
 
+                        sandbox_files: Sequence[_SandboxGeneratedFile] = exec_result["files"]
+
                         execution_results.append(
                             {
                                 "iteration": iteration,
                                 "success": exec_result["success"],
                                 "output": exec_result["output"],
                                 "error": exec_result["error"],
-                                "files": [f["name"] for f in exec_result["files"]],
+                                "files": [f["name"] for f in sandbox_files],
                             }
                         )
 
@@ -316,9 +318,9 @@ class CodeExecutionHandler:
                         tool_result = exec_result["output"] or ""
 
                         # Collect generated files (returned directly, no storage)
-                        if exec_result["files"]:
+                        if sandbox_files:
                             tool_result += "\n\nGenerated files:"
-                            for f in exec_result["files"]:
+                            for f in sandbox_files:
                                 file_content = base64.b64decode(f["content_base64"])
                                 # Add to generated files list (returned in response)
                                 generated_files.append(

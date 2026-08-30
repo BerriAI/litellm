@@ -144,7 +144,7 @@ class UserApiKeyCache(DualCache):
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs) -> None:
+    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs: object) -> None:
         """
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
