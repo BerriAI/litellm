@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import traceback
-from collections.abc import Callable, Coroutine, Generator
+from collections.abc import Awaitable, Callable, Coroutine, Generator
+from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
 from typing import Final, cast
@@ -11,8 +13,14 @@ from typing import Final, cast
 import pytest
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from tests.route_parity.compare import assert_parity
+from litellm.rust_bridge import get_native_bridge
+from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.ocr import RustAocr, RustOcr
+from tests.route_parity.compare import assert_model_parity, assert_parity, assert_request_parity
+from tests.route_parity.fixture_recorder import recorded_fixtures
+from tests.route_parity.inprocess import run_in_process
 from tests.route_parity.models import SDKCommand, SDKReport, WorkerFailure, WorkerResult, WorkerSuccess
+from tests.route_parity.replay import replay_server
 from tests.route_parity.runner import (
     PythonScriptRunner,
     PythonScriptWorker,
@@ -24,6 +32,7 @@ from tests.test_litellm.ocr.fixture_models import MistralOcrSdkInput, OcrParityC
 
 API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"
+FIXTURE_DIR_ENV: Final = "LITELLM_OCR_FIXTURE_DIR"
 
 
 class SDKRoute(str, Enum):
@@ -58,6 +67,96 @@ def _execute_sdk_case(
     return SDKReport(response=async_response.model_dump(mode="json"))
 
 
+def _call_sdk_case(sdk_input: MistralOcrSdkInput, route: SDKRoute, mock_url: str) -> OCRResponse:
+    import litellm
+
+    call_kwargs: Final = _call_kwargs(sdk_input, mock_url, route)
+    if route is SDKRoute.OCR:
+        sync_route: Final = cast(Callable[..., OCRResponse], litellm.ocr)
+        return sync_route(**call_kwargs)
+    async_route: Final = cast(Callable[..., Coroutine[object, object, OCRResponse]], litellm.aocr)
+    return asyncio.run(async_route(**call_kwargs))
+
+
+class _RustOcrSpy:
+    def __init__(self, delegate: RustOcr) -> None:
+        self.delegate: Final = delegate
+        self.calls = 0
+
+    def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        self.calls += 1
+        return self.delegate(
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=timeout_seconds,
+        )
+
+
+class _RustAocrSpy:
+    def __init__(self, delegate: RustAocr) -> None:
+        self.delegate: Final = delegate
+        self.calls = 0
+
+    async def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        self.calls += 1
+        result: Final[Awaitable[dict[str, object]]] = self.delegate(
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=timeout_seconds,
+        )
+        return await result
+
+
+@contextmanager
+def _restore_rust_ocr_state() -> Generator[None]:
+    enabled: Final = rust_ocr_bridge._rust_ocr_enabled  # pyright: ignore[reportPrivateUsage]  # restore test state
+    ocr_impl: Final = rust_ocr_bridge._rust_ocr_impl  # pyright: ignore[reportPrivateUsage]  # restore test state
+    aocr_impl: Final = rust_ocr_bridge._rust_aocr_impl  # pyright: ignore[reportPrivateUsage]  # restore test state
+    try:
+        yield
+    finally:
+        rust_ocr_bridge.use_litellm_rust(enabled, ocr=ocr_impl, aocr=aocr_impl)
+
+
+def _native_spies() -> tuple[_RustOcrSpy, _RustAocrSpy]:
+    native_bridge: Final = get_native_bridge()
+    if native_bridge is None:
+        pytest.fail("native Rust bridge is required for OCR parity testing")
+    sync_spy: Final = _RustOcrSpy(cast(RustOcr, getattr(native_bridge, "ocr")))
+    async_spy: Final = _RustAocrSpy(cast(RustAocr, getattr(native_bridge, "aocr")))
+    return sync_spy, async_spy
+
+
 @pytest.fixture(scope="module")
 def sdk_workers() -> Generator[tuple[PythonScriptWorker, PythonScriptWorker]]:
     runner: Final = PythonScriptRunner(
@@ -70,28 +169,65 @@ def sdk_workers() -> Generator[tuple[PythonScriptWorker, PythonScriptWorker]]:
         yield workers
 
 
+@pytest.fixture(scope="module")
+def startup_ocr_fixture() -> OcrParityCase:
+    default_directory: Final = Path(__file__).with_name("fixtures")
+    configured: Final = os.environ.get(FIXTURE_DIR_ENV)
+    directory: Final = Path(configured).expanduser() if configured is not None else default_directory
+    fixtures: Final = recorded_fixtures(directory, OcrParityCase)
+    if not fixtures:
+        pytest.skip(f"no recorded fixtures in {directory}")
+    return fixtures[0]
+
+
 @pytest.mark.parametrize("route", tuple(SDKRoute), ids=tuple(route.value for route in SDKRoute))
 def test_recorded_ocr_sdk_parity(
     ocr_fixture: OcrParityCase,
     route: SDKRoute,
+) -> None:
+    sync_spy, async_spy = _native_spies()
+    with _restore_rust_ocr_state(), replay_server() as provider:
+        rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
+        python: Final = run_in_process(
+            provider,
+            ocr_fixture.provider_response,
+            lambda mock_url: _call_sdk_case(ocr_fixture.litellm_input, route, mock_url),
+        )
+        assert sync_spy.calls == 0
+        assert async_spy.calls == 0
+
+        rust_ocr_bridge.use_litellm_rust(True, ocr=sync_spy, aocr=async_spy)
+        rust: Final = run_in_process(
+            provider,
+            ocr_fixture.provider_response,
+            lambda mock_url: _call_sdk_case(ocr_fixture.litellm_input, route, mock_url),
+        )
+
+    assert sync_spy.calls == (1 if route is SDKRoute.OCR else 0)
+    assert async_spy.calls == (1 if route is SDKRoute.AOCR else 0)
+    assert_request_parity(python.request, rust.request)
+    assert_model_parity(python.response, rust.response)
+
+
+def test_ocr_subprocess_startup_smoke(
+    startup_ocr_fixture: OcrParityCase,
     tmp_path: Path,
     sdk_workers: tuple[PythonScriptWorker, PythonScriptWorker],
 ) -> None:
-    case_file: Final = tmp_path / f"{route.value}-ocr-parity-case.json"
-    case_file.write_text(ocr_fixture.model_dump_json(indent=2, exclude_unset=True), encoding="utf-8")
-    response: Final = ocr_fixture.provider_response
+    case_file: Final = tmp_path / "ocr-startup-smoke.json"
+    case_file.write_text(startup_ocr_fixture.model_dump_json(indent=2, exclude_unset=True), encoding="utf-8")
     python_worker, rust_worker = sdk_workers
     python: Final = run_execution(
         python_worker,
         case_file,
-        route.value,
-        response,
+        SDKRoute.OCR.value,
+        startup_ocr_fixture.provider_response,
     )
     rust: Final = run_execution(
         rust_worker,
         case_file,
-        route.value,
-        response,
+        SDKRoute.OCR.value,
+        startup_ocr_fixture.provider_response,
     )
 
     assert_parity(python, rust, PYTHON_HTTP_SENTINEL)

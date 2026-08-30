@@ -8,7 +8,16 @@
 - The same LiteLLM input is transformed by isolated Python and Rust workers
 - The resulting provider requests must match in method, path, headers, and body, excluding runtime-specific HTTP metadata
 - The recorded provider response is then replayed unchanged to both workers
-- Each worker serializes its normalized LiteLLM SDK response to JSON, and the results must match
+- The harness compares the values returned through the Python SDK interface
+- Non-streaming responses are compared directly, including their concrete return type and public model fields
+- Streaming responses are consumed and compared chunk by chunk, including wrapper type, chunk type and order, termination, and public exception behavior
+- Route-specific comparators and chunk normalizers handle differences in each public SDK contract
+
+## Process isolation
+
+- SDK object and stream parity runs Python and Rust sequentially in the same process so tests can retain the returned objects
+- Every test saves and restores the original bridge state
+- A small subprocess smoke test verifies environment-based startup configuration and detects fallback to the Python HTTP implementation
 
 ## Hypothesis and property-based testing
 
