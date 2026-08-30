@@ -10,6 +10,7 @@
 
 pub mod key_auth;
 pub mod rate_limit;
+pub mod sliding_window_rate_limit;
 pub mod circuit_breaker;
 pub mod retry;
 

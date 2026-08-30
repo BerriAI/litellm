@@ -23,8 +23,12 @@ use litellm_core::persistence::{PostgresStore, RedisPostgresSpendFlush, RedisSto
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 use litellm_core::spend_tracking::SpendWorker;
 
+use litellm_ai_gateway::integrations::custom_guardrail::CustomGuardrailRunner;
 use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
 use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
+use litellm_ai_gateway::middleware::alerting::AlertingState;
+use litellm_ai_gateway::middleware::csrf::CsrfState;
+use litellm_ai_gateway::alerting::AlertingConfig;
 
 /// Bind to localhost by default so the gateway is not a public, unauthenticated
 /// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).
@@ -174,6 +178,14 @@ async fn main() {
         audit_log_shipper: std::env::var("AUDIT_LOG_ENDPOINT")
             .ok()
             .map(|endpoint| Arc::new(AuditLogShipper::new(&endpoint, 100))),
+        guardrail_runner: Arc::new(CustomGuardrailRunner::new(Vec::new())),
+        csrf_state: Arc::new(CsrfState::new(
+            std::env::var("CSRF_TOKEN_TTL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600),
+        )),
+        alerting_state: Arc::new(AlertingState::new(AlertingConfig::default())),
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
@@ -313,6 +325,10 @@ fn build_router_from_env() -> Router {
             api_key,
             api_base: None,
         },
+        healthy: Some(true),
+        weight: None,
+        input_cost_per_token: None,
+        output_cost_per_token: None,
     };
     Router::new(vec![deployment])
 }

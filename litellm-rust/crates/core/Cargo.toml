@@ -17,6 +17,8 @@ tokenizers.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 redis.workspace = true
 sqlx.workspace = true
+parking_lot.workspace = true
+smallvec.workspace = true
 futures = "0.3"
 async-stream = "0.3"
 aws-config = { version = "1.9.0", default-features = false, features = ["rustls", "rt-tokio"], optional = true }

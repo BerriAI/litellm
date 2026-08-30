@@ -1,0 +1,322 @@
+# Example LiteLLM Rust Gateway Configuration
+#
+# This configuration demonstrates all available features of the Rust gateway.
+# Copy this file and modify it to match your requirements.
+
+# ============================================================================
+# MODEL LIST
+# ============================================================================
+# Define your model deployments here. Each deployment maps a public model name
+# to a provider-specific model with credentials and settings.
+
+model_list:
+  # OpenAI GPT-4 with fallback to Azure
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+    # Enhanced model settings
+    rpm: 1000                    # Requests per minute limit
+    tpm: 100000                  # Tokens per minute limit
+    max_parallel_requests: 50    # Max concurrent requests
+    mode: fallback               # Fallback routing mode
+    healthy: true                # Deployment health status
+    cooldown: 30                 # Cooldown seconds after failure
+    weight: 10                   # Routing weight (higher = more traffic)
+    model_info:
+      input_cost_per_token: 0.00003    # Cost per input token (USD)
+      output_cost_per_token: 0.00006   # Cost per output token (USD)
+      mode: chat                         # Model mode (chat, completion, etc.)
+
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4
+      api_key: os.environ/AZURE_API_KEY
+      api_base: https://my-resource.openai.azure.com
+    rpm: 500
+    tpm: 50000
+    max_parallel_requests: 25
+    mode: fallback
+    healthy: true
+    cooldown: 30
+    weight: 5
+    model_info:
+      input_cost_per_token: 0.00003
+      output_cost_per_token: 0.00006
+      mode: chat
+
+  # Anthropic Claude 3
+  - model_name: claude-3-opus
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+    rpm: 500
+    tpm: 100000
+    max_parallel_requests: 30
+    mode: fallback
+    healthy: true
+    cooldown: 60
+    weight: 10
+    model_info:
+      input_cost_per_token: 0.000015
+      output_cost_per_token: 0.000075
+      mode: chat
+
+  # OpenAI Embeddings
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+    rpm: 5000
+    tpm: 1000000
+    max_parallel_requests: 100
+    healthy: true
+    model_info:
+      input_cost_per_token: 0.00000002
+      mode: embedding
+
+  # OpenAI Image Generation
+  - model_name: dall-e-3
+    litellm_params:
+      model: openai/dall-e-3
+      api_key: os.environ/OPENAI_API_KEY
+    rpm: 100
+    tpm: 10000
+    max_parallel_requests: 10
+    healthy: true
+    model_info:
+      input_cost_per_token: 0.00004
+      mode: image_generation
+
+  # OpenAI Text-to-Speech
+  - model_name: tts-1
+    litellm_params:
+      model: openai/tts-1
+      api_key: os.environ/OPENAI_API_KEY
+    rpm: 500
+    tpm: 100000
+    max_parallel_requests: 20
+    healthy: true
+    model_info:
+      input_cost_per_token: 0.000015
+      mode: audio_speech
+
+  # OpenAI Speech-to-Text
+  - model_name: whisper-1
+    litellm_params:
+      model: openai/whisper-1
+      api_key: os.environ/OPENAI_API_KEY
+    rpm: 500
+    tpm: 100000
+    max_parallel_requests: 20
+    healthy: true
+    model_info:
+      input_cost_per_token: 0.00001
+      mode: audio_transcription
+
+# ============================================================================
+# GENERAL SETTINGS
+# ============================================================================
+# Gateway-wide settings for authentication, rate limiting, and alerting.
+
+general_settings:
+  # Master key for admin operations
+  master_key: os.environ/LITELLM_MASTER_KEY
+  
+  # Database connection for spend tracking and key management
+  database_url: os.environ/DATABASE_URL
+  
+  # Redis for coordination and caching
+  coordination_redis: os.environ/REDIS_URL
+  
+  # Rate limiting
+  max_parallel_requests: 1000           # Per-key max parallel requests
+  global_max_parallel_requests: 10000   # Global max parallel requests
+  
+  # Request size limits
+  max_request_size_mb: 10
+  max_response_size_mb: 100
+  
+  # Alerting configuration
+  alerting:
+    - slack
+    - email
+  alert_webhook_url: os.environ/SLACK_WEBHOOK_URL
+  alert_types:
+    - budget_exceeded
+    - rate_limit_exceeded
+    - provider_error
+    - high_latency
+  
+  # Allowed routes (whitelist)
+  allowed_routes:
+    - /v1/chat/completions
+    - /v1/messages
+    - /v1/embeddings
+    - /v1/images/generations
+    - /v1/images/edits
+    - /v1/audio/speech
+    - /v1/audio/transcriptions
+    - /v1/models
+    - /key/info
+    - /spend/logs
+    - /user/info
+    - /team/info
+  
+  # Pass-through endpoints for custom routing
+  pass_through_endpoints:
+    - path: /custom/endpoint
+      target: https://api.example.com/v1
+      headers:
+        X-Custom-Header: value
+
+# ============================================================================
+# LITELLM SETTINGS
+# ============================================================================
+# LiteLLM-specific settings for callbacks, guardrails, caching, and retries.
+
+litellm_settings:
+  # Callback integrations for observability and monitoring
+  callbacks:
+    # Langfuse for LLM observability
+    - type: langfuse
+      public_key: os.environ/LANGFUSE_PUBLIC_KEY
+      secret_key: os.environ/LANGFUSE_SECRET_KEY
+      host: https://cloud.langfuse.com
+    
+    # Datadog for metrics and monitoring
+    - type: datadog
+      api_key: os.environ/DATADOG_API_KEY
+      app_key: os.environ/DATADOG_APP_KEY  # optional
+      host: https://api.datadoghq.com
+    
+    # Custom webhooks for integration
+    - type: webhooks
+      url: os.environ/WEBHOOK_URL
+      headers:
+        X-Custom-Header: value
+      auth_token: os.environ/WEBHOOK_AUTH_TOKEN
+    
+    # Slack notifications for alerts
+    - type: slack
+      webhook_url: os.environ/SLACK_WEBHOOK_URL
+      channel: "#alerts"
+      username: "LiteLLM Bot"
+      icon_emoji: ":robot_face:"
+  
+  # Guardrails for request/response validation
+  guardrails:
+    - guardrail_name: prompt_injection
+      guardrail_type: lakera
+      enabled: true
+    - guardrail_name: pii_detection
+      guardrail_type: presidio
+      enabled: true
+    - guardrail_name: content_moderation
+      guardrail_type: azure_content_safety
+      enabled: true
+  
+  # Response caching
+  cache: true
+  cache_params:
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: 6379
+    password: os.environ/REDIS_PASSWORD
+    ttl: 300  # Cache TTL in seconds
+  
+  # Parameter handling
+  drop_params: true  # Drop unsupported parameters instead of erroring
+  
+  # Retry configuration
+  num_retries: 3
+  timeout: 600  # Request timeout in seconds
+
+# ============================================================================
+# ROUTER SETTINGS
+# ============================================================================
+# Router configuration for load balancing, retries, and failure handling.
+
+router_settings:
+  # Routing strategy
+  routing_strategy: latency-based  # Options: simple-shuffle, latency-based, load-based, usage-based
+  
+  # Retry configuration
+  num_retries: 5
+  timeout: 300
+  
+  # Failure handling
+  cooldown_seconds: 60    # Cooldown after deployment failure
+  allowed_fails: 3        # Max failures before circuit opens
+  
+  # Load balancing
+  enable_load_balancing: true
+  load_balancing_strategy: least-connections
+  
+  # Health checks
+  health_check_interval: 60  # Health check interval in seconds
+  health_check_timeout: 10   # Health check timeout in seconds
+  
+  # Deployment selection
+  deployment_selection_timeout: 5  # Timeout for deployment selection
+  max_deployment_attempts: 3       # Max attempts to find healthy deployment
+
+# ============================================================================
+# ENVIRONMENT VARIABLES
+# ============================================================================
+# Set environment variables for API keys and secrets.
+# In production, use a secrets manager or environment-specific config.
+
+environment_variables:
+  OPENAI_API_KEY: sk-...
+  ANTHROPIC_API_KEY: sk-ant-...
+  AZURE_API_KEY: ...
+  LITELLM_MASTER_KEY: sk-...
+  DATABASE_URL: postgres://user:password@host:5432/litellm
+  REDIS_URL: redis://user:password@host:6379/0
+  REDIS_HOST: localhost
+  REDIS_PASSWORD: ...
+  LANGFUSE_PUBLIC_KEY: pk-lf-...
+  LANGFUSE_SECRET_KEY: sk-lf-...
+  DATADOG_API_KEY: ...
+  DATADOG_APP_KEY: ...
+  WEBHOOK_URL: https://your-webhook-url.com/callback
+  WEBHOOK_AUTH_TOKEN: ...
+  SLACK_WEBHOOK_URL: https://hooks.slack.com/services/...
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+#
+# 1. Start the gateway:
+#    cargo run --release --features server
+#
+# 2. Make a chat completion request:
+#    curl -X POST http://localhost:8000/v1/chat/completions \
+#      -H "Authorization: Bearer YOUR_API_KEY" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "model": "gpt-4",
+#        "messages": [{"role": "user", "content": "Hello!"}],
+#        "stream": false
+#      }'
+#
+# 3. Check available models:
+#    curl http://localhost:8000/v1/models \
+#      -H "Authorization: Bearer YOUR_API_KEY"
+#
+# 4. View spend logs:
+#    curl "http://localhost:8000/spend/logs?limit=100" \
+#      -H "Authorization: Bearer YOUR_API_KEY"
+#
+# 5. Check key info:
+#    curl "http://localhost:8000/key/info" \
+#      -H "Authorization: Bearer YOUR_API_KEY"
+#
+# 6. View metrics:
+#    curl http://localhost:8000/metrics
+#
+# 7. Health check:
+#    curl http://localhost:8000/health/liveness
+#    curl http://localhost:8000/health/readiness
+#    curl http://localhost:8000/health/deep

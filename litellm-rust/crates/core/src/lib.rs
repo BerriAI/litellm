@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod audio_transcription;
 pub mod auth;
 pub mod caching;
@@ -6,7 +7,9 @@ pub mod chat_completions;
 pub mod constants;
 pub mod cost_calculator;
 pub mod error;
+pub mod embeddings;
 pub mod http_utils;
+pub mod images;
 pub mod messages;
 pub mod ocr;
 pub mod persistence;
