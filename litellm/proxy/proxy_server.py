@@ -399,6 +399,9 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
 )
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    build_window_spend_transaction,
+)
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
@@ -2434,6 +2437,7 @@ async def get_current_spend(
     max_budget: float | None = None,
     window_entity_type: str | None = None,
     window_entity_id: str | None = None,
+    window_duration: str | None = None,
     window_start: datetime | None = None,
     fallback_authoritative: bool = False,
 ) -> float:
@@ -2458,7 +2462,8 @@ async def get_current_spend(
     runs and a key can leak spend past ``max_budget`` indefinitely. The
     authoritative source depends on the counter: primary key/team/user/org
     counters read the DB row; per-window counters (``window_start`` supplied)
-    aggregate spend logs; end-user/tag counters have no DB row, so the caller's
+    read the maintained window-spend row and only aggregate spend logs when
+    that row is missing or stale; end-user/tag counters have no DB row, so the caller's
     ``fallback_spend`` (loaded fresh in auth) is authoritative. The DB read is
     skipped for healthy primary counters (counter at or above recorded spend)
     and cached in-process for a few seconds, so a persistently stale counter
@@ -2483,6 +2488,7 @@ async def get_current_spend(
             counter_key=counter_key,
             window_entity_type=window_entity_type,
             window_entity_id=window_entity_id,
+            window_duration=window_duration,
             window_start=window_start,
         )
         if authoritative is not None:
@@ -2564,6 +2570,7 @@ async def _authoritative_floor_spend(
     counter_key: str,
     window_entity_type: str | None = None,
     window_entity_id: str | None = None,
+    window_duration: str | None = None,
     window_start: datetime | None = None,
 ) -> float | None:
     marker_key: Final = f"spend_db_floor:{counter_key}"
@@ -2578,10 +2585,11 @@ async def _authoritative_floor_spend(
         and window_entity_id is not None
         and window_start is not None
     ):
-        db_spend = await SpendCounterReseed.window_from_spend_logs(
+        db_spend = await SpendCounterReseed.window_from_db(
             prisma_client=prisma_client,
             entity_type=window_entity_type,
             entity_id=window_entity_id,
+            window_duration=window_duration,
             window_start=window_start,
         )
     if db_spend is None:
@@ -2651,6 +2659,8 @@ async def increment_spend_counters(
     budget_reservation: dict | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
+    request_id: str | None = None,
+    request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
 ):
     """
@@ -2705,15 +2715,28 @@ async def increment_spend_counters(
             return
         for window in key_budget_limits:
             duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            key_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
             key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
+            key_window_start = get_budget_window_start(window)
             if key_window_counter not in reserved_counter_keys:
                 await _init_and_increment_window_spend_counter(
                     counter_key=key_window_counter,
                     entity_type="Key",
                     entity_id=hashed_token,
-                    window_start=get_budget_window_start(window),
+                    window_duration=duration,
+                    window_start=key_window_start,
                     increment=cost,
                 )
+            await _enqueue_window_spend_row_update(
+                entity_type=Litellm_EntityType.KEY,
+                entity_id=hashed_token,
+                reset_at=key_window_reset_at,
+                window_duration=duration,
+                window_start=key_window_start,
+                increment=cost,
+                request_id=request_id,
+                request_started_at=request_started_at,
+            )
 
     async def _team_scope(scope_team_id: str) -> None:
         team_counter_key: Final = f"spend:team:{scope_team_id}"
@@ -2736,15 +2759,28 @@ async def increment_spend_counters(
             return
         for window in team_budget_limits:
             duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            team_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
             team_window_counter = f"spend:team:{scope_team_id}:window:{duration}"
+            team_window_start = get_budget_window_start(window)
             if team_window_counter not in reserved_counter_keys:
                 await _init_and_increment_window_spend_counter(
                     counter_key=team_window_counter,
                     entity_type="Team",
                     entity_id=scope_team_id,
-                    window_start=get_budget_window_start(window),
+                    window_duration=duration,
+                    window_start=team_window_start,
                     increment=cost,
                 )
+            await _enqueue_window_spend_row_update(
+                entity_type=Litellm_EntityType.TEAM,
+                entity_id=scope_team_id,
+                reset_at=team_window_reset_at,
+                window_duration=duration,
+                window_start=team_window_start,
+                increment=cost,
+                request_id=request_id,
+                request_started_at=request_started_at,
+            )
 
     async def _team_member_scope(scope_user_id: str, scope_team_id: str) -> None:
         team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
@@ -2963,10 +2999,62 @@ async def _init_and_increment_spend_counter(
     await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
 
 
+async def _enqueue_window_spend_row_update(
+    entity_type: Litellm_EntityType,
+    entity_id: str,
+    reset_at: datetime | str | None,
+    window_duration: str,
+    window_start: datetime | None,
+    increment: float,
+    request_id: str | None,
+    request_started_at: datetime | None,
+) -> None:
+    """Queue this request's cost against the LiteLLM_BudgetWindowSpend row for
+    the window, so enforcement can read a maintained total instead of
+    aggregating LiteLLM_SpendLogs.
+
+    request_id is the LiteLLM_SpendLogs id this cost was recorded under and
+    request_started_at its startTime; the flush uses them to keep the one-time
+    seed from counting a request that its increment already covers.
+
+    Enqueued even when the cache increment was skipped for a reserved counter:
+    the reservation only pre-charged the counter, and the row still owes the
+    actual cost.
+
+    Windows with no reset_at slide with wall clock, so their window_start moves
+    on every request and no single row can represent them. Those are left to
+    the read path's LiteLLM_SpendLogs fallback rather than rewritten per
+    request.
+    """
+    if window_start is None or not reset_at:
+        return
+    try:
+        await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(
+            build_window_spend_transaction(
+                entity_type=entity_type.value,
+                entity_id=entity_id,
+                window_duration=window_duration,
+                window_start=window_start,
+                spend=increment,
+                request_id=request_id,
+                started_at=request_started_at,
+            )
+        )
+    except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
+        verbose_proxy_logger.debug(
+            "Unable to enqueue budget window spend update for %s=%s window=%s: %s",
+            entity_type.value,
+            entity_id,
+            window_duration,
+            e,
+        )
+
+
 async def _init_and_increment_window_spend_counter(
     counter_key: str,
     entity_type: str,
     entity_id: str,
+    window_duration: str | None,
     window_start: datetime | None,
     increment: float,
 ):
@@ -2981,6 +3069,7 @@ async def _init_and_increment_window_spend_counter(
         counter_key=counter_key,
         entity_type=entity_type,
         entity_id=entity_id,
+        window_duration=window_duration,
         window_start=window_start,
     )
     if initialized is False:
@@ -3026,6 +3115,7 @@ async def _ensure_window_spend_counter_initialized(
     counter_key: str,
     entity_type: str,
     entity_id: str,
+    window_duration: str | None,
     window_start: datetime,
 ) -> bool:
     is_warm: Final = await _is_spend_counter_cache_warm(counter_key=counter_key)
@@ -3038,6 +3128,7 @@ async def _ensure_window_spend_counter_initialized(
         counter_key=counter_key,
         entity_type=entity_type,
         entity_id=entity_id,
+        window_duration=window_duration,
         window_start=window_start,
     )
     if window_spend is None:
@@ -12671,25 +12762,53 @@ async def get_all_team_models(
     return returned_team_models
 
 
+def _resolve_model_grant_to_deployment_ids(
+    models: Sequence[str],
+    llm_router: Router,
+) -> tuple[str, ...]:
+    """
+    Resolve a `models` grant (a user's or a key's) to the deployment ids it can call.
+
+    An empty grant and the 'all-proxy-models' sentinel both mean unrestricted at call
+    time (see `_check_model_access_helper`), so both expand to every non-team deployment.
+    A grant entry naming an access group also grants that group's members, and naming a
+    deployed model that shares the name grants the model itself, matching the union the
+    call-time check applies.
+    """
+    if not models or SpecialModelNames.all_proxy_models.value in models:
+        return tuple(llm_router.get_model_ids(exclude_team_models=True))
+
+    access_groups: Final = llm_router.get_model_access_groups()
+    granted_model_names: Final = tuple(name for model in models for name in (model, *access_groups.get(model, ())))
+    return tuple(
+        model_id
+        for name in granted_model_names
+        for deployment in (llm_router.get_model_list(model_name=name) or ())
+        if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
+    )
+
+
 def get_direct_access_models(
     user_db_object: LiteLLM_UserTable,
     llm_router: Router,
-) -> list[str]:
+    key_models: Sequence[str] = (),
+) -> tuple[str, ...]:
     """
-    Get all models that user has direct access to.
+    Get all models the caller has direct (non-team) access to.
 
-    The 'all-proxy-models' sentinel grants direct access to every non-team
-    deployment, mirroring how get_key_models expands it for the key/team path.
+    Both the user record and the calling key are enforced at call time, so direct access
+    is the intersection of the two grants. An unrestricted key (empty grant, or the
+    'all-proxy-models' sentinel) leaves the user's grant untouched.
     """
-    if SpecialModelNames.all_proxy_models.value in user_db_object.models:
-        return llm_router.get_model_ids(exclude_team_models=True)
+    user_model_ids: Final = _resolve_model_grant_to_deployment_ids(
+        cast(Sequence[str], user_db_object.models),  # cast-ok: user.models is a String[] column
+        llm_router,
+    )
+    if not key_models or SpecialModelNames.all_proxy_models.value in key_models:
+        return user_model_ids
 
-    return [
-        model_id
-        for model in user_db_object.models
-        for deployment in (llm_router.get_model_list(model_name=model) or [])
-        if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
-    ]
+    key_model_ids: Final = frozenset(_resolve_model_grant_to_deployment_ids(key_models, llm_router))
+    return tuple(model_id for model_id in user_model_ids if model_id in key_model_ids)
 
 
 def _filter_models_to_user_accessible(all_models: list[dict]) -> list[dict]:
@@ -12713,10 +12832,10 @@ async def _populate_team_access_on_models(
     without filtering the model list.
     """
     user_teams: list[str] | Literal["*"] | None = None
-    direct_access_models: list[str] = []
+    direct_access_models: Sequence[str] = ()
     if _user_has_admin_view(user_api_key_dict):
         user_teams = "*"
-        direct_access_models = llm_router.get_model_ids(exclude_team_models=True)  # has access to all models
+        direct_access_models = tuple(llm_router.get_model_ids(exclude_team_models=True))  # access to all models
     elif user_api_key_dict.user_id is not None:
         user_db_object: Final[SupportsModelDump | None] = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": user_api_key_dict.user_id}
@@ -12727,6 +12846,7 @@ async def _populate_team_access_on_models(
             direct_access_models = get_direct_access_models(
                 user_db_object=user_object,
                 llm_router=llm_router,
+                key_models=cast(Sequence[str], user_api_key_dict.models),  # cast-ok: key.models is a String[] column
             )
     if user_teams is not None:
         team_models: Final = await get_all_team_models(
@@ -12748,7 +12868,7 @@ async def _populate_team_access_on_models(
                 if can_use_model:
                     _model["model_info"]["access_via_team_ids"] = team_models.get(model_id, [])
 
-    direct_access_model_ids: Final = set(direct_access_models)
+    direct_access_model_ids: Final = frozenset(direct_access_models)
     for _model in all_models:
         model_id = _model.get("model_info", {}).get("id", None)
         if model_id is not None:
