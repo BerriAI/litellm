@@ -401,12 +401,10 @@ class AgentRegistry:
             The patched agent
         """
         try:
-            existing_row: Final = await AgentsRepository(prisma_client).table.find_unique(
-                where={"agent_id": agent_id}  # mutable-ok: prisma filters are plain dicts
-            )
-            if existing_row is None:
+            existing_record: Final = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+            if existing_record is None:
                 raise Exception(f"Agent with ID {agent_id} not found")
-            existing_agent: Final = dict(existing_row)
+            existing_agent: Final[Mapping[str, object]] = dict(existing_record)
 
             augment_agent: Final = {**existing_agent, **agent}
             update_data: Final[dict[str, object]] = {}
@@ -433,7 +431,7 @@ class AgentRegistry:
                 update_data["extra_headers"] = extra_headers_value if extra_headers_value is not None else []
             if agent.get("object_permission") is not None:
                 agent_copy: Final = dict(augment_agent)
-                existing_object_permission_id: Final = existing_agent.get("object_permission_id")
+                existing_object_permission_id: Final = existing_record.object_permission_id
                 object_permission_id: Final = await handle_update_object_permission_common(
                     agent_copy,
                     existing_object_permission_id,
