@@ -4,6 +4,7 @@ use crate::error::CoreResult;
 use crate::http_utils::string_headers as shared_string_headers;
 use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
 use crate::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
+use crate::providers::deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG;
 
 use super::transformation::AnthropicMessagesProviderConfig;
 
@@ -17,6 +18,7 @@ pub(super) fn messages_provider_config(
     match provider {
         "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
         "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),
+        "deepseek" => Some(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG),
         _ => None,
     }
 }

@@ -439,3 +439,157 @@ async fn messages_rejects_unsupported_provider() {
 
     assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "openai"));
 }
+
+#[test]
+fn provider_config_resolves_deepseek() {
+    assert!(super::common_utils::messages_provider_config("deepseek").is_some());
+}
+
+#[test]
+fn deepseek_messages_accept_existing_authorization_header() {
+    let extra_headers = serde_json::from_value(serde_json::json!({
+        "Authorization": "custom-auth-value"
+    }))
+    .unwrap();
+
+    let prepared = super::prepare::prepare_messages_call(MessagesRequest {
+        model: "deepseek-v4-pro",
+        body: serde_json::json!({
+            "model": "deepseek-v4-pro",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 100
+        }),
+        api_key: None,
+        api_base: Some("https://api.deepseek.com/anthropic"),
+        custom_llm_provider: Some("deepseek"),
+        extra_headers: Some(extra_headers),
+        timeout: None,
+    })
+    .unwrap();
+
+    assert!(prepared.upstream_headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("authorization") && value == "custom-auth-value"
+    }));
+    assert!(
+        !prepared
+            .upstream_headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("x-api-key"))
+    );
+}
+
+#[tokio::test]
+async fn messages_round_trip_builds_deepseek_anthropic_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body = r#"{"id":"msg_deepseek","type":"message","role":"assistant","content":[{"type":"text","text":"done"}],"model":"deepseek-v4-pro","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":2}}"#;
+        socket
+            .write_all(write_response(response_body).as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+
+    let response = messages(MessagesRequest {
+        model: "deepseek-v4-pro",
+        body: json!({
+            "model": "deepseek-v4-pro",
+            "max_tokens": 100,
+            "system": [
+                {
+                    "type": "text",
+                    "text": "x-anthropic-billing-header: cc_version=1"
+                },
+                {
+                    "type": "text",
+                    "text": "Keep this"
+                }
+            ],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "I should call the tool.",
+                            "signature": "sig"
+                        }
+                    ]
+                }
+            ],
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": 1024
+            },
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {"type": "object"}
+                },
+                {
+                    "type": "web_search_20260209",
+                    "name": "web_search",
+                    "max_uses": 1
+                }
+            ]
+        }),
+        api_key: Some("sk-deepseek"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("deepseek"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect("deepseek messages request succeeds");
+
+    assert_eq!(response.content[0]["text"], "done");
+    assert_eq!(response.stop_reason.as_deref(), Some("end_turn"));
+
+    let request = server.await.expect("server task completes");
+    let (head, body) = request.split_once("\r\n\r\n").expect("has body");
+
+    assert!(head.starts_with("POST /anthropic/v1/messages "), "{head}");
+
+    let head_lower = head.to_ascii_lowercase();
+
+    assert!(head_lower.contains("x-api-key: sk-deepseek"), "{head}");
+    assert!(
+        head_lower.contains("anthropic-version: 2023-06-01"),
+        "{head}"
+    );
+    assert!(
+        head_lower.contains("content-type: application/json"),
+        "{head}"
+    );
+
+    let sent_body: Value = serde_json::from_str(body).expect("body is json");
+
+    assert_eq!(
+        sent_body["thinking"],
+        json!({"type": "enabled", "budget_tokens": 1024})
+    );
+
+    assert_eq!(
+        sent_body["system"],
+        json!([{"type": "text", "text": "Keep this"}])
+    );
+
+    assert_eq!(
+        sent_body["tools"][0],
+        json!({
+            "name": "get_weather",
+            "description": "Get weather",
+            "input_schema": {"type": "object"}
+        })
+    );
+
+    assert_eq!(sent_body["tools"][1]["type"], "web_search_20260209");
+
+    assert_eq!(sent_body["messages"][0]["content"][0]["type"], "thinking");
+}
