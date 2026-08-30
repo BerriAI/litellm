@@ -121,6 +121,10 @@ impl IntoResponse for AudioRouteError {
                 StatusCode::BAD_REQUEST,
                 format!("audio request is not supported: {reason}"),
             ),
+            CoreError::Timeout(message) => (
+                StatusCode::GATEWAY_TIMEOUT,
+                format!("audio request timed out: {message}"),
+            ),
         };
         (
             status,

@@ -36,6 +36,9 @@ pub enum CoreError {
     /// keep a reference implementation treat this as "fall back", not "fail".
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
+    /// The request or stream exceeded the configured timeout duration.
+    #[error("timeout: {0}")]
+    Timeout(String),
 }
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {

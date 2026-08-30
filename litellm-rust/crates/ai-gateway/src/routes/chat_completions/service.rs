@@ -37,6 +37,11 @@ struct SpendTrackingStream {
     tool_call_tracker: crate::streaming::ToolCallAccumulator,
     finish_reason_tracker: crate::streaming::FinishReasonTracker,
     thinking_tracker: crate::streaming::ThinkingBlockTracker,
+    role_stripper: crate::streaming::RoleStripper,
+    timeout_enforcer: crate::streaming::StreamTimeoutEnforcer,
+    repetition_detector: crate::streaming::ModelRepetitionDetector,
+    provider_feature_handler: crate::streaming::ProviderFeatureHandler,
+    comprehensive_timeout_tracker: crate::streaming::ComprehensiveTimeoutTracker,
     /// Provider-specific fields extracted from streaming chunks (e.g., Anthropic thinking, OpenAI metadata)
     provider_specific_fields: Option<Map<String, Value>>,
     state: Arc<AppState>,
@@ -49,8 +54,32 @@ impl Stream for SpendTrackingStream {
     type Item = StreamingChunk;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Check if stream has exceeded maximum duration
+        if let Some(error_msg) = self.timeout_enforcer.check_timeout() {
+            return Poll::Ready(Some(Err(CoreError::Timeout(error_msg))));
+        }
+        
+        // Check comprehensive timeouts (connect, read, pool, total, chunk)
+        if let Some(error_msg) = self.comprehensive_timeout_tracker.check_timeouts() {
+            return Poll::Ready(Some(Err(CoreError::Timeout(error_msg))));
+        }
+        
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(Some(chunk)))) => {
+                // Update comprehensive timeout tracker
+                self.comprehensive_timeout_tracker.update_chunk_time();
+                if !self.comprehensive_timeout_tracker.connection_established {
+                    self.comprehensive_timeout_tracker.connection_established = true;
+                }
+                
+                // Check for model repetition
+                if let Some(error_msg) = self.repetition_detector.check_repetition(&chunk) {
+                    return Poll::Ready(Some(Err(CoreError::InvalidResponse(error_msg))));
+                }
+                
+                // Strip role from delta after first chunk
+                let chunk = self.role_stripper.process_chunk(&chunk);
+                
                 // Track usage for cost calculation
                 self.tracker.accumulate(&chunk);
                 
@@ -77,6 +106,9 @@ impl Stream for SpendTrackingStream {
                         self.provider_specific_fields = Some(fields);
                     }
                 }
+                
+                // Extract provider-specific features from chunk
+                self.provider_feature_handler.extract_from_chunk(&chunk, None);
                 
                 Poll::Ready(Some(Ok(Some(chunk))))
             }
@@ -340,7 +372,22 @@ pub async fn run(
         }
     }
 
+    tracing::debug!(
+        request_id = request_id,
+        model = %model,
+        "Looking up deployments for model"
+    );
+    
     let deployments = state.router.get_all_deployments(&model);
+    
+    tracing::debug!(
+        request_id = request_id,
+        model = %model,
+        deployments_found = deployments.len(),
+        "Found {} deployments",
+        deployments.len()
+    );
+    
     if deployments.is_empty() {
         return Err(CoreError::Routing(format!(
             "no deployment available for model '{model}'"
@@ -475,12 +522,49 @@ pub async fn run(
                     state.metrics.requests_total.with_label_values(&[provider_model, "success"]).inc();
                     state.metrics.request_duration_seconds.with_label_values(&[provider_model]).observe(start.elapsed().as_secs_f64());
 
+                    // Count images in request for vision/multimodal support
+                    let messages = body.get("messages").cloned().unwrap_or(Value::Array(vec![]));
+                    let (image_count, image_tokens) = crate::streaming::StreamingCostTracker::count_images_in_messages(&messages);
+                    
+                    let mut tracker = crate::streaming::StreamingCostTracker::new();
+                    tracker.image_count = image_count;
+                    tracker.image_tokens = image_tokens;
+                    
+                    // Extract provider-specific features from request
+                    let optional_params = body.as_object()
+                        .map(|obj| {
+                            obj.iter()
+                                .filter(|(k, _)| k.as_str() != "model" && k.as_str() != "messages")
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let mut provider_feature_handler = crate::streaming::ProviderFeatureHandler::new();
+                    provider_feature_handler.extract_from_request(&Value::Object(optional_params), custom_llm_provider);
+
                     let tracking_stream = SpendTrackingStream {
                         inner: stream,
-                        tracker: crate::streaming::StreamingCostTracker::new(),
+                        tracker,
                         tool_call_tracker: crate::streaming::ToolCallAccumulator::new(),
                         finish_reason_tracker: crate::streaming::FinishReasonTracker::new(),
                         thinking_tracker: crate::streaming::ThinkingBlockTracker::new(),
+                        role_stripper: crate::streaming::RoleStripper::new(),
+                        timeout_enforcer: crate::streaming::StreamTimeoutEnforcer::new(
+                            std::env::var("LITELLM_MAX_STREAMING_DURATION_SECONDS")
+                                .ok()
+                                .and_then(|v| v.parse().ok())
+                        ),
+                        repetition_detector: crate::streaming::ModelRepetitionDetector::new(
+                            std::env::var("LITELLM_MAX_STREAMING_REPETITIONS")
+                                .ok()
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(10),
+                            5
+                        ),
+                        provider_feature_handler,
+                        comprehensive_timeout_tracker: crate::streaming::ComprehensiveTimeoutTracker::new(
+                            crate::streaming::ComprehensiveTimeoutConfig::from_env()
+                        ),
                         provider_specific_fields: None,
                         state: Arc::new(state.clone()),
                         model: provider_model.to_string(),
