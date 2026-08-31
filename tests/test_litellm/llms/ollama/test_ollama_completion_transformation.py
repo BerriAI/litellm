@@ -540,13 +540,30 @@ class TestOllamaTextCompletionStreamingToolCalls:
         assert json.loads(tool_calls[0].function.arguments) == {"location": "Paris"}
         assert done.choices[0].finish_reason == "tool_calls"
 
-    def test_streamed_regular_json_emitted_as_content_on_done(self):
+    def test_streamed_regular_json_flushed_as_content_once_not_a_function_call(self):
         chunks, done = self._stream(['{"answer":', ' 42}'])
 
+        assert isinstance(chunks[0], ModelResponseStream)
+        assert chunks[0].choices[0].delta.content == '{"answer":'
+        assert chunks[1].choices[0].delta.content == " 42}"
+        assert done["finish_reason"] == "stop"
+
+    def test_streamed_function_call_with_string_arguments_not_double_encoded(self):
+        chunks, done = self._stream(['{"name": "get_weather",', ' "arguments": "{\\"location\\": \\"Paris\\"}"}'])
+
         assert isinstance(done, ModelResponseStream)
-        assert done.choices[0].delta.tool_calls is None
-        assert done.choices[0].delta.content == '{"answer": 42}'
-        assert done.choices[0].finish_reason == "stop"
+        tool_calls = done.choices[0].delta.tool_calls
+        assert tool_calls is not None and len(tool_calls) == 1
+        assert json.loads(tool_calls[0].function.arguments) == {"location": "Paris"}
+
+    def test_brace_prefixed_prose_streams_incrementally(self):
+        chunks, done = self._stream(["{note: this", " is not JSON}", " and more text"])
+
+        assert isinstance(chunks[0], ModelResponseStream)
+        assert chunks[0].choices[0].delta.content == "{note: this"
+        assert chunks[1].choices[0].delta.content == " is not JSON}"
+        assert chunks[2].choices[0].delta.content == " and more text"
+        assert done["finish_reason"] == "stop"
 
     def test_plain_text_still_streams_incrementally(self):
         chunks, done = self._stream(["Hello", " world"])
