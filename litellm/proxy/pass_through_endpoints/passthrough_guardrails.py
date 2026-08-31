@@ -293,7 +293,10 @@ class PassthroughGuardrailHandler:
         completion routes would, instead of silently skipping enforcement
         (fail closed).
         """
+        from typing import cast
+
         import litellm
+        from litellm import _custom_logger_compatible_callbacks_literal
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.litellm_core_utils.litellm_logging import (
             get_custom_logger_compatible_class,
@@ -301,7 +304,11 @@ class PassthroughGuardrailHandler:
         from litellm.types.guardrails import GuardrailEventHooks
 
         for callback in litellm.callbacks:
-            resolved = get_custom_logger_compatible_class(callback) if isinstance(callback, str) else callback
+            resolved = (
+                get_custom_logger_compatible_class(cast(_custom_logger_compatible_callbacks_literal, callback))
+                if isinstance(callback, str)
+                else callback
+            )
             if not isinstance(resolved, CustomGuardrail):
                 continue
             try:
