@@ -27,35 +27,13 @@ FRIENDLI_API_URL = "https://api.friendli.ai/serverless/v1/models"
 FRIENDLI_PROVIDER = "friendliai"
 
 INHERITABLE_BASE_KEYS = (
-    "supports_reasoning",
-    "supports_function_calling",
-    "supports_parallel_function_calling",
-    "supports_response_schema",
-    "supports_system_messages",
-    "supports_tool_choice",
-    "supports_vision",
     "supports_pdf_input",
-    "supports_prompt_caching",
     "supports_assistant_prefill",
-    "supports_low_reasoning_effort",
-    "supports_minimal_reasoning_effort",
-    "supports_max_reasoning_effort",
-    "supports_xhigh_reasoning_effort",
-    "supports_none_reasoning_effort",
     "supports_adaptive_thinking",
     "supports_output_config",
-    "supports_native_structured_output",
 )
 
-EFFORT_FLAG_MAP = {
-    "none": "supports_none_reasoning_effort",
-    "minimal": "supports_minimal_reasoning_effort",
-    "low": "supports_low_reasoning_effort",
-    "medium": "supports_low_reasoning_effort",
-    "high": "supports_max_reasoning_effort",
-    "xhigh": "supports_xhigh_reasoning_effort",
-    "max": "supports_max_reasoning_effort",
-}
+REASONING_EFFORT_LEVEL_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
 def _find_base_model_entry(base_model: str, local_data: dict) -> str | None:
@@ -72,15 +50,14 @@ def _find_base_model_entry(base_model: str, local_data: dict) -> str | None:
     return None
 
 
-def _effort_flags(reasoning_options: list) -> dict:
-    flags: dict[str, bool] = {flag: False for flag in EFFORT_FLAG_MAP.values()}
-    for opt in reasoning_options or []:
-        if opt.get("type") == "effort":
-            for val in opt.get("values", []):
-                flag = EFFORT_FLAG_MAP.get(val)
-                if flag:
-                    flags[flag] = True
-    return flags
+def _reasoning_effort_levels(reasoning_options: list) -> list:
+    offered = {
+        val
+        for opt in reasoning_options or []
+        if opt.get("type") == "effort"
+        for val in opt.get("values", [])
+    }
+    return [level for level in REASONING_EFFORT_LEVEL_ORDER if level in offered]
 
 
 def _pricing(pricing: dict) -> dict:
@@ -97,15 +74,19 @@ def _pricing(pricing: dict) -> dict:
 
 
 def _modality_flags(input_mods: list) -> dict:
-    has_image = "image" in (input_mods or [])
+    mods = input_mods or []
+    has_image = "image" in mods
     return {
         "supports_vision": has_image,
         "supports_image_input": has_image,
+        "supports_video_input": "video" in mods,
     }
 
 
 def transform_friendli_data(data: list, local_data: dict) -> dict:
     transformed: dict[str, dict] = {}
+    if not data:
+        return transformed
     for model in data:
         model_id = model["id"]
         base_model = model.get("base_model") or ""
@@ -123,17 +104,21 @@ def transform_friendli_data(data: list, local_data: dict) -> dict:
         ctx = model.get("context_length")
         if ctx is not None:
             entry["max_input_tokens"] = int(ctx)
-            entry["max_tokens"] = int(ctx)
         max_out = model.get("max_completion_tokens")
         if max_out is not None:
             entry["max_output_tokens"] = int(max_out)
+            entry["max_tokens"] = int(max_out)
 
-        entry.update(_pricing(model.get("pricing", {})))
+        pricing = _pricing(model.get("pricing", {}))
+        entry.update(pricing)
+        entry["supports_prompt_caching"] = "cache_read_input_token_cost" in pricing
 
         reasoning = model.get("reasoning") is True
         entry["supports_reasoning"] = reasoning
         if reasoning:
-            entry.update(_effort_flags(model.get("reasoning_options", [])))
+            entry["reasoning_effort_levels"] = _reasoning_effort_levels(
+                model.get("reasoning_options", [])
+            )
 
         func = model.get("functionality", {})
         entry["supports_function_calling"] = func.get("tool_call") is True
