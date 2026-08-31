@@ -271,6 +271,85 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
     assert client.post.call_args.kwargs["json"]["stream"] is True
 
 
+@pytest.mark.asyncio
+async def test_async_response_api_handler_streaming_passes_logging_obj_to_post():
+    """LIT-5466: @track_llm_api_timing only records llm_api_duration_ms when the POST
+    receives logging_obj; without it streaming /v1/responses never gets
+    x-litellm-overhead-duration-ms (the non-streaming site is pinned by
+    test_async_responses_records_llm_api_duration below)."""
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.transform_responses_api_request.return_value = {"model": "gpt-5", "input": "hi", "stream": True}
+    config.sign_request.return_value = ({}, None)
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+    logging_obj = Mock()
+
+    await handler.async_response_api_handler(
+        model="gpt-5",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        client=client,
+    )
+
+    assert client.post.call_args.kwargs["logging_obj"] is logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_responses_records_llm_api_duration():
+    """aresponses must feed the httpx timing into the logging obj, so the proxy can emit
+    x-litellm-overhead-duration-ms on /v1/responses (mirrors the arerank regression test)."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "model": "gpt-4o-mini",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.aresponses(
+        model="openai/gpt-4o-mini",
+        input="ping",
+        api_key="fake-key",
+        client=client,
+    )
+
+    assert response._hidden_params["litellm_overhead_time_ms"] is not None
+    assert response._hidden_params["_response_ms"] >= response._hidden_params["litellm_overhead_time_ms"]
+
+
 def test_get_agentic_loop_settings_defaults_and_overrides():
     handler = BaseLLMHTTPHandler()
 
@@ -1899,6 +1978,76 @@ async def test_async_audio_transcriptions_sends_dict_data_as_json_body():
     assert captured["content_type"] == "application/json"
     assert captured["body"] == {"config": {"model": "test-model"}, "content": "YXVkaW8="}
     assert response.text == "transcribed"
+
+
+class _WordTimestampAudioTranscriptionConfig(_JSONBodyAudioTranscriptionConfig):
+    def transform_audio_transcription_response(self, raw_response):
+        payload = raw_response.json()
+        response = TranscriptionResponse(text=payload["text"])
+        response["words"] = payload["words"]
+        return response
+
+
+def test_transform_audio_transcription_response_without_subtitle_opt_in_keeps_text_and_words():
+    words = [
+        {"word": "hello", "start": 0.0, "end": 0.5},
+        {"word": "world", "start": 0.5, "end": 1.0},
+    ]
+    raw_response = httpx.Response(200, json={"text": "hello world", "words": words})
+
+    response = BaseLLMHTTPHandler()._transform_audio_transcription_response(
+        provider_config=_WordTimestampAudioTranscriptionConfig(),
+        model="test-model",
+        response=raw_response,
+        model_response=TranscriptionResponse(),
+        logging_obj=Mock(),
+        optional_params={"response_format": "srt"},
+        api_key=None,
+    )
+
+    assert response.text == "hello world"
+    assert response["words"] == words
+
+
+class _SubtitleSynthesisAudioTranscriptionConfig(_JSONBodyAudioTranscriptionConfig):
+    @property
+    def supports_subtitle_synthesis(self) -> bool:
+        return True
+
+    def transform_audio_transcription_response(self, raw_response):
+        payload = raw_response.json()
+        response = TranscriptionResponse(text=payload["text"])
+        if "words" in payload:
+            response["words"] = payload["words"]
+        return response
+
+
+def _transform_subtitle_response(payload):
+    return BaseLLMHTTPHandler()._transform_audio_transcription_response(
+        provider_config=_SubtitleSynthesisAudioTranscriptionConfig(),
+        model="test-model",
+        response=httpx.Response(200, json=payload),
+        model_response=TranscriptionResponse(),
+        logging_obj=Mock(),
+        optional_params={"response_format": "srt"},
+        api_key=None,
+    )
+
+
+def test_subtitle_synthesis_fallback_without_timings_drops_words():
+    response = _transform_subtitle_response(
+        {"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]}
+    )
+
+    assert response.text == "hello world"
+    assert "words" not in response
+
+
+def test_subtitle_synthesis_without_words_keeps_plain_text():
+    response = _transform_subtitle_response({"text": "hello world"})
+
+    assert response.text == "hello world"
+    assert "words" not in response
 
 
 @pytest.mark.asyncio

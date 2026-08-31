@@ -3977,6 +3977,74 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
 
 
+def _together_chat_response(model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-together-cache",
+        choices=[{"finish_reason": "stop", "index": 0, "message": {"content": "acknowledged", "role": "assistant"}}],
+        created=1756164000,
+        model=model,
+        object="chat.completion",
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
+
+
+def test_completion_cost_prices_together_cached_tokens_at_cache_read_rate(_local_model_cost_map):
+    """Regression: Together reports prompt_tokens_details.cached_tokens but no together_ai
+    registry entry carried cache_read_input_token_cost, so cache-hit tokens were priced at
+    0.0 and spend on cache-heavy workloads was understated."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="deepseek-ai/DeepSeek-V4-Flash-0731", prompt_tokens=7864, completion_tokens=16, cached_tokens=7863
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(1 * 1.4e-07 + 7863 * 3e-08 + 16 * 2.8e-07, rel=1e-9)
+
+
+def test_completion_cost_together_mapped_model_skips_size_bucket(_local_model_cost_map):
+    """Regression: any together model whose name matches (\\d+b) was rewritten to a
+    together-ai-* size bucket before the registry lookup, so mapped models like
+    Muse-Glimmer-30B never used their per-model rates, cache fields included."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="meta-models/Muse-Glimmer-30B", prompt_tokens=63, completion_tokens=16, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(63 * 3.5e-07 + 16 * 1.5e-06, rel=1e-9)
+
+
+def test_completion_cost_together_unmapped_model_still_uses_size_bucket(_local_model_cost_map):
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="qwen/Qwen2-72B-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 9e-07, rel=1e-9)
+
+
+def test_completion_cost_together_metadata_only_model_still_uses_size_bucket(_local_model_cost_map):
+    assert "input_cost_per_token" not in litellm.model_cost["together_ai/togethercomputer/CodeLlama-34b-Instruct"]
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="togethercomputer/CodeLlama-34b-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 8e-07, rel=1e-9)
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
     """A router-facing model_name alias containing "/" whose leading segment is NOT a
     registered provider must not be double-prefixed into a non-existent cost key.
@@ -4036,6 +4104,53 @@ def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_ma
     )
 
     assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
+def _bedrock_response_with_private_model(model: str, region_name: str) -> litellm.ModelResponse:
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model=model,
+    )
+    response._hidden_params = {"provider_response_model": model, "region_name": region_name}
+    return response
+
+
+def test_select_model_name_applies_region_to_private_provider_response_model(_local_model_cost_map):
+    """A Bedrock stream carries its requested model as the private provider model and must keep the
+    request's region in the cost key, exactly as the same request does without streaming."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=_bedrock_response_with_private_model("anthropic.claude-v2:1", "us-east-1"),
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
+def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
+    """An explicit base_model keeps pricing on that model's own key even when the request carries a
+    region with different regional rates, so the private provider model never widens region pricing."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    selected = _select_model_name_for_cost_calc(
+        model="my-bedrock-deployment",
+        completion_response=_bedrock_response_with_private_model("moonshotai.kimi-k2.5", "ap-northeast-1"),
+        base_model="moonshotai.kimi-k2.5",
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/moonshotai.kimi-k2.5"
 
 
 def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
@@ -4282,3 +4397,79 @@ def test_realtime_explicitly_free_session_model_still_bills_zero(
     )
 
     assert cost == 0.0
+
+
+def test_completion_cost_prefers_private_provider_response_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/selected-cost-model",
+        {
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000004,
+            "litellm_provider": "openai",
+        },
+    )
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="requested-route",
+    )
+    response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "provider_response_model": "selected-cost-model",
+    }
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="openai",
+    )
+
+    assert response.model == "requested-route"
+    assert cost == pytest.approx(100 * 0.000002 + 50 * 0.000004)
+
+
+@pytest.mark.parametrize(
+    ("base_model", "custom_pricing", "expected"),
+    [
+        ("openai/base-model", False, "openai/base-model"),
+        (None, True, "openai/requested-route"),
+    ],
+)
+def test_explicit_pricing_precedes_private_provider_response_model(
+    base_model: str | None,
+    custom_pricing: bool,
+    expected: str,
+) -> None:
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="requested-route",
+    )
+    response._hidden_params = {"provider_response_model": "selected-cost-model"}
+
+    selected = _select_model_name_for_cost_calc(
+        model="requested-route",
+        completion_response=response,
+        base_model=base_model,
+        custom_pricing=custom_pricing,
+        custom_llm_provider="openai",
+    )
+
+    assert selected == expected

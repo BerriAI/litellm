@@ -40,7 +40,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import ReadOnly, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -164,6 +164,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: bool | None
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
+    reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -542,6 +544,8 @@ CallTypesLiteral = Literal[
     "_arealtime",
     "create_batch",
     "acreate_batch",
+    "create_file",
+    "acreate_file",
     "pass_through_endpoint",
     "allm_passthrough_route",
     "anthropic_messages",
@@ -2831,6 +2835,11 @@ RoutingDecisionCause = Literal[
     # keyword rule, or session pin), or the floor was already the top configured tier and the
     # classifier was skipped. The matched sentinel rides in matched_keyword.
     "plan_mode",
+    # A client housekeeping sentinel (a coding agent's conversation-title prompt) was detected on
+    # the newest ask, so the request routed to the cheapest configured tier and the classifier was
+    # never called. The matched sentinel rides in matched_keyword. Distinct from the keyword causes,
+    # which are operator-authored rules; these sentinels ship with the router.
+    "housekeeping",
     "session_affinity_pin",
     "session_affinity_escalation",
     "default_fallback",
@@ -2948,6 +2957,8 @@ class StandardLoggingHiddenParams(TypedDict):
     litellm_overhead_time_ms: float | None
     additional_headers: StandardLoggingAdditionalHeaders | None
     batch_models: list[str] | None
+    batch_successful_requests: ReadOnly[int | None]
+    batch_failed_requests: ReadOnly[int | None]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -3249,6 +3260,7 @@ class StandardLoggingPayload(TypedDict):
     cache_key: str | None
     saved_cache_cost: float
     request_tags: list
+    request_model_access_groups: NotRequired[ReadOnly[Sequence[str]]]
     end_user: str | None
     requester_ip_address: str | None
     user_agent: str | None
@@ -3494,6 +3506,7 @@ agentic_loop_internal_litellm_params: Final = [
     "_code_interpreter_interception_converted_stream",
     "_websearch_interception_emit_native_blocks",
     "_websearch_interception_converted_stream",
+    "_headroom_interception_converted_stream",
 ]
 
 # Proxy-owned callback credentials, stamped from admin-configured team/key callback

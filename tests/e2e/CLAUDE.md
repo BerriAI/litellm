@@ -177,15 +177,15 @@ quota_management.<behavior>.<variant>.<assertion>
   behavior  : ratelimit | budget | spend_tracking
   variant   : <ratelimit>      rpm | tpm | priority_generous | priority_strict
               <budget>         key | internal_user | end_user | organization | team | team_member | tag
-                               | model_max | soft | key_multi_window | team_multi_window
-                               | fallback | spend_counter
+                               | model_access_group | model_max | soft | key_multi_window
+                               | team_multi_window | fallback | spend_counter
               <spend_tracking> chat_completions | stream | messages_bridge | embeddings
                                | cache_hit | key_rollup | concurrent_burst | tags | end_user
                                | per_model | failure | spend_calculate | pagination
   assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
               | blocks_then_resets | resets_windows_independently | alerts_without_blocking
-              | isolates_per_model | isolates_per_member | enforced_across_keys | routes_to_fallback
-              | reseed_matches_db | logs_cost | zero_cost
+              | isolates_per_model | isolates_per_member | isolates_per_group | enforced_across_keys
+              | routes_to_fallback | reseed_matches_db | reports_spend | logs_cost | zero_cost
               | matches_sum_of_logs | loses_no_spend | attributes_spend | writes_own_rows
               | writes_failure_row | returns_cost | keeps_total
   e.g.  quota_management.ratelimit.rpm.blocks_over_limit           exercised_on=[chat_completions, messages]
