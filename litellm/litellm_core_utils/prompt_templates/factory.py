@@ -1314,12 +1314,7 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
                 signature_from_model_fields: Final = typed_function_provider_fields.get("thought_signature")
                 if signature_from_model_fields:
                     return cast(str, signature_from_model_fields)  # cast-ok: untyped provider response field
-    # Check if thought signature is embedded in tool call ID.
-    # Any client that normalizes the id shortens/hashes it, so the segment
-    # after ``__thought__`` may no longer base64-decode. Reject those here so
-    # the caller can decide between "no signature" and the dummy fallback,
-    # instead of forwarding a corrupted value that would 400 on Vertex. See
-    # issue #37849.
+    # Check if thought signature is embedded in tool call ID
     tool_call_id: Final = cast(  # cast-ok: tool IDs come from model responses
         str, tool.get("id")
     )
