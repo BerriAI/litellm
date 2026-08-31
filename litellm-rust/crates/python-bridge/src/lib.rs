@@ -13,15 +13,11 @@ use litellm_core::chat_completions::{
 use litellm_core::error::CoreError;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
+use litellm_python_interop::{from_py, release_count, release_gil, to_py};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
-
-mod gil;
-mod marshal;
-
-use marshal::{from_py, to_py};
 
 pyo3::create_exception!(
     _native,
@@ -230,7 +226,7 @@ fn ocr(
         timeout_seconds,
     )?;
 
-    let result = gil::release_gil(py, || {
+    let result = release_gil(py, || {
         pyo3_async_runtimes::tokio::get_runtime().block_on(run_ocr(OcrRequest {
             model: &model,
             document,
@@ -318,7 +314,7 @@ fn transcription(
     };
     let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
     let timeout = optional_timeout(timeout_seconds);
-    let result = gil::release_gil(py, || {
+    let result = release_gil(py, || {
         pyo3_async_runtimes::tokio::get_runtime().block_on(run_audio_transcription(
             AudioTranscriptionRequest {
                 model: &model,
@@ -419,7 +415,7 @@ fn messages(
     let (body, extra_headers, timeout) =
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
 
-    let result = gil::release_gil(py, || {
+    let result = release_gil(py, || {
         pyo3_async_runtimes::tokio::get_runtime().block_on(run_messages(MessagesRequest {
             model: &model,
             body,
@@ -546,7 +542,7 @@ fn chat_completions(
         timeout_seconds,
     )?;
 
-    let result = gil::release_gil(py, || {
+    let result = release_gil(py, || {
         pyo3_async_runtimes::tokio::get_runtime().block_on(run_chat_completions(
             ChatCompletionsRequest {
                 model: &model,
@@ -610,7 +606,7 @@ fn achat_completions(
 #[pyfunction]
 fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let stats = PyDict::new(py);
-    stats.set_item("releases", gil::release_count())?;
+    stats.set_item("releases", release_count())?;
     Ok(stats.into_any().unbind())
 }
 
