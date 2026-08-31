@@ -1910,12 +1910,15 @@ def ocr_cost(
     if credits is not None and cost_per_credit is not None:
         return cost_per_credit * credits, 0.0
 
-    ocr_cost_per_page: float | None = None
-    if model_info is not None:
-        ocr_cost_per_page = model_info.get("ocr_cost_per_page")
+    ocr_cost_per_page: Final = model_info.get("ocr_cost_per_page") if model_info is not None else None
+    annotation_cost_per_page: Final = model_info.get("annotation_cost_per_page") if model_info is not None else None
+    annotation_rate: Final = annotation_cost_per_page if annotation_cost_per_page is not None else ocr_cost_per_page
 
     pages_processed: Final = response.usage_info.pages_processed
-    if pages_processed is None:
+    annotation_pages: Final = response.usage_info.pages_processed_annotation or 0
+    has_billable_annotation_pages: Final = annotation_rate is not None and annotation_pages > 0
+
+    if pages_processed is None and not has_billable_annotation_pages:
         if cost_per_credit is not None or ocr_cost_per_page is None:
             # Surface missing usage data instead of silently under-reporting
             # cost. The previous behavior raised ValueError; we now return 0.0
@@ -1931,7 +1934,7 @@ def ocr_cost(
             return 0.0, 0.0
         raise ValueError("OCR response pages_processed is None")
 
-    if ocr_cost_per_page is None:
+    if ocr_cost_per_page is None and not has_billable_annotation_pages:
         # No per-page pricing configured. Either the model is on credit-based
         # pricing (and credits weren't returned, so the credit branch above did
         # not match) or the model has no OCR pricing entry at all. Surface a
@@ -1947,8 +1950,9 @@ def ocr_cost(
         )
         return 0.0, 0.0
 
-    total_ocr_processing_cost: Final[float] = ocr_cost_per_page * pages_processed
-    return total_ocr_processing_cost, 0.0
+    ocr_pages_cost: Final = (ocr_cost_per_page or 0.0) * (pages_processed or 0)
+    annotation_pages_cost: Final = (annotation_rate or 0.0) * annotation_pages
+    return ocr_pages_cost + annotation_pages_cost, 0.0
 
 
 def vector_store_search_cost(
