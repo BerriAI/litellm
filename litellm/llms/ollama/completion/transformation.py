@@ -20,7 +20,9 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
     Delta,
+    Function,
     GenericStreamingChunk,
     ModelResponse,
     ModelResponseStream,
@@ -456,25 +458,23 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         return self.chunk_parser(json.loads(str_line))
 
-    def _parse_buffered_function_call(self) -> list[dict] | None:
+    def _parse_buffered_function_call(self) -> ChatCompletionDeltaToolCall | None:
         if self.buffered_json_content is None:
             return None
         try:
-            parsed = json.loads(self.buffered_json_content)
+            parsed: Final = json.loads(self.buffered_json_content)
         except json.JSONDecodeError:
             return None
         if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
-            return [
-                {
-                    "id": f"call_{uuid.uuid4()}",
-                    "index": 0,
-                    "function": {
-                        "name": parsed["name"],
-                        "arguments": json.dumps(parsed["arguments"]),
-                    },
-                    "type": "function",
-                }
-            ]
+            return ChatCompletionDeltaToolCall(
+                id=f"call_{uuid.uuid4()}",
+                index=0,
+                type="function",
+                function=Function(
+                    name=parsed["name"],
+                    arguments=json.dumps(parsed["arguments"]),
+                ),
+            )
         return None
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
@@ -499,13 +499,13 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         completion_tokens=eval_count,
                         total_tokens=prompt_eval_count + eval_count,
                     )
-                tool_calls: Final = self._parse_buffered_function_call()
-                if tool_calls is not None:
+                buffered_tool_call: Final = self._parse_buffered_function_call()
+                if buffered_tool_call is not None:
                     return ModelResponseStream(
-                        choices=[
+                        choices=[  # mutable-ok: ModelResponseStream only accepts a list of choices
                             StreamingChoices(
                                 index=0,
-                                delta=Delta(content=None, tool_calls=tool_calls),
+                                delta=Delta(content=None, tool_calls=(buffered_tool_call,)),
                                 finish_reason="tool_calls",
                             )
                         ],
@@ -513,7 +513,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     )
                 if self.buffered_json_content is not None:
                     return ModelResponseStream(
-                        choices=[
+                        choices=[  # mutable-ok: ModelResponseStream only accepts a list of choices
                             StreamingChoices(
                                 index=0,
                                 delta=Delta(content=self.buffered_json_content),
@@ -537,7 +537,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 ):
                     self.buffered_json_content = (self.buffered_json_content or "") + text
                     return ModelResponseStream(
-                        choices=[StreamingChoices(index=0, delta=Delta())],
+                        choices=[StreamingChoices(index=0, delta=Delta())],  # mutable-ok: requires a list of choices
                         usage=None,
                     )
                 reasoning_content: str | None = None

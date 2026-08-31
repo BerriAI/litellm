@@ -341,8 +341,8 @@ class OllamaChatConfig(BaseConfig):
         if "error" in response_json:
             raise OllamaError(
                 message=str(response_json["error"]),
-                status_code=raw_response.status_code if raw_response.status_code >= 400 else 400,
-                headers=dict(raw_response.headers),
+                status_code=max(raw_response.status_code, 400),
+                headers=raw_response.headers,
             )
 
         ## RESPONSE OBJECT
@@ -387,7 +387,11 @@ class OllamaChatConfig(BaseConfig):
             model_response.choices[0].message = message
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-            _message: Final = litellm.Message(**(response_json_message or {}))
+            _message: Final = (
+                litellm.Message(**response_json_message)
+                if response_json_message is not None
+                else litellm.Message(content=None)
+            )
             model_response.choices[0].message = _message
             # Set finish_reason to "tool_calls" when tool_calls are present
             # Fixes: https://github.com/BerriAI/litellm/issues/18922
@@ -396,9 +400,8 @@ class OllamaChatConfig(BaseConfig):
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
         prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))
-        completion_tokens: Final = response_json.get("eval_count") or litellm.token_counter(
-            text=(response_json_message or {}).get("content") or ""
-        )
+        _message_content: Final = response_json_message.get("content") if response_json_message is not None else None
+        completion_tokens: Final = response_json.get("eval_count") or litellm.token_counter(text=_message_content or "")
         setattr(
             model_response,
             "usage",
@@ -430,6 +433,21 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
     stream_tool_call_count: int = 0
+
+    def _assign_tool_call_index_and_id(
+        self,
+        tool_call: dict,  # mutable-ok: normalizes the provider chunk's tool call dict in place
+    ) -> None:
+        function: Final = tool_call.get("function")
+        if function is None:
+            return
+        function_index: Final = function.pop("index", None)
+        if tool_call.get("index") is None:
+            tool_call["index"] = function_index if function_index is not None else self.stream_tool_call_count
+        self.stream_tool_call_count = max(self.stream_tool_call_count + 1, tool_call["index"] + 1)
+        function_args: Final = function.get("arguments")
+        if function_args is not None and len(function_args) > 0 and self._is_function_call_complete(function_args):
+            tool_call["id"] = str(uuid.uuid4())
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -476,23 +494,14 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                 raise OllamaError(
                     message=str(chunk["error"]),
                     status_code=400,
-                    headers={"Content-Type": "application/json"},
+                    headers=Headers(),
                 )
 
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
             if tool_calls is not None:
                 for tool_call in tool_calls:
-                    function = tool_call.get("function") or {}
-                    function_index = function.pop("index", None)
-                    if tool_call.get("index") is None:
-                        tool_call["index"] = function_index if function_index is not None else self.stream_tool_call_count
-                    self.stream_tool_call_count = max(self.stream_tool_call_count + 1, tool_call["index"] + 1)
-                    function_args = function.get("arguments")
-                    if function_args is not None and len(function_args) > 0:
-                        is_function_call_complete = self._is_function_call_complete(function_args)
-                        if is_function_call_complete:
-                            tool_call["id"] = str(uuid.uuid4())
+                    self._assign_tool_call_index_and_id(tool_call)
 
             # PROCESS REASONING CONTENT
             reasoning_content: str | None = None
