@@ -1063,7 +1063,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         self,
         response: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict[str, object] | None = None,
+        request_data: Mapping[str, object] | None = None,
         call_type: str | None = None,
     ):
         BaseResponsesAPIStreamingIterator.__init__(
@@ -1074,7 +1074,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             logging_obj=logging_obj,
             litellm_metadata=None,
             custom_llm_provider="cached_response",
-            request_data=request_data,
+            request_data=dict(request_data) if request_data is not None else None,
             call_type=call_type,
         )
         self._completed_response_cache_hit = True

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm._logging import verbose_proxy_logger
@@ -26,11 +27,15 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
 )
+from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
-from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.responses.main import DeleteResponseResult, GenericResponseOutputItem, OutputText
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.router import Router
+else:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 router: Final = APIRouter()
 
@@ -44,6 +49,19 @@ _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     }
 )
 _EMPTY_TOOL_PAYLOAD: Final[Mapping[str, Any]] = MappingProxyType({})
+
+
+def _blocked_responses_api_stream(
+    response: ResponsesAPIResponse,
+    logging_obj: LiteLLMLoggingObj,
+    request_data: Mapping[str, object],
+) -> CachedResponsesAPIStreamingIterator:
+    return CachedResponsesAPIStreamingIterator(  # mutable-ok: the iterator stores advancing stream state
+        response=response,
+        logging_obj=logging_obj,
+        request_data=request_data,
+        call_type="aresponses",
+    )
 
 
 def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
@@ -404,6 +422,7 @@ async def responses_api(
     except ModifyResponseException as e:
         # Guardrail passthrough: return violation message in Responses API format (200)
         _data: Final = e.request_data
+        exception_logging_obj: Final = _data.get("litellm_logging_obj") or proxy_logging_obj
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -411,15 +430,45 @@ async def responses_api(
         )
 
         violation_text: Final = e.message
+        response_id: Final = f"resp_{uuid4()}"
+        output_item_id: Final = f"msg_{uuid4()}"
+        blocked_output: Final = GenericResponseOutputItem(
+            id=output_item_id,
+            type="message",
+            role="assistant",
+            status="completed",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text=violation_text,
+                    annotations=[],  # mutable-ok: the OpenAI response schema requires a list
+                ),
+            ],
+        )
         response_obj: Final = ResponsesAPIResponse(
-            id=f"resp_{uuid4()}",
+            id=response_id,
             object="response",
             created_at=int(time.time()),
-            model=e.model or data.get("model"),
-            output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
+            model=e.model,
+            output=[blocked_output],  # mutable-ok: ResponsesAPIResponse.output is specified as a list
             status="completed",
             usage=_blocked_responses_api_usage(e.original_response),
         )
+        if data.get("stream") is True:
+            streaming_response: Final = _blocked_responses_api_stream(
+                response=response_obj,
+                logging_obj=cast(
+                    LiteLLMLoggingObj, exception_logging_obj
+                ),  # cast-ok: guardrail request data carries call logging
+                request_data=_data,
+            )
+            selected_data_generator: Final = select_data_generator(
+                response=streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+                request=request,
+            )
+            return StreamingResponse(selected_data_generator, media_type="text/event-stream")
         return response_obj
     except Exception as e:
         raise await processor._handle_llm_api_exception(

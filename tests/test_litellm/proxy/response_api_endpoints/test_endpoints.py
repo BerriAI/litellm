@@ -720,6 +720,54 @@ def _auth_override():
     return UserAPIKeyAuth(api_key="sk-test-cursor", user_id="cursor-user")
 
 
+@pytest.mark.asyncio
+async def test_blocked_responses_api_stream_emits_canonical_events():
+    from litellm.proxy.response_api_endpoints.endpoints import _blocked_responses_api_stream
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    response = ResponsesAPIResponse(
+        id="resp_test",
+        created_at=1234567890,
+        model="gpt-4o",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "blocked by test", "annotations": []}],
+            }
+        ],
+    )
+    stream = _blocked_responses_api_stream(
+        response=response,
+        logging_obj=MagicMock(),
+        request_data={"model": "gpt-4o"},
+    )
+    events = [event async for event in stream]
+    event_types = [event.type for event in events]
+    assert event_types[:4] == [
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.content_part.added",
+    ]
+    assert event_types[-4:] == [
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert event_types[4:-4] == ["response.output_text.delta"] * len(event_types[4:-4])
+    assert events[0].response.status == "in_progress"
+    assert events[0].response.output == []
+    assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == "blocked by test"
+    assert events[-1].response.status == "completed"
+    assert events[-1].response.output[0].content[0].text == "blocked by test"
+
+
 def test_cursor_chat_completions_messages_body_uses_chat_pipeline():
     """A genuine chat-completions body (``messages`` present; what Cursor sends for
     models whose BYOK it already fixed) must run through the standard chat pipeline
