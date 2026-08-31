@@ -4552,7 +4552,9 @@ def test_get_deployment_credentials_with_provider_fails_closed_for_missing_named
         ]
     )
 
-    with patch.object(litellm, "credential_list", []):
+    with patch.object(  # test-quality-ok: CredentialAccessor reads the process-global credential list
+        litellm, "credential_list", []
+    ):
         credentials = router.get_deployment_credentials_with_provider(model_id="embedding-model")
 
     assert credentials is None
