@@ -8,15 +8,49 @@ Handles:
 - Combining guardrails from multiple matching policies
 """
 
+from collections.abc import Sequence
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine import (
     GuardrailPipeline,
     Policy,
     PolicyMatchContext,
     ResolvedPolicy,
 )
+
+
+def _plain_stage(hook: object) -> str | None:
+    if isinstance(hook, GuardrailEventHooks):
+        return hook.value
+    if isinstance(hook, str):
+        return hook
+    return None
+
+
+def _list_gated_stages_for_guardrail(guardrail_name: str) -> frozenset[str] | None:
+    """
+    The lifecycle stages where this guardrail only runs if its name is in the
+    request's flat guardrails list, or None when they cannot be determined
+    statically (enterprise tag-based Mode hooks, whose stages depend on
+    request tags).
+
+    An unregistered name or an event_hook of None yields an empty set: the
+    flat list never gates such a guardrail, so dropping the name from the
+    list cannot suppress anything.
+    """
+    from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
+
+    callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
+    event_hook: Final = callback.event_hook if callback is not None else None
+    if event_hook is None:
+        return frozenset()
+    hooks: Final = tuple(event_hook) if isinstance(event_hook, list) else (event_hook,)
+    stages: Final = tuple(_plain_stage(hook) for hook in hooks)
+    if any(stage is None for stage in stages):
+        return None
+    return frozenset(stage for stage in stages if stage is not None and stage != GuardrailEventHooks.logging_only.value)
 
 
 class PolicyResolver:
@@ -252,6 +286,34 @@ class PolicyResolver:
             for step in pipeline.steps:
                 managed.add(step.guardrail)
         return managed
+
+    @staticmethod
+    def get_guardrails_fully_covered_by_pipelines(
+        pipelines: Sequence[tuple[str, GuardrailPipeline]],
+    ) -> frozenset[str]:
+        """
+        Guardrail names whose every list-gated stage is covered by the mode of
+        a pipeline naming them.
+
+        Only these may be dropped from the request's flat guardrails list. A
+        pipeline manages just its own mode, so a guardrail that also runs in a
+        stage no pipeline covers must stay in the list or that stage's
+        independent activation is silently suppressed.
+        """
+        managed_names: Final = frozenset(
+            step.guardrail for _policy_name, pipeline in pipelines for step in pipeline.steps
+        )
+        return frozenset(
+            name
+            for name in managed_names
+            if (gated_stages := _list_gated_stages_for_guardrail(name)) is not None
+            and gated_stages
+            <= frozenset(
+                pipeline.mode
+                for _policy_name, pipeline in pipelines
+                if any(step.guardrail == name for step in pipeline.steps)
+            )
+        )
 
     @staticmethod
     def get_all_resolved_policies(

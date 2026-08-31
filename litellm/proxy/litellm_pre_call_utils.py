@@ -2991,6 +2991,7 @@ def _apply_resolved_guardrails_to_metadata(
 
     # Track pipeline-managed guardrails to exclude from independent execution
     pipeline_managed_guardrails: set = set()
+    fully_pipeline_covered_guardrails: Final = PolicyResolver.get_guardrails_fully_covered_by_pipelines(pipelines)
     if pipelines:
         pipeline_managed_guardrails = PolicyResolver.get_pipeline_managed_guardrails(pipelines)
         data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
@@ -3008,11 +3009,13 @@ def _apply_resolved_guardrails_to_metadata(
     if not isinstance(existing_guardrails, list):
         existing_guardrails = []
 
-    # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    # Exclude pipeline-managed guardrails from the flat list
+    # Combine existing guardrails with policy-resolved guardrails (no duplicates).
+    # Drop a name only when pipelines cover every stage it supports: a pipeline
+    # manages just its own mode, so the guardrail must stay in the flat list for
+    # its stages outside that mode (mode-scoped execution skips prevent doubles).
     combined = set(existing_guardrails)
     combined.update(resolved_guardrails)
-    combined -= pipeline_managed_guardrails
+    combined -= fully_pipeline_covered_guardrails
     data[metadata_variable_name]["guardrails"] = list(combined)
 
     verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", list(combined))
