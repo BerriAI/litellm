@@ -54,9 +54,11 @@ class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
 
     experimental_use_latest_role_message_only: bool | None = Field(
         default=None,
-        description="Anthropic /v1/messages only. When unset: scans only latest user/developer "
-        "message on request side. Set false to scan all user/system/developer messages. "
-        "Non-Anthropic unaffected.",
+        description="Scan only the latest user/developer message on the request side instead of "
+        "the full conversation history. Set true to enable for every request shape (avoids "
+        "rescanning prior turns on every call of a multi-turn conversation); set false to always "
+        "scan all user/system/developer messages. When unset: defaults to latest-only for "
+        "Anthropic /v1/messages requests and full-history for all other request shapes.",
     )
 
     @staticmethod
