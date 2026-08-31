@@ -27,10 +27,11 @@ class WindowSpendTransaction(TypedDict):
     transaction survives the JSON round trip through the Redis buffer.
 
     started_at is the earliest request start in the batch. The one-time seed for
-    a window that has no row yet sums only LiteLLM_SpendLogs rows that started
-    before it, because the spend log writer flushes on its own ~2s poll and will
-    usually have persisted this batch's rows before the window queue flushes;
-    without the bound the seed and the increment would each count them.
+    a window that has no row yet uses it to tell this batch's own
+    LiteLLM_SpendLogs rows from everything else, because the spend log writer
+    flushes on its own ~2s poll and will usually have persisted this batch's
+    rows before the window queue flushes; without that split the seed and the
+    increment would each count them.
     """
 
     entity_type: ReadOnly[str]
@@ -39,6 +40,34 @@ class WindowSpendTransaction(TypedDict):
     window_start: ReadOnly[str]
     spend: ReadOnly[float]
     started_at: ReadOnly[str | None]
+
+
+class WindowSpendWirePayload(WindowSpendTransaction):
+    """How an increment is encoded in the shared Redis buffer.
+
+    request_ids is dead weight here: workers built before this field was
+    dropped index it while merging whatever they pop, and the pop is
+    destructive, so a leader still running one of those during a rolling deploy
+    would raise on a payload without the key and lose those increments. It is
+    always empty, which only makes such a leader seed without exclusions.
+
+    TODO: remove once no supported version reads it, i.e. one release after the
+    field stopped being written.
+    """
+
+    request_ids: ReadOnly[Sequence[str]]
+
+
+def to_wire_payload(transaction: WindowSpendTransaction) -> WindowSpendWirePayload:
+    return WindowSpendWirePayload(
+        entity_type=transaction["entity_type"],
+        entity_id=transaction["entity_id"],
+        window_duration=transaction["window_duration"],
+        window_start=transaction["window_start"],
+        spend=transaction["spend"],
+        started_at=transaction.get("started_at"),
+        request_ids=(),
+    )
 
 
 def to_naive_utc(value: datetime) -> datetime:
