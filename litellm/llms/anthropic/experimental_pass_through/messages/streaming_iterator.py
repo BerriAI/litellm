@@ -598,7 +598,12 @@ class BaseAnthropicMessagesStreamingIterator:
         """Drain the whole upstream into ``queue`` (backpressured) and bill once.
 
         Runs detached so a client disconnect can't interrupt the upstream read;
-        see ``async_sse_wrapper`` for the full rationale. Returns after billing.
+        see ``async_sse_wrapper`` for the full rationale. On a completed drain
+        the success billing (or deferred park) happens before the end-of-stream
+        sentinel is enqueued: the relay can only tear down after consuming the
+        sentinel, so its teardown can never outrun the park and get mistaken
+        for a client disconnect, and a sentinel the client never consumes falls
+        back to dispatching the parked billing here.
         """
         from litellm._logging import verbose_proxy_logger
 
@@ -631,11 +636,17 @@ class BaseAnthropicMessagesStreamingIterator:
             await self._handle_pump_upstream_error(queue, client_detached, collected_chunks, exc)
             return
 
-        if not client_detached.is_set():
-            if not saw_terminal_event:
-                await self._enqueue_for_client(queue, client_detached, _incomplete_stream_error_sse_event())
-            await self._enqueue_for_client(queue, client_detached, None)
-        await self._bill_collected_chunks(collected_chunks, stream_teardown=client_detached.is_set())
+        if client_detached.is_set():
+            await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
+            return
+        if not saw_terminal_event and not await self._enqueue_for_client(
+            queue, client_detached, _incomplete_stream_error_sse_event()
+        ):
+            await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
+            return
+        await self._bill_collected_chunks(collected_chunks, stream_teardown=False)
+        if not await self._enqueue_for_client(queue, client_detached, None):
+            self._dispatch_pending_deferred_logging()
 
     async def _handle_pump_upstream_error(
         self,
