@@ -147,10 +147,15 @@ def transform_friendli_data(data: list, local_data: dict) -> dict:
     return transformed
 
 # Synchronize local data with remote data
-def sync_local_data_with_remote(local_data, remote_data):
+def sync_local_data_with_remote(local_data, remote_data, replace_keys=frozenset()):
     # Update existing keys in local_data with values from remote_data
+    # (replace_keys entries are swapped wholesale so a field the remote catalog
+    #  dropped, e.g. cache pricing, cannot survive as a stale value)
     for key in (set(local_data) & set(remote_data)):
-        local_data[key].update(remote_data[key])
+        if key in replace_keys:
+            local_data[key] = remote_data[key]
+        else:
+            local_data[key].update(remote_data[key])
 
     # Add new keys from remote_data to local_data
     for key in (set(remote_data) - set(local_data)):
@@ -286,7 +291,7 @@ def main():
 
     # If both local and openrouter data are available, synchronize and save
     if local_data and all_remote_data:
-        sync_local_data_with_remote(local_data, all_remote_data)
+        sync_local_data_with_remote(local_data, all_remote_data, replace_keys=frozenset(friendli_data))
         write_to_file(local_file_path, local_data)
     else:
         print("Failed to fetch model data from either local file or URL.")
