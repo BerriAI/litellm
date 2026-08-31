@@ -89,17 +89,23 @@ class DualCache(BaseCache):
         redis_cache: RedisCache | None = None,
         *,
         default_redis_ttl: float | None = None,
+        replace_existing: bool = False,
     ) -> None:
         """
-        Attach a Redis backend if this DualCache does not already have one.
+        Attach a Redis backend.
 
-        No-op when ``redis_cache`` is None or when Redis was already set (constructor
-        or a prior attach). Use this for lazy wiring after a shared Redis client exists.
-        Does not backfill in-memory-only keys to Redis.
+        By default, an existing Redis backend is preserved.
+        ``replace_existing=True`` is used when a higher-priority
+        configuration must replace the current backend.
         """
-        if redis_cache is None or self.redis_cache is not None:
+        if redis_cache is None:
             return
+
+        if self.redis_cache is not None and not replace_existing:
+            return
+
         self.redis_cache = redis_cache
+
         if default_redis_ttl is not None:
             self.default_redis_ttl = default_redis_ttl
 

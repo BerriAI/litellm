@@ -4163,7 +4163,11 @@ def _build_redis_usage_cache_from_environment() -> RedisCache | None:
     return _build_redis_usage_cache(litellm._redis._redis_kwargs_from_environment())
 
 
-def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: bool) -> None:
+def _attach_redis_usage_cache(
+    redis_cache: RedisCache,
+    enable_redis_auth_cache: bool,
+    replace_existing: bool = False,
+) -> None:
     """
     Wires an established coordination Redis into the proxy-level caches that
     consume it directly: the spend counter cache, the CLI SSO login-session
@@ -4177,15 +4181,18 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     spend_counter_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=litellm.default_redis_ttl,
+        replace_existing=replace_existing,
     )
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
+        replace_existing=replace_existing,
     )
     if enable_redis_auth_cache is True:
         user_api_key_cache.attach_redis_cache(
             redis_cache,
             default_redis_ttl=litellm.default_redis_ttl,
+            replace_existing=replace_existing,
         )
         verbose_proxy_logger.info(
             "enable_redis_auth_cache=True: attached Redis to "
@@ -4782,7 +4789,11 @@ class ProxyConfig:
         if resolved_usage_cache is not None:
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
-            _attach_redis_usage_cache(resolved_usage_cache, enable_redis_auth_cache)
+            _attach_redis_usage_cache(
+                resolved_usage_cache,
+                enable_redis_auth_cache,
+                replace_existing=False,
+            )
         elif litellm_config_cache.redis_cache is None:
             verbose_proxy_logger.info("litellm_config_cache: no Redis configured; cluster-wide cache sharing disabled.")
         return resolved_usage_cache
@@ -5420,6 +5431,7 @@ class ProxyConfig:
                 _attach_redis_usage_cache(
                     environment_redis_cache,
                     enable_redis_auth_cache=(litellm_settings.get("enable_redis_auth_cache", False) is True),
+                    replace_existing=False,
                 )
                 _set_redis_usage_cache(environment_redis_cache)
 
@@ -8999,6 +9011,7 @@ class ProxyStartupEvent:
         _attach_redis_usage_cache(
             coordination_redis_cache,
             enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+            replace_existing=True,
         )
         if llm_router is not None and llm_router.cache.redis_cache is None:
             llm_router._update_redis_cache(cache=coordination_redis_cache)

@@ -412,6 +412,26 @@ def test_dual_cache_late_attach_redis_wires_writes_and_ttl_sync():
     assert in_memory.get_cache(key_after) == val_after
 
 
+def test_attach_redis_cache_does_not_replace_existing_backend():
+    env_cache = MagicMock(spec=RedisCache)
+    persisted_cache = MagicMock(spec=RedisCache)
+    cache = DualCache(redis_cache=env_cache)
+
+    cache.attach_redis_cache(persisted_cache)
+
+    assert cache.redis_cache is env_cache
+
+
+def test_attach_redis_cache_replaces_existing_backend_when_requested():
+    env_cache = MagicMock(spec=RedisCache)
+    persisted_cache = MagicMock(spec=RedisCache)
+    cache = DualCache(redis_cache=env_cache)
+
+    cache.attach_redis_cache(persisted_cache, replace_existing=True)
+
+    assert cache.redis_cache is persisted_cache
+
+
 @pytest.mark.asyncio
 async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
     """

@@ -10957,6 +10957,31 @@ def test_env_fallback_builds_client_from_sentinel_nodes_env():
     assert isinstance(result, _EnvBuiltRedisCache)
 
 
+def test_persisted_redis_replaces_environment_redis():
+    env_cache = MagicMock(spec=RedisCache)
+    persisted_cache = MagicMock(spec=RedisCache)
+    cli_cache = DualCache(redis_cache=env_cache)
+
+    with (
+        patch.object(proxy_server_module, "spend_counter_cache", DualCache()),
+        patch.object(proxy_server_module, "cli_sso_session_cache", cli_cache),
+        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
+        patch.object(proxy_server_module, "litellm_config_cache", types.SimpleNamespace(redis_cache=None)),
+    ):
+        proxy_server_module._attach_redis_usage_cache(
+            env_cache,
+            enable_redis_auth_cache=False,
+            replace_existing=False,
+        )
+        proxy_server_module._attach_redis_usage_cache(
+            persisted_cache,
+            enable_redis_auth_cache=False,
+            replace_existing=True,
+        )
+
+    assert cli_cache.redis_cache is persisted_cache
+
+
 @pytest.mark.asyncio
 async def test_startup_applies_coordination_redis_saved_in_database():
     """A coordination_redis block saved from the admin UI lives only in the
@@ -10987,6 +11012,30 @@ async def test_startup_applies_coordination_redis_saved_in_database():
     assert result.init_kwargs["host"] == "db-host"
     assert fresh_spend_cache.redis_cache is result
     assert fresh_config_cache.redis_cache is result
+
+
+@pytest.mark.asyncio
+async def test_startup_database_coordination_redis_requests_backend_replacement():
+    persisted_cache = MagicMock(spec=RedisCache)
+    attach_redis = MagicMock()
+
+    with (
+        patch.object(proxy_server_module, "_build_redis_usage_cache", return_value=persisted_cache),
+        patch.object(proxy_server_module, "_attach_redis_usage_cache", attach_redis),
+        patch.object(
+            proxy_server_module,
+            "get_persisted_coordination_redis_settings",
+            AsyncMock(return_value={"host": "db-host", "port": 6381}),
+        ),
+    ):
+        result = await proxy_server_module.ProxyStartupEvent._init_coordination_redis_from_db(
+            litellm_settings={},
+            llm_router=None,
+        )
+
+    assert result is persisted_cache
+    attach_redis.assert_called_once()
+    assert attach_redis.call_args.kwargs["replace_existing"] is True
 
 
 @pytest.mark.asyncio

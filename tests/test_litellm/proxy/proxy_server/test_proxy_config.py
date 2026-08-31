@@ -1699,6 +1699,7 @@ async def test_ProxyConfig_load_config_initializes_coordination_redis_from_envir
     attach_redis.assert_called_once_with(
         fake_redis,
         enable_redis_auth_cache=False,
+        replace_existing=False,
     )
 
     assert ps.redis_usage_cache is fake_redis
