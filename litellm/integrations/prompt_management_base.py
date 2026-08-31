@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
 
@@ -17,6 +17,19 @@ class PromptManagementClient(TypedDict):
     prompt_template_model: str | None
     prompt_template_optional_params: dict[str, Any] | None
     completed_messages: list[AllMessageValues] | None
+
+
+def resolve_prompt_manager_ignore_flags(
+    prompt_spec: PromptSpec | None,
+    ignore_prompt_manager_model: bool | None,
+    ignore_prompt_manager_optional_params: bool | None,
+) -> tuple[bool, bool]:
+    spec_params: Final = prompt_spec.litellm_params if prompt_spec is not None else None
+    return (
+        bool(ignore_prompt_manager_model) or bool(spec_params is not None and spec_params.ignore_prompt_manager_model),
+        bool(ignore_prompt_manager_optional_params)
+        or bool(spec_params is not None and spec_params.ignore_prompt_manager_optional_params),
+    )
 
 
 class PromptManagementBase(ABC):
@@ -75,7 +88,7 @@ class PromptManagementBase(ABC):
         prompt_version: int | None = None,
         prompt_spec: PromptSpec | None = None,
     ) -> PromptManagementClient:
-        compiled_prompt_client = self._compile_prompt_helper(
+        compiled_prompt_client: Final = self._compile_prompt_helper(
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
             prompt_variables=prompt_variables,
@@ -85,7 +98,7 @@ class PromptManagementBase(ABC):
         )
 
         try:
-            messages = compiled_prompt_client["prompt_template"] + client_messages
+            messages: Final = compiled_prompt_client["prompt_template"] + client_messages
         except Exception as e:
             raise ValueError(f"Error compiling prompt: {e}. Prompt id={prompt_id}")
 
@@ -102,7 +115,7 @@ class PromptManagementBase(ABC):
         prompt_label: str | None = None,
         prompt_version: int | None = None,
     ) -> PromptManagementClient:
-        compiled_prompt_client = await self.async_compile_prompt_helper(
+        compiled_prompt_client: Final = await self.async_compile_prompt_helper(
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
             prompt_variables=prompt_variables,
@@ -112,7 +125,7 @@ class PromptManagementBase(ABC):
         )
 
         try:
-            messages = compiled_prompt_client["prompt_template"] + client_messages
+            messages: Final = compiled_prompt_client["prompt_template"] + client_messages
         except Exception as e:
             raise ValueError(f"Error compiling prompt: {e}. Prompt id={prompt_id}")
 
@@ -134,11 +147,11 @@ class PromptManagementBase(ABC):
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
     ):
-        completed_messages = prompt_template["completed_messages"] or messages
+        completed_messages: Final = prompt_template["completed_messages"] or messages
 
-        prompt_template_optional_params = prompt_template["prompt_template_optional_params"] or {}
+        prompt_template_optional_params: Final = prompt_template["prompt_template_optional_params"] or {}
 
-        updated_non_default_params = {
+        updated_non_default_params: Final = {
             **non_default_params,
             **(prompt_template_optional_params if not ignore_prompt_manager_optional_params else {}),
         }
@@ -165,7 +178,7 @@ class PromptManagementBase(ABC):
         ignore_prompt_manager_optional_params: bool | None = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         if prompt_id is None:
-            raise ValueError("prompt_id is required for Prompt Management Base class")
+            return model, messages, non_default_params
         if not self.should_run_prompt_management(
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
@@ -173,7 +186,7 @@ class PromptManagementBase(ABC):
         ):
             return model, messages, non_default_params
 
-        prompt_template = self.compile_prompt(
+        prompt_template: Final = self.compile_prompt(
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             client_messages=messages,
@@ -182,13 +195,18 @@ class PromptManagementBase(ABC):
             prompt_version=prompt_version,
         )
 
+        resolved_ignore_model, resolved_ignore_optional_params = resolve_prompt_manager_ignore_flags(
+            prompt_spec=prompt_spec,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+        )
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,
             messages=messages,
             non_default_params=non_default_params,
             model=model,
-            ignore_prompt_manager_model=ignore_prompt_manager_model,
-            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+            ignore_prompt_manager_model=resolved_ignore_model,
+            ignore_prompt_manager_optional_params=resolved_ignore_optional_params,
         )
 
     async def async_get_chat_completion_prompt(
@@ -214,7 +232,7 @@ class PromptManagementBase(ABC):
         ):
             return model, messages, non_default_params
 
-        prompt_template = await self.async_compile_prompt(
+        prompt_template: Final = await self.async_compile_prompt(
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             client_messages=messages,
@@ -224,11 +242,16 @@ class PromptManagementBase(ABC):
             prompt_version=prompt_version,
         )
 
+        resolved_ignore_model, resolved_ignore_optional_params = resolve_prompt_manager_ignore_flags(
+            prompt_spec=prompt_spec,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+        )
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,
             messages=messages,
             non_default_params=non_default_params,
             model=model,
-            ignore_prompt_manager_model=ignore_prompt_manager_model,
-            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+            ignore_prompt_manager_model=resolved_ignore_model,
+            ignore_prompt_manager_optional_params=resolved_ignore_optional_params,
         )

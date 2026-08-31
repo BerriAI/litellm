@@ -6,11 +6,25 @@ import json
 import os
 import re
 import threading
-from typing import Any, Final
+from collections.abc import Callable
+from typing import Any, Final, Protocol
 from urllib.parse import urlsplit
 
 import litellm
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
+from litellm.types.llms.openai import AllMessageValues
+
+
+class _GDCHAudienceCredentials(Protocol):
+    """A GDCH service account credential already bound to an audience, ready to mint a bearer token."""
+
+    @property
+    def valid(self) -> bool: ...
+
+    @property
+    def token(self) -> str: ...
+
+    def refresh(self, request: object) -> None: ...
 
 
 class GDCGeminiConfig(OpenAILikeChatConfig):
@@ -21,7 +35,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._creds_lock = threading.Lock()
-        self._gdch_creds_cache: dict = {}
+        self._gdch_creds_cache: dict[tuple[str, str], _GDCHAudienceCredentials] = {}
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
@@ -48,7 +62,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         )
 
     def _effective_project(self, api_base: str, optional_params: dict, litellm_params: dict) -> str | None:
-        match = re.search(r"/v1/projects/([^/]+)", api_base)
+        match: Final = re.search(r"/v1/projects/([^/]+)", api_base)
         if match:
             return match.group(1)
         return self._resolve_project(optional_params, litellm_params)
@@ -110,9 +124,9 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
 
         return f"{api_base}/v1/projects/{project}/locations/{location}/chat/completions"
 
-    def _read_env_bool(self, val: Any, env_var: str, default: bool = True) -> bool | str:
+    def _read_env_bool(self, val: bool | str | None, env_var: str, default: bool = True) -> bool | str:
         def _parse(s: str) -> bool | str:
-            cleaned = s.strip().lower()
+            cleaned: Final = s.strip().lower()
             if cleaned in ("false", "0", "no", "off"):
                 return False
             if cleaned in ("true", "1", "yes", "on"):
@@ -124,42 +138,53 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
                 return _parse(val)
             return val
 
-        _env_val = os.getenv(env_var)
+        _env_val: Final = os.getenv(env_var)
         if _env_val is None:
             return default
         return _parse(_env_val)
 
-    def _fetch_auth(self, gdch_creds: Any, ssl_verify: bool | str) -> None:
+    def _fetch_auth(self, gdch_creds: _GDCHAudienceCredentials, ssl_verify: bool | str) -> None:
         import requests
         from google.auth.transport import requests as auth_requests
 
-        auth_session = requests.Session()
+        auth_session: Final = requests.Session()
         auth_session.verify = ssl_verify
-        auth_request = auth_requests.Request(session=auth_session)
+        auth_request: Final = auth_requests.Request(session=auth_session)
         gdch_creds.refresh(auth_request)
 
-    def _cached_fetch_token(self, creds: Any, audience: str, ssl_verify: bool | str, api_key: str | None = None) -> str:
+    def _with_gdch_audience(self, creds: object, audience: str) -> _GDCHAudienceCredentials:
+        """The credential rebound to ``audience``, which GDCH requires before a token refresh."""
+        bind_audience: Final[Callable[[str], _GDCHAudienceCredentials] | None] = getattr(
+            creds, "with_gdch_audience", None
+        )
+        if bind_audience is None:
+            raise AttributeError("GDC credentials must expose with_gdch_audience to be bound to a request audience")
+        return bind_audience(audience)
+
+    def _cached_fetch_token(
+        self, creds: object, audience: str, ssl_verify: bool | str, api_key: str | None = None
+    ) -> str:
         # Key cache by both audience and credential identity to prevent cross-caller contamination
-        cache_key = (audience.rstrip("/"), api_key or str(id(creds)))
+        cache_key: Final = (audience.rstrip("/"), api_key or str(id(creds)))
 
         with self._creds_lock:
             if cache_key not in self._gdch_creds_cache:
-                self._gdch_creds_cache[cache_key] = creds.with_gdch_audience(audience.rstrip("/"))
+                self._gdch_creds_cache[cache_key] = self._with_gdch_audience(creds, audience.rstrip("/"))
 
-            gdch_creds = self._gdch_creds_cache[cache_key]
+            gdch_creds: Final = self._gdch_creds_cache[cache_key]
 
             if not getattr(gdch_creds, "valid", False) or not getattr(gdch_creds, "token", None):
                 self._fetch_auth(gdch_creds, ssl_verify)
 
-            token = gdch_creds.token
+            token: Final = gdch_creds.token
 
         return token
 
-    def _load_creds_from_key(self, api_key: str) -> tuple[Any, bool]:
+    def _load_creds_from_key(self, api_key: str) -> tuple[object | None, bool]:
         import google.auth
 
         try:
-            json_obj = json.loads(api_key)
+            json_obj: Final = json.loads(api_key)
         except json.JSONDecodeError:
             return None, False
         if not isinstance(json_obj, dict) or json_obj.get("type") != self._GDCH_CREDENTIAL_TYPE:
@@ -175,7 +200,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -207,8 +232,8 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             )
         project = self._validate_path_id(project, "vertex_project", model)
 
-        _audience_parts = urlsplit(api_base if api_base.startswith("http") else f"https://{api_base}")
-        audience = f"{_audience_parts.scheme}://{_audience_parts.netloc}"
+        _audience_parts: Final = urlsplit(api_base if api_base.startswith("http") else f"https://{api_base}")
+        audience: Final = f"{_audience_parts.scheme}://{_audience_parts.netloc}"
 
         try:
             creds, is_service_account = self._load_creds_from_key(api_key)
@@ -226,11 +251,11 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             ) from e
 
         if creds is not None:
-            ssl_verify = self._read_env_bool(litellm_params.get("ssl_verify"), "SSL_VERIFY", default=True)
+            ssl_verify: Final = self._read_env_bool(litellm_params.get("ssl_verify"), "SSL_VERIFY", default=True)
             if self._read_env_bool(litellm_params.get("gdc_token_caching"), "GDC_TOKEN_CACHING", default=False):
                 token = self._cached_fetch_token(creds, audience, ssl_verify, api_key)
             else:
-                gdch_creds = creds.with_gdch_audience(audience)
+                gdch_creds: Final = self._with_gdch_audience(creds, audience)
                 self._fetch_auth(gdch_creds, ssl_verify)
                 token = gdch_creds.token
             headers["Authorization"] = f"Bearer {token}"
@@ -242,7 +267,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         if "content-type" not in headers and "Content-Type" not in headers:
             headers["Content-Type"] = "application/json"
 
-        stale_quota_headers = tuple(h for h in headers if h.lower() == "x-goog-user-project")
+        stale_quota_headers: Final = tuple(h for h in headers if h.lower() == "x-goog-user-project")
         for stale in stale_quota_headers:
             headers.pop(stale, None)
         headers["x-goog-user-project"] = f"projects/{project}"
@@ -252,7 +277,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[Any],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -263,7 +288,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         if model.startswith("gdc/"):
             model = model.split("/", 1)[1]
 
-        data = super().transform_request(
+        data: Final = super().transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,

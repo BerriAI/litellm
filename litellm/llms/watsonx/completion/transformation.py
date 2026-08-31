@@ -1,10 +1,7 @@
 import time
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-)
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -23,6 +20,8 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -103,7 +102,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         stream: bool | None = None,
         **kwargs,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -116,7 +115,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         """
         Determine if user passed in a watsonx.ai text generation param
         """
-        text_generation_params = [
+        text_generation_params: Final = [
             "decoding_method",
             "max_new_tokens",
             "min_new_tokens",
@@ -153,7 +152,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        extra_body = {}
+        extra_body: Final = {}
         for k, v in non_default_params.items():
             if k == "max_tokens":
                 optional_params["max_new_tokens"] = v
@@ -199,7 +198,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         }
 
     def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
-        mapped_params = self.get_mapped_special_auth_params()
+        mapped_params: Final = self.get_mapped_special_auth_params()
 
         for param, value in non_default_params.items():
             if param in mapped_params:
@@ -225,10 +224,10 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
 
     def _build_request_payload(self, model: str, prompt: str, optional_params: dict) -> dict:
         """Shared logic to build request payload"""
-        extra_body_params = optional_params.pop("extra_body", {})
+        extra_body_params: Final = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
-        watsonx_api_params = _get_api_params(params=optional_params, model=model)
-        watsonx_auth_payload = self._prepare_payload(model=model, api_params=watsonx_api_params)
+        watsonx_api_params: Final = _get_api_params(params=optional_params, model=model)
+        watsonx_auth_payload: Final = self._prepare_payload(model=model, api_params=watsonx_api_params)
 
         return {
             "input": prompt,
@@ -250,8 +249,8 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             aconvert_watsonx_messages_to_prompt,
         )
 
-        provider = model.split("/")[0]
-        prompt = await aconvert_watsonx_messages_to_prompt(
+        provider: Final = model.split("/")[0]
+        prompt: Final = await aconvert_watsonx_messages_to_prompt(
             model=model, messages=messages, provider=provider, custom_prompt_dict={}
         )
         return self._build_request_payload(model=model, prompt=prompt, optional_params=optional_params)
@@ -265,8 +264,8 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         headers: dict,
     ) -> dict:
         """Sync version of transform_request"""
-        provider = model.split("/")[0]
-        prompt = convert_watsonx_messages_to_prompt(
+        provider: Final = model.split("/")[0]
+        prompt: Final = convert_watsonx_messages_to_prompt(
             model=model, messages=messages, provider=provider, custom_prompt_dict={}
         )
         return self._build_request_payload(model=model, prompt=prompt, optional_params=optional_params)
@@ -281,7 +280,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -292,7 +291,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             original_response=raw_response.text,
         )
 
-        json_resp = raw_response.json()
+        json_resp: Final = raw_response.json()
 
         if "results" not in json_resp:
             raise WatsonXAIError(
@@ -301,10 +300,10 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             )
         if model_response is None:
             model_response = ModelResponse(model=json_resp.get("model_id", None))
-        generated_text = json_resp["results"][0]["generated_text"]
-        prompt_tokens = json_resp["results"][0]["input_token_count"]
-        completion_tokens = json_resp["results"][0]["generated_token_count"]
-        model_response.choices[0].message.content = generated_text  # type: ignore
+        generated_text: Final = json_resp["results"][0]["generated_text"]
+        prompt_tokens: Final = json_resp["results"][0]["input_token_count"]
+        completion_tokens: Final = json_resp["results"][0]["generated_token_count"]
+        model_response.choices[0].message.content = generated_text
         model_response.choices[0].finish_reason = map_finish_reason(json_resp["results"][0]["stop_reason"])
         if json_resp.get("created_at"):
             try:
@@ -315,7 +314,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -335,7 +334,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         url = self._get_base_url(api_base=api_base)
         if model.startswith("deployment/"):
             # deployment models are passed in as 'deployment/<deployment_id>'
-            deployment_id = "/".join(model.split("/")[1:])
+            deployment_id: Final = "/".join(model.split("/")[1:])
             endpoint = (
                 WatsonXAIEndpoint.DEPLOYMENT_TEXT_GENERATION_STREAM.value
                 if stream
@@ -369,11 +368,11 @@ class WatsonxTextCompletionResponseIterator(BaseModelResponseIterator):
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
-            results = chunk.get("results", [])
+            results: Final = chunk.get("results", [])
             if len(results) > 0:
-                text = results[0].get("generated_text", "")
-                finish_reason = results[0].get("stop_reason")
-                is_finished = finish_reason != "not_finished"
+                text: Final = results[0].get("generated_text", "")
+                finish_reason: Final = results[0].get("stop_reason")
+                is_finished: Final = finish_reason != "not_finished"
 
                 return GenericStreamingChunk(
                     text=text,

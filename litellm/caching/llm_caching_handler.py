@@ -3,6 +3,7 @@ Add the event loop to the cache key, to prevent event loop closed errors.
 """
 
 import asyncio
+from typing import Final
 
 from .evicted_client_closer import EvictedClientCloser, default_evicted_client_closer
 from .in_memory_cache import InMemoryCache
@@ -28,7 +29,7 @@ class LLMClientCache(InMemoryCache):
         default_ttl: int | None = 600,
         max_size_per_item: int | None = 1024,
         evicted_client_closer: EvictedClientCloser | None = None,
-    ):
+    ) -> None:
         super().__init__(
             max_size_in_memory=max_size_in_memory,
             default_ttl=default_ttl,
@@ -37,7 +38,7 @@ class LLMClientCache(InMemoryCache):
         self.evicted_client_closer = evicted_client_closer or default_evicted_client_closer
 
     def _remove_key(self, key: str) -> None:
-        evicted: object = self.cache_dict.get(key)
+        evicted: Final[object] = self.cache_dict.get(key)
         super()._remove_key(key)
         self.evicted_client_closer.schedule(evicted)
         self.evicted_client_closer.reap()
@@ -48,8 +49,8 @@ class LLMClientCache(InMemoryCache):
         If none, use the key as is.
         """
         try:
-            event_loop = asyncio.get_running_loop()
-            stringified_event_loop = str(id(event_loop))
+            event_loop: Final = asyncio.get_running_loop()
+            stringified_event_loop: Final = str(id(event_loop))
             return f"{key}-{stringified_event_loop}"
         except RuntimeError:  # handle no current running event loop
             return key

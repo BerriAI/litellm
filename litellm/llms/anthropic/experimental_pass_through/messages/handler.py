@@ -9,20 +9,20 @@ import asyncio
 import contextvars
 from collections.abc import AsyncIterator, Coroutine, Iterator
 from functools import partial
-from typing import (
-    Any,
-    cast,
-)
+from typing import Any, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
+    flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
-    strip_empty_text_blocks_from_anthropic_messages,
+    strip_empty_content_blocks_from_anthropic_messages,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
@@ -41,18 +41,49 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
-_RESPONSES_API_PROVIDERS = frozenset({"openai"})
+_RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 
 
-def _should_route_to_responses_api(custom_llm_provider: str | None) -> bool:
-    """Return True when the provider should use the Responses API path.
+def _bridges_to_responses_api(model: str, custom_llm_provider: str) -> bool:
+    from litellm.main import responses_api_bridge_check
+
+    model_info, _ = responses_api_bridge_check(model=model, custom_llm_provider=custom_llm_provider)
+    return model_info.get("mode") == "responses"
+
+
+def _responses_mode_is_lost_by_prefix_strip(
+    requested_model: str, resolved_model: str, custom_llm_provider: str
+) -> bool:
+    """Whether a Responses-only deployment stops looking like one once its provider prefix is stripped.
+
+    ``litellm.completion`` re-derives the Responses bridge from the stripped id alone, so a
+    deployment id such as ``perplexity/perplexity/sonar`` (mode ``responses``) is shadowed by the
+    chat entry ``perplexity/sonar`` and would otherwise be sent to chat/completions.
+    """
+    if requested_model == resolved_model:
+        return False
+    return _bridges_to_responses_api(requested_model, custom_llm_provider) and not _bridges_to_responses_api(
+        resolved_model, custom_llm_provider
+    )
+
+
+def _should_route_to_responses_api(
+    custom_llm_provider: str | None,
+    requested_model: str | None = None,
+    resolved_model: str | None = None,
+) -> bool:
+    """Return True when the request should use the Responses API path.
 
     Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
     opt out and route OpenAI/Azure requests through chat/completions instead.
     """
     if litellm.use_chat_completions_url_for_anthropic_messages:
         return False
-    return custom_llm_provider in _RESPONSES_API_PROVIDERS
+    if custom_llm_provider in _RESPONSES_API_PROVIDERS:
+        return True
+    if custom_llm_provider is None or requested_model is None or resolved_model is None:
+        return False
+    return _responses_mode_is_lost_by_prefix_strip(requested_model, resolved_model, custom_llm_provider)
 
 
 def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
@@ -64,7 +95,7 @@ def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
     """
     if not isinstance(model_info, dict):
         return False
-    supported_endpoints = model_info.get("supported_endpoints")
+    supported_endpoints: Final = model_info.get("supported_endpoints")
     return isinstance(supported_endpoints, (list, tuple)) and "/v1/messages" in supported_endpoints
 
 
@@ -211,36 +242,40 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec.
 
-    Runs the empty-text-block sanitizer before any backend dispatch.
+    Runs the empty-content-block sanitizer before any backend dispatch.
     """
     # Anthropic's API rejects requests containing empty / whitespace-only
-    # text content blocks with "messages: text content blocks must be
-    # non-empty".  Multi-turn tool-use clients (e.g. Claude Code) routinely
-    # loop assistant responses that contain {"type": "text", "text": ""}
-    # alongside tool_use blocks back as conversation history, which then
-    # causes the next /v1/messages call to 400.  /v1/chat/completions
-    # already handles this in anthropic_messages_pt; sanitize the native
-    # Anthropic Messages path here for the same guarantee.  See #22930.
-    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+    # text content blocks ("messages: text content blocks must be
+    # non-empty") and empty thinking blocks ("each thinking block must
+    # contain thinking").  Multi-turn tool-use clients (e.g. Claude Code)
+    # routinely loop assistant responses that contain such blocks — an empty
+    # text block alongside tool_use, or an empty thinking block from a turn
+    # a non-Anthropic reasoning model served through the bridge — back as
+    # conversation history, which then causes the next /v1/messages call to
+    # 400.  /v1/chat/completions already handles this in
+    # anthropic_messages_pt; sanitize the native Anthropic Messages path
+    # here for the same guarantee.  See #22930.
+    messages = strip_empty_content_blocks_from_anthropic_messages(messages)
     # Replay of cross-provider tool history (e.g. kimi -> Anthropic) may carry
     # ids like ``functions.Bash:0`` that violate Anthropic's id pattern.
     messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+    messages = flatten_unencrypted_web_search_results_in_anthropic_messages(messages)
 
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
     )
 
     messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
-        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools, api_base=api_base
     )
 
-    original_stream = stream or kwargs.get("_websearch_interception_converted_stream", False)
+    original_stream: Final = stream or kwargs.get("_websearch_interception_converted_stream", False)
 
     # Execute pre-request hooks to allow CustomLoggers to modify request.
     # tool_choice is forwarded explicitly (it is a named param, not in kwargs)
     # so hooks that rename tools — e.g. websearch_interception converting
     # web_search -> litellm_web_search — can keep a forced tool_choice in sync.
-    request_kwargs = await _execute_pre_request_hooks(
+    request_kwargs: Final = await _execute_pre_request_hooks(
         model=model,
         messages=messages,
         tools=tools,
@@ -284,7 +319,7 @@ async def anthropic_messages(
     # without ever touching the backend LLM or the adapter path.
     # Use original_stream (not the hook-converted stream) so streaming
     # callers get SSE events instead of a plain dict.
-    short_circuit_response = await _try_websearch_short_circuit(
+    short_circuit_response: Final = await _try_websearch_short_circuit(
         model=model,
         messages=messages,
         tools=tools,
@@ -320,10 +355,10 @@ async def anthropic_messages(
                 **kwargs,
             )
 
-    loop = asyncio.get_event_loop()
+    loop: Final = asyncio.get_event_loop()
     kwargs["is_async"] = True
 
-    func = partial(
+    func: Final = partial(
         anthropic_messages_handler,
         max_tokens=max_tokens,
         messages=messages,
@@ -342,7 +377,7 @@ async def anthropic_messages(
         api_base=api_base,
         client=client,
         custom_llm_provider=custom_llm_provider,
-        # messages were already empty-text-block sanitized at the top of this
+        # messages were already empty-content-block sanitized at the top of this
         # function and are NOT reassigned before this dispatch, so the handler
         # can skip its (otherwise redundant) second full-messages scan. Passed
         # explicitly (not via **kwargs) so it only affects this direct
@@ -350,15 +385,20 @@ async def anthropic_messages(
         _litellm_messages_presanitized=True,
         **kwargs,
     )
-    ctx = contextvars.copy_context()
-    func_with_context = partial(ctx.run, func)
-    init_response = await loop.run_in_executor(None, func_with_context)
-
-    if asyncio.iscoroutine(init_response):
-        response = await init_response
-    else:
-        response = init_response
-    return response
+    ctx: Final = contextvars.copy_context()
+    func_with_context: Final = partial(ctx.run, func)
+    try:
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            return await init_response
+        return init_response
+    except BaseLLMException as e:
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            extra_kwargs=kwargs,
+        )
 
 
 def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None:
@@ -369,7 +409,7 @@ def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None
     """
     if metadata is None:
         return None
-    anthropic_metadata_obj = AnthropicMetadata(**metadata)
+    anthropic_metadata_obj: Final = AnthropicMetadata(**metadata)
     return anthropic_metadata_obj.model_dump(exclude_none=True)
 
 
@@ -414,29 +454,30 @@ def anthropic_messages_handler(
     # ``_litellm_messages_presanitized`` to skip this redundant second
     # full-messages scan. Pop it so it never leaks into provider params.
     if not kwargs.pop("_litellm_messages_presanitized", False):
-        messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+        messages = strip_empty_content_blocks_from_anthropic_messages(messages)
         messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+        messages = flatten_unencrypted_web_search_results_in_anthropic_messages(messages)
 
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
     )
 
     messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
-        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools, api_base=api_base
     )
 
     metadata = validate_anthropic_api_metadata(metadata)
 
-    local_vars = locals()
-    is_async = kwargs.pop("is_async", False)
+    local_vars: Final = locals()
+    is_async: Final = kwargs.pop("is_async", False)
     # Use provided client or create a new one
-    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
 
     # Store original model name before get_llm_provider strips the provider prefix
     # This is needed by agentic hooks (e.g., websearch_interception) to make follow-up requests
-    original_model = model
+    original_model: Final = model
 
-    litellm_params = GenericLiteLLMParams(
+    litellm_params: Final = GenericLiteLLMParams(
         **kwargs,
         api_key=api_key,
         api_base=api_base,
@@ -481,7 +522,7 @@ def anthropic_messages_handler(
     # Expand litellm_proxy MCP references through the MCP gateway before dispatch, so every
     # downstream path (native passthrough and both bridges) gets real tools rather than a
     # reference the provider cannot resolve. Popped from kwargs so it never reaches the provider.
-    skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
+    skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler import (
             anthropic_messages_with_mcp,
@@ -530,10 +571,37 @@ def anthropic_messages_handler(
         anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig()
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        _shared_kwargs = dict(
+        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
+            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=original_model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                _is_async=is_async,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
+
+        # The in-gateway context_management polyfill runs inside
+        # ``async_anthropic_messages_handler`` so it can ``await`` the
+        # summarization model for ``compact_20260112``. ``context_management``
+        # is passed through as a regular kwarg.
+        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
-            model=model,
+            model=original_model,
             metadata=metadata,
             stop_sequences=stop_sequences,
             stream=stream,
@@ -551,16 +619,6 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
-
-        # The in-gateway context_management polyfill runs inside
-        # ``async_anthropic_messages_handler`` so it can ``await`` the
-        # summarization model for ``compact_20260112``. ``context_management``
-        # is passed through as a regular kwarg.
-        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-            **_shared_kwargs,
-        )
 
     if custom_llm_provider is None:
         raise ValueError(
@@ -568,7 +626,7 @@ def anthropic_messages_handler(
         )
 
     local_vars.update(kwargs)
-    anthropic_messages_optional_request_params = (
+    anthropic_messages_optional_request_params: Final = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             params=local_vars,
             model=model,
@@ -577,7 +635,7 @@ def anthropic_messages_handler(
         )
     )
     if is_reasoning_auto_summary_enabled():
-        thinking_param = anthropic_messages_optional_request_params.get("thinking")
+        thinking_param: Final = anthropic_messages_optional_request_params.get("thinking")
         if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
             anthropic_messages_optional_request_params["thinking"] = {
                 **thinking_param,

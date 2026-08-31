@@ -7,7 +7,8 @@ to reuse all authentication and Azure Storage operations.
 """
 
 import time
-from urllib.parse import quote
+from typing import Final
+from urllib.parse import quote, urlparse
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -46,6 +47,8 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         - AZURE_STORAGE_TENANT_ID (optional, if using Azure AD)
         - AZURE_STORAGE_CLIENT_ID (optional, if using Azure AD)
         - AZURE_STORAGE_CLIENT_SECRET (optional, if using Azure AD)
+        - AZURE_STORAGE_ENDPOINT_SUFFIX (optional, defaults to core.windows.net; set to
+          core.usgovcloudapi.net or another sovereign-cloud suffix as needed)
 
         Note: We skip periodic_flush since we're not using this as a logger.
         """
@@ -83,12 +86,12 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         elif file_naming_strategy == "timestamp":
             # Use timestamp
             extension = original_filename.split(".")[-1] if "." in original_filename else ""
-            timestamp = int(time.time() * 1000)  # milliseconds
+            timestamp: Final = int(time.time() * 1000)  # milliseconds
             return f"{timestamp}.{extension}" if extension else str(timestamp)
         else:  # default to "uuid"
             # Use UUID
             extension = original_filename.split(".")[-1] if "." in original_filename else ""
-            file_uuid = str(uuid.uuid4())
+            file_uuid: Final = str(uuid.uuid4())
             return f"{file_uuid}.{extension}" if extension else file_uuid
 
     async def upload_file(
@@ -102,16 +105,16 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         """
         Upload a file to Azure Blob Storage.
 
-        Returns the blob URL in format: https://{account}.blob.core.windows.net/{container}/{path}
+        Returns the blob URL in format: https://{account}.blob.{endpoint_suffix}/{container}/{path}
         """
         try:
             # Generate file name
-            file_name = self._generate_file_name(filename, file_naming_strategy)
+            file_name: Final = self._generate_file_name(filename, file_naming_strategy)
 
             # Build full path
             if path_prefix:
                 # Remove leading/trailing slashes and normalize
-                prefix = path_prefix.strip("/")
+                prefix: Final = path_prefix.strip("/")
                 full_path = f"{prefix}/{file_name}"
             else:
                 full_path = file_name
@@ -139,8 +142,8 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
     async def _upload_file_with_account_key(self, file_content: bytes, full_path: str) -> str:
         """Upload file using Azure SDK with account key authentication."""
         # Reuse the logger's service client method
-        service_client = await self.get_service_client()
-        file_system_client = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
+        service_client: Final = await self.get_service_client()
+        file_system_client: Final = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
 
         # Create filesystem (container) if it doesn't exist
         if not await file_system_client.exists():
@@ -148,13 +151,13 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
             verbose_logger.debug("Created filesystem: %s", self.azure_storage_file_system)
 
         # Extract directory and filename (similar to logger's pattern)
-        path_parts = full_path.split("/")
+        path_parts: Final = full_path.split("/")
         if len(path_parts) > 1:
-            directory_path = "/".join(path_parts[:-1])
-            file_name = path_parts[-1]
+            directory_path: Final = "/".join(path_parts[:-1])
+            file_name: Final = path_parts[-1]
 
             # Create directory if needed (like logger does)
-            directory_client = file_system_client.get_directory_client(directory_path)
+            directory_client: Final = file_system_client.get_directory_client(directory_path)
             if not await directory_client.exists():
                 await directory_client.create_directory()
                 verbose_logger.debug("Created directory: %s", directory_path)
@@ -171,7 +174,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         await file_client.flush_data(position=len(file_content), offset=0)
 
         # Return blob URL (not DFS URL)
-        blob_url = f"https://{self.azure_storage_account_name}.blob.core.windows.net/{self.azure_storage_file_system}/{full_path}"
+        blob_url = f"{self.azure_storage_blob_endpoint}/{self.azure_storage_file_system}/{full_path}"
         return blob_url
 
     async def _upload_file_with_azure_ad(self, file_content: bytes, full_path: str) -> str:
@@ -184,10 +187,10 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
             httpxSpecialProvider,
         )
 
-        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
         # Use DFS endpoint for upload
-        base_url = f"https://{self.azure_storage_account_name}.dfs.core.windows.net/{self.azure_storage_file_system}/{full_path}"
+        base_url = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{full_path}"
 
         # Execute 3-step upload process: create, append, flush
         # Reuse the logger's helper methods
@@ -197,19 +200,19 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         await self._flush_data(async_client, base_url, len(file_content))
 
         # Return blob URL (not DFS URL)
-        blob_url = f"https://{self.azure_storage_account_name}.blob.core.windows.net/{self.azure_storage_file_system}/{full_path}"
+        blob_url = f"{self.azure_storage_blob_endpoint}/{self.azure_storage_file_system}/{full_path}"
         return blob_url
 
     async def _append_data_bytes(self, client, base_url: str, file_content: bytes):
         """Append binary data to file using REST API."""
         from litellm.constants import AZURE_STORAGE_MSFT_VERSION
 
-        headers = {
+        headers: Final = {
             "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
             "Content-Type": "application/octet-stream",
             "Authorization": f"Bearer {self.azure_auth_token}",
         }
-        response = await client.patch(
+        response: Final = await client.patch(
             f"{base_url}?action=append&position=0",
             headers=headers,
             content=file_content,
@@ -221,23 +224,22 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         Download a file from Azure Blob Storage.
 
         Args:
-            storage_url: Blob URL in format: https://{account}.blob.core.windows.net/{container}/{path}
+            storage_url: Blob URL in format: https://{account}.blob.{endpoint_suffix}/{container}/{path}
 
         Returns:
             bytes: File content
         """
         try:
             # Parse blob URL to extract path
-            # URL format: https://{account}.blob.core.windows.net/{container}/{path}
-            if ".blob.core.windows.net/" not in storage_url:
+            # URL format: https://{account}.blob.{endpoint_suffix}/{container}/{path}
+            parsed_url: Final = urlparse(storage_url)
+            if ".blob." not in (parsed_url.hostname or ""):
                 raise ValueError(f"Invalid Azure Blob Storage URL: {storage_url}")
 
             # Extract path after container name
-            container_and_path = storage_url.split(".blob.core.windows.net/", 1)[1]
-            path_parts = container_and_path.split("/", 1)
-            if len(path_parts) < 2:
+            _, _, file_path = parsed_url.path.lstrip("/").partition("/")
+            if not file_path:
                 raise ValueError(f"Invalid Azure Blob Storage URL format: {storage_url}")
-            file_path = path_parts[1]  # Path after container name
 
             if self.azure_storage_account_key:
                 # Use Azure SDK (reuse logger's service client)
@@ -253,15 +255,15 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
     async def _download_file_with_account_key(self, file_path: str) -> bytes:
         """Download file using Azure SDK with account key."""
         # Reuse the logger's service client method
-        service_client = await self.get_service_client()
-        file_system_client = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
+        service_client: Final = await self.get_service_client()
+        file_system_client: Final = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
         # Ensure filesystem exists (should already exist, but check for safety)
         if not await file_system_client.exists():
             raise ValueError(f"Filesystem {self.azure_storage_file_system} does not exist")
-        file_client = file_system_client.get_file_client(file_path)
+        file_client: Final = file_system_client.get_file_client(file_path)
         # Download file
-        download_response = await file_client.download_file()
-        file_content = await download_response.readall()
+        download_response: Final = await file_client.download_file()
+        file_content: Final = await download_response.readall()
         return file_content
 
     async def _download_file_with_azure_ad(self, file_path: str) -> bytes:
@@ -275,16 +277,16 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
             httpxSpecialProvider,
         )
 
-        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
         # Use blob endpoint for download (simpler than DFS)
-        blob_url = f"https://{self.azure_storage_account_name}.blob.core.windows.net/{self.azure_storage_file_system}/{file_path}"
+        blob_url = f"{self.azure_storage_blob_endpoint}/{self.azure_storage_file_system}/{file_path}"
 
-        headers = {
+        headers: Final = {
             "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
             "Authorization": f"Bearer {self.azure_auth_token}",
         }
 
-        response = await async_client.get(blob_url, headers=headers)
+        response: Final = await async_client.get(blob_url, headers=headers)
         response.raise_for_status()
         return response.content

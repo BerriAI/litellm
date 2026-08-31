@@ -757,9 +757,13 @@ async def test_evict_config_param_does_not_publish() -> None:
 def _reload_config_prisma_client() -> MagicMock:
     config_record = MagicMock()
     config_record.param_value = {"interval_hours": 6, "force_reload": True}
+    config_record.reload_revision = 0
+    config_record.last_run_at = None
     prisma_client = MagicMock()
     prisma_client.get_generic_data = AsyncMock(return_value=config_record)
-    prisma_client.db.litellm_config.upsert = AsyncMock(return_value=None)
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=config_record)
+    prisma_client.db.litellm_config.upsert = AsyncMock(return_value=config_record)
+    prisma_client.db.litellm_config.update_many = AsyncMock(return_value=1)
     return prisma_client
 
 
@@ -790,7 +794,7 @@ async def test_model_cost_map_reload_does_not_publish_config_change() -> None:
         _invalidate_model_cost_lowercase_map()
         _set_redis_usage_cache(previous_cache)
 
-    prisma_client.db.litellm_config.upsert.assert_awaited_once()
+    prisma_client.db.litellm_config.update_many.assert_awaited_once()
     assert client.published == []
 
 

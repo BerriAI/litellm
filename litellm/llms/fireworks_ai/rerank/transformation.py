@@ -4,7 +4,8 @@ Fireworks AI Rerank API transformation
 Reference: https://docs.fireworks.ai/inference-api-reference/rerank
 """
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Final
 
 import httpx
 
@@ -70,7 +71,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         """
         Map Cohere rerank params to Fireworks AI rerank params
         """
-        params: dict[str, Any] = {
+        params: Final[dict[str, Any]] = {
             "query": query,
             "documents": documents,
         }
@@ -96,12 +97,13 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
 
         return params
 
-    def validate_environment(  # type: ignore[override]
+    def validate_environment(
         self,
         headers: dict,
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         api_key = self._get_api_key(api_key)
         if api_key is None:
@@ -109,7 +111,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
                 "FIREWORKS_API_KEY is not set. Please set 'FIREWORKS_API_KEY' or 'FIREWORKS_AI_API_KEY' in your environment"
             )
 
-        default_headers = {
+        default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
@@ -146,7 +148,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         if not model.startswith("fireworks/"):
             model = f"fireworks/{model}"
 
-        request_data = {
+        request_data: Final = {
             "model": model,
             "query": optional_rerank_params["query"],
             "documents": optional_rerank_params["documents"],
@@ -175,7 +177,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         Transform Fireworks AI rerank response to LiteLLM RerankResponse format
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse response: {e}",
@@ -202,21 +204,21 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         # }
 
         # Extract usage information
-        usage = raw_response_json.get("usage", {})
-        _billed_units = RerankBilledUnits(search_units=usage.get("total_tokens", 0))
-        _tokens = RerankTokens(
+        usage: Final = raw_response_json.get("usage", {})
+        _billed_units: Final = RerankBilledUnits(search_units=usage.get("total_tokens", 0))
+        _tokens: Final = RerankTokens(
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
         )
-        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         # Extract results - Fireworks AI uses "data" instead of "results"
-        _results: list[dict] | None = raw_response_json.get("data") or raw_response_json.get("results")
+        _results: Final[list[dict] | None] = raw_response_json.get("data") or raw_response_json.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
 
-        rerank_results: list[RerankResponseResult] = []
+        rerank_results: Final[list[RerankResponseResult]] = []
 
         for result in _results:
             # Validate required fields exist
@@ -249,7 +251,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             rerank_results.append(rerank_result)
 
         # Use model name as id if no id is provided
-        response_id = raw_response_json.get("id") or raw_response_json.get("model") or str(uuid.uuid4())
+        response_id: Final = raw_response_json.get("id") or raw_response_json.get("model") or str(uuid.uuid4())
 
         return RerankResponse(
             id=response_id,

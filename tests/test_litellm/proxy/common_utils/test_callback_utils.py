@@ -1,15 +1,12 @@
 import copy
 import sys
-import os
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_scan_id,
     add_policy_to_applied_policies_header,
     decrypt_callback_vars,
     encrypt_callback_vars,
@@ -21,6 +18,10 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 import litellm
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import ProxyLogging
 
 from unittest.mock import patch
 from litellm.proxy.common_utils.callback_utils import process_callback
@@ -186,6 +187,22 @@ def test_get_logging_caching_headers_merges_metadata_and_litellm_metadata():
     assert headers["x-litellm-applied-policies"] == "global-baseline"
     assert headers["x-litellm-applied-guardrails"] == "pii_blocker"
     assert headers["x-litellm-policy-sources"] == "global-baseline=team_default"
+
+
+def test_add_guardrail_scan_id_dedupes_and_becomes_response_header():
+    request_data = {"litellm_metadata": {}}
+
+    add_guardrail_scan_id(request_data=request_data, scan_id="scan-1")
+    add_guardrail_scan_id(request_data=request_data, scan_id="scan-1")
+    add_guardrail_scan_id(request_data=request_data, scan_id="scan-2")
+    add_guardrail_scan_id(request_data=request_data, scan_id=None)
+
+    assert request_data["litellm_metadata"]["guardrail_scan_ids"] == ("scan-1", "scan-2")
+    assert get_logging_caching_headers(request_data)["x-litellm-guardrail-scan-id"] == "scan-1,scan-2"
+
+
+def test_get_logging_caching_headers_omits_scan_id_header_without_scans():
+    assert "x-litellm-guardrail-scan-id" not in get_logging_caching_headers({"litellm_metadata": {}})
 
 
 def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
@@ -471,6 +488,7 @@ def test_strip_callback_config_drops_credential_bearing_slots():
             }
         ],
         "callback_settings": {"callback_vars": {"langfuse_secret_key": "litellm_enc::other"}},
+        "secret_manager_settings": {"vault_token": "vt-secret"},
         "priority": "high",
         "guardrails": ["presidio"],
         "langsmith_provisioning": {"api_key_id": "prov-1"},
@@ -480,6 +498,7 @@ def test_strip_callback_config_drops_credential_bearing_slots():
 
     assert "logging" not in stripped
     assert "callback_settings" not in stripped
+    assert "secret_manager_settings" not in stripped
     assert stripped["priority"] == "high"
     assert stripped["guardrails"] == ["presidio"]
     assert stripped["langsmith_provisioning"] == {"api_key_id": "prov-1"}
@@ -491,3 +510,163 @@ def test_strip_callback_config_drops_credential_bearing_slots():
 @pytest.mark.parametrize("value", [None, "not-a-dict", 42])
 def test_strip_callback_config_passes_through_non_dicts(value):
     assert strip_callback_config(value) is value
+
+
+# ---------------------------------------------------------------------------
+# initialize_callbacks_on_proxy: dotted-path entries must resolve to something
+# the request path can actually dispatch
+# ---------------------------------------------------------------------------
+
+_PROBE_MODULE_NAME = "custom_callback_probe"
+
+_PROBE_MODULE_SOURCE = '''
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class FloorMaxTokens(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        data["max_tokens"] = 16
+        return data
+
+
+class NotALogger:
+    pass
+
+
+def log_event_fn(kwargs, response_obj, start_time, end_time):
+    return None
+
+
+NOT_A_CALLBACK = "some-plain-string"
+
+proxy_handler_instance = FloorMaxTokens()
+'''
+
+
+@pytest.fixture
+def probe_config_path(tmp_path):
+    """Write a callback module next to a config.yaml, the layout get_instance_fn's file
+    branch expects, and restore every global the load + dispatch path touches.
+
+    ``ProxyLogging._callback_capabilities_cache`` is keyed on the id()s of the
+    litellm.callbacks members, so an entry left behind here can be read back by an
+    unrelated test whose (len, ids) signature happens to collide.
+    """
+    (tmp_path / f"{_PROBE_MODULE_NAME}.py").write_text(_PROBE_MODULE_SOURCE)
+
+    original_callbacks = (
+        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else litellm.callbacks
+    )
+    litellm.callbacks = []
+    ProxyLogging._callback_capabilities_cache.clear()
+    try:
+        yield str(tmp_path / "config.yaml")
+    finally:
+        litellm.callbacks = original_callbacks
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _load_callbacks(value, config_file_path):
+    initialize_callbacks_on_proxy(
+        value=value,
+        premium_user=False,
+        config_file_path=config_file_path,
+        litellm_settings={},
+        callback_specific_params={},
+    )
+
+
+def test_initialize_callbacks_on_proxy_rejects_class_valued_entry(probe_config_path):
+    """A class path loads an object that fails the `isinstance(_callback, CustomLogger)`
+    dispatch gate in ProxyLogging.pre_call_hook, so the proxy used to boot clean and
+    silently never run the hook. Config load must fail instead."""
+    entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
+
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
+        _load_callbacks([entry], probe_config_path)
+
+    message = str(exc_info.value)
+    assert entry in message
+    assert "the class" in message
+    assert "FloorMaxTokens" in message
+    assert f"{_PROBE_MODULE_NAME}.proxy_handler_instance" in message
+    assert litellm.callbacks == []
+
+
+@pytest.mark.parametrize(
+    "attribute, expected_fragment",
+    [
+        ("NotALogger", "the class"),
+        ("NOT_A_CALLBACK", "str 'some-plain-string'"),
+    ],
+)
+def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
+    probe_config_path, attribute, expected_fragment
+):
+    entry = f"{_PROBE_MODULE_NAME}.{attribute}"
+
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
+        _load_callbacks([entry], probe_config_path)
+
+    message = str(exc_info.value)
+    assert entry in message
+    assert expected_fragment in message
+    assert litellm.callbacks == []
+
+
+def test_initialize_callbacks_on_proxy_rejects_class_valued_non_list_value(probe_config_path):
+    entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
+
+    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
+        _load_callbacks(entry, probe_config_path)
+
+    assert entry in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_initialize_callbacks_on_proxy_instance_entry_runs_pre_call_hook(probe_config_path):
+    """Positive control: the supported shape must still load AND still run. Drives the
+    real ProxyLogging.pre_call_hook, which is where a class-valued entry goes silent."""
+    _load_callbacks([f"{_PROBE_MODULE_NAME}.proxy_handler_instance"], probe_config_path)
+
+    assert len(litellm.callbacks) == 1
+    assert isinstance(litellm.callbacks[0], CustomLogger)
+
+    ProxyLogging._callback_capabilities_cache.clear()
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    data = await proxy_logging.pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-probe"),
+        data={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+            "metadata": {},
+        },
+        call_type="acompletion",
+    )
+
+    assert data["max_tokens"] == 16
+
+
+def test_initialize_callbacks_on_proxy_keeps_known_string_callback(probe_config_path):
+    """Non-narrowing control: a known callback name never reaches get_instance_fn and
+    stays a plain string in litellm.callbacks."""
+    _load_callbacks(["langfuse"], probe_config_path)
+
+    assert litellm.callbacks == ["langfuse"]
+
+
+def test_initialize_callbacks_on_proxy_accepts_plain_function_callback(probe_config_path):
+    """Non-narrowing control: litellm.callbacks is typed
+    `Callable | <known name> | CustomLogger`, so a dotted path resolving to a plain
+    function is a supported shape and must keep loading."""
+    _load_callbacks([f"{_PROBE_MODULE_NAME}.log_event_fn"], probe_config_path)
+
+    assert [getattr(cb, "__name__", None) for cb in litellm.callbacks] == ["log_event_fn"]
+
+
+def test_initialize_callbacks_on_proxy_accepts_instance_non_list_value(probe_config_path):
+    _load_callbacks(f"{_PROBE_MODULE_NAME}.proxy_handler_instance", probe_config_path)
+
+    assert len(litellm.callbacks) == 1
+    assert isinstance(litellm.callbacks[0], CustomLogger)

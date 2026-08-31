@@ -6,12 +6,14 @@ import random
 import time
 import uuid
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypedDict, overload
 
 import httpx
+from typing_extensions import Never, ReadOnly, Required
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -29,6 +31,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Function,
@@ -43,12 +46,110 @@ if TYPE_CHECKING:
     )
     from litellm.proxy._types import UserAPIKeyAuth
 
-_WEBHOOK_PATH_RESPONSE_MODERATION = "/v1/after_completion/openai/v1"
-_WEBHOOK_PATH_PROMPT_MODERATION = "/v1/before_prompt/openai/v1"
-_WEBHOOK_PATH_LOGGING_BATCH = "/v1/litellm/batch"
-_MAX_QUEUE_SIZE = 10_000
-_DROP_WARNING_INTERVAL_SECONDS = 60.0
-_EMPTY_MAPPING: Mapping[str, Any] = MappingProxyType({})
+_WEBHOOK_PATH_RESPONSE_MODERATION: Final = "/v1/after_completion/openai/v1"
+_WEBHOOK_PATH_PROMPT_MODERATION: Final = "/v1/before_prompt/openai/v1"
+_WEBHOOK_PATH_LOGGING_BATCH: Final = "/v1/litellm/batch"
+_MAX_QUEUE_SIZE: Final = 10_000
+_DROP_WARNING_INTERVAL_SECONDS: Final = 60.0
+_EMPTY_MAPPING: Final[Mapping[str, Never]] = MappingProxyType({})
+
+
+class _ModerationToolCall(TypedDict, total=False):
+    id: ReadOnly[Required[str]]
+
+
+class _ModerationMessage(TypedDict, total=False):
+    content: ReadOnly[str | None]
+    tool_calls: ReadOnly[Sequence[_ModerationToolCall] | None]
+
+
+class _ModerationChoice(TypedDict, total=False):
+    message: ReadOnly[_ModerationMessage | None]
+
+
+class _ModerationResponse(TypedDict, total=False):
+    choices: ReadOnly[Sequence[_ModerationChoice]]
+
+
+class _LogEventKwargs(TypedDict, total=False):
+    standard_logging_object: ReadOnly[Required[StandardLoggingPayload]]
+    litellm_call_id: ReadOnly[str]
+
+
+class _HasCallId(Protocol):
+    def get(self, key: Literal["litellm_call_id"], /) -> str | None: ...
+
+
+class _HasModelAttr(Protocol):
+    model: str | None
+
+
+class _ResponseSource(Protocol):
+    def get(self, key: Literal["response"], /) -> "_HasModelAttr | None": ...
+
+
+class _ModelSource(Protocol):
+    def get(self, key: Literal["model"], default: str, /) -> str: ...
+
+
+class _FallbackSource(Protocol):
+    @overload
+    def get(self, key: Literal["start_time"], /) -> datetime | None: ...
+    @overload
+    def get(self, key: str, /) -> object | None: ...
+
+
+class _RequestContextSource(Protocol):
+    @overload
+    def get(self, key: Literal["optional_params"], /) -> Mapping[str, object] | None: ...
+    @overload
+    def get(self, key: str, /) -> object | None: ...
+    def __contains__(self, key: object, /) -> bool: ...
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+class _ToolCallLike(Protocol):
+    id: str | None
+    type: str | None
+    function: Function
+
+
+class _ModerationSourceToolCall(TypedDict, total=False):
+    function: ReadOnly[Mapping[str, object] | None]
+
+
+class _ModerationSourceMessage(TypedDict, total=False):
+    role: ReadOnly[str]
+    function_call: ReadOnly[Mapping[str, object] | None]
+    tool_calls: ReadOnly[Sequence[_ModerationSourceToolCall | None] | None]
+
+
+class _FlattenedModerationMessage(TypedDict):
+    role: ReadOnly[str | None]
+    content: ReadOnly[str]
+
+
+class _CorrelatablePayload(TypedDict):
+    id: str  # writable-ok: _apply_correlation_id overwrites the provider id on a deep-copied payload
+
+
+class _SystemPromptCarrier(TypedDict, total=False):
+    messages: object  # writable-ok: _prepend_system_prompt rebinds messages on the copied payload by design
+
+
+class _BlockFailurePayload(TypedDict, total=False):
+    id: object  # writable-ok: correlation id is pinned after copying the base payload
+    model: ReadOnly[object]
+    model_group: ReadOnly[object]
+    model_id: ReadOnly[str]
+    model_parameters: ReadOnly[object]
+    startTime: ReadOnly[float | None]
+    endTime: ReadOnly[float | None]
+    completionStartTime: ReadOnly[float | None]
+    messages: object  # writable-ok: passed to _prepend_system_prompt, which rebinds messages
+    metadata: ReadOnly[StandardLoggingUserAPIKeyMetadata]
+    response: str  # writable-ok: block failure text replaces the copied response
+    status: ReadOnly[str]
 
 
 class _MalformedToolBlockingResponseError(Exception):
@@ -143,7 +244,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             else {"Content-Type": "application/json"}
         )
 
-        self._periodic_flush_task: asyncio.Task[Any] | None = self._start_periodic_flush_task()
+        self._periodic_flush_task: asyncio.Task[None] | None = self._start_periodic_flush_task()
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -157,10 +258,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     def _parse_sampling_rate(self) -> None:
         self.sampling_rate = 1.0
-        rbrk_sampling_rate = os.getenv("RUBRIK_SAMPLING_RATE")
+        rbrk_sampling_rate: Final = os.getenv("RUBRIK_SAMPLING_RATE")
         if rbrk_sampling_rate is not None:
             try:
-                parsed_rate = float(rbrk_sampling_rate.strip())
+                parsed_rate: Final = float(rbrk_sampling_rate.strip())
                 self.sampling_rate = max(0.0, min(1.0, parsed_rate))
                 if parsed_rate != self.sampling_rate:
                     verbose_logger.warning("RUBRIK_SAMPLING_RATE=%s clamped to %s", parsed_rate, self.sampling_rate)
@@ -168,10 +269,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 verbose_logger.warning("Invalid RUBRIK_SAMPLING_RATE: %r, using 1.0", rbrk_sampling_rate)
 
     def _parse_batch_size(self) -> None:
-        _batch_size = os.getenv("RUBRIK_BATCH_SIZE")
+        _batch_size: Final = os.getenv("RUBRIK_BATCH_SIZE")
         if _batch_size:
             try:
-                parsed_size = int(_batch_size)
+                parsed_size: Final = int(_batch_size)
                 if parsed_size <= 0:
                     verbose_logger.warning("RUBRIK_BATCH_SIZE=%r must be > 0, using default", _batch_size)
                 else:
@@ -191,10 +292,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             params={"timeout": httpx.Timeout(5.0, connect=2.0)},
         )
 
-    def _start_periodic_flush_task(self) -> asyncio.Task[Any] | None:
+    def _start_periodic_flush_task(self) -> asyncio.Task[None] | None:
         """Start the periodic flush task only when an event loop is already running."""
         try:
-            loop = asyncio.get_running_loop()
+            loop: Final = asyncio.get_running_loop()
         except RuntimeError:
             return None
         return loop.create_task(self.periodic_flush())
@@ -212,7 +313,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         Closing them here would close the shared connection pool for every
         other logger instance; let LiteLLM manage their lifecycle instead.
         """
-        task = getattr(self, "_periodic_flush_task", None)
+        task: Final[asyncio.Task[None] | None] = getattr(self, "_periodic_flush_task", None)
         if task is not None:
             task.cancel()
 
@@ -253,7 +354,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     @staticmethod
     async def _guarded(
-        coro: Any,
+        coro: Awaitable[GenericGuardrailAPIInputs],
         inputs: GenericGuardrailAPIInputs,
         label: str,
     ) -> GenericGuardrailAPIInputs:
@@ -294,13 +395,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     ) -> GenericGuardrailAPIInputs:
         """Send response text + tool calls to the after_completion webhook and
         raise if either the response text or any tool call is blocked."""
-        tool_calls = inputs.get("tool_calls")
-        texts = inputs.get("texts")
+        tool_calls: Final = inputs.get("tool_calls")
+        texts: Final = inputs.get("texts")
         if not tool_calls and not texts:
             return inputs
 
-        message_tool_calls = self._normalize_tool_calls(tool_calls or ())
-        sent_content = self._join_texts(texts)
+        message_tool_calls: Final = self._normalize_tool_calls(tool_calls or ())
+        sent_content: Final = self._join_texts(texts)
 
         call_details = getattr(logging_obj, "model_call_details", _EMPTY_MAPPING) if logging_obj else _EMPTY_MAPPING
         if logging_obj and not call_details:
@@ -312,16 +413,16 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # correlation key (the S3 filename), so it must match the failure
         # (response) log written for the same blocked request. Both use
         # ``litellm_call_id`` -- see ``_correlation_id``.
-        request_id = self._correlation_id(call_details, request_data)
+        request_id: Final = self._correlation_id(call_details, request_data)
 
-        response_data = self._build_response_moderation_payload(message_tool_calls, sent_content, request_id)
-        req_data = self._extract_request_data(call_details, request_data)
+        response_data: Final = self._build_response_moderation_payload(message_tool_calls, sent_content, request_id)
+        req_data: Final = self._extract_request_data(call_details, request_data)
 
-        service_response = await self._post_to_response_moderation_endpoint(response_data, req_data)
-        blocked = self._extract_response_block(service_response, message_tool_calls, sent_content)
+        service_response: Final = await self._post_to_response_moderation_endpoint(response_data, req_data)
+        blocked: Final = self._extract_response_block(service_response, message_tool_calls, sent_content)
 
         if blocked:
-            model = self._resolve_model(request_data, call_details)
+            model: Final = self._resolve_model(request_data, call_details)
             self._stash_block_context(logging_obj, request_data)
             raise ModifyResponseException(
                 message=blocked.explanation,
@@ -345,21 +446,21 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             # For non-chat request types (e.g. /v1/completions), litellm
             # supplies the prompt as ``texts`` with no structured_messages.
             # Synthesise a user-message so the webhook can evaluate the prompt.
-            texts = inputs.get("texts")
+            texts: Final = inputs.get("texts")
             if texts:
-                joined = "\n".join(t for t in texts if t)
+                joined: Final = "\n".join(t for t in texts if t)
                 if joined:
                     messages = [{"role": "user", "content": joined}]
         if not messages:
             return inputs
 
-        payload = self._build_prompt_moderation_payload(inputs, request_data)
-        service_response = await self._post_to_prompt_moderation_endpoint(payload)
-        refusal = self._extract_prompt_refusal(service_response)
+        payload: Final = self._build_prompt_moderation_payload(inputs, request_data)
+        service_response: Final = await self._post_to_prompt_moderation_endpoint(payload)
+        refusal: Final = self._extract_prompt_refusal(service_response)
         if refusal is None:
             return inputs
 
-        model = inputs.get("model") or request_data.get("model") or "unknown"
+        model: Final = inputs.get("model") or request_data.get("model") or "unknown"
         self._stash_block_context(logging_obj, request_data)
         raise ModifyResponseException(
             message=refusal,
@@ -371,7 +472,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     @staticmethod
     def _stash_block_context(
         logging_obj: Optional["LiteLLMLoggingObj"],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> None:
         """Stash signals so the deferred success-event skips this request and
         ``async_post_call_failure_hook`` can build the failure payload.
@@ -400,16 +501,20 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         request_data["_rubrik_logging_obj"] = logging_obj
 
     @staticmethod
-    def _normalize_tool_calls(tool_calls: Any) -> tuple[ChatCompletionMessageToolCall, ...]:
+    def _normalize_tool_calls(
+        tool_calls: Sequence[ChatCompletionToolCallChunk | ChatCompletionMessageToolCall | _ToolCallLike],
+    ) -> tuple[ChatCompletionMessageToolCall, ...]:
         """Convert tool_calls from inputs to ChatCompletionMessageToolCall objects."""
         return tuple(RubrikLogger._normalize_tool_call(tc) for tc in tool_calls)
 
     @staticmethod
-    def _normalize_tool_call(tc: Any) -> ChatCompletionMessageToolCall:
+    def _normalize_tool_call(
+        tc: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall | _ToolCallLike,
+    ) -> ChatCompletionMessageToolCall:
         if isinstance(tc, ChatCompletionMessageToolCall):
             return tc
         if isinstance(tc, dict):
-            func = tc.get("function") or _EMPTY_MAPPING
+            func: Final = tc.get("function") or _EMPTY_MAPPING
             return ChatCompletionMessageToolCall(
                 id=tc.get("id", ""),
                 type=tc.get("type", "function"),
@@ -427,7 +532,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         raise TypeError(f"Cannot normalize tool_call of type {type(tc).__name__}: {tc!r}")
 
     @staticmethod
-    def _join_texts(texts: Any) -> str:
+    def _join_texts(texts: Sequence[str] | None) -> str:
         """Join response text segments into the single content string the
         webhook evaluates. Empty when there is no assistant text."""
         if not texts:
@@ -439,19 +544,22 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         tool_calls: Sequence[ChatCompletionMessageToolCall],
         content: str,
         request_id: str | None,
-    ) -> Mapping[str, Any]:
+    ) -> Mapping[str, object]:
         """Build an OpenAI ChatCompletion-format dict (assistant text + tool
         calls) for the after_completion webhook.
 
         ``content`` is sent so the webhook can moderate the response text;
         ``None`` when the assistant produced no text (tool-call-only response).
         """
-        message: dict[str, Any] = {
+        message: Final[Mapping[str, object]] = {
             "role": "assistant",
             "content": content or None,
+            **(
+                {"tool_calls": tuple(tc.model_dump(exclude_none=True) for tc in tool_calls)}
+                if tool_calls
+                else _EMPTY_MAPPING
+            ),
         }
-        if tool_calls:
-            message["tool_calls"] = tuple(tc.model_dump(exclude_none=True) for tc in tool_calls)
         return {
             "id": request_id or f"chatcmpl-{uuid.uuid4()}",
             "object": "chat.completion",
@@ -467,7 +575,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         }
 
     @staticmethod
-    def _flatten_messages_for_moderation(messages: Any) -> tuple[Mapping[str, Any], ...]:
+    def _flatten_messages_for_moderation(
+        messages: Sequence[AllMessageValues | None] | None,
+    ) -> tuple[_FlattenedModerationMessage, ...]:
         """Collapse each message's content to a plain string for the webhook.
 
         litellm normalizes Anthropic ``/v1/messages`` requests to OpenAI shape,
@@ -488,10 +598,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         )
 
     @staticmethod
-    def _moderation_text_parts(message: Mapping[str, Any]) -> tuple[str, ...]:
+    def _moderation_text_parts(message: _ModerationSourceMessage) -> tuple[str, ...]:
         """Every attacker-controlled text segment of a message: its content plus
         the arguments of any tool call or deprecated function call."""
-        fc = message.get("function_call")
+        fc: Final = message.get("function_call")
         return (
             # Base text content (flattens Anthropic content-part arrays)
             convert_content_list_to_str(message),  # pyright: ignore[reportArgumentType]  # dict[str,Any] is AllMessageValues at runtime
@@ -506,8 +616,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     @staticmethod
     def _build_prompt_moderation_payload(
         inputs: GenericGuardrailAPIInputs,
-        request_data: Mapping[str, Any],
-    ) -> Mapping[str, Any]:
+        request_data: Mapping[str, object],
+    ) -> Mapping[str, object]:
         """Build the bare OpenAI request the before_prompt webhook consumes.
 
         Unlike the after_completion envelope, this endpoint takes a raw OpenAI
@@ -516,32 +626,28 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         ``/v1/messages`` requests too. Optional fields are sent only when
         present so the payload stays clean.
         """
-        payload: dict[str, Any] = {
-            "model": inputs.get("model") or request_data.get("model") or "",
-            "messages": RubrikLogger._flatten_messages_for_moderation(inputs.get("structured_messages")),
-        }
-        tools = inputs.get("tools")
-        if tools is not None:
-            payload["tools"] = tools
-        user = request_data.get("user")
-        if user:
-            payload["user"] = user
+        tools: Final = inputs.get("tools")
+        user: Final = request_data.get("user")
         # Fall back to litellm_call_id, the stable cross-provider join key the
         # response/tool path uses (see _correlation_id). LiteLLM does not
         # populate request_data["correlation_key"]; it carries litellm_call_id.
         # The before_prompt webhook skips the *_prompt_moderation.json S3 write
         # when correlation_key is empty, so without this the block fires but no
         # log is ever written. An explicit correlation_key still wins.
-        correlation_key = request_data.get("correlation_key") or request_data.get("litellm_call_id")
-        if correlation_key:
-            payload["correlation_key"] = correlation_key
-        return payload
+        correlation_key: Final = request_data.get("correlation_key") or request_data.get("litellm_call_id")
+        return {
+            "model": inputs.get("model") or request_data.get("model") or "",
+            "messages": RubrikLogger._flatten_messages_for_moderation(inputs.get("structured_messages")),
+            **({"tools": tools} if tools is not None else _EMPTY_MAPPING),
+            **({"user": user} if user else _EMPTY_MAPPING),
+            **({"correlation_key": correlation_key} if correlation_key else _EMPTY_MAPPING),
+        }
 
     @staticmethod
     def _extract_request_data(
-        call_details: Mapping[str, Any],
-        request_data: Mapping[str, Any] | None,
-    ) -> Mapping[str, Any]:
+        call_details: _RequestContextSource,
+        request_data: _RequestContextSource | None,
+    ) -> Mapping[str, object]:
         """Extract original request data from model_call_details for the
         response moderation service envelope.
 
@@ -553,7 +659,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return _EMPTY_MAPPING
         call_details = call_details or _EMPTY_MAPPING
         request_data = request_data or _EMPTY_MAPPING
-        optional_params = call_details.get("optional_params") or _EMPTY_MAPPING
+        optional_params: Final = call_details.get("optional_params") or _EMPTY_MAPPING
 
         # Use ``in`` rather than truthy ``or`` so an explicit empty list
         # (caller declared the agent has NO tools) is forwarded as-is.
@@ -576,7 +682,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         }
 
     @staticmethod
-    def _sanitize_proxy_server_request(proxy_server_request: Any) -> Any:
+    def _sanitize_proxy_server_request(proxy_server_request: Mapping[str, object] | str | None) -> object:
         """Allowlist only routing fields (``url``, ``method``) when forwarding
         ``proxy_server_request`` to an external webhook, dropping inbound
         ``headers`` (Authorization, Cookie, x-api-key, ...) and the raw
@@ -586,9 +692,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         return {key: proxy_server_request[key] for key in ("url", "method") if key in proxy_server_request}
 
     @staticmethod
-    def _resolve_model(request_data: Mapping[str, Any], call_details: Mapping[str, Any]) -> str:
+    def _resolve_model(request_data: _ResponseSource, call_details: _ModelSource) -> str:
         """Get the model name for the ModifyResponseException."""
-        response = request_data.get("response")
+        response: Final = request_data.get("response")
         if response and hasattr(response, "model"):
             return response.model or "unknown"
         return call_details.get("model", "unknown")
@@ -596,7 +702,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     # -- Logging hooks ---------------------------------------------------------
 
     @staticmethod
-    def _correlation_id(call_details: Mapping[str, Any], request_data: Mapping[str, Any] | None = None) -> str | None:
+    def _correlation_id(
+        call_details: _HasCallId | _LogEventKwargs, request_data: _HasCallId | None = None
+    ) -> str | None:
         """The id that joins a blocked request's two S3 logs by filename: the
         moderation (``_blocking``) log and the failure (response) log.
 
@@ -610,7 +718,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         return call_details.get("litellm_call_id") or (request_data or _EMPTY_MAPPING).get("litellm_call_id")
 
     @classmethod
-    def _apply_correlation_id(cls, payload: dict[str, Any], source: Mapping[str, Any]) -> None:
+    def _apply_correlation_id(cls, payload: _CorrelatablePayload, source: _HasCallId | _LogEventKwargs) -> None:
         """Pin ``payload["id"]`` to ``litellm_call_id`` in place so this log
         shares its S3 filename id with the moderation (``_blocking``) and
         failure logs for the same request -- for every provider.
@@ -625,12 +733,12 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         ``source`` may be ``model_call_details`` directly or a ``kwargs`` dict
         that aliases it -- same shape either way.
         """
-        correlated = cls._correlation_id(source)
+        correlated: Final = cls._correlation_id(source)
         if correlated:
             payload["id"] = correlated
 
     @staticmethod
-    def _prepend_system_prompt(payload: dict[str, Any], source: Mapping[str, Any]) -> None:
+    def _prepend_system_prompt(payload: _SystemPromptCarrier, source: Mapping[str, object]) -> None:
         """Prepend ``source["system"]`` onto ``payload["messages"]``.
 
         Builds a NEW messages list rather than mutating ``payload["messages"]``
@@ -641,12 +749,12 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         No-op if no system prompt is present. Tolerates list/dict/str
         message shapes; on unexpected shape, leaves payload alone.
         """
-        system_prompt = source.get("system")
+        system_prompt: Final = source.get("system")
         if not system_prompt:
             return
         try:
-            system_scaffold = {"role": "system", "content": system_prompt}
-            messages = payload.get("messages")
+            system_scaffold: Final = {"role": "system", "content": system_prompt}
+            messages: Final = payload.get("messages")
             if isinstance(messages, list):
                 payload["messages"] = (system_scaffold, *messages)
             elif isinstance(messages, (dict, str)):
@@ -658,21 +766,21 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 exc_info=True,
             )
 
-    async def _prepare_log_payload(self, kwargs: Mapping[str, Any], event_type: str) -> StandardLoggingPayload | None:
+    async def _prepare_log_payload(self, kwargs: _LogEventKwargs, event_type: str) -> StandardLoggingPayload | None:
         """Shared logic for success logging (sampled)."""
         if random.random() > self.sampling_rate:
             verbose_logger.debug("Skipping Rubrik %s logging (sampling_rate=%s)", event_type, self.sampling_rate)
             return None
 
         # Deep-copy so mutations don't affect other callbacks sharing this object
-        standard_logging_payload: StandardLoggingPayload = safe_deep_copy(kwargs["standard_logging_object"])
+        standard_logging_payload: Final[StandardLoggingPayload] = safe_deep_copy(kwargs["standard_logging_object"])
 
-        self._apply_correlation_id(standard_logging_payload, kwargs)  # pyright: ignore[reportArgumentType]  # StandardLoggingPayload is dict[str,Any] at runtime
+        self._apply_correlation_id(standard_logging_payload, kwargs)
         self._prepend_system_prompt(standard_logging_payload, kwargs)  # pyright: ignore[reportArgumentType]  # StandardLoggingPayload is dict[str,Any] at runtime
 
         return standard_logging_payload
 
-    async def _append_and_maybe_flush(self, payload) -> None:
+    async def _append_and_maybe_flush(self, payload: Mapping[str, object]) -> None:
         self._ensure_periodic_flush_task()
         self.log_queue.append(payload)
         self._enforce_max_queue_size()
@@ -680,12 +788,12 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             await self.flush_queue()
 
     def _enforce_max_queue_size(self) -> None:
-        overflow = len(self.log_queue) - self.max_queue_size
+        overflow: Final = len(self.log_queue) - self.max_queue_size
         if overflow <= 0:
             return
         del self.log_queue[:overflow]
         self._dropped_since_warning += overflow
-        now = time.time()
+        now: Final = time.time()
         if now - self._last_drop_warning_time >= _DROP_WARNING_INTERVAL_SECONDS:
             verbose_logger.warning(
                 "Rubrik: log queue exceeded max_queue_size=%s; dropped %s "
@@ -697,9 +805,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             self._dropped_since_warning = 0
             self._last_drop_warning_time = now
 
-    async def _enqueue_log_event(self, kwargs: Mapping[str, Any], event_type: str):
+    async def _enqueue_log_event(self, kwargs: _LogEventKwargs, event_type: str):
         try:
-            payload = await self._prepare_log_payload(kwargs, event_type)
+            payload: Final = await self._prepare_log_payload(kwargs, event_type)
             if payload is None:
                 return
             await self._append_and_maybe_flush(payload)
@@ -754,7 +862,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if getattr(original_exception, "guardrail_name", None) != self.guardrail_name:
             return
 
-        logging_obj = request_data.pop("_rubrik_logging_obj", None)
+        logging_obj: Final = request_data.pop("_rubrik_logging_obj", None)
         if logging_obj is None:
             # Legitimate when a non-Rubrik guardrail raised the block;
             # problematic if Rubrik did and the stash was lost (e.g.
@@ -773,7 +881,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             )
             return
 
-        call_id: str | None = None
+        call_id: Final[str | None] = None
         await self._build_and_enqueue_block_event(logging_obj, original_exception, call_id, user_api_key_dict)
 
     async def _build_and_enqueue_block_event(
@@ -784,7 +892,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> None:
         try:
-            call_details = logging_obj.model_call_details
+            call_details: Final = logging_obj.model_call_details
             # Do NOT pop "_rubrik_blocked" here. The deferred success-handler
             # task may still be iterating callbacks, and popping mid-iteration
             # (between two awaited callback invocations) would cause this
@@ -793,7 +901,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             # prevent. The flag dies with model_call_details when the request
             # completes; there's nothing to clean up.
             call_id = call_details.get("litellm_call_id")
-            payload = self._prepare_block_failure_payload(logging_obj, exception, user_api_key_dict)
+            payload: Final = self._prepare_block_failure_payload(logging_obj, exception, user_api_key_dict)
         except (AttributeError, ImportError, KeyError, TypeError) as e:
             verbose_logger.error(
                 "Rubrik: failed to build blocked-tool payload for litellm_call_id=%s: %s. Event will NOT be logged.",
@@ -818,7 +926,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         logging_obj: "LiteLLMLoggingObj",
         exception: "ModifyResponseException",
         user_api_key_dict: "UserAPIKeyAuth",
-    ) -> StandardLoggingPayload:
+    ) -> _BlockFailurePayload:
         """Build a failure-style payload using the exception text as response.
 
         Blocked-tool events are security-relevant and **bypass sampling**:
@@ -857,12 +965,12 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         - time fields: ``call_details["start_time"]`` reused for all three;
           end/completion times are meaningless for a prompt block.
         """
-        call_details = logging_obj.model_call_details
-        exception_text = f"{type(exception).__name__}: {exception.message}"
+        call_details: Final = logging_obj.model_call_details
+        exception_text: Final = f"{type(exception).__name__}: {exception.message}"
 
-        base = call_details.get("standard_logging_object")
+        base: Final[StandardLoggingPayload | None] = call_details.get("standard_logging_object")
         if base is not None:
-            payload: dict = safe_deep_copy(base)
+            payload: _BlockFailurePayload = self._copy_block_payload_base(base)
         else:
             verbose_logger.debug(
                 "Rubrik: standard_logging_object not yet on model_call_details "
@@ -882,7 +990,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         payload["id"] = self._correlation_id(call_details) or f"chatcmpl-{uuid.uuid4()}"
         self._prepend_system_prompt(payload, call_details)
 
-        return payload  # type: ignore[return-value]
+        return payload
+
+    @staticmethod
+    def _copy_block_payload_base(base: StandardLoggingPayload) -> _BlockFailurePayload:
+        return safe_deep_copy(base)
 
     @staticmethod
     def _caller_metadata(user_api_key_dict: "UserAPIKeyAuth") -> StandardLoggingUserAPIKeyMetadata:
@@ -906,13 +1018,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     @classmethod
     def _build_fallback_payload(
         cls,
-        call_details: Mapping[str, Any],
+        call_details: _FallbackSource,
         user_api_key_dict: "UserAPIKeyAuth",
-    ) -> dict[str, Any]:
+    ) -> _BlockFailurePayload:
         # Convert datetime to a Unix float so json.dumps can serialize it.
         # httpx's json= parameter uses stdlib json.dumps with no custom encoder.
-        _raw_start = call_details.get("start_time")
-        _start = _raw_start.timestamp() if _raw_start is not None else None
+        _raw_start: Final = call_details.get("start_time")
+        _start: Final = _raw_start.timestamp() if _raw_start is not None else None
         return {
             "id": call_details.get("litellm_call_id"),
             "model": call_details.get("model") or "",
@@ -939,10 +1051,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # can preserve the unsent events for the next flush attempt instead of
         # silently dropping them.
         try:
-            response = await self.async_httpx_client.post(
+            response: Final = await self.async_httpx_client.post(
                 url=self.logging_endpoint,
                 json=data,
-                headers=self._headers,
+                headers=dict(self._headers),
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -983,7 +1095,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         async with self.flush_lock:
             if not self.log_queue:
                 return
-            snapshot = list(self.log_queue)
+            snapshot: Final = list(self.log_queue)
             verbose_logger.debug("Rubrik: Flushing batch of %s events", len(snapshot))
             try:
                 await self._log_batch_to_rubrik(data=snapshot)
@@ -996,7 +1108,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     # -- Webhook services ------------------------------------------------------
 
-    async def _post_json(self, endpoint: str, payload: Mapping[str, Any], service_name: str) -> Mapping[str, Any]:
+    async def _post_json(self, endpoint: str, payload: Mapping[str, object], service_name: str) -> _ModerationResponse:
         """POST ``payload`` to a Rubrik webhook and return its dict response.
 
         Raises:
@@ -1004,13 +1116,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             TypeError: If the response JSON is not a dict.
         """
         verbose_logger.debug("Sending request to %s: %s", service_name, endpoint)
-        http_response = await self.moderation_client.post(
+        http_response: Final = await self.moderation_client.post(
             endpoint,
-            json=payload,
-            headers=self._headers,
+            json=dict(payload),
+            headers=dict(self._headers),
         )
         http_response.raise_for_status()
-        result = http_response.json()
+        result: Final[_ModerationResponse | None] = http_response.json()
         if not isinstance(result, dict):
             raise TypeError(
                 f"{service_name} returned non-dict JSON "
@@ -1021,9 +1133,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     async def _post_to_response_moderation_endpoint(
         self,
-        response_data: Mapping[str, Any],
-        request_data: Mapping[str, Any],
-    ) -> Mapping[str, Any]:
+        response_data: Mapping[str, object],
+        request_data: Mapping[str, object],
+    ) -> _ModerationResponse:
         """Post the ``{request, response}`` envelope to the after_completion
         webhook and return its (possibly rewritten) response.
 
@@ -1032,14 +1144,14 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             request_data: Original LLM request data to include alongside
                 the response for additional context. Empty dict if unavailable.
         """
-        envelope = {"request": request_data, "response": response_data}
+        envelope: Final = {"request": request_data, "response": response_data}
         return await self._post_json(
             self.response_moderation_endpoint,
             envelope,
             "Response moderation service",
         )
 
-    async def _post_to_prompt_moderation_endpoint(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    async def _post_to_prompt_moderation_endpoint(self, payload: Mapping[str, object]) -> _ModerationResponse:
         """Post a bare OpenAI request to the before_prompt webhook.
 
         Returns ``{}`` (passthrough) or a synthetic chat.completion (block).
@@ -1047,23 +1159,23 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         return await self._post_json(self.prompt_moderation_endpoint, payload, "Prompt moderation service")
 
     @staticmethod
-    def _extract_prompt_refusal(service_response: Mapping[str, Any]) -> str | None:
+    def _extract_prompt_refusal(service_response: _ModerationResponse) -> str | None:
         """Return the refusal text when the prompt was blocked, else None.
 
         The before_prompt webhook returns ``{}`` (passthrough) or a synthetic
         chat.completion whose ``choices[0].message.content`` is the refusal
         explanation.
         """
-        choices = service_response.get("choices")
+        choices: Final = service_response.get("choices")
         if not choices:
             return None
-        message = choices[0].get("message") or _EMPTY_MAPPING
-        content = message.get("content")
+        message: Final = choices[0].get("message") or _EMPTY_MAPPING
+        content: Final = message.get("content")
         return content or "Request blocked by policy."
 
     @staticmethod
     def _extract_response_block(
-        service_response: Mapping[str, Any],
+        service_response: _ModerationResponse,
         all_tool_calls: Sequence[ChatCompletionMessageToolCall],
         sent_content: str,
     ) -> BlockedResponseResult | None:
@@ -1086,24 +1198,24 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         Expects service_response in OpenAI chat completion format:
             {"choices": [{"message": {"tool_calls": [...], "content": "..."}}]}
         """
-        choices = service_response.get("choices") or ()
+        choices: Final = service_response.get("choices") or ()
         if not choices:
             raise _MalformedToolBlockingResponseError("Response moderation service returned empty response")
 
-        message = choices[0].get("message") or _EMPTY_MAPPING
-        returned_tool_calls = message.get("tool_calls") or ()
-        returned_content = message.get("content") or ""
+        message: Final = choices[0].get("message") or _EMPTY_MAPPING
+        returned_tool_calls: Final = message.get("tool_calls") or ()
+        returned_content: Final = message.get("content") or ""
 
         # Use Counter so duplicate IDs are handled correctly: if the model
         # emits two calls with the same ID (one allowed, one prohibited) and
         # the service returns only the allowed one, a set-based check would
         # miss the block. Counter preserves multiplicity.
-        returned_id_counts: Counter[str] = Counter(tc["id"] for tc in returned_tool_calls if tc.get("id"))
-        required_id_counts: Counter[str] = Counter(tc.id for tc in all_tool_calls if tc.id)
+        returned_id_counts: Final[Counter[str]] = Counter(tc["id"] for tc in returned_tool_calls if tc.get("id"))
+        required_id_counts: Final[Counter[str]] = Counter(tc.id for tc in all_tool_calls if tc.id)
         # Cardinality check catches ID-less tool calls (not counted in
         # required_id_counts because tc.id is falsy); Counter check catches
         # duplicate-ID attacks where one occurrence is silently removed.
-        tools_blocked = len(returned_tool_calls) < len(all_tool_calls) or not all(
+        tools_blocked: Final = len(returned_tool_calls) < len(all_tool_calls) or not all(
             returned_id_counts.get(tc_id, 0) >= count for tc_id, count in required_id_counts.items()
         )
 
@@ -1116,8 +1228,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # Without the separator, a replacement like "Hello, blocked." where the
         # original was "Hello" would be classified as an append (not a text
         # block) and silently pass through to the client.
-        appended = bool(sent_content) and returned_content.startswith(f"{sent_content}\n\n")
-        text_blocked = bool(sent_content) and returned_content != sent_content and not appended
+        appended: Final = bool(sent_content) and returned_content.startswith(f"{sent_content}\n\n")
+        text_blocked: Final = bool(sent_content) and returned_content != sent_content and not appended
 
         if text_blocked:
             return BlockedResponseResult(explanation=returned_content or "Response blocked by policy.")

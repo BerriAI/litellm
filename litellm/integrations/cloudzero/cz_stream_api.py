@@ -20,7 +20,7 @@
 
 import zoneinfo
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import polars as pl
@@ -55,7 +55,7 @@ class CloudZeroStreamer:
             return
 
         # Group data by date and send each day as a batch
-        daily_batches = self._group_by_date(data)
+        daily_batches: Final = self._group_by_date(data)
 
         if not daily_batches:
             self.console.print("[yellow]No valid daily batches to send[/yellow]")
@@ -68,7 +68,7 @@ class CloudZeroStreamer:
 
     def _group_by_date(self, data: pl.DataFrame) -> dict[str, pl.DataFrame]:
         """Group data by date, converting to UTC and validating dates."""
-        daily_batches: dict[str, list[dict[str, Any]]] = {}
+        daily_batches: Final[dict[str, list[dict[str, Any]]]] = {}
 
         # Ensure we have the required columns
         if "time/usage_start" not in data.columns:
@@ -153,22 +153,22 @@ class CloudZeroStreamer:
         if batch_data.is_empty():
             return
 
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
 
         # Use the correct API endpoint format from documentation
-        url = f"{self.base_url}/v2/connections/billing/anycost/{self.connection_id}/billing_drops"
+        url: Final = f"{self.base_url}/v2/connections/billing/anycost/{self.connection_id}/billing_drops"
 
         # Prepare the batch payload according to AnyCost API format
-        payload = self._prepare_batch_payload(batch_date, batch_data, operation)
+        payload: Final = self._prepare_batch_payload(batch_date, batch_data, operation)
 
         try:
             with httpx.Client(timeout=30.0) as client:
                 self.console.print(f"[blue]Sending batch for {batch_date} ({len(batch_data)} records)[/blue]")
 
-                response = client.post(url, headers=headers, json=payload)
+                response: Final = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
 
                 self.console.print(
@@ -188,20 +188,20 @@ class CloudZeroStreamer:
         """Prepare batch payload according to CloudZero AnyCost API format."""
         # Convert batch_date to month for the API (YYYY-MM format)
         try:
-            date_obj = datetime.strptime(batch_date, "%Y-%m-%d")
+            date_obj: Final = datetime.strptime(batch_date, "%Y-%m-%d")
             month_str = date_obj.strftime("%Y-%m")
         except ValueError:
             # Fallback to current month
             month_str = datetime.now().strftime("%Y-%m")
 
         # Convert DataFrame rows to API format
-        data_records = []
+        data_records: Final = []
         for row in batch_data.iter_rows(named=True):
             record = self._convert_cbf_to_api_format(row)
             if record:
                 data_records.append(record)
 
-        payload = {"month": month_str, "operation": operation, "data": data_records}
+        payload: Final = {"month": month_str, "operation": operation, "data": data_records}
 
         return payload
 
@@ -209,7 +209,7 @@ class CloudZeroStreamer:
         """Convert CBF row to CloudZero API format - keeping CBF field names as CloudZero expects them."""
         try:
             # CloudZero expects CBF format field names directly, not converted names
-            api_record = {}
+            api_record: Final = {}
 
             # Copy all CBF fields, converting numeric values to strings as required by CloudZero
             for key, value in row.items():
@@ -241,7 +241,7 @@ class CloudZeroStreamer:
             return datetime.now(timezone.utc).isoformat()
 
         try:
-            dt = self._parse_and_convert_timestamp(timestamp_str)
+            dt: Final = self._parse_and_convert_timestamp(timestamp_str)
             return dt.isoformat().replace("+00:00", "Z")
         except Exception:
             # Fallback to current time in UTC

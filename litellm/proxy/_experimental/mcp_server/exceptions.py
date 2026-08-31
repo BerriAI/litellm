@@ -1,5 +1,7 @@
 """Exceptions raised by the LiteLLM MCP proxy."""
 
+from typing import Final
+
 from fastapi import HTTPException
 
 
@@ -59,18 +61,36 @@ class MCPUpstreamAuthError(Exception):
         """
         challenge: str | None = self.www_authenticate
         if challenge is None and self.status_code == 401 and base_url:
-            prefix = base_url.rstrip("/")
+            prefix: Final = base_url.rstrip("/")
             if request_path and request_path.startswith(f"/{self.server_name}/mcp"):
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
             else:
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
-        detail = "Forbidden" if self.status_code == 403 else "Unauthorized"
+        detail: Final = "Forbidden" if self.status_code == 403 else "Unauthorized"
         return HTTPException(
             status_code=self.status_code,
             detail=detail,
             headers={"www-authenticate": challenge} if challenge else None,
         )
+
+
+class MCPOpenApiUpstreamError(Exception):
+    """An OpenAPI-backed MCP tool's upstream answered with a non-2xx that is not a 401.
+
+    Carries the status only. The upstream's response body is deliberately dropped rather than served
+    as tool content: it crosses a trust boundary and may hold prose, urls, or an error document that
+    reads as data, which is how these failures came to be reported as successful tool output. This
+    matches ``outcome_wire_value``'s contract for listing faults, category and status and nothing
+    else. A 401 is raised as ``MCPUpstreamAuthError`` instead, so the caller learns to
+    re-authenticate; every other status stays here, mirroring the regular MCP path where a 403
+    deliberately does not produce a challenge.
+    """
+
+    def __init__(self, status_code: int, server_name: str) -> None:
+        self.status_code = status_code
+        self.server_name = server_name
+        super().__init__(f"upstream returned HTTP {status_code}")
 
 
 class MCPToolResultError(Exception):

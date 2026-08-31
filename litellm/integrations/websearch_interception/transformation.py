@@ -5,7 +5,7 @@ Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
 
 import json
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
@@ -82,7 +82,7 @@ class WebSearchTransformation:
         if not isinstance(output, list):
             return False, []
 
-        tool_calls: list[dict] = []
+        tool_calls: Final[list[dict]] = []
         for item in output:
             if isinstance(item, dict):
                 item_type = item.get("type")
@@ -146,7 +146,7 @@ class WebSearchTransformation:
             return False, []
 
         # Find all WebSearch tool_use blocks
-        tool_calls = []
+        tool_calls: Final = []
         for block in content:
             # Handle both dict and object blocks
             if isinstance(block, dict):
@@ -202,7 +202,7 @@ class WebSearchTransformation:
             return False, []
 
         # Get first choice's message
-        first_choice = choices[0]
+        first_choice: Final = choices[0]
         if isinstance(first_choice, dict):
             message = first_choice.get("message", {})
         else:
@@ -223,7 +223,7 @@ class WebSearchTransformation:
             return False, []
 
         # Find all WebSearch tool calls
-        tool_calls = []
+        tool_calls: Final = []
         for tool_call in openai_tool_calls:
             # Handle both dict and object tool calls
             if isinstance(tool_call, dict):
@@ -319,7 +319,7 @@ class WebSearchTransformation:
     ) -> tuple[dict, dict]:
         """Transform to Anthropic format (single user message with tool_result blocks)"""
         # Build assistant message content
-        assistant_content: list[dict] = []
+        assistant_content: Final[list[dict]] = []
 
         # Prepend thinking blocks if present.
         # When extended thinking is enabled, Anthropic requires the assistant
@@ -341,13 +341,13 @@ class WebSearchTransformation:
             ]
         )
 
-        assistant_message = {
+        assistant_message: Final = {
             "role": "assistant",
             "content": assistant_content,
         }
 
         # Build user message with tool_result blocks
-        user_message = {
+        user_message: Final = {
             "role": "user",
             "content": [
                 {
@@ -368,7 +368,7 @@ class WebSearchTransformation:
     ) -> tuple[dict, list[dict]]:
         """Transform to OpenAI format (assistant with tool_calls, separate tool messages)"""
         # Build assistant message with tool_calls
-        assistant_message = {
+        assistant_message: Final = {
             "role": "assistant",
             "tool_calls": [
                 {
@@ -384,7 +384,7 @@ class WebSearchTransformation:
         }
 
         # Build separate tool messages (one per tool call)
-        tool_messages = [
+        tool_messages: Final = [
             {
                 "role": "tool",
                 "tool_call_id": tool_calls[i]["id"],
@@ -412,6 +412,15 @@ class WebSearchTransformation:
         block that should accompany the model's text reply when the original
         request used a native ``web_search_*`` tool.
 
+        The spec'd shape carries page text only in ``encrypted_content``, an
+        opaque server-issued blob that we cannot mint. Emitting the four spec
+        fields alone would drop the snippet entirely, leaving the client (and
+        the model, on any replayed follow-up turn) with URLs and titles but no
+        evidence to answer from, forcing a fetch per result. So the snippet is
+        carried in an additive ``snippet`` key alongside the spec fields.
+        ``encrypted_content`` stays empty rather than holding plaintext, which
+        would assert encryption semantics that do not hold.
+
         Spec reference:
         https://docs.anthropic.com/en/api/web-search-tool
 
@@ -424,9 +433,9 @@ class WebSearchTransformation:
                 emitted with an empty result list (signals "search ran, no
                 results" rather than "search did not run").
         """
-        items: list[dict[str, Any]] = []
+        items: Final[list[dict[str, Any]]] = []
         if search_response is not None:
-            results = getattr(search_response, "results", None) or []
+            results: Final = getattr(search_response, "results", None) or []
             for r in results:
                 url = getattr(r, "url", "") or ""
                 title = getattr(r, "title", "") or ""
@@ -438,6 +447,7 @@ class WebSearchTransformation:
                         "title": title,
                         "page_age": page_age,
                         "encrypted_content": "",
+                        "snippet": getattr(r, "snippet", "") or "",
                     }
                 )
         return {

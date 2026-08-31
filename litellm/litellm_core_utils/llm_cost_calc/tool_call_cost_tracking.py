@@ -2,11 +2,14 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Any, Final, Literal
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
-from litellm.litellm_core_utils.llm_cost_calc.utils import _get_web_search_requests
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    get_web_search_requests_from_usage,
+)
 from litellm.types.llms.openai import (
     FileSearchTool,
     ResponsesAPIResponse,
@@ -21,6 +24,19 @@ from litellm.types.utils import (
     StandardBuiltInToolsParams,
     Usage,
 )
+
+
+def _output_item_type(output_item: object) -> str | None:
+    item_type: Final = output_item.get("type") if isinstance(output_item, dict) else getattr(output_item, "type", None)
+    return item_type if isinstance(item_type, str) else None
+
+
+def _usage_reports_server_side_web_search_calls(usage: Usage) -> bool:
+    details: Final = getattr(usage, "server_side_tool_usage_details", None)
+    if not isinstance(details, Mapping):
+        return False
+    calls: Final = details.get("web_search_calls")
+    return isinstance(calls, int) and calls > 0
 
 
 class StandardBuiltInToolCostTracking:
@@ -50,11 +66,17 @@ class StandardBuiltInToolCostTracking:
         """
         standard_built_in_tools_params = standard_built_in_tools_params or {}
 
+        google_maps_grounding_cost: Final = StandardBuiltInToolCostTracking._handle_google_maps_grounding_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            usage=usage,
+        )
+
         # Handle web search
         if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=response_object, usage=usage
         ):
-            return StandardBuiltInToolCostTracking._handle_web_search_cost(
+            return google_maps_grounding_cost + StandardBuiltInToolCostTracking._handle_web_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
@@ -64,17 +86,54 @@ class StandardBuiltInToolCostTracking:
 
         # Handle file search
         if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response_object=response_object):
-            return StandardBuiltInToolCostTracking._handle_file_search_cost(
+            return google_maps_grounding_cost + StandardBuiltInToolCostTracking._handle_file_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 standard_built_in_tools_params=standard_built_in_tools_params,
             )
 
         # Handle Azure assistant features
-        return StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+        return google_maps_grounding_cost + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
             model=model,
             custom_llm_provider=custom_llm_provider,
             standard_built_in_tools_params=standard_built_in_tools_params,
+        )
+
+    @staticmethod
+    def _resolve_model_info(model: str, custom_llm_provider: str | None) -> tuple[ModelInfo | None, str | None]:
+        direct: Final = StandardBuiltInToolCostTracking._safe_get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        if direct is not None:
+            return direct, custom_llm_provider or direct["litellm_provider"]
+        if "/" not in model:
+            return None, custom_llm_provider
+        by_prefix: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=model)
+        if by_prefix is None:
+            return None, custom_llm_provider
+        return by_prefix, by_prefix["litellm_provider"]
+
+    @staticmethod
+    def _handle_google_maps_grounding_cost(
+        model: str,
+        custom_llm_provider: str | None,
+        usage: Usage | None,
+    ) -> float:
+        from litellm.llms import get_cost_for_google_maps_grounding_request
+        from litellm.llms.gemini.cost_calculator import google_maps_grounding_requests
+
+        if usage is None or google_maps_grounding_requests(usage) is None:
+            return 0.0
+        model_info, resolved_provider = StandardBuiltInToolCostTracking._resolve_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        if model_info is None or resolved_provider is None:
+            return 0.0
+        return (
+            get_cost_for_google_maps_grounding_request(
+                custom_llm_provider=resolved_provider, usage=usage, model_info=model_info
+            )
+            or 0.0
         )
 
     @staticmethod
@@ -88,39 +147,49 @@ class StandardBuiltInToolCostTracking:
         """Handle web search cost calculation."""
         from litellm.llms import get_cost_for_web_search_request
 
-        model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+        # A provider-prefixed model (e.g. gemini/gemini-3.1-flash-lite) may not map under the
+        # request's custom_llm_provider. _resolve_model_info re-resolves from the prefix and adopts
+        # that provider so the cost is routed and priced with the model_info that was actually
+        # resolved, instead of feeding a re-resolved model into the original provider's calculator.
+        model_info, resolved_provider = StandardBuiltInToolCostTracking._resolve_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        # A provider-prefixed model (e.g. gemini/gemini-3.1-flash-lite) may not map under the
-        # request's custom_llm_provider. Re-resolve from the prefix and adopt that provider so the
-        # cost is routed and priced with the model_info that was actually resolved, instead of
-        # feeding a re-resolved model into the original provider's calculator.
-        if model_info is None and "/" in model:
-            model_info = StandardBuiltInToolCostTracking._safe_get_model_info(model=model)
-            if model_info is not None:
-                custom_llm_provider = model_info["litellm_provider"]
-
-        if custom_llm_provider is None and model_info is not None:
-            custom_llm_provider = model_info["litellm_provider"]
-
-        resolved_usage = StandardBuiltInToolCostTracking._usage_with_anthropic_web_search(
+        resolved_usage: Final = StandardBuiltInToolCostTracking._usage_with_anthropic_web_search(
             usage=usage, response_object=response_object
         )
 
-        if model_info is not None and resolved_usage is not None and custom_llm_provider is not None:
-            result = get_cost_for_web_search_request(
-                custom_llm_provider=custom_llm_provider,
+        if model_info is not None and resolved_usage is not None and resolved_provider is not None:
+            result: Final = get_cost_for_web_search_request(
+                custom_llm_provider=resolved_provider,
                 usage=resolved_usage,
                 model_info=model_info,
             )
             if result is not None:
                 return result
 
-        return StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        per_call_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
             web_search_options=standard_built_in_tools_params.get("web_search_options", None),
             model_info=model_info,
         )
+        return per_call_cost * StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
+
+    @staticmethod
+    def _count_web_search_calls(response_object: object) -> int:
+        """
+        Number of web searches to bill for on the per-call pricing path.
+
+        Providers that report a request count in usage (gemini, anthropic, xai, vertex) are handled by
+        get_cost_for_web_search_request and never reach here. This path prices per call, so it must count
+        the web_search_call items. Chat-completions responses only expose url_citation annotations with no
+        count, so they floor to a single billable search.
+        """
+        if isinstance(response_object, ResponsesAPIResponse):
+            count = sum(
+                1 for output_item in response_object.output if _output_item_type(output_item) == "web_search_call"
+            )
+            return max(count, 1)
+        return 1
 
     @staticmethod
     def _handle_file_search_cost(
@@ -129,14 +198,14 @@ class StandardBuiltInToolCostTracking:
         standard_built_in_tools_params: StandardBuiltInToolsParams,
     ) -> float:
         """Handle file search cost calculation."""
-        model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+        model_info: Final = StandardBuiltInToolCostTracking._safe_get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        file_search_raw: Any = standard_built_in_tools_params.get("file_search", {})
-        file_search_usage: FileSearchTool | None = FileSearchTool(**file_search_raw) if file_search_raw else None
+        file_search_raw: Final[Any] = standard_built_in_tools_params.get("file_search", {})
+        file_search_usage: Final[FileSearchTool | None] = FileSearchTool(**file_search_raw) if file_search_raw else None
 
         # Convert model_info to dict and extract usage parameters
-        model_info_dict = dict(model_info) if model_info is not None else None
+        model_info_dict: Final = dict(model_info) if model_info is not None else None
         storage_gb, days = StandardBuiltInToolCostTracking._extract_file_search_params(file_search_usage)
 
         return StandardBuiltInToolCostTracking.get_cost_for_file_search(
@@ -157,7 +226,7 @@ class StandardBuiltInToolCostTracking:
         if custom_llm_provider != "azure":
             return 0.0
 
-        model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+        model_info: Final = StandardBuiltInToolCostTracking._safe_get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
@@ -183,18 +252,18 @@ class StandardBuiltInToolCostTracking:
         days = None
 
         if isinstance(file_search_usage, dict):
-            storage_gb_val = file_search_usage.get("storage_gb")
-            days_val = file_search_usage.get("days")
+            storage_gb_val: Final = file_search_usage.get("storage_gb")
+            days_val: Final = file_search_usage.get("days")
 
             if storage_gb_val is not None:
                 try:
-                    storage_gb = float(storage_gb_val)  # type: ignore
+                    storage_gb = float(storage_gb_val)
                 except (TypeError, ValueError):
                     storage_gb = None
 
             if days_val is not None:
                 try:
-                    days = float(days_val)  # type: ignore
+                    days = float(days_val)
                 except (TypeError, ValueError):
                     days = None
 
@@ -207,12 +276,12 @@ class StandardBuiltInToolCostTracking:
         standard_built_in_tools_params: StandardBuiltInToolsParams,
     ) -> float:
         """Calculate vector store cost."""
-        vector_store_usage = standard_built_in_tools_params.get("vector_store_usage", None)
+        vector_store_usage: Final = standard_built_in_tools_params.get("vector_store_usage", None)
         if not vector_store_usage:
             return 0.0
 
-        model_info_dict = dict(model_info) if model_info is not None else None
-        vector_store_dict = vector_store_usage if isinstance(vector_store_usage, dict) else {}
+        model_info_dict: Final = dict(model_info) if model_info is not None else None
+        vector_store_dict: Final = vector_store_usage if isinstance(vector_store_usage, dict) else {}
 
         return StandardBuiltInToolCostTracking.get_cost_for_vector_store(
             vector_store_usage=vector_store_dict,
@@ -227,11 +296,11 @@ class StandardBuiltInToolCostTracking:
         standard_built_in_tools_params: StandardBuiltInToolsParams,
     ) -> float:
         """Calculate computer use cost."""
-        computer_use_usage = standard_built_in_tools_params.get("computer_use_usage", {})
+        computer_use_usage: Final = standard_built_in_tools_params.get("computer_use_usage", {})
         if not computer_use_usage:
             return 0.0
 
-        model_info_dict = dict(model_info) if model_info is not None else None
+        model_info_dict: Final = dict(model_info) if model_info is not None else None
         (
             input_tokens,
             output_tokens,
@@ -251,12 +320,12 @@ class StandardBuiltInToolCostTracking:
         standard_built_in_tools_params: StandardBuiltInToolsParams,
     ) -> float:
         """Calculate code interpreter cost."""
-        code_interpreter_sessions = standard_built_in_tools_params.get("code_interpreter_sessions", None)
+        code_interpreter_sessions: Final = standard_built_in_tools_params.get("code_interpreter_sessions", None)
         if not code_interpreter_sessions:
             return 0.0
 
-        model_info_dict = dict(model_info) if model_info is not None else None
-        sessions = StandardBuiltInToolCostTracking._safe_convert_to_int(code_interpreter_sessions)
+        model_info_dict: Final = dict(model_info) if model_info is not None else None
+        sessions: Final = StandardBuiltInToolCostTracking._safe_convert_to_int(code_interpreter_sessions)
 
         return StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
             sessions=sessions,
@@ -273,8 +342,8 @@ class StandardBuiltInToolCostTracking:
         output_tokens = None
 
         if isinstance(computer_use_usage, dict):
-            input_tokens_val = computer_use_usage.get("input_tokens")
-            output_tokens_val = computer_use_usage.get("output_tokens")
+            input_tokens_val: Final = computer_use_usage.get("input_tokens")
+            output_tokens_val: Final = computer_use_usage.get("output_tokens")
 
             input_tokens = StandardBuiltInToolCostTracking._safe_convert_to_int(input_tokens_val)
             output_tokens = StandardBuiltInToolCostTracking._safe_convert_to_int(output_tokens_val)
@@ -286,7 +355,7 @@ class StandardBuiltInToolCostTracking:
         """Safely convert a value to int."""
         if value is not None:
             try:
-                return int(value)  # type: ignore
+                return int(value)
             except (TypeError, ValueError):
                 return None
         return None
@@ -301,12 +370,12 @@ class StandardBuiltInToolCostTracking:
             get_anthropic_web_search_requests_from_response,
         )
 
-        if usage is not None and (_get_web_search_requests(getattr(usage, "server_tool_use", None)) is not None):
+        if usage is not None and (get_web_search_requests_from_usage(usage) is not None):
             return usage
-        web_search_requests = get_anthropic_web_search_requests_from_response(response_object)
+        web_search_requests: Final = get_anthropic_web_search_requests_from_response(response_object)
         if web_search_requests is None:
             return usage
-        server_tool_use = ServerToolUse(web_search_requests=web_search_requests)
+        server_tool_use: Final = ServerToolUse(web_search_requests=web_search_requests)
         if usage is None:
             return Usage(server_tool_use=server_tool_use)
         return usage.model_copy(update={"server_tool_use": server_tool_use})
@@ -331,7 +400,7 @@ class StandardBuiltInToolCostTracking:
 
         if isinstance(response_object, ModelResponse):
             # chat completions only include url_citation annotations when a web search call is made
-            has_url_citations = StandardBuiltInToolCostTracking.response_includes_annotation_type(
+            has_url_citations: Final = StandardBuiltInToolCostTracking.response_includes_annotation_type(
                 response_object=response_object, annotation_type="url_citation"
             )
             if has_url_citations:
@@ -349,7 +418,11 @@ class StandardBuiltInToolCostTracking:
                 # Anthropic Claude (direct API and Vertex AI) uses server_tool_use.web_search_requests.
                 # Without this check, Claude ModelResponse always falls through to return False
                 # and _handle_web_search_cost() is never called.
-                if hasattr(usage, "server_tool_use") and _get_web_search_requests(usage.server_tool_use) is not None:
+                if get_web_search_requests_from_usage(usage) is not None:
+                    return True
+                # xAI reports usage.server_side_tool_usage_details.web_search_calls; a searched
+                # answer with no url_citation annotations has no other chat-path signal
+                if _usage_reports_server_side_web_search_calls(usage):
                     return True
             return False
         elif isinstance(response_object, ResponsesAPIResponse):
@@ -358,17 +431,15 @@ class StandardBuiltInToolCostTracking:
                 response_object=response_object, output_type="web_search_call"
             )
         elif usage is not None:
-            if (
-                hasattr(usage, "server_tool_use")
-                and _get_web_search_requests(usage.server_tool_use) is not None
-                or (
-                    hasattr(usage, "prompt_tokens_details")
-                    and usage.prompt_tokens_details is not None
-                    and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
-                    and hasattr(usage.prompt_tokens_details, "web_search_requests")
-                    and usage.prompt_tokens_details.web_search_requests is not None
-                )
+            if get_web_search_requests_from_usage(usage) is not None or (
+                hasattr(usage, "prompt_tokens_details")
+                and usage.prompt_tokens_details is not None
+                and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+                and hasattr(usage.prompt_tokens_details, "web_search_requests")
+                and usage.prompt_tokens_details.web_search_requests is not None
             ):
+                return True
+            if _usage_reports_server_side_web_search_calls(usage):
                 return True
 
         return False
@@ -430,12 +501,7 @@ class StandardBuiltInToolCostTracking:
         Returns:
             True if the ResponsesAPIResponse includes one of the specified output types, False otherwise.
         """
-        output = response_object.output
-        for output_item in output:
-            _output_type: str | None = getattr(output_item, "type", None)
-            if _output_type == output_type:
-                return True
-        return False
+        return any(_output_item_type(output_item) == output_type for output_item in response_object.output)
 
     @staticmethod
     def _safe_get_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo | None:
@@ -456,8 +522,8 @@ class StandardBuiltInToolCostTracking:
         if model_info is None:
             return 0.0
 
-        search_context_raw: Any = model_info.get("search_context_cost_per_query", {})
-        search_context_pricing: SearchContextCostPerQuery = (
+        search_context_raw: Final[Any] = model_info.get("search_context_cost_per_query", {})
+        search_context_pricing: Final[SearchContextCostPerQuery] = (
             SearchContextCostPerQuery(**search_context_raw) if search_context_raw else SearchContextCostPerQuery()
         )
         if web_search_options.get("search_context_size", None) == "low":
@@ -479,8 +545,8 @@ class StandardBuiltInToolCostTracking:
         """
         if model_info is None:
             return 0.0
-        search_context_raw: Any = model_info.get("search_context_cost_per_query", {}) or {}
-        search_context_pricing: SearchContextCostPerQuery = (
+        search_context_raw: Final[Any] = model_info.get("search_context_cost_per_query", {}) or {}
+        search_context_pricing: Final[SearchContextCostPerQuery] = (
             SearchContextCostPerQuery(**search_context_raw) if search_context_raw else SearchContextCostPerQuery()
         )
         return search_context_pricing.get("search_context_size_medium", 0.0)
@@ -535,8 +601,8 @@ class StandardBuiltInToolCostTracking:
         if vector_store_usage is None:
             return 0.0
 
-        storage_gb = vector_store_usage.get("storage_gb", 0.0)
-        days = vector_store_usage.get("days", 0.0)
+        storage_gb: Final = vector_store_usage.get("storage_gb", 0.0)
+        days: Final = vector_store_usage.get("days", 0.0)
 
         # Check if model-specific pricing is available
         if model_info and "vector_store_cost_per_gb_per_day" in model_info:
@@ -566,8 +632,8 @@ class StandardBuiltInToolCostTracking:
         if provider == "azure" and (input_tokens or output_tokens):
             # Check if model-specific pricing is available
             if model_info:
-                input_cost = model_info.get("computer_use_input_cost_per_1k_tokens", 0.0)
-                output_cost = model_info.get("computer_use_output_cost_per_1k_tokens", 0.0)
+                input_cost: Final = model_info.get("computer_use_input_cost_per_1k_tokens", 0.0)
+                output_cost: Final = model_info.get("computer_use_output_cost_per_1k_tokens", 0.0)
                 if input_cost or output_cost:
                     total_cost = 0.0
                     if input_tokens:
@@ -602,8 +668,8 @@ class StandardBuiltInToolCostTracking:
         import litellm
 
         try:
-            container_model = f"{provider}/container"
-            model_info = litellm.get_model_info(model=container_model, custom_llm_provider=provider)
+            container_model: Final = f"{provider}/container"
+            model_info: Final = litellm.get_model_info(model=container_model, custom_llm_provider=provider)
             model_key = model_info.get("key") if isinstance(model_info, dict) else getattr(model_info, "key", None)
 
             if model_key and model_key in litellm.model_cost:
@@ -635,7 +701,7 @@ class StandardBuiltInToolCostTracking:
 
         # Try to get cost from model cost map for any provider
         if provider:
-            cost_per_session = StandardBuiltInToolCostTracking._get_code_interpreter_cost_from_model_map(
+            cost_per_session: Final = StandardBuiltInToolCostTracking._get_code_interpreter_cost_from_model_map(
                 provider=provider
             )
             if cost_per_session is not None:
@@ -663,7 +729,7 @@ class StandardBuiltInToolCostTracking:
         if "web_search_options" in kwargs:
             return WebSearchOptions(**kwargs.get("web_search_options", {}))
 
-        tools = StandardBuiltInToolCostTracking._get_tools_from_kwargs(
+        tools: Final = StandardBuiltInToolCostTracking._get_tools_from_kwargs(
             kwargs=kwargs, tool_type="web_search_preview"
         ) or StandardBuiltInToolCostTracking._get_tools_from_kwargs(kwargs=kwargs, tool_type="web_search")
         if tools:
@@ -682,7 +748,7 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def _get_file_search_tool_call(kwargs: dict) -> FileSearchTool | None:
-        tools = StandardBuiltInToolCostTracking._get_tools_from_kwargs(kwargs, "file_search")
+        tools: Final = StandardBuiltInToolCostTracking._get_tools_from_kwargs(kwargs, "file_search")
         if tools:
             for tool in tools:
                 if isinstance(tool, dict):

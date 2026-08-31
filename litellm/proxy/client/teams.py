@@ -1,7 +1,7 @@
 """Teams management client for LiteLLM proxy."""
 
 import builtins
-from typing import Any
+from typing import Any, Final
 
 import requests
 
@@ -11,16 +11,18 @@ from .exceptions import UnauthorizedError
 class TeamsManagementClient:
     """Client for managing teams in LiteLLM proxy."""
 
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 30):
         """
         Initialize the TeamsManagementClient.
 
         Args:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:4000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
+            timeout (int): Request timeout in seconds (default: 30)
         """
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
+        self._timeout = timeout
 
     def _get_headers(self) -> dict[str, str]:
         """
@@ -29,7 +31,7 @@ class TeamsManagementClient:
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
@@ -53,14 +55,14 @@ class TeamsManagementClient:
             requests.exceptions.HTTPError: If the request fails
             UnauthorizedError: If authentication fails
         """
-        url = f"{self._base_url}/team/list"
-        params = {}
+        url: Final = f"{self._base_url}/team/list"
+        params: Final = {}
         if user_id:
             params["user_id"] = user_id
         if organization_id:
             params["organization_id"] = organization_id
 
-        response = requests.get(url, headers=self._get_headers(), params=params)
+        response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self._timeout)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
@@ -99,8 +101,8 @@ class TeamsManagementClient:
             requests.exceptions.HTTPError: If the request fails
             UnauthorizedError: If authentication fails
         """
-        url = f"{self._base_url}/v2/team/list"
-        params: dict[str, str | int] = {
+        url: Final = f"{self._base_url}/v2/team/list"
+        params: Final[dict[str, str | int]] = {
             "page": page,
             "page_size": page_size,
             "sort_order": sort_order,
@@ -117,7 +119,7 @@ class TeamsManagementClient:
         if sort_by:
             params["sort_by"] = sort_by
 
-        response = requests.get(url, headers=self._get_headers(), params=params)
+        response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self._timeout)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
@@ -136,9 +138,9 @@ class TeamsManagementClient:
             requests.exceptions.HTTPError: If the request fails
             UnauthorizedError: If authentication fails
         """
-        url = f"{self._base_url}/team/available"
+        url: Final = f"{self._base_url}/team/available"
 
-        response = requests.get(url, headers=self._get_headers())
+        response: Final = requests.get(url, headers=self._get_headers(), timeout=self._timeout)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")

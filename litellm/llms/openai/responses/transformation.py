@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING, Any, cast, get_type_hints
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -20,7 +22,7 @@ from litellm.types.utils import LlmProviders
 
 from ..common_utils import OpenAIError
 
-OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS = 16
+OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -28,6 +30,10 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+_MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
+_PROVIDERS_WITH_COMBINATOR_REJECTING_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -45,7 +51,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Excludes pass-through models from other providers that happen to
         reference gpt-5 in their name (e.g. perplexity/openai/gpt-5.2).
         """
-        parts = model.split("/")
+        parts: Final = model.split("/")
         if len(parts) > 1 and parts[0] not in ("openai",):
             return False
         return "gpt-5" in model and "gpt-5-chat" not in model
@@ -60,6 +66,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             custom_llm_provider=None,
             key="supports_none_reasoning_effort",
         )
+
+    @staticmethod
+    def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
+        """Whether this request's reasoning effort ends up as "none", the one condition
+        under which a non-default temperature is accepted.
+
+        Delegates to the chat-completions gpt-5 config so both surfaces answer from one
+        rule: the Responses API reaches the same models over a different wire, and a second
+        copy of the rule here is what let this surface keep forwarding temperature after the
+        chat surface stopped.
+        """
+        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+        return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
@@ -78,7 +98,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         All OpenAI Responses API params are supported
         """
-        supported_params = get_type_hints(ResponsesAPIRequestParams).keys()
+        supported_params: Final = get_type_hints(ResponsesAPIRequestParams).keys()
         return list(
             set(
                 [
@@ -105,28 +125,28 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         is accepted unless reasoning_effort='none' on models that support it).
         Apply the same validation used by the chat completions path.
         """
-        params = dict(response_api_optional_params)
+        params: Final = dict(response_api_optional_params)
 
         if "max_output_tokens" in params:
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
 
         if self._is_gpt_5_model(model=model):
-            temperature = params.get("temperature")
+            temperature: Final = params.get("temperature")
             if temperature is not None and temperature != 1:
-                reasoning = params.get("reasoning") or {}
-                effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
-                supports_none = self._supports_reasoning_effort_none(model=model)
-                if supports_none and (effort == "none" or effort is None):
+                reasoning: Final = params.get("reasoning") or {}
+                effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+                supports_none: Final = self._supports_reasoning_effort_none(model=model)
+                if supports_none and self._effort_resolves_to_none(model, effort):
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
                     params.pop("temperature", None)
                 else:
                     raise litellm.UnsupportedParamsError(
                         message=(
-                            f"gpt-5 models don't support temperature={temperature}. "
-                            "Only temperature=1 is supported. "
-                            "For models like gpt-5.1/5.4, temperature is supported "
-                            "when reasoning.effort='none' (or not specified). "
+                            f"{model} doesn't support temperature={temperature} while reasoning is "
+                            "active. Only temperature=1 is supported unless reasoning.effort resolves "
+                            "to 'none', either set explicitly on the request or declared as the "
+                            "model's default_reasoning_effort. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ),
                         status_code=400,
@@ -153,9 +173,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
         input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        if tools is not None:
-            response_api_optional_request_params["tools"] = tools
-        final_request_params = dict(
+        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(
+            model=model, tools=tools, litellm_params=litellm_params
+        )
+        if sanitized_tools is not None:
+            response_api_optional_request_params["tools"] = sanitized_tools
+        final_request_params: Final = dict(
             ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params)
         )
 
@@ -165,10 +188,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self,
         model: str,  # allows overrides to selectively run this
         input: str | ResponseInputParam,
-        tools: List[ALL_RESPONSES_API_TOOL_PARAMS] | None = None,
-    ) -> Tuple[
+        tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None = None,
+    ) -> tuple[
         str | ResponseInputParam,
-        List[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+        list[ALL_RESPONSES_API_TOOL_PARAMS] | None,
     ]:
         """Sibling of `remove_cache_control_flag_from_messages_and_tools` on
         the chat path. Strips Anthropic-only `cache_control` markers from
@@ -193,6 +216,79 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         return input, tools
 
+    def _flatten_tool_schema_combinators_for_openai(
+        self,
+        model: str,
+        tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None,  # mutable-ok: request tools are a JSON list
+        litellm_params: GenericLiteLLMParams,
+    ) -> list[ALL_RESPONSES_API_TOOL_PARAMS] | None:  # mutable-ok: request tools are a JSON list
+        """Flatten top-level schema combinators only where OpenAI's validator rejects them.
+
+        OpenAI-compatible backends reusing this config (and the ChatGPT backend
+        Codex talks to natively) accept them, and so do GPT-5 and later models,
+        which also call tools better with the union intact. Codex wraps MCP tools
+        inside namespace entries, so nested ``tools`` arrays are walked too.
+        Azure OpenAI shares the validator but names deployments arbitrarily, so
+        the router's declared ``model_info.base_model`` wins over the deployment
+        name and an unrecognized name without one is left untouched.
+        """
+        if tools is None or self.custom_llm_provider not in _PROVIDERS_WITH_COMBINATOR_REJECTING_VALIDATOR:
+            return tools
+        gate_model: Final = self._combinator_gate_model(model=model, litellm_params=litellm_params)
+        if not self._rejects_top_level_schema_combinators(gate_model):
+            return tools
+        flattened: Final = [  # mutable-ok: request tools are a JSON list
+            self._flattened_tool_or_passthrough(tool) for tool in tools
+        ]
+        return cast("list[ALL_RESPONSES_API_TOOL_PARAMS]", flattened)  # cast-ok: dict spread keeps each tool's shape
+
+    @staticmethod
+    def _flattened_tool_or_passthrough(tool: object) -> object:
+        return OpenAIResponsesAPIConfig._flattened_tool_entry(tool) if isinstance(tool, dict) else tool
+
+    @staticmethod
+    def _rejects_top_level_schema_combinators(model: str) -> bool:
+        bare_model: Final = model.split("/")[-1]
+        base_model: Final = bare_model.split(":")[1] if bare_model.startswith("ft:") else bare_model
+        return base_model.startswith(_MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS)
+
+    @staticmethod
+    def _combinator_gate_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
+        model_info: Final[object] = getattr(litellm_params, "model_info", None)
+        base_model: Final[object] = model_info.get("base_model") if isinstance(model_info, dict) else None
+        return base_model if isinstance(base_model, str) and base_model else model
+
+    @staticmethod
+    def _flattened_tool_entry(
+        entry: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: request tools are JSON dicts
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_top_level_schema_combinators,
+        )
+
+        parameters: Final = entry.get("parameters")
+        nested_tools: Final = entry.get("tools")
+        parameters_update: Final = (
+            MappingProxyType({"parameters": flatten_top_level_schema_combinators(parameters)})
+            if isinstance(parameters, dict)
+            else _NO_TOOL_UPDATE
+        )
+        tools_update: Final = (
+            MappingProxyType({"tools": OpenAIResponsesAPIConfig._flattened_nested_tools(nested_tools)})
+            if isinstance(nested_tools, list)
+            else _NO_TOOL_UPDATE
+        )
+        return {**entry, **parameters_update, **tools_update}  # mutable-ok: request tools are JSON dicts
+
+    @staticmethod
+    def _flattened_nested_tools(
+        nested_tools: Sequence[object],
+    ) -> list[object]:  # mutable-ok: namespace tools are a JSON list
+        return [  # mutable-ok: namespace tools are a JSON list
+            OpenAIResponsesAPIConfig._flattened_tool_entry(item) if isinstance(item, dict) else item
+            for item in nested_tools
+        ]
+
     def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """
         Ensure all input fields if pydantic are converted to dict
@@ -201,7 +297,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         This function ensures all input fields are converted to dict.
         """
         if isinstance(input, list):
-            validated_input = []
+            validated_input: Final = []
             for item in input:
                 # if it's pydantic, convert to dict
                 if isinstance(item, BaseModel):
@@ -219,7 +315,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)
-            return validated_input  # type: ignore
+            return validated_input
         # Input is expected to be either str or List, no single BaseModel expected
         return input
 
@@ -235,7 +331,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if item.get("type") == "reasoning":
             try:
                 # Ensure required fields are present for ResponseReasoningItem
-                item_data = dict(item)
+                item_data: Final = dict(item)
                 if "summary" not in item_data:
                     item_data["summary"] = (
                         item_data.get("reasoning_content", "")[:100] + "..."
@@ -244,16 +340,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     )
 
                 # Create ResponseReasoningItem object from the item data
-                reasoning_item = ResponseReasoningItem(**item_data)
+                reasoning_item: Final = ResponseReasoningItem(**item_data)
 
                 # Convert back to dict with exclude_none=True to exclude None fields
-                dict_reasoning_item = reasoning_item.model_dump(exclude_none=True)
+                dict_reasoning_item: Final = reasoning_item.model_dump(exclude_none=True)
 
                 return dict_reasoning_item
             except Exception as e:
                 verbose_logger.debug("Failed to create ResponseReasoningItem, falling back to manual filtering: %s", e)
                 # Fallback: manually filter out known None fields
-                filtered_item = {
+                filtered_item: Final = {
                     k: v
                     for k, v in item.items()
                     if v is not None or k not in {"status", "content", "encrypted_content"}
@@ -273,12 +369,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
             raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        raw_response_headers = dict(raw_response.headers)
-        processed_headers = process_response_headers(raw_response_headers)
+        raw_response_headers: Final = dict(raw_response.headers)
+        processed_headers: Final = process_response_headers(raw_response_headers)
         try:
             response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
@@ -331,11 +427,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         # Convert the dictionary to a properly typed ResponsesAPIStreamingResponse
         verbose_logger.debug("Raw OpenAI Chunk=%s", parsed_chunk)
-        event_type = str(parsed_chunk.get("type"))
-        event_pydantic_model = OpenAIResponsesAPIConfig.get_event_model_class(event_type=event_type)
+        event_type: Final = str(parsed_chunk.get("type"))
+        event_pydantic_model: Final = OpenAIResponsesAPIConfig.get_event_model_class(event_type=event_type)
         # Some OpenAI-compatible providers send error.code: null; coalesce so validation succeeds.
         try:
-            error_obj = parsed_chunk.get("error")
+            error_obj: Final = parsed_chunk.get("error")
             if isinstance(error_obj, dict) and error_obj.get("code") is None:
                 parsed_chunk = dict(parsed_chunk)
                 parsed_chunk["error"] = dict(error_obj)
@@ -354,6 +450,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return event_pydantic_model.model_construct(**parsed_chunk)
 
     @staticmethod
+    def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+        for chunk_str in reversed(all_chunks):
+            for event_model in (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent):
+                try:
+                    return event_model.model_validate_json(chunk_str.removeprefix("data: ")).response
+                except ValueError:
+                    continue
+        return None
+
+    @staticmethod
     def get_event_model_class(event_type: str) -> Any:
         """
         Returns the appropriate event model class based on the event type.
@@ -367,7 +473,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Raises:
             ValueError: If the event type is unknown
         """
-        event_models = {
+        event_models: Final = {
             ResponsesAPIStreamEvents.RESPONSE_CREATED: ResponseCreatedEvent,
             ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS: ResponseInProgressEvent,
             ResponsesAPIStreamEvents.RESPONSE_COMPLETED: ResponseCompletedEvent,
@@ -406,7 +512,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             ResponsesAPIStreamEvents.SHELL_CALL_OUTPUT: GenericEvent,
         }
 
-        model_class = event_models.get(cast(ResponsesAPIStreamEvents, event_type))
+        model_class: Final = event_models.get(cast(ResponsesAPIStreamEvents, event_type))
         if not model_class:
             return GenericEvent
 
@@ -447,16 +553,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the delete response API request into a URL and data
 
         OpenAI API expects the following request
         - DELETE /v1/responses/{response_id}
         """
-        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
-        url = f"{api_base}/{encoded_response_id}"
-        data: dict = {}
+        encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
+        url: Final = f"{api_base}/{encoded_response_id}"
+        data: Final[dict] = {}
         return url, data
 
     def transform_delete_response_api_response(
@@ -468,7 +574,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Transform the delete response API response into a DeleteResponseResult
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         return DeleteResponseResult(**raw_response_json)
@@ -482,16 +588,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the get response API request into a URL and data
 
         OpenAI API expects the following request
         - GET /v1/responses/{response_id}
         """
-        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
-        url = f"{api_base}/{encoded_response_id}"
-        data: dict = {}
+        encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
+        url: Final = f"{api_base}/{encoded_response_id}"
+        data: Final[dict] = {}
         return url, data
 
     def transform_get_response_api_response(
@@ -503,12 +609,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Transform the get response API response into a ResponsesAPIResponse
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        raw_response_headers = dict(raw_response.headers)
-        processed_headers = process_response_headers(raw_response_headers)
-        response = ResponsesAPIResponse.model_validate(raw_response_json)
+        raw_response_headers: Final = dict(raw_response.headers)
+        processed_headers: Final = process_response_headers(raw_response_headers)
+        response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
 
@@ -525,13 +631,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         headers: dict,
         after: str | None = None,
         before: str | None = None,
-        include: List[str] | None = None,
+        include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-    ) -> Tuple[str, dict]:
-        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
-        url = f"{api_base}/{encoded_response_id}/input_items"
-        params: dict[str, Any] = {}
+    ) -> tuple[str, dict]:
+        encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
+        url: Final = f"{api_base}/{encoded_response_id}/input_items"
+        params: Final[dict[str, Any]] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -563,16 +669,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the cancel response API request into a URL and data
 
         OpenAI API expects the following request
         - POST /v1/responses/{response_id}/cancel
         """
-        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
-        url = f"{api_base}/{encoded_response_id}/cancel"
-        data: dict = {}
+        encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
+        url: Final = f"{api_base}/{encoded_response_id}/cancel"
+        data: Final[dict] = {}
         return url, data
 
     def transform_cancel_response_api_response(
@@ -584,13 +690,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Transform the cancel response API response into a ResponsesAPIResponse
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        raw_response_headers = dict(raw_response.headers)
-        processed_headers = process_response_headers(raw_response_headers)
+        raw_response_headers: Final = dict(raw_response.headers)
+        processed_headers: Final = process_response_headers(raw_response_headers)
 
-        response = ResponsesAPIResponse.model_validate(raw_response_json)
+        response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
 
@@ -607,7 +713,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the compact response API request into a URL and data
 
@@ -615,16 +721,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         - POST /v1/responses/compact
         """
         # Preserve query params (e.g., api-version) while appending /compact.
-        parsed_url = httpx.URL(api_base)
-        compact_path = parsed_url.path.rstrip("/") + "/compact"
-        url = str(parsed_url.copy_with(path=compact_path))
+        parsed_url: Final = httpx.URL(api_base)
+        compact_path: Final = parsed_url.path.rstrip("/") + "/compact"
+        url: Final = str(parsed_url.copy_with(path=compact_path))
 
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
         input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        if tools is not None:
-            response_api_optional_request_params["tools"] = tools
-        data = dict(ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params))
+        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(
+            model=model, tools=tools, litellm_params=litellm_params
+        )
+        if sanitized_tools is not None:
+            response_api_optional_request_params["tools"] = sanitized_tools
+        data: Final = dict(ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params))
 
         return url, data
 
@@ -641,12 +750,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
             raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        raw_response_headers = dict(raw_response.headers)
-        processed_headers = process_response_headers(raw_response_headers)
+        raw_response_headers: Final = dict(raw_response.headers)
+        processed_headers: Final = process_response_headers(raw_response_headers)
 
         try:
             response = ResponsesAPIResponse.model_validate(raw_response_json)

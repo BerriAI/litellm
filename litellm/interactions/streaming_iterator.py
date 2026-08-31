@@ -8,7 +8,7 @@ from the Google Interactions API, similar to the responses API streaming iterato
 import asyncio
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -55,11 +55,11 @@ class BaseInteractionsAPIStreamingIterator:
         self.custom_llm_provider = custom_llm_provider
 
         # set hidden params for response headers
-        _api_base = get_api_base(
+        _api_base: Final = get_api_base(
             model=model or "",
             optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
         )
-        _model_info: dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        _model_info: Final[dict] = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
         self._hidden_params = {
             "model_id": _model_info.get("id", None),
             "api_base": _api_base,
@@ -72,7 +72,7 @@ class BaseInteractionsAPIStreamingIterator:
             return None
 
         # Handle SSE format (data: {...})
-        stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
+        stripped_chunk: Final = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
         if stripped_chunk is None:
             return None
 
@@ -83,11 +83,11 @@ class BaseInteractionsAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk = json.loads(stripped_chunk)
+            parsed_chunk: Final = json.loads(stripped_chunk)
 
             # Format as InteractionsAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
-                streaming_response = self.interactions_api_config.transform_streaming_response(
+                streaming_response: Final = self.interactions_api_config.transform_streaming_response(
                     model=self.model,
                     parsed_chunk=parsed_chunk,
                     logging_obj=self.logging_obj,
@@ -170,7 +170,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
         """Handle logging for completed responses in async context."""
         import copy
 
-        logging_response = copy.deepcopy(self.completed_response)
+        logging_response: Final = copy.deepcopy(self.completed_response)
 
         asyncio.create_task(
             self.logging_obj.dispatch_success_handlers(
@@ -237,7 +237,7 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
         """Handle logging for completed responses in sync context."""
         import copy
 
-        logging_response = copy.deepcopy(self.completed_response)
+        logging_response: Final = copy.deepcopy(self.completed_response)
 
         run_async_function(
             async_function=self.logging_obj.async_success_handler,

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -8,6 +8,8 @@ from litellm.types.utils import ImageObject, ImageResponse
 from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -53,10 +55,10 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         - response_format -> ignored (Recraft returns URLs)
         - n -> ignored (Recraft doesn't support multiple images)
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         # Map OpenAI params to Recraft v3 params
-        param_mapping = {
+        param_mapping: Final = {
             "size": "image_size",
         }
 
@@ -104,7 +106,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         - landscape_16_9
         """
         # Map common OpenAI sizes to Recraft presets
-        size_mapping = {
+        size_mapping: Final = {
             "1024x1024": "square_hd",
             "512x512": "square",
             "768x1024": "portrait_4_3",
@@ -154,7 +156,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
 
         Note: Vector illustrations cost 2X as much.
         """
-        recraft_request_body = {
+        recraft_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }
@@ -170,7 +172,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -190,7 +192,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         }
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -202,7 +204,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
             model_response.data = []
 
         # Handle Recraft v3 response format
-        images = response_data.get("images", [])
+        images: Final = response_data.get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):

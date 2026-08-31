@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Final, cast
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -8,12 +8,19 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject, ChatCompletionImageObject
 from litellm.types.llms.vertex_ai import ContentType, PartType
 from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+
+def _image_url_fields(img_element: ChatCompletionImageObject) -> tuple[str | None, str | None, str | None]:
+    image_value: Final = img_element.get("image_url")
+    if isinstance(image_value, dict):
+        return image_value.get("url"), image_value.get("format"), image_value.get("detail")
+    return image_value, None, None
 
 
 class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
@@ -61,7 +68,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         candidate_count: int | None = None,
         stop_sequences: list | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -74,7 +81,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         return "tts" in model
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        supported_params = [
+        supported_params: Final = [
             "temperature",
             "top_p",
             "max_tokens",
@@ -118,26 +125,18 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                 _parts: list[PartType] = []
                 for element in _message_content:
                     if element.get("type") == "image_url":
-                        img_element = element
-                        _image_url: str | None = None
-                        format: str | None = None
-                        detail: str | None = None
-                        if isinstance(img_element.get("image_url"), dict):
-                            _image_url = img_element["image_url"].get("url")  # type: ignore
-                            format = img_element["image_url"].get("format")  # type: ignore
-                            detail = img_element["image_url"].get("detail")  # type: ignore
-                        else:
-                            _image_url = img_element.get("image_url")  # type: ignore
+                        img_element = cast(ChatCompletionImageObject, element)  # cast-ok: runtime type tag checked
+                        _image_url, format, detail = _image_url_fields(img_element)
                         if _image_url and "https://" in _image_url:
                             image_obj = convert_to_anthropic_image_obj(_image_url, format=format)
                             converted_image_url = convert_generic_image_chunk_to_openai_image_obj(image_obj)
                             if detail is not None:
-                                img_element["image_url"] = {  # type: ignore
+                                img_element["image_url"] = {
                                     "url": converted_image_url,
                                     "detail": detail,
                                 }
                             else:
-                                img_element["image_url"] = converted_image_url  # type: ignore
+                                img_element["image_url"] = converted_image_url
                     elif element.get("type") == "file":
                         file_element = cast(ChatCompletionFileObject, element)
                         _file_field = file_element.get("file")
@@ -152,8 +151,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                             # Convert HTTP/HTTPS file URL to base64 data
                             try:
                                 base64_data = convert_url_to_base64(file_id)
-                                _file_field["file_data"] = base64_data  # type: ignore
-                                _file_field.pop("file_id", None)  # type: ignore
+                                _file_field["file_data"] = base64_data
+                                _file_field.pop("file_id", None)
                             except Exception:
                                 # If conversion fails, leave as is and let the API handle it
                                 pass

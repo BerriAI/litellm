@@ -19,14 +19,15 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     TeamMetadataValidationPayload,
     TeamMetadataValidationResult,
 )
+from typing import Final
 
-VALID_COST_CENTERS = frozenset({"CC-1001", "CC-1002", "CC-2001"})
+VALID_COST_CENTERS: Final = frozenset({"CC-1001", "CC-1002", "CC-2001"})
 
 
 async def validate_team_metadata(
     payload: TeamMetadataValidationPayload,
 ) -> TeamMetadataValidationResult:
-    cost_center = payload.metadata.get("cost_center")
+    cost_center: Final = payload.metadata.get("cost_center")
     if cost_center is None:
         return TeamMetadataValidationResult(
             valid=False,

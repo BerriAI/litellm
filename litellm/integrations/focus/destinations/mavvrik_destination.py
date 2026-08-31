@@ -9,8 +9,11 @@ Flow:
 from __future__ import annotations
 
 import gzip
-from typing import Any
+from collections.abc import Mapping
+from typing import Final, Protocol
 from urllib.parse import urlparse
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -21,17 +24,45 @@ from litellm.llms.custom_httpx.http_handler import (
 
 from .base import FocusDestination, FocusTimeWindow
 
-_MAVVRIK_ALLOWED_SUFFIXES = (".mavvrik.dev", ".mavvrik.ai", ".mavvrik.app")
+_MAVVRIK_ALLOWED_SUFFIXES: Final = (".mavvrik.dev", ".mavvrik.ai", ".mavvrik.app")
 
 # GCS requires intermediate chunks to be a multiple of 256 KB.
 # 8 MB gives a good balance between round-trips and memory pressure.
-_GCS_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
+_GCS_CHUNK_SIZE: Final = 8 * 1024 * 1024  # 8 MB
+
+
+class MavvrikRegisterBody(TypedDict):
+    metricsMarker: ReadOnly[NotRequired[int | str]]
+
+
+class MavvrikUploadUrlBody(TypedDict):
+    url: ReadOnly[NotRequired[str]]
+
+
+class _RegisterResponse(Protocol):
+    def json(self) -> MavvrikRegisterBody: ...
+
+
+class _UploadUrlResponse(Protocol):
+    def json(self) -> MavvrikUploadUrlBody: ...
+
+
+def _register_body(response: _RegisterResponse) -> MavvrikRegisterBody:
+    return response.json()
+
+
+def _upload_url_body(response: _UploadUrlResponse) -> MavvrikUploadUrlBody:
+    return response.json()
+
+
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    return headers.get(name)
 
 
 def _validate_api_endpoint(api_endpoint: str) -> None:
     if not api_endpoint.startswith("https://"):
         raise ValueError("MAVVRIK_API_ENDPOINT must be an HTTPS URL")
-    hostname = (urlparse(api_endpoint).hostname or "").lower()
+    hostname: Final = (urlparse(api_endpoint).hostname or "").lower()
     if not any(hostname.endswith(suffix) for suffix in _MAVVRIK_ALLOWED_SUFFIXES):
         raise ValueError(
             "MAVVRIK_API_ENDPOINT host must be a Mavvrik domain (e.g. https://api.mavvrik.dev/<tenant_id>)"
@@ -39,10 +70,10 @@ def _validate_api_endpoint(api_endpoint: str) -> None:
 
 
 def _validate_gcs_url(url: str, label: str) -> None:
-    parsed = urlparse(url)
+    parsed: Final = urlparse(url)
     if parsed.scheme != "https":
         raise ValueError(f"Mavvrik FOCUS destination: {label} must be HTTPS, got scheme '{parsed.scheme}'")
-    hostname = (parsed.hostname or "").lower()
+    hostname: Final = (parsed.hostname or "").lower()
     if not (hostname == "storage.googleapis.com" or hostname.endswith(".storage.googleapis.com")):
         raise ValueError(
             f"Mavvrik FOCUS destination: {label} must be a GCS endpoint (storage.googleapis.com), got '{hostname}'"
@@ -56,12 +87,12 @@ class FocusMavvrikDestination(FocusDestination):
         self,
         *,
         prefix: str,
-        config: dict[str, Any] | None = None,
+        config: Mapping[str, str] | None = None,
     ) -> None:
-        config = config or {}
-        api_key = config.get("api_key")
-        api_endpoint = config.get("api_endpoint")
-        connection_id = config.get("connection_id")
+        resolved_config: Final[Mapping[str, str]] = config or {}
+        api_key: Final = resolved_config.get("api_key")
+        api_endpoint: Final = resolved_config.get("api_endpoint")
+        connection_id: Final = resolved_config.get("connection_id")
 
         if not api_key:
             raise ValueError(
@@ -100,7 +131,7 @@ class FocusMavvrikDestination(FocusDestination):
     def _auth_headers(self) -> dict[str, str]:
         return {"Content-Type": "application/json", "x-api-key": self.api_key}
 
-    async def _ensure_registered(self) -> int | None:
+    async def _ensure_registered(self) -> int | str | None:
         """POST agent endpoint to register/initialize the connector (once per instance).
 
         Returns metricsMarker from the Mavvrik response — the last date index
@@ -111,7 +142,7 @@ class FocusMavvrikDestination(FocusDestination):
         """
         if self._registered:
             return None
-        resp = await self._http.client.request(
+        resp: Final = await self._http.client.request(
             method="POST",
             url=self._agent_url,
             headers=self._auth_headers,
@@ -127,7 +158,7 @@ class FocusMavvrikDestination(FocusDestination):
         if resp.status_code >= 400:
             raise RuntimeError(f"Mavvrik FOCUS destination: register failed ({resp.status_code}): {resp.text[:200]}")
         self._registered = True
-        metrics_marker = resp.json().get("metricsMarker", 0)
+        metrics_marker: Final = _register_body(resp).get("metricsMarker", 0)
         verbose_logger.debug(
             "Mavvrik FOCUS destination: connector registered (metricsMarker=%s)",
             metrics_marker,
@@ -136,8 +167,8 @@ class FocusMavvrikDestination(FocusDestination):
 
     async def _get_signed_url(self, date_str: str) -> str:
         """GET upload-url endpoint → GCS signed URL for the given date."""
-        params = {"name": date_str, "type": "metrics", "datetime": date_str}
-        resp = await self._http.client.request(
+        params: Final = {"name": date_str, "type": "metrics", "datetime": date_str}
+        resp: Final = await self._http.client.request(
             method="GET",
             url=self._upload_url_endpoint,
             headers=self._auth_headers,
@@ -148,7 +179,7 @@ class FocusMavvrikDestination(FocusDestination):
             raise RuntimeError(
                 f"Mavvrik FOCUS destination: failed to get signed URL ({resp.status_code}): {resp.text[:200]}"
             )
-        signed_url = resp.json().get("url")
+        signed_url: Final = _upload_url_body(resp).get("url")
         if not signed_url:
             raise RuntimeError(f"Mavvrik FOCUS destination: response missing 'url' field: {resp.json()}")
         _validate_gcs_url(signed_url, "signed URL")
@@ -170,12 +201,12 @@ class FocusMavvrikDestination(FocusDestination):
         keeping the destination code self-contained (no changes to the FOCUS
         pipeline upstream).
         """
-        gzip_bytes = gzip.compress(content)
-        total = len(gzip_bytes)
+        gzip_bytes: Final = gzip.compress(content)
+        total: Final = len(gzip_bytes)
 
         # Step 1: initiate resumable upload session
-        metadata = b'{"contentEncoding":"gzip","contentDisposition":"attachment"}'
-        init_resp = await self._http.client.request(
+        metadata: Final = b'{"contentEncoding":"gzip","contentDisposition":"attachment"}'
+        init_resp: Final = await self._http.client.request(
             method="POST",
             url=signed_url,
             headers={
@@ -190,7 +221,7 @@ class FocusMavvrikDestination(FocusDestination):
                 f"Mavvrik FOCUS destination: GCS session init failed ({init_resp.status_code}): {init_resp.text[:400]}"
             )
 
-        session_uri = init_resp.headers.get("Location")
+        session_uri: Final = _header_value(init_resp.headers, "Location")
         if not session_uri:
             raise RuntimeError("Mavvrik FOCUS destination: GCS session init missing Location header")
         _validate_gcs_url(session_uri, "session URI")
@@ -245,7 +276,7 @@ class FocusMavvrikDestination(FocusDestination):
 
     async def _update_metrics_marker(self, date_epoch: int) -> None:
         """PATCH agent endpoint to advance metricsMarker after a successful upload."""
-        resp = await self._http.client.request(
+        resp: Final = await self._http.client.request(
             method="PATCH",
             url=self._agent_url,
             headers=self._auth_headers,
@@ -264,14 +295,14 @@ class FocusMavvrikDestination(FocusDestination):
             )
         verbose_logger.debug("Mavvrik FOCUS destination: metricsMarker advanced to %s", date_epoch)
 
-    async def get_metrics_marker(self) -> int | None:
+    async def get_metrics_marker(self) -> int | str | None:
         """Register with Mavvrik and return the current metricsMarker.
 
         Always calls the Mavvrik register API — unlike deliver() which skips
         registration once _registered is True, catch-up requires a fresh
         marker value on every run.
         """
-        resp = await self._http.client.request(
+        resp: Final = await self._http.client.request(
             method="POST",
             url=self._agent_url,
             headers=self._auth_headers,
@@ -287,7 +318,7 @@ class FocusMavvrikDestination(FocusDestination):
         if resp.status_code >= 400:
             raise RuntimeError(f"Mavvrik FOCUS destination: register failed ({resp.status_code}): {resp.text[:200]}")
         self._registered = True
-        metrics_marker = resp.json().get("metricsMarker", 0)
+        metrics_marker: Final = _register_body(resp).get("metricsMarker", 0)
         verbose_logger.debug("Mavvrik FOCUS destination: got metricsMarker=%s", metrics_marker)
         return metrics_marker
 
@@ -302,8 +333,8 @@ class FocusMavvrikDestination(FocusDestination):
 
         Uses the start date of the time window as the object date key.
         """
-        date_str = time_window.start_time.strftime("%Y-%m-%d")
-        date_epoch = int(time_window.start_time.timestamp())
+        date_str: Final = time_window.start_time.strftime("%Y-%m-%d")
+        date_epoch: Final = int(time_window.start_time.timestamp())
 
         await self._ensure_registered()
 
@@ -322,7 +353,7 @@ class FocusMavvrikDestination(FocusDestination):
             filename,
         )
 
-        signed_url = await self._get_signed_url(date_str)
+        signed_url: Final = await self._get_signed_url(date_str)
         await self._upload_to_gcs(signed_url, content)
         await self._update_metrics_marker(date_epoch)
 

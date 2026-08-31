@@ -1,17 +1,11 @@
 import json
 import os
+import time
 from collections.abc import Mapping, Sequence
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    Literal,
-    NamedTuple,
-    Optional,
-    cast,
-)
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Optional, cast
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import Any, override
 
 from litellm._logging import verbose_proxy_logger
@@ -112,7 +106,7 @@ def _normalize_content(raw: object) -> str | list[_ContentPart] | None:
         return raw
     if not isinstance(raw, list):
         return json.dumps(raw)
-    parts: list[_ContentPart] = []
+    parts: Final[list[_ContentPart]] = []
     for block in raw:
         if not isinstance(block, dict):
             parts.append(_TextContentPart(text=json.dumps(block)))
@@ -141,7 +135,7 @@ def _extract_text_from_content(content: object) -> str:
 
 
 def _extract_text_from_message(message: _Message) -> str:
-    content = message.content
+    content: Final = message.content
     if isinstance(content, str):
         return content
     if content is None:
@@ -149,8 +143,8 @@ def _extract_text_from_message(message: _Message) -> str:
     return "\n".join(part.text for part in content if isinstance(part, _TextContentPart))
 
 
-def _merge_metadata_bags(request_data: Mapping[str, Any]) -> dict[str, Any] | None:
-    merged: dict[str, Any] = {}
+def _merge_metadata_bags(request_data: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    merged: Final[dict[str, Any]] = {}
     present = False
     for bag in (request_data.get("metadata"), request_data.get("litellm_metadata")):
         if isinstance(bag, Mapping):
@@ -160,7 +154,7 @@ def _merge_metadata_bags(request_data: Mapping[str, Any]) -> dict[str, Any] | No
 
 
 def _messages_since_last_assistant(
-    messages: list[AllMessageValues],
+    messages: Sequence[AllMessageValues],
 ) -> _FilteredMessages:
     if not messages:
         return _FilteredMessages([], ())
@@ -175,8 +169,8 @@ def _messages_since_last_assistant(
             last_assistant_idx = i
             break
 
-    system_indices = tuple(i for i in range(last_assistant_idx + 1) if messages[i]["role"] == "system")
-    tail_indices = tuple(range(last_assistant_idx + 1, len(messages)))
+    system_indices: Final = tuple(i for i in range(last_assistant_idx + 1) if messages[i]["role"] == "system")
+    tail_indices: Final = tuple(range(last_assistant_idx + 1, len(messages)))
     indices = system_indices + tail_indices
     return _FilteredMessages([messages[i] for i in indices], indices)
 
@@ -187,11 +181,11 @@ def _merge_request_transforms(
     texts: list[str],
     sent_indices: tuple[int, ...],
 ) -> list[str]:
-    returned_texts = [_extract_text_from_message(msg) for msg in guard_output.messages]
-    original_texts = (
+    returned_texts: Final = [_extract_text_from_message(msg) for msg in guard_output.messages]
+    original_texts: Final = (
         [_extract_text_from_content(m.get("content")) for m in structured_messages] if structured_messages else texts
     )
-    replacements = {
+    replacements: Final = {
         idx: returned_texts[pos]
         for pos, idx in enumerate(sent_indices)
         if pos < len(returned_texts) and idx < len(original_texts)
@@ -200,12 +194,12 @@ def _merge_request_transforms(
 
 
 def _apply_message_redaction(original: AllMessageValues, redacted: _Message) -> AllMessageValues:
-    content = original.get("content")
+    content: Final = original.get("content")
     if isinstance(content, str):
         return cast(AllMessageValues, {**original, "content": _extract_text_from_message(redacted)})
     if isinstance(content, list) and _extract_text_from_content(content):
-        redacted_content = redacted.content
-        new_content = (
+        redacted_content: Final = redacted.content
+        new_content: Final = (
             [part.model_dump() for part in redacted_content] if isinstance(redacted_content, list) else redacted_content
         )
         return cast(AllMessageValues, {**original, "content": new_content})
@@ -218,7 +212,7 @@ def _redacted_messages(
     sent_indices: tuple[int, ...],
     full_messages: list[AllMessageValues],
 ) -> list[AllMessageValues] | None:
-    redactions = {
+    redactions: Final = {
         id(processed_messages[idx]): _apply_message_redaction(processed_messages[idx], guard_output.messages[pos])
         for pos, idx in enumerate(sent_indices)
         if pos < len(guard_output.messages) and idx < len(processed_messages)
@@ -246,6 +240,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         guardrail_name: str,
         api_key: str | None = None,
         api_base: str | None = None,
+        fail_on_error: bool | None = True,
         **kwargs,
     ) -> None:
         """
@@ -258,6 +253,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             **kwargs: Additional arguments passed to the CustomGuardrail base class.
         """
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.fail_on_error = True if fail_on_error is None else fail_on_error
 
         self.api_key = api_key or os.environ.get("CS_AIDR_TOKEN")
         if not self.api_key:
@@ -298,9 +294,9 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         Returns:
             The parsed `result` body of the API response.
         """
-        endpoint = f"{self.api_base}/v1/guard_chat_completions"
+        endpoint: Final = f"{self.api_base}/v1/guard_chat_completions"
 
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
@@ -309,15 +305,17 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             "CrowdStrike AIDR Guardrail (%s): Calling endpoint %s with payload: %s", hook_name, endpoint, payload
         )
 
-        response = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
+        response: Final = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
         assert response is not None
         response.raise_for_status()
 
-        result = _GuardChatCompletionsResponse.model_validate(response.json()).result or _GuardChatCompletionsResult()
+        response_body: Final[object] = response.json()
+        raw_result: Final[object] = response_body.get("result") if isinstance(response_body, dict) else None
+        blocked_signal: Final[object] = raw_result.get("blocked") if isinstance(raw_result, dict) else None
 
-        if result.blocked:
+        if blocked_signal:
             verbose_proxy_logger.warning(
-                "CrowdStrike AIDR Guardrail (%s): Request blocked. Response: %s", hook_name, result
+                "CrowdStrike AIDR Guardrail (%s): Request blocked. Verdict: %s", hook_name, blocked_signal
             )
             raise HTTPException(
                 status_code=400,  # Bad Request, indicating violation
@@ -326,6 +324,23 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                     "guardrail_name": self.guardrail_name,
                 },
             )
+
+        try:
+            result: Final = (
+                _GuardChatCompletionsResponse.model_validate(response_body).result or _GuardChatCompletionsResult()
+            )
+        except ValidationError as validation_error:
+            transformed_signal: Final[object] = raw_result.get("transformed") if isinstance(raw_result, dict) else None
+            if transformed_signal:
+                raise HTTPException(
+                    status_code=500,
+                    detail={  # mutable-ok: one-shot HTTPException detail payload, never mutated after construction
+                        "error": "CrowdStrike AIDR returned a transformed response litellm could not parse; "
+                        "failing closed instead of dropping the delivered redactions",
+                        "guardrail_name": self.guardrail_name,
+                    },
+                ) from validation_error
+            raise
         verbose_proxy_logger.debug(
             "CrowdStrike AIDR Guardrail (%s): Request passed. Response: %s", hook_name, result.detectors
         )
@@ -333,13 +348,13 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         return result
 
     def _build_guard_input_for_request(self, inputs: GenericGuardrailAPIInputs) -> _GuardInputWithIndices | None:
-        guard_input = _GuardInput(messages=[], tools=[])
-        structured_messages = inputs.get("structured_messages")
-        texts = inputs.get("texts", [])
-        tools = inputs.get("tools")
+        guard_input: Final = _GuardInput(messages=[], tools=[])
+        structured_messages: Final = inputs.get("structured_messages")
+        texts: Final = inputs.get("texts", [])
+        tools: Final = inputs.get("tools")
 
         if structured_messages:
-            filtered = _messages_since_last_assistant(structured_messages)
+            filtered: Final = _messages_since_last_assistant(structured_messages)
             for message in filtered.messages:
                 content = _normalize_content(message.get("content"))
                 if content is None or len(content) == 0:
@@ -359,25 +374,57 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         return _GuardInputWithIndices(guard_input, indices)
 
     def _build_guard_input_for_response(self, inputs: GenericGuardrailAPIInputs) -> _GuardInput:
-        output_texts: list[str] = inputs.get("texts", [])
+        output_texts: Final[list[str]] = inputs.get("texts", [])
         return _GuardInput(
             messages=[_Message(role="assistant", content=text) for text in output_texts],
             tools=inputs.get("tools", []),
         )
 
     def _extract_transformed_texts(self, guard_output: _GuardInput, num_assistant_messages: int) -> list[str]:
-        tail = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []
+        tail: Final = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []
         return [_extract_text_from_message(msg) for msg in tail]
+
+    async def _call_or_fail_open(
+        self, payload: dict[str, Any], hook_name: str, request_data: dict[str, object]
+    ) -> _GuardChatCompletionsResult:
+        start_time: Final = time.time()
+        try:
+            return await self._call_crowdstrike_aidr_guard(payload, hook_name)
+        except HTTPException:
+            raise
+        except Exception as error:
+            if self.fail_on_error:
+                raise
+            verbose_proxy_logger.error(
+                "CrowdStrike AIDR Guardrail failed open | hook_name: %s error: %s",
+                hook_name,
+                error,
+                exc_info=True,
+            )
+            end_time: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=error,
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                start_time=start_time,
+                end_time=end_time,
+                duration=end_time - start_time,
+            )
+            return _GuardChatCompletionsResult()
+
+    @override
+    def structured_messages_cover_full_request(self) -> bool:
+        return effective_skip_system_message_for_guardrail(self) or effective_skip_tool_message_for_guardrail(self)
 
     def _writeback_messages(
         self,
         structured_messages: list[AllMessageValues],
         guard_output: _GuardInput,
         sent_indices: tuple[int, ...],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> list[AllMessageValues] | None:
         if effective_skip_system_message_for_guardrail(self) or effective_skip_tool_message_for_guardrail(self):
-            request_messages = request_data.get("messages")
+            request_messages: Final = request_data.get("messages")
             full_messages = (
                 cast("list[AllMessageValues]", request_messages)
                 if isinstance(request_messages, list)
@@ -399,15 +446,15 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         verbose_proxy_logger.debug("CrowdStrike AIDR Guardrail: Applying guardrail to %s", input_type)
 
         # Extract inputs
-        texts = inputs.get("texts", [])
-        structured_messages = inputs.get("structured_messages")
-        tools = inputs.get("tools")
-        tool_calls = inputs.get("tool_calls")
+        texts: Final = inputs.get("texts", [])
+        structured_messages: Final = inputs.get("structured_messages")
+        tools: Final = inputs.get("tools")
+        tool_calls: Final = inputs.get("tool_calls")
 
         # Build guard_input based on input_type
         sent_indices: tuple[int, ...] = ()
         if input_type == "request":
-            request_result = self._build_guard_input_for_request(inputs)
+            request_result: Final = self._build_guard_input_for_request(inputs)
             if request_result is None:
                 return inputs
             guard_input = request_result.guard_input
@@ -421,28 +468,28 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             event_type = "output"
             hook_name = "apply_guardrail (response)"
 
-        ai_guard_payload: dict[str, Any] = {
+        ai_guard_payload: Final[dict[str, Any]] = {
             "guard_input": guard_input.model_dump(mode="json"),
             "event_type": event_type,
         }
 
-        model = inputs.get("model")
+        model: Final = inputs.get("model")
         if model:
             ai_guard_payload["model"] = model
 
-        metadata = _merge_metadata_bags(request_data)
+        metadata: Final = _merge_metadata_bags(request_data)
         if metadata is not None:
-            user_id = metadata.get("user_api_key_user_id")
+            user_id: Final = metadata.get("user_api_key_user_id")
             if user_id:
                 ai_guard_payload["user_id"] = user_id
 
-            extra_info: dict[str, str] = {}
-            user_email = metadata.get("user_api_key_user_email")
+            extra_info: Final[dict[str, str]] = {}
+            user_email: Final = metadata.get("user_api_key_user_email")
             if user_email:
                 extra_info["user_name"] = user_email
             ai_guard_payload["extra_info"] = extra_info
 
-        result = await self._call_crowdstrike_aidr_guard(ai_guard_payload, hook_name)
+        result: Final = await self._call_or_fail_open(ai_guard_payload, hook_name, request_data)
 
         if "body" in request_data or "messages" in request_data:
             add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
@@ -450,20 +497,20 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         if not result.transformed or result.guard_output is None:
             return inputs
 
-        guard_output = result.guard_output
+        guard_output: Final = result.guard_output
 
         if input_type == "request":
             transformed_texts = _merge_request_transforms(guard_output, structured_messages, texts, sent_indices)
         else:
             transformed_texts = self._extract_transformed_texts(guard_output, len(texts))
 
-        result_inputs: GenericGuardrailAPIInputs = {"texts": transformed_texts}
+        result_inputs: Final[GenericGuardrailAPIInputs] = {"texts": transformed_texts}
         if tools:
             result_inputs["tools"] = tools
         if tool_calls:
             result_inputs["tool_calls"] = tool_calls
         if structured_messages:
-            rebuilt = (
+            rebuilt: Final = (
                 self._writeback_messages(structured_messages, guard_output, sent_indices, request_data)
                 if input_type == "request"
                 else None

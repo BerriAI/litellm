@@ -1,12 +1,12 @@
 import asyncio
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import _is_proxy_admin_request
 
 # Client-supplied params that make the router or the call path fabricate a
@@ -16,7 +16,7 @@ from litellm.router_utils.common_utils import _is_proxy_admin_request
 # (rather than deriving via ``dataclasses.fields(MockRouterTestingParams)`` at
 # import time) avoids a cyclic import: ``litellm.types.router`` imports
 # back into proxy modules before this module finishes loading.
-GATED_MOCK_PARAM_NAMES: tuple[str, ...] = (
+GATED_MOCK_PARAM_NAMES: Final[tuple[str, ...]] = (
     "mock_testing_fallbacks",
     "mock_testing_context_fallbacks",
     "mock_testing_content_policy_fallbacks",
@@ -25,7 +25,7 @@ GATED_MOCK_PARAM_NAMES: tuple[str, ...] = (
     "mock_delay",
 )
 
-MOCK_TESTING_CONFIG_KEY = "dangerously_allow_mock_testing_request_params"
+MOCK_TESTING_CONFIG_KEY: Final = "dangerously_allow_mock_testing_request_params"
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -37,15 +37,15 @@ else:
 
 def _route_user_config_request(data: dict, route_type: str):
     """Route a request using the user-provided router config."""
-    router_config = data.pop("user_config")
+    router_config: Final = data.pop("user_config")
 
     # Filter router_config to only include valid Router.__init__ arguments
     # This prevents TypeError when invalid parameters are stored in the database
-    valid_args = litellm.Router.get_valid_args()
-    filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
+    valid_args: Final = litellm.Router.get_valid_args()
+    filtered_config: Final = {k: v for k, v in router_config.items() if k in valid_args}
 
-    user_router = litellm.Router(**filtered_config)
-    ret_val = getattr(user_router, f"{route_type}")(**data)
+    user_router: Final = litellm.Router(**filtered_config)
+    ret_val: Final = getattr(user_router, f"{route_type}")(**data)
     user_router.discard()
     return ret_val
 
@@ -60,7 +60,7 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, te
         return
     if not isinstance(llm_router, litellm.Router):
         return
-    deployments = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
+    deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
     if llm_router._are_all_deployments_blocked(deployments):
         raise litellm.PermissionDeniedError(
             message="Model is blocked",
@@ -73,7 +73,7 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, te
         )
 
 
-ROUTE_ENDPOINT_MAPPING = {
+ROUTE_ENDPOINT_MAPPING: Final = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
     "aembedding": "/embeddings",
@@ -141,38 +141,46 @@ ROUTE_ENDPOINT_MAPPING = {
     "aget_run": "/evals/{eval_id}/runs/{run_id}",
     "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
     "adelete_run": "/evals/{eval_id}/runs/{run_id}",
+    "acreate_batch": "/batches",
 }
 
 
 class ProxyModelNotFoundError(HTTPException):
-    def __init__(self, route: str, model_name: str):
-        detail = {
+    def __init__(self, route: str, model_name: str, retryable_with_model_read_through: bool = True):
+        self.retryable_with_model_read_through: Final = retryable_with_model_read_through
+        detail: Final = {
             "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
         }
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
-REQUIRED_BODY_PARAM_BY_ROUTE: Mapping[str, str] = {
-    "acompletion": "messages",
-    "aembedding": "input",
+REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
+    "acompletion": ("messages",),
+    "aembedding": ("input",),
+    "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
 }
 
 
-class ProxyMissingRequiredParamError(HTTPException):
+class ProxyMissingRequiredParamError(ProxyException):
     def __init__(self, route: str, param: str):
-        detail = {"error": f"{route}: Missing required parameter: '{param}'."}
-        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
-        self.type = "invalid_request_error"
-        self.param = param
+        super().__init__(
+            message=f"{route}: Missing required parameter: '{param}'.",
+            type="invalid_request_error",
+            param=param,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    required_param = REQUIRED_BODY_PARAM_BY_ROUTE.get(route_type)
-    if required_param is None or data.get(required_param) is not None:
+    missing_param: Final = next(
+        (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),
+        None,
+    )
+    if missing_param is None:
         return
     raise ProxyMissingRequiredParamError(
         route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
-        param=required_param,
+        param=missing_param,
     )
 
 
@@ -199,7 +207,7 @@ def raise_if_mock_testing_params_disallowed(data: Mapping[str, object], *, allow
     """
     if allowed:
         return
-    present = tuple(name for name in GATED_MOCK_PARAM_NAMES if name in data)
+    present: Final = tuple(name for name in GATED_MOCK_PARAM_NAMES if name in data)
     if present:
         raise MockTestingParamsDisabledError(params=present)
 
@@ -266,7 +274,7 @@ async def add_shared_session_to_data(data: dict) -> None:
         elif session is not None and session.closed:
             # Session was created at startup but has since closed — recreate it
             # Use lock to prevent concurrent recreation (avoids session/connector leak)
-            lock = _get_shared_session_lock()
+            lock: Final = _get_shared_session_lock()
             async with lock:
                 # Double-check under lock — another coroutine may have already recreated it
                 session = proxy_server.shared_aiohttp_session
@@ -313,112 +321,150 @@ async def add_shared_session_to_data(data: dict) -> None:
             pass
 
 
+RouteType = Literal[
+    "acompletion",
+    "atext_completion",
+    "aembedding",
+    "aimage_generation",
+    "aspeech",
+    "atranscription",
+    "amoderation",
+    "arerank",
+    "aresponses",
+    "aget_responses",
+    "adelete_responses",
+    "acancel_responses",
+    "acompact_responses",
+    "acreate_response_reply",
+    "alist_input_items",
+    "_arealtime",  # private function for realtime API
+    "acreate_realtime_client_secret",
+    "arealtime_calls",
+    "acreate_realtime_transcription_session",
+    "_aresponses_websocket",  # private function for responses WebSocket mode
+    "aimage_edit",
+    "agenerate_content",
+    "agenerate_content_stream",
+    "allm_passthrough_route",
+    "acreate_batch",
+    "aretrieve_batch",
+    "alist_batches",
+    "afile_content",
+    "afile_retrieve",
+    "acreate_fine_tuning_job",
+    "acancel_fine_tuning_job",
+    "alist_fine_tuning_jobs",
+    "aretrieve_fine_tuning_job",
+    "avector_store_search",
+    "avector_store_create",
+    "avector_store_retrieve",
+    "avector_store_list",
+    "avector_store_update",
+    "avector_store_delete",
+    "avector_store_file_create",
+    "avector_store_file_list",
+    "avector_store_file_retrieve",
+    "avector_store_file_content",
+    "avector_store_file_update",
+    "avector_store_file_delete",
+    "aocr",
+    "asearch",
+    "avideo_generation",
+    "avideo_list",
+    "avideo_status",
+    "avideo_content",
+    "avideo_remix",
+    "avideo_create_character",
+    "avideo_get_character",
+    "avideo_edit",
+    "avideo_extension",
+    "acreate_container",
+    "alist_containers",
+    "aretrieve_container",
+    "adelete_container",
+    "aupload_container_file",
+    "alist_container_files",
+    "aretrieve_container_file",
+    "adelete_container_file",
+    "aretrieve_container_file_content",
+    "acreate_skill",
+    "alist_skills",
+    "aget_skill",
+    "adelete_skill",
+    "aingest",
+    "anthropic_messages",
+    "acreate_interaction",
+    "aget_interaction",
+    "adelete_interaction",
+    "acancel_interaction",
+    "acreate_agent",
+    "alist_agents",
+    "aget_agent",
+    "adelete_agent",
+    "alist_agent_versions",
+    "asend_message",
+    "call_mcp_tool",
+    "acancel_batch",
+    "afile_delete",
+    "acreate_eval",
+    "alist_evals",
+    "aget_eval",
+    "aupdate_eval",
+    "adelete_eval",
+    "acancel_eval",
+    "acreate_run",
+    "alist_runs",
+    "aget_run",
+    "acancel_run",
+    "adelete_run",
+]
+
+
 async def route_request(
     data: dict,
     llm_router: LitellmRouter | None,
     user_model: str | None,
-    route_type: Literal[
-        "acompletion",
-        "atext_completion",
-        "aembedding",
-        "aimage_generation",
-        "aspeech",
-        "atranscription",
-        "amoderation",
-        "arerank",
-        "aresponses",
-        "aget_responses",
-        "adelete_responses",
-        "acancel_responses",
-        "acompact_responses",
-        "acreate_response_reply",
-        "alist_input_items",
-        "_arealtime",  # private function for realtime API
-        "acreate_realtime_client_secret",
-        "arealtime_calls",
-        "acreate_realtime_transcription_session",
-        "_aresponses_websocket",  # private function for responses WebSocket mode
-        "aimage_edit",
-        "agenerate_content",
-        "agenerate_content_stream",
-        "allm_passthrough_route",
-        "acreate_batch",
-        "aretrieve_batch",
-        "alist_batches",
-        "afile_content",
-        "afile_retrieve",
-        "acreate_fine_tuning_job",
-        "acancel_fine_tuning_job",
-        "alist_fine_tuning_jobs",
-        "aretrieve_fine_tuning_job",
-        "avector_store_search",
-        "avector_store_create",
-        "avector_store_retrieve",
-        "avector_store_list",
-        "avector_store_update",
-        "avector_store_delete",
-        "avector_store_file_create",
-        "avector_store_file_list",
-        "avector_store_file_retrieve",
-        "avector_store_file_content",
-        "avector_store_file_update",
-        "avector_store_file_delete",
-        "aocr",
-        "asearch",
-        "avideo_generation",
-        "avideo_list",
-        "avideo_status",
-        "avideo_content",
-        "avideo_remix",
-        "avideo_create_character",
-        "avideo_get_character",
-        "avideo_edit",
-        "avideo_extension",
-        "acreate_container",
-        "alist_containers",
-        "aretrieve_container",
-        "adelete_container",
-        "aupload_container_file",
-        "alist_container_files",
-        "aretrieve_container_file",
-        "adelete_container_file",
-        "aretrieve_container_file_content",
-        "acreate_skill",
-        "alist_skills",
-        "aget_skill",
-        "adelete_skill",
-        "aingest",
-        "anthropic_messages",
-        "acreate_interaction",
-        "aget_interaction",
-        "adelete_interaction",
-        "acancel_interaction",
-        "acreate_agent",
-        "alist_agents",
-        "aget_agent",
-        "adelete_agent",
-        "alist_agent_versions",
-        "asend_message",
-        "call_mcp_tool",
-        "acancel_batch",
-        "afile_delete",
-        "acreate_eval",
-        "alist_evals",
-        "aget_eval",
-        "aupdate_eval",
-        "adelete_eval",
-        "acancel_eval",
-        "acreate_run",
-        "alist_runs",
-        "aget_run",
-        "acancel_run",
-        "adelete_run",
-    ],
+    route_type: RouteType,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     """
     Common helper to route the request
     """
+    try:
+        return await _route_request_single_attempt(
+            data=data,
+            llm_router=llm_router,
+            user_model=user_model,
+            route_type=route_type,
+            user_api_key_dict=user_api_key_dict,
+        )
+    except ProxyModelNotFoundError as e:
+        requested_model: Final = data.get("model", "")
+        if not e.retryable_with_model_read_through or not isinstance(requested_model, str) or not requested_model:
+            raise
+        from litellm.proxy import proxy_server
+        from litellm.proxy.common_utils.registry_read_through import (
+            model_registry_read_through,
+        )
+
+        if not await model_registry_read_through.attempt(requested_model):
+            raise
+        return await _route_request_single_attempt(
+            data=data,
+            llm_router=proxy_server.llm_router,
+            user_model=user_model,
+            route_type=route_type,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+
+async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited provider coroutines; the inferred union keeps route_request's callers typed
+    data: dict,  # mutable-ok: request body is the proxy-wide mutable dict contract shared with route_request
+    llm_router: LitellmRouter | None,
+    user_model: str | None,
+    route_type: RouteType,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+):
     raise_if_required_body_param_missing(route_type=route_type, data=data)
 
     await add_shared_session_to_data(data)
@@ -427,9 +473,9 @@ async def route_request(
 
     data.pop("enable_tag_filtering", None)
 
-    team_id = get_team_id_from_data(data)
-    router_model_names = llm_router.model_names if llm_router is not None else []
-    is_proxy_admin_without_team = team_id is None and _is_proxy_admin_request(data)
+    team_id: Final = get_team_id_from_data(data)
+    router_model_names: Final = llm_router.model_names if llm_router is not None else []
+    is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
@@ -453,7 +499,7 @@ async def route_request(
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
         else:
-            models = [model.strip() for model in data.pop("model").split(",")]
+            models: Final = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:
@@ -463,11 +509,11 @@ async def route_request(
         # Apply per-request router settings overrides from key/team config
         # Instead of creating a new Router (expensive), merge settings into kwargs
         # The Router already supports per-request overrides for these settings
-        override_settings = data.pop("router_settings_override")
+        override_settings: Final = data.pop("router_settings_override")
 
         # Settings that the Router accepts as per-request kwargs
         # These override the global router settings for this specific request
-        per_request_settings = [
+        per_request_settings: Final = [
             "fallbacks",
             "context_window_fallbacks",
             "content_policy_fallbacks",
@@ -506,14 +552,14 @@ async def route_request(
             "adelete_run",
         ]:
             # If a model is provided, get its credentials from the router
-            model = data.get("model")
+            model: Final = data.get("model")
             if model and llm_router:
                 try:
                     # Try to get deployment credentials for this model
                     deployment_creds = llm_router.get_deployment_credentials(model_id=model)
                     if not deployment_creds:
                         # Try by model group name
-                        deployment = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                        deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
                         if (
                             deployment
                             and deployment.litellm_params
@@ -581,22 +627,16 @@ async def route_request(
             # These endpoints don't need a model, use custom_llm_provider directly
             return getattr(litellm, f"{route_type}")(**data)
 
-        team_model_name = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
+        team_model_name: Final = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
         if team_model_name is not None:
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif (
-            (
-                is_proxy_admin_without_team
-                and data["model"] not in router_model_names
-                and data["model"] in llm_router.team_public_model_names
-            )
-            or data["model"] in router_model_names
-            or llm_router.has_model_id(data["model"])
-            or llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
-        ):
+            is_proxy_admin_without_team
+            and data["model"] not in router_model_names
+            and data["model"] in llm_router.team_public_model_names
+        ) or llm_router.is_recognized_model(data["model"]):
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:
@@ -661,7 +701,7 @@ async def route_request(
                     route_a2a_agent_request,
                 )
 
-                result = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
+                result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
                 if result is not None:
                     return result
                 # Fall through to raise exception below if result is None
@@ -670,7 +710,7 @@ async def route_request(
         return getattr(litellm, f"{route_type}")(**data)
 
     # if no route found then it's a bad request
-    route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
+    route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
     raise ProxyModelNotFoundError(
         route=route_name,
         model_name=data.get("model", ""),

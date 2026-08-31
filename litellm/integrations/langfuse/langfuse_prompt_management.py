@@ -2,9 +2,10 @@
 Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 """
 
+import inspect
 import os
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 from packaging.version import Version
 
@@ -30,12 +31,12 @@ if TYPE_CHECKING:
 
     LangfuseClass: TypeAlias = Langfuse
 
-    PROMPT_CLIENT = Union[TextPromptClient, ChatPromptClient]
+    PROMPT_CLIENT = TextPromptClient | ChatPromptClient
 else:
     PROMPT_CLIENT = Any
     LangfuseClass = Any
     LiteLLMLoggingObj = Any
-in_memory_dynamic_logger_cache = DynamicLoggingCache()
+in_memory_dynamic_logger_cache: Final = DynamicLoggingCache()
 
 
 @lru_cache(maxsize=10)
@@ -82,10 +83,10 @@ def langfuse_client_init(
         # add http:// if unset, assume communicating over private network - e.g. render
         langfuse_host = "http://" + langfuse_host
 
-    langfuse_release = os.getenv("LANGFUSE_RELEASE")
-    langfuse_debug = os.getenv("LANGFUSE_DEBUG")
+    langfuse_release: Final = os.getenv("LANGFUSE_RELEASE")
+    langfuse_debug: Final = os.getenv("LANGFUSE_DEBUG")
 
-    parameters = {
+    parameters: Final = {
         "public_key": public_key,
         "secret_key": secret_key,
         "host": langfuse_host,
@@ -109,7 +110,10 @@ def langfuse_client_init(
             cert=os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate),
         )
 
-    client = Langfuse(**parameters)
+    if "environment" in inspect.signature(Langfuse.__init__).parameters:
+        parameters["environment"] = LangFuseLogger.resolve_deployment_environment()
+
+    client: Final = Langfuse(**parameters)
 
     return client
 
@@ -168,8 +172,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         return compiled_prompt
 
     def _get_optional_params_from_langfuse(self, langfuse_prompt_client: PROMPT_CLIENT) -> dict:
-        config = langfuse_prompt_client.config
-        optional_params = {}
+        config: Final = langfuse_prompt_client.config
+        optional_params: Final = {}
         for k, v in config.items():
             if k != "model":
                 optional_params[k] = v
@@ -217,14 +221,14 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
     ) -> bool:
         if prompt_id is None:
             return False
-        langfuse_client = langfuse_client_init(
+        langfuse_client: Final = langfuse_client_init(
             langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
             langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
             allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
         )
-        langfuse_prompt_client = self._get_prompt_from_id(
+        langfuse_prompt_client: Final = self._get_prompt_from_id(
             langfuse_prompt_id=prompt_id,
             langfuse_client=langfuse_client,
         )
@@ -242,14 +246,14 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         if prompt_id is None:
             raise ValueError("prompt_id is required for Langfuse prompt management")
 
-        langfuse_client = langfuse_client_init(
+        langfuse_client: Final = langfuse_client_init(
             langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
             langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
             allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
         )
-        langfuse_prompt_client = self._get_prompt_from_id(
+        langfuse_prompt_client: Final = self._get_prompt_from_id(
             langfuse_prompt_id=prompt_id,
             langfuse_client=langfuse_client,
             prompt_label=prompt_label,
@@ -257,15 +261,15 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         )
 
         ## SET PROMPT
-        compiled_prompt = self._compile_prompt(
+        compiled_prompt: Final = self._compile_prompt(
             langfuse_prompt_client=langfuse_prompt_client,
             langfuse_prompt_variables=prompt_variables,
             call_type="completion",
         )
 
-        template_model = langfuse_prompt_client.config.get("model")
+        template_model: Final = langfuse_prompt_client.config.get("model")
 
-        template_optional_params = self._get_optional_params_from_langfuse(langfuse_prompt_client)
+        template_optional_params: Final = self._get_optional_params_from_langfuse(langfuse_prompt_client)
 
         return PromptManagementClient(
             prompt_id=prompt_id,
@@ -301,8 +305,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_callback_dynamic_params = kwargs.get("standard_callback_dynamic_params")
-            langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
+            standard_callback_dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
+            langfuse_logger_to_use: Final = LangFuseHandler.get_langfuse_logger_for_request(
                 globalLangfuseLogger=self,
                 standard_callback_dynamic_params=standard_callback_dynamic_params,
                 in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
@@ -322,13 +326,13 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_callback_dynamic_params = kwargs.get("standard_callback_dynamic_params")
-            langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
+            standard_callback_dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
+            langfuse_logger_to_use: Final = LangFuseHandler.get_langfuse_logger_for_request(
                 globalLangfuseLogger=self,
                 standard_callback_dynamic_params=standard_callback_dynamic_params,
                 in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
             )
-            standard_logging_object = cast(
+            standard_logging_object: Final = cast(
                 StandardLoggingPayload | None,
                 kwargs.get("standard_logging_object", None),
             )

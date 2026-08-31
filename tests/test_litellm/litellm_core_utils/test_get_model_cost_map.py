@@ -6,11 +6,9 @@ count actual model entries, not reserved meta keys) and the extraction of the
 
 import json
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
@@ -249,6 +247,27 @@ def test_azure_ai_claude_1m_context_entries(cost_map: dict):
     ]:
         assert cost_map[model]["max_input_tokens"] == 200000, model
 
+
+def test_get_model_cost_map_stamps_loaded_at(monkeypatch):
+    """The load time feeds each pod's reload-due decision; a load that does not stamp it
+    would make manual reload requests race the proxy's startup"""
+    from datetime import datetime, timezone
+
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    monkeypatch.setattr(module._cost_map_source_info, "loaded_at", None)
+    monkeypatch.setattr(
+        module.GetModelCostMap,
+        "fetch_remote_model_cost_map",
+        staticmethod(lambda url, timeout=5: _load_root_cost_map()),
+    )
+
+    before = datetime.now(timezone.utc)
+    module.get_model_cost_map(url="https://example.invalid/cost_map.json")
+    loaded_at = module.get_model_cost_map_loaded_at()
+
+    assert loaded_at is not None
+    assert before <= loaded_at <= datetime.now(timezone.utc)
 
 # ---------------------------------------------------------------------------
 # refetch_model_cost_map: retry/backoff behavior for runtime reloads

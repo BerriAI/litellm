@@ -2,6 +2,8 @@
 OpenAI Evals API endpoints - /v1/evals
 """
 
+from typing import Final
+
 import orjson
 from fastapi import APIRouter, Depends, Request, Response
 
@@ -19,7 +21,7 @@ from litellm.types.llms.openai_evals import (
     RunDeleteResponse,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 @router.post(
@@ -71,12 +73,12 @@ async def create_eval(
     )
 
     # Read request body
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    body: Final = await request.body()
+    data: Final = orjson.loads(body) if body else {}
 
     # Extract model for routing (header > query > body)
     # When using extra_body={"model": "..."}, the OpenAI SDK merges it into the body
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -84,7 +86,7 @@ async def create_eval(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -161,8 +163,8 @@ async def list_evals(
     )
 
     # Read request body (optional for GET)
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    body: Final = await request.body()
+    data: Final = orjson.loads(body) if body else {}
 
     # Use query params if not in body
     if "limit" not in data and limit is not None:
@@ -177,7 +179,7 @@ async def list_evals(
         data["order_by"] = order_by
 
     # Extract model for routing (header > query > body)
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -185,7 +187,7 @@ async def list_evals(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -258,14 +260,14 @@ async def get_eval(
     )
 
     # Read request body (optional for GET)
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    body: Final = await request.body()
+    data: Final = orjson.loads(body) if body else {}
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -273,7 +275,7 @@ async def get_eval(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -348,14 +350,14 @@ async def update_eval(
     )
 
     # Read request body
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    body: Final = await request.body()
+    data: Final = orjson.loads(body) if body else {}
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -363,7 +365,7 @@ async def update_eval(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -436,14 +438,14 @@ async def delete_eval(
     )
 
     # Read request body (optional for DELETE)
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    body: Final = await request.body()
+    data: Final = orjson.loads(body) if body else {}
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -451,7 +453,7 @@ async def delete_eval(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -524,14 +526,14 @@ async def cancel_eval(
     )
 
     # Read request body (optional for cancel)
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    body: Final = await request.body()
+    data: Final = orjson.loads(body) if body else {}
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -539,7 +541,7 @@ async def cancel_eval(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -623,14 +625,14 @@ async def create_run(
     )
 
     # Read request body
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    body: Final = await request.body()
+    data: Final = orjson.loads(body) if body else {}
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body > completion.model)
-    model = (
+    model: Final = (
         request.headers.get("x-litellm-model")
         or request.query_params.get("model")
         or data.get("model")
@@ -643,7 +645,7 @@ async def create_run(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -719,7 +721,7 @@ async def list_runs(
     )
 
     # Build request data
-    data = {
+    data: Final = {
         "eval_id": eval_id,
         "limit": limit,
         "after": after,
@@ -728,7 +730,7 @@ async def list_runs(
     }
 
     # Extract model for routing (header > query)
-    model = request.headers.get("x-litellm-model") or request.query_params.get("model")
+    model: Final = request.headers.get("x-litellm-model") or request.query_params.get("model")
     if model:
         data["model"] = model
 
@@ -736,7 +738,7 @@ async def list_runs(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -809,13 +811,13 @@ async def get_run(
     )
 
     # Build request data
-    data = {
+    data: Final = {
         "eval_id": eval_id,
         "run_id": run_id,
     }
 
     # Extract model for routing (header > query)
-    model = request.headers.get("x-litellm-model") or request.query_params.get("model")
+    model: Final = request.headers.get("x-litellm-model") or request.query_params.get("model")
     if model:
         data["model"] = model
 
@@ -823,7 +825,7 @@ async def get_run(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -896,15 +898,15 @@ async def cancel_run(
     )
 
     # Read request body (optional for cancel)
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    body: Final = await request.body()
+    data: Final = orjson.loads(body) if body else {}
 
     # Set eval_id and run_id from path parameters
     data["eval_id"] = eval_id
     data["run_id"] = run_id
 
     # Extract model for routing (header > query > body)
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -912,7 +914,7 @@ async def cancel_run(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -985,15 +987,15 @@ async def delete_run(
     )
 
     # Read request body (optional for delete)
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    body: Final = await request.body()
+    data: Final = orjson.loads(body) if body else {}
 
     # Set eval_id and run_id from path parameters
     data["eval_id"] = eval_id
     data["run_id"] = run_id
 
     # Extract model for routing (header > query > body)
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
     if model:
         data["model"] = model
 
@@ -1001,7 +1003,7 @@ async def delete_run(
         data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,

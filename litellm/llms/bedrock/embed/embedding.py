@@ -6,7 +6,7 @@ import copy
 import json
 import urllib.parse
 from collections.abc import Callable
-from typing import Any, get_args
+from typing import TYPE_CHECKING, Any, Final, get_args
 
 import httpx
 
@@ -37,6 +37,9 @@ from .amazon_titan_v2_transformation import AmazonTitanV2Config
 from .cohere_transformation import BedrockCohereEmbeddingConfig
 from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 
 class BedrockEmbedding(BaseAWSLLM):
     def _load_credentials(
@@ -49,32 +52,33 @@ class BedrockEmbedding(BaseAWSLLM):
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id = optional_params.pop("aws_access_key_id", None)
-        aws_session_token = optional_params.pop("aws_session_token", None)
+        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
+        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
+        aws_session_token: Final = optional_params.pop("aws_session_token", None)
         aws_region_name = optional_params.pop("aws_region_name", None)
-        aws_role_name = optional_params.pop("aws_role_name", None)
-        aws_session_name = optional_params.pop("aws_session_name", None)
-        aws_profile_name = optional_params.pop("aws_profile_name", None)
-        aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
+        aws_role_name: Final = optional_params.pop("aws_role_name", None)
+        aws_session_name: Final = optional_params.pop("aws_session_name", None)
+        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
+        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
+        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
+        aws_external_id: Final = optional_params.pop("aws_external_id", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check env #
-            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+            litellm_aws_region_name: Final = get_secret("AWS_REGION_NAME", None)
 
             if litellm_aws_region_name is not None and isinstance(litellm_aws_region_name, str):
                 aws_region_name = litellm_aws_region_name
 
-            standard_aws_region_name = get_secret("AWS_REGION", None)
+            standard_aws_region_name: Final = get_secret("AWS_REGION", None)
             if standard_aws_region_name is not None and isinstance(standard_aws_region_name, str):
                 aws_region_name = standard_aws_region_name
 
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
 
-        credentials: Credentials = self.get_credentials(  # type: ignore
+        credentials: Final[Credentials] = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
@@ -84,6 +88,7 @@ class BedrockEmbedding(BaseAWSLLM):
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
         )
         return credentials, aws_region_name
 
@@ -99,19 +104,19 @@ class BedrockEmbedding(BaseAWSLLM):
         data: dict,
     ) -> dict:
         if client is None or not isinstance(client, HTTPHandler):
-            _params = {}
+            _params: Final = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_httpx_client(_params)  # type: ignore
+            client = _get_httpx_client(_params)
         else:
             client = client
         try:
-            response = client.post(url=api_base, headers=headers, data=json.dumps(data))  # type: ignore
+            response: Final = client.post(url=api_base, headers=headers, data=json.dumps(data))
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
@@ -127,7 +132,7 @@ class BedrockEmbedding(BaseAWSLLM):
         data: dict,
     ) -> dict:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            _params = {}
+            _params: Final = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
@@ -137,10 +142,10 @@ class BedrockEmbedding(BaseAWSLLM):
             client = client
 
         try:
-            response = await client.post(url=api_base, headers=headers, data=json.dumps(data))  # type: ignore
+            response: Final = await client.post(url=api_base, headers=headers, data=json.dumps(data))
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
@@ -172,21 +177,21 @@ class BedrockEmbedding(BaseAWSLLM):
                 )
             else:
                 # For other providers, create a generic async response
-                invocation_arn = response_list[0].get("invocationArn", "")
+                invocation_arn: Final = response_list[0].get("invocationArn", "")
 
                 from litellm.types.utils import Embedding, Usage
 
-                embedding = Embedding(
+                embedding: Final = Embedding(
                     embedding=[],
                     index=0,
                     object="embedding",  # Must be literal "embedding"
                 )
-                usage = Usage(prompt_tokens=0, total_tokens=0)
+                usage: Final = Usage(prompt_tokens=0, total_tokens=0)
 
                 # Create hidden params with job ID
                 from litellm.types.llms.base import HiddenParams
 
-                hidden_params = HiddenParams()
+                hidden_params: Final = HiddenParams()
                 setattr(hidden_params, "_invocation_arn", invocation_arn)
 
                 returned_response = EmbeddingResponse(
@@ -233,18 +238,18 @@ class BedrockEmbedding(BaseAWSLLM):
         endpoint_url: str,
         aws_region_name: str,
         model: str,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
     ):
-        responses: list[dict] = []
+        responses: Final[list[dict]] = []
         for data in batch_data:
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
 
-            prepped = self.get_request_headers(  # type: ignore  # type: ignore
+            prepped = self.get_request_headers(
                 credentials=credentials,
                 aws_region_name=aws_region_name,
                 extra_headers=extra_headers,
@@ -301,18 +306,18 @@ class BedrockEmbedding(BaseAWSLLM):
         endpoint_url: str,
         aws_region_name: str,
         model: str,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
     ):
-        responses: list[dict] = []
+        responses: Final[list[dict]] = []
         for data in batch_data:
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
 
-            prepped = self.get_request_headers(  # type: ignore  # type: ignore
+            prepped = self.get_request_headers(
                 credentials=credentials,
                 aws_region_name=aws_region_name,
                 extra_headers=extra_headers,
@@ -381,18 +386,18 @@ class BedrockEmbedding(BaseAWSLLM):
         credentials, aws_region_name = self._load_credentials(optional_params)
 
         ### TRANSFORMATION ###
-        unencoded_model_id = optional_params.pop("model_id", None) or model  # default to model if not passed
-        modelId = urllib.parse.quote(unencoded_model_id, safe="")
+        unencoded_model_id: Final = optional_params.pop("model_id", None) or model  # default to model if not passed
+        modelId: Final = urllib.parse.quote(unencoded_model_id, safe="")
         aws_region_name = self._get_aws_region_name(
             optional_params={"aws_region_name": aws_region_name},
             model=model,
             model_id=unencoded_model_id,
         )
         # Check async invoke needs to be used
-        has_async_invoke = "async_invoke/" in model
+        has_async_invoke: Final = "async_invoke/" in model
         if has_async_invoke:
             model = model.replace("async_invoke/", "", 1)
-        provider = self.get_bedrock_embedding_provider(model)
+        provider: Final = self.get_bedrock_embedding_provider(model)
         if provider is None:
             raise Exception(
                 f"Unable to determine bedrock embedding provider for model: {model}. "
@@ -485,7 +490,7 @@ class BedrockEmbedding(BaseAWSLLM):
 
         if batch_data is not None:
             if aembedding:
-                return self._async_single_func_embeddings(  # type: ignore
+                return self._async_single_func_embeddings(
                     client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
                     timeout=timeout,
                     batch_data=batch_data,
@@ -499,7 +504,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     provider=provider,
                     is_async_invoke=has_async_invoke,
                 )
-            returned_response = self._single_func_embeddings(
+            returned_response: Final = self._single_func_embeddings(
                 client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                 timeout=timeout,
                 batch_data=batch_data,
@@ -523,7 +528,7 @@ class BedrockEmbedding(BaseAWSLLM):
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
 
-        prepped = self.get_request_headers(  # type: ignore
+        prepped: Final = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,
             extra_headers=extra_headers,
@@ -535,7 +540,7 @@ class BedrockEmbedding(BaseAWSLLM):
 
         ## ROUTING ##
         # Convert CaseInsensitiveDict to regular dict for httpx compatibility
-        headers_for_request = dict(prepped.headers) if hasattr(prepped, "headers") else {}
+        headers_for_request: Final = dict(prepped.headers) if hasattr(prepped, "headers") else {}
         return cohere_embedding(
             model=model,
             input=input,
@@ -543,7 +548,7 @@ class BedrockEmbedding(BaseAWSLLM):
             logging_obj=logging_obj,
             optional_params=optional_params,
             encoding=encoding,
-            data=data,  # type: ignore
+            data=data,
             complete_api_base=prepped.url,
             api_key=None,
             aembedding=aembedding,
@@ -580,11 +585,11 @@ class BedrockEmbedding(BaseAWSLLM):
         from urllib.parse import quote
 
         # Encode the ARN for use in URL path
-        encoded_arn = quote(invocation_arn, safe="")
-        status_url = f"{endpoint_url.rstrip('/')}/async-invoke/{encoded_arn}"
+        encoded_arn: Final = quote(invocation_arn, safe="")
+        status_url: Final = f"{endpoint_url.rstrip('/')}/async-invoke/{encoded_arn}"
 
         # Prepare headers for GET request
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
 
         # Use AWSRequest directly for GET requests (get_request_headers hardcodes POST)
         try:
@@ -594,7 +599,7 @@ class BedrockEmbedding(BaseAWSLLM):
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         # Create AWSRequest with GET method and encoded URL
-        request = AWSRequest(
+        request: Final = AWSRequest(
             method="GET",
             url=status_url,
             data=None,  # GET request, no body
@@ -602,17 +607,17 @@ class BedrockEmbedding(BaseAWSLLM):
         )
 
         # Sign the request - SigV4Auth will create canonical string from request URL
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+        sigv4: Final = SigV4Auth(credentials, "bedrock", aws_region_name)
         sigv4.add_auth(request)
 
         # Prepare the request
-        prepped = request.prepare()
+        prepped: Final = request.prepare()
 
         # LOGGING
         if logging_obj is not None:
             # Create custom curl command for GET request
-            masked_headers = logging_obj._get_masked_headers(prepped.headers)
-            formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
+            masked_headers: Final = logging_obj._get_masked_headers(prepped.headers)
+            formatted_headers: Final = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
             custom_curl = "\n\nGET Request Sent from LiteLLM:\n"
             custom_curl += "curl -X GET \\\n"
             custom_curl += f"{prepped.url} \\\n"
@@ -630,8 +635,8 @@ class BedrockEmbedding(BaseAWSLLM):
             )
 
         # Make the GET request
-        client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
-        response = await client.get(
+        client: Final = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
+        response: Final = await client.get(
             url=prepped.url,
             headers=prepped.headers,
         )

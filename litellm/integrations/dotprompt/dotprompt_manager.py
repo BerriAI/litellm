@@ -4,7 +4,7 @@ Builds on top of PromptManagementBase to provide .prompt file support.
 """
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -96,7 +96,7 @@ class DotpromptManager(CustomPromptManagement):
         if prompt_id is None:
             return False
         try:
-            return prompt_id in self.prompt_manager.list_prompts()
+            return self.prompt_manager.get_prompt(prompt_id) is not None
         except Exception:
             # If there's any error accessing prompts, don't run prompt management
             return False
@@ -125,26 +125,26 @@ class DotpromptManager(CustomPromptManagement):
 
         try:
             # Get the prompt template (versioned or base)
-            template = self.prompt_manager.get_prompt(prompt_id=prompt_id, version=prompt_version)
+            template: Final = self.prompt_manager.get_prompt(prompt_id=prompt_id, version=prompt_version)
             if template is None:
-                version_str = f" (version {prompt_version})" if prompt_version else ""
+                version_str: Final = f" (version {prompt_version})" if prompt_version else ""
                 raise ValueError(f"Prompt '{prompt_id}'{version_str} not found in prompt directory")
 
             # Render the template with variables (pass version for proper lookup)
-            rendered_content = self.prompt_manager.render(
+            rendered_content: Final = self.prompt_manager.render(
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 version=prompt_version,
             )
 
             # Convert rendered content to chat messages
-            messages = self._convert_to_messages(rendered_content)
+            messages: Final = self._convert_to_messages(rendered_content)
 
             # Extract model from metadata (if specified)
-            template_model = template.model
+            template_model: Final = template.model
 
             # Extract optional parameters from metadata
-            optional_params = self._extract_optional_params(template)
+            optional_params: Final = self._extract_optional_params(template)
 
             return PromptManagementClient(
                 prompt_id=prompt_id,
@@ -209,6 +209,8 @@ class DotpromptManager(CustomPromptManagement):
             prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     async def async_get_chat_completion_prompt(
@@ -259,14 +261,14 @@ class DotpromptManager(CustomPromptManagement):
         3. Already formatted as a single message
         """
         # Clean up the content
-        content = rendered_content.strip()
+        content: Final = rendered_content.strip()
 
         # Try to parse role-based format (System: ..., User: ..., etc.)
-        messages = []
+        messages: Final = []
         current_role = None
         current_content = []
 
-        lines = content.split("\n")
+        lines: Final = content.split("\n")
 
         for line in lines:
             line = line.strip()
@@ -298,7 +300,7 @@ class DotpromptManager(CustomPromptManagement):
 
         # Add the last message
         if current_role and current_content:
-            content_text = "\n".join(current_content).strip()
+            content_text: Final = "\n".join(current_content).strip()
             if content_text:  # Only add if there's actual content
                 messages.append(self._create_message(current_role, content_text))
 
@@ -311,7 +313,7 @@ class DotpromptManager(CustomPromptManagement):
     def _create_message(self, role: str, content: str) -> AllMessageValues:
         """Create a message with the specified role and content."""
         return {
-            "role": role,  # type: ignore
+            "role": role,
             "content": content,
         }
 
@@ -321,7 +323,7 @@ class DotpromptManager(CustomPromptManagement):
 
         Includes parameters like temperature, max_tokens, etc.
         """
-        optional_params = {}
+        optional_params: Final = {}
 
         # Extract common parameters from metadata
         if template.optional_params is not None:
@@ -341,8 +343,8 @@ class DotpromptManager(CustomPromptManagement):
 
     def add_prompt_from_json(self, prompt_id: str, json_data: dict[str, Any]) -> None:
         """Add a prompt from JSON data."""
-        content = json_data.get("content", "")
-        metadata = json_data.get("metadata", {})
+        content: Final = json_data.get("content", "")
+        metadata: Final = json_data.get("metadata", {})
         self.prompt_manager.add_prompt(prompt_id, content, metadata)
 
     def load_prompts_from_json(self, prompts_data: dict[str, dict[str, Any]]) -> None:

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -29,7 +29,7 @@ from litellm.router_strategy.adaptive_router.signals import Turn
 # Identity fields hashed into a derived session key so the same conversation
 # from the same caller produces a stable key, while different keys/teams/users
 # stay segregated even if they happen to send identical first messages.
-_IDENTITY_FIELDS = (
+_IDENTITY_FIELDS: Final = (
     "user_api_key_hash",
     "user_api_key_team_id",
     "user_api_key_user_id",
@@ -51,17 +51,17 @@ def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
 
     Returns None if the conversation is shorter than SIGNAL_GATE_MIN_MESSAGES.
     """
-    litellm_params = kwargs.get("litellm_params") or {}
+    litellm_params: Final = kwargs.get("litellm_params") or {}
     sid = litellm_params.get("litellm_session_id")
     if sid:
         return str(sid)
-    metadata = litellm_params.get("metadata") or {}
+    metadata: Final = litellm_params.get("metadata") or {}
     if isinstance(metadata, dict):
         sid = metadata.get("session_id") or metadata.get("litellm_session_id")
         if sid:
             return str(sid)
 
-    messages = kwargs.get("messages") or []
+    messages: Final = kwargs.get("messages") or []
     if len(messages) < SIGNAL_GATE_MIN_MESSAGES:
         # Don't attribute until we have enough turns to match the signal gate —
         # ensures the hash is stable (same N messages every time) and avoids
@@ -69,8 +69,8 @@ def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
         return None
 
     identity = ":".join(str(metadata.get(f) or "") if isinstance(metadata, dict) else "" for f in _IDENTITY_FIELDS)
-    anchor = messages[:SIGNAL_GATE_MIN_MESSAGES]
-    payload = (
+    anchor: Final = messages[:SIGNAL_GATE_MIN_MESSAGES]
+    payload: Final = (
         identity
         + "|"
         + json.dumps(
@@ -115,7 +115,7 @@ def _recent_tool_results(
     """
     if not messages:
         return []
-    results: list[dict[str, Any]] = []
+    results: Final[list[dict[str, Any]]] = []
     for msg in reversed(messages):
         if not isinstance(msg, dict):
             break
@@ -136,7 +136,7 @@ def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
     if response_obj is None:
         return None, []
     try:
-        choices = getattr(response_obj, "choices", None) or response_obj.get("choices")
+        choices: Final = getattr(response_obj, "choices", None) or response_obj.get("choices")
     except Exception:
         return None, []
     if not choices:
@@ -154,7 +154,7 @@ def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
     raw_tool_calls = getattr(msg, "tool_calls", None)
     if raw_tool_calls is None and isinstance(msg, dict):
         raw_tool_calls = msg.get("tool_calls")
-    tool_calls: list[dict[str, Any]] = []
+    tool_calls: Final[list[dict[str, Any]]] = []
     for tc in raw_tool_calls or []:
         if isinstance(tc, dict):
             tool_calls.append(tc)
@@ -190,8 +190,8 @@ class AdaptiveRouterPostCallHook(CustomLogger):
         called during header construction (before StreamingResponse is built), so
         the header is included for both paths.
         """
-        metadata = data.get("metadata") or {}
-        chosen = metadata.get(ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY) if isinstance(metadata, dict) else None
+        metadata: Final = data.get("metadata") or {}
+        chosen: Final = metadata.get(ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY) if isinstance(metadata, dict) else None
         if not chosen:
             return None
         return {ADAPTIVE_ROUTER_RESPONSE_HEADER: chosen}
@@ -202,7 +202,7 @@ class AdaptiveRouterPostCallHook(CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         status = kwargs.get("response_status")
         if status is None:
-            exc = kwargs.get("exception")
+            exc: Final = kwargs.get("exception")
             status = getattr(exc, "status_code", 500) if exc is not None else 500
         await self._record(kwargs, response_obj, response_status=int(status))
 
@@ -213,8 +213,8 @@ class AdaptiveRouterPostCallHook(CustomLogger):
         response_status: int,
     ) -> None:
         try:
-            messages = kwargs.get("messages") or []
-            session_key = _resolve_session_key(kwargs)
+            messages: Final = kwargs.get("messages") or []
+            session_key: Final = _resolve_session_key(kwargs)
             if not session_key:
                 return
 
@@ -223,18 +223,18 @@ class AdaptiveRouterPostCallHook(CustomLogger):
             # post-call time is the physical upstream model
             # (e.g. "anthropic/claude-opus-4-7"), so it cannot be used directly.
             # The pre-routing hook stashes the logical pick under this key.
-            litellm_params = kwargs.get("litellm_params") or {}
-            metadata = litellm_params.get("metadata") or {}
+            litellm_params: Final = kwargs.get("litellm_params") or {}
+            metadata: Final = litellm_params.get("metadata") or {}
             current_model = metadata.get(ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY) if isinstance(metadata, dict) else None
             if not current_model:
                 return
 
-            user_text = _last_user_content(messages)
+            user_text: Final = _last_user_content(messages)
             assistant_text, tool_calls = _assistant_content_and_tool_calls(response_obj)
-            tool_results = _recent_tool_results(messages)
+            tool_results: Final = _recent_tool_results(messages)
 
-            request_type = classify_prompt(user_text or "")
-            turn = Turn(
+            request_type: Final = classify_prompt(user_text or "")
+            turn: Final = Turn(
                 user_content=user_text,
                 assistant_content=(assistant_text if isinstance(assistant_text, str) else None),
                 tool_calls=tool_calls,

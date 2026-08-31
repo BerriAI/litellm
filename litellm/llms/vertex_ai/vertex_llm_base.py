@@ -8,7 +8,8 @@ import asyncio
 import json
 import os
 import threading
-from typing import TYPE_CHECKING, Any, Literal
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlparse
 
 import litellm
@@ -26,7 +27,7 @@ from .common_utils import (
     get_vertex_base_url,
 )
 
-GOOGLE_IMPORT_ERROR_MESSAGE = (
+GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
     "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform"
 )
 
@@ -68,14 +69,15 @@ class VertexBase:
         # re-acquire it without deadlocking the current thread.
         self._sync_refresh_lock = threading.RLock()
 
-    def get_vertex_region(self, vertex_region: str | None, model: str) -> str:
+    @staticmethod
+    def get_vertex_region(vertex_region: str | None, model: str) -> str:
         import litellm
 
         # Try to get supported_regions directly from model_cost
         # Check both with and without vertex_ai/ prefix
-        model_key = f"vertex_ai/{model}" if not model.startswith("vertex_ai/") else model
-        model_info = litellm.model_cost.get(model_key, {})
-        supported_regions = model_info.get("supported_regions")
+        model_key: Final = f"vertex_ai/{model}" if not model.startswith("vertex_ai/") else model
+        model_info: Final = litellm.model_cost.get(model_key, {})
+        supported_regions: Final = model_info.get("supported_regions")
 
         if supported_regions and len(supported_regions) > 0:
             # If user didn't specify region, use the first supported region
@@ -101,7 +103,7 @@ class VertexBase:
     ) -> tuple[Any, str]:
         if credentials is not None:
             if isinstance(credentials, str):
-                _is_path = os.path.exists(
+                _is_path: Final = os.path.exists(
                     credentials
                 )  # credentials is from server config (litellm_params), not user input
                 verbose_logger.debug(
@@ -130,8 +132,8 @@ class VertexBase:
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
                 # If environment_id key contains "aws" value it corresponds to an AWS config file
-                credential_source = json_obj.get("credential_source", {})
-                environment_id = (
+                credential_source: Final = json_obj.get("credential_source", {})
+                environment_id: Final = (
                     credential_source.get("environment_id", "") if isinstance(credential_source, dict) else ""
                 )
                 if isinstance(environment_id, str) and "aws" in environment_id:
@@ -140,7 +142,7 @@ class VertexBase:
                         VertexAIAwsWifAuth,
                     )
 
-                    aws_params = VertexAIAwsWifAuth.extract_aws_params(json_obj)
+                    aws_params: Final = VertexAIAwsWifAuth.extract_aws_params(json_obj)
                     if aws_params:
                         creds = VertexAIAwsWifAuth.credentials_from_explicit_aws(
                             json_obj,
@@ -305,9 +307,9 @@ class VertexBase:
         model: str,
     ) -> str:
         # Use get_vertex_region to handle global-only models
-        resolved_location = self.get_vertex_region(vertex_location, model)
+        resolved_location: Final = self.get_vertex_region(vertex_location, model)
         api_base = self.get_api_base(api_base=custom_api_base, vertex_location=resolved_location)
-        default_api_base = VertexBase.create_vertex_url(
+        default_api_base: Final = VertexBase.create_vertex_url(
             vertex_location=resolved_location,
             vertex_project=vertex_project or project_id,
             partner=partner,
@@ -342,7 +344,7 @@ class VertexBase:
     def refresh_auth(self, credentials: Any) -> None:
         try:
             from google.auth.transport.requests import (
-                Request,  # type: ignore[import-untyped]
+                Request,
             )
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
@@ -366,7 +368,7 @@ class VertexBase:
         caller is done with the lock so the entry can be pruned when no other
         coroutine is holding or waiting on it.
         """
-        lock = self._async_refresh_locks.setdefault(credential_cache_key, asyncio.Lock())
+        lock: Final = self._async_refresh_locks.setdefault(credential_cache_key, asyncio.Lock())
         self._async_refresh_lock_refcounts[credential_cache_key] = (
             self._async_refresh_lock_refcounts.get(credential_cache_key, 0) + 1
         )
@@ -380,7 +382,7 @@ class VertexBase:
         the decrement-then-pop sequence below runs atomically with respect to
         other coroutines.
         """
-        remaining = self._async_refresh_lock_refcounts.get(credential_cache_key, 0) - 1
+        remaining: Final = self._async_refresh_lock_refcounts.get(credential_cache_key, 0) - 1
         if remaining > 0:
             self._async_refresh_lock_refcounts[credential_cache_key] = remaining
             return
@@ -406,7 +408,7 @@ class VertexBase:
             and creds.token is not None
             and isinstance(creds.token, str)
         ):
-            resolved_project = project_id or cached_project_id
+            resolved_project: Final = project_id or cached_project_id
             if resolved_project:
                 return creds.token, resolved_project
         return None
@@ -428,12 +430,12 @@ class VertexBase:
         creds, cached_project_id = self._unpack_cached_credentials(credential_cache_key)
         if creds is None:
             return None
-        token_state = self._get_token_state(creds)
+        token_state: Final = self._get_token_state(creds)
         if token_state not in (TokenState.FRESH, TokenState.STALE):
             return None
         if creds.token is None or not isinstance(creds.token, str):
             return None
-        resolved_project = project_id or cached_project_id
+        resolved_project: Final = project_id or cached_project_id
         if not resolved_project:
             return None
         return creds.token, resolved_project, token_state, creds, cached_project_id
@@ -445,7 +447,7 @@ class VertexBase:
         """
         if credential_cache_key not in self._credentials_project_mapping:
             return None, None
-        cached_entry = self._credentials_project_mapping[credential_cache_key]
+        cached_entry: Final = self._credentials_project_mapping[credential_cache_key]
         if isinstance(cached_entry, tuple):
             return cached_entry
         return cached_entry, cached_entry.quota_project_id or getattr(cached_entry, "project_id", None)
@@ -459,7 +461,7 @@ class VertexBase:
         """
         from google.auth.credentials import TokenState as _TokenState
 
-        token_state = getattr(credentials, "token_state", None)
+        token_state: Final = getattr(credentials, "token_state", None)
         if isinstance(token_state, _TokenState):
             return token_state
         # Fallback for credentials without a real token_state (e.g. mocks)
@@ -533,7 +535,7 @@ class VertexBase:
         blocking refresh must first drain any background refresh that was
         scheduled while a previous STALE token was being served.
         """
-        existing_task = self._background_refresh_tasks.get(credential_cache_key)
+        existing_task: Final = self._background_refresh_tasks.get(credential_cache_key)
         if existing_task is None or existing_task.done():
             return
         try:
@@ -556,11 +558,11 @@ class VertexBase:
         guards against removing a newer task that has replaced this one in the
         tracking dict (done_callbacks are scheduled via ``call_soon``).
         """
-        existing = self._background_refresh_tasks.get(credential_cache_key)
+        existing: Final = self._background_refresh_tasks.get(credential_cache_key)
         if existing is not None and not existing.done():
             return
         self._background_refresh_tasks.pop(credential_cache_key, None)
-        task = asyncio.create_task(
+        task: Final = asyncio.create_task(
             self._background_refresh_credentials(credentials, credential_cache_key, credential_project_id)
         )
 
@@ -643,7 +645,7 @@ class VertexBase:
                         "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                     )
                 if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+                    auth_header = {"x-goog-api-key": gemini_api_key}
             else:
                 # For Vertex AI
                 if use_psc_endpoint_format:
@@ -654,9 +656,9 @@ class VertexBase:
                             "vertex_project, vertex_location, and model are required when use_psc_endpoint_format=True"
                         )
                     # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
-                    model_for_url = get_vertex_base_model_name(model=model)
+                    model_for_url: Final = get_vertex_base_model_name(model=model)
                     # Format: {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
-                    version = vertex_api_version or "v1"
+                    version: Final = vertex_api_version or "v1"
                     url = "{}/{}/projects/{}/locations/{}/endpoints/{}:{}".format(
                         api_base.rstrip("/"),
                         version,
@@ -707,7 +709,7 @@ class VertexBase:
                 model=model,
                 stream=stream,
             )
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            auth_header = {"x-goog-api-key": gemini_api_key}
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,
@@ -817,8 +819,8 @@ class VertexBase:
             )
             if project_id is None and isinstance(credential_project_id, str):
                 project_id = credential_project_id
-                cache_credentials = json.dumps(credentials) if isinstance(credentials, dict) else credentials
-                resolved_cache_key = (cache_credentials, project_id)
+                cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
+                resolved_cache_key: Final = (cache_credentials, project_id)
                 # Always overwrite — any pre-existing entry at the resolved key
                 # references the OLD credentials object we just replaced, and
                 # leaving it would force the next request to do a redundant
@@ -870,8 +872,8 @@ class VertexBase:
         """
 
         # Convert dict credentials to string for caching
-        cache_credentials = json.dumps(credentials) if isinstance(credentials, dict) else credentials
-        credential_cache_key = (cache_credentials, project_id)
+        cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        credential_cache_key: Final = (cache_credentials, project_id)
         _credentials: GoogleCredentialsObject | None = None
 
         verbose_logger.debug("Checking cached credentials for project_id: %s", project_id)
@@ -879,7 +881,7 @@ class VertexBase:
         if credential_cache_key in self._credentials_project_mapping:
             verbose_logger.debug("Cached credentials found for project_id: %s.", project_id)
             # Retrieve both credentials and cached project_id
-            cached_entry = self._credentials_project_mapping[credential_cache_key]
+            cached_entry: Final = self._credentials_project_mapping[credential_cache_key]
             verbose_logger.debug("cached_entry: %s", cached_entry)
             if isinstance(cached_entry, tuple):
                 _credentials, credential_project_id = cached_entry
@@ -921,7 +923,7 @@ class VertexBase:
         if project_id is None and credential_project_id is not None and isinstance(credential_project_id, str):
             project_id = credential_project_id
             # Update cache with resolved project_id for future lookups
-            resolved_cache_key = (cache_credentials, project_id)
+            resolved_cache_key: Final = (cache_credentials, project_id)
             if resolved_cache_key not in self._credentials_project_mapping:
                 self._credentials_project_mapping[resolved_cache_key] = (
                     _credentials,
@@ -980,8 +982,8 @@ class VertexBase:
         """
         from google.auth.credentials import TokenState
 
-        cache_credentials = json.dumps(credentials) if isinstance(credentials, dict) else credentials
-        credential_cache_key = (cache_credentials, project_id)
+        cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        credential_cache_key: Final = (cache_credentials, project_id)
 
         # === FAST PATH (no lock) ===
         # If credentials are FRESH or STALE, return immediately without
@@ -989,7 +991,7 @@ class VertexBase:
         # we kick off a deduplicated background refresh so subsequent
         # requests get a fresh token, but we must not serialize concurrent
         # callers on the lock just to schedule that refresh.
-        usable = self._try_get_usable_cached_token(credential_cache_key, project_id)
+        usable: Final = self._try_get_usable_cached_token(credential_cache_key, project_id)
         if usable is not None:
             cached_token, resolved_project, token_state, creds, cached_project_id = usable
             if token_state == TokenState.STALE:
@@ -997,7 +999,7 @@ class VertexBase:
             return cached_token, resolved_project
 
         # === SLOW PATH (per-key lock) ===
-        lock = self._acquire_async_refresh_lock(credential_cache_key)
+        lock: Final = self._acquire_async_refresh_lock(credential_cache_key)
         try:
             async with lock:
                 # Double-check after acquiring lock — another coroutine may have refreshed.
@@ -1017,7 +1019,7 @@ class VertexBase:
                 # Resolve project_id from credentials if not provided
                 if project_id is None and isinstance(credential_project_id, str):
                     project_id = credential_project_id
-                    resolved_cache_key = (cache_credentials, project_id)
+                    resolved_cache_key: Final = (cache_credentials, project_id)
                     # Always overwrite — a pre-existing entry at the resolved
                     # key may reference stale credentials (e.g. from before a
                     # reauth that only repopulated the unresolved key), which
@@ -1037,7 +1039,7 @@ class VertexBase:
                 if token_state == TokenState.STALE:
                     if project_id is None:
                         raise ValueError("Could not resolve project_id")
-                    current_token = _credentials.token
+                    current_token: Final = _credentials.token
                     if current_token is None or not isinstance(current_token, str):
                         # Token is malformed despite STALE state — block on a full
                         # refresh using the same path as INVALID credentials.
@@ -1112,7 +1114,7 @@ class VertexBase:
             )
 
     def set_headers(self, auth_header: str | None, extra_headers: dict | None) -> dict:
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
         }
         if auth_header is not None:
@@ -1191,7 +1193,18 @@ class VertexBase:
         )
 
     @staticmethod
-    def safe_get_vertex_ai_location(litellm_params: dict) -> str | None:
+    def explicit_vertex_ai_location(params: Mapping[str, object]) -> str | None:
+        """
+        The location explicitly configured in the given params, without any
+        module-level or environment fallback. None when not configured.
+        """
+        for configured in (params.get("vertex_location"), params.get("vertex_ai_location")):
+            if isinstance(configured, str) and configured:
+                return configured
+        return None
+
+    @staticmethod
+    def safe_get_vertex_ai_location(litellm_params: Mapping[str, object]) -> str | None:
         """
         Safely get Vertex AI location without mutating the litellm_params dict.
 
@@ -1205,8 +1218,7 @@ class VertexBase:
             Vertex AI location/region or None
         """
         return (
-            litellm_params.get("vertex_location")
-            or litellm_params.get("vertex_ai_location")
+            VertexBase.explicit_vertex_ai_location(litellm_params)
             or litellm.vertex_location
             or get_secret_str("VERTEXAI_LOCATION")
             or get_secret_str("VERTEX_LOCATION")

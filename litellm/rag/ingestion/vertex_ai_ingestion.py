@@ -10,7 +10,10 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -24,6 +27,42 @@ from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
+
+
+def _present_fields(fields: tuple[tuple[str, object], ...]) -> Mapping[str, object]:
+    return {name: value for name, value in fields if value}
+
+
+class VertexRagResourceName(TypedDict, total=False):
+    name: ReadOnly[str]
+
+
+class VertexRagOperation(TypedDict, total=False):
+    """A Vertex AI long-running operation resource, as the RAG Engine API returns it."""
+
+    done: ReadOnly[bool]
+    name: ReadOnly[str]
+    error: ReadOnly[object]
+    response: ReadOnly[VertexRagResourceName]
+
+
+class VertexRagFileUpload(TypedDict, total=False):
+    """Body of a ``ragFiles:upload`` response."""
+
+    name: ReadOnly[str]
+    ragFile: ReadOnly[VertexRagResourceName]
+
+
+class _RagOperationView(TypedDict):
+    """Holds one decoded long-running operation so the JSON body reads back typed."""
+
+    operation: ReadOnly[VertexRagOperation]
+
+
+class _RagFileUploadView(TypedDict):
+    """Holds one decoded ``ragFiles:upload`` body so the JSON body reads back typed."""
+
+    upload: ReadOnly[VertexRagFileUpload]
 
 
 class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
@@ -47,7 +86,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         VertexBase.__init__(self)
 
         # Extract Vertex AI specific configs from vector_store_config
-        litellm_params = dict(self.vector_store_config)
+        litellm_params: Final = dict(self.vector_store_config)
 
         # Get project, location, and credentials using VertexBase methods
         self.project_id = self.safe_get_vertex_ai_project(litellm_params)
@@ -144,40 +183,34 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             self.project_id = project_id
 
         # Construct URL using vertex base URL helper
-        base_url = get_vertex_base_url(self.location)
-        url = f"{base_url}/v1beta1/projects/{self.project_id}/locations/{self.location}/ragCorpora"
+        base_url: Final = get_vertex_base_url(self.location)
+        url: Final = f"{base_url}/v1beta1/projects/{self.project_id}/locations/{self.location}/ragCorpora"
 
         # Build request body with camelCase keys (Vertex AI API format)
-        request_body: dict[str, Any] = {
+        vector_db_config: Final = self.vector_store_config.get("vector_db_config")
+        embedding_model: Final = self.vector_store_config.get("embedding_model")
+        embedding_model_config: Final = (
+            {"ragEmbeddingModelConfig": {"vertexPredictionEndpoint": {"endpoint": embedding_model}}}
+            if embedding_model
+            else None
+        )
+        vector_db_section: Final = (
+            {**(vector_db_config or {}), **embedding_model_config} if embedding_model_config else vector_db_config
+        )
+        request_body: Final = {
             "displayName": display_name,
+            **_present_fields((("description", description), ("vectorDbConfig", vector_db_section))),
         }
-
-        if description:
-            request_body["description"] = description
-
-        # Add vector database config if specified
-        vector_db_config = self.vector_store_config.get("vector_db_config")
-        if vector_db_config:
-            request_body["vectorDbConfig"] = vector_db_config
-
-        # Add embedding model config if specified
-        embedding_model = self.vector_store_config.get("embedding_model")
-        if embedding_model:
-            if "vectorDbConfig" not in request_body:
-                request_body["vectorDbConfig"] = {}
-            request_body["vectorDbConfig"]["ragEmbeddingModelConfig"] = {
-                "vertexPredictionEndpoint": {"endpoint": embedding_model}
-            }
 
         verbose_logger.debug("Creating RAG corpus: %s", url)
         verbose_logger.debug("Request body: %s", json.dumps(request_body, indent=2))
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
             params={"timeout": 60.0},
         )
 
-        response = await client.post(
+        response: Final = await client.post(
             url,
             json=request_body,
             headers={
@@ -186,11 +219,12 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             },
         )
         if response.status_code not in [200, 201]:
-            error_msg = f"Failed to create RAG corpus: {response.text}"
+            error_msg: Final = f"Failed to create RAG corpus: {response.text}"
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
 
-        response_data = response.json()
+        operation_view: Final[_RagOperationView] = {"operation": response.json()}
+        response_data: Final = operation_view["operation"]
         verbose_logger.debug("Create corpus response: %s", json.dumps(response_data, indent=2))
 
         # The response is a long-running operation
@@ -200,7 +234,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             corpus_name = response_data.get("response", {}).get("name", "")
         else:
             # Need to poll the operation
-            operation_name = response_data.get("name", "")
+            operation_name: Final = response_data.get("name", "")
             verbose_logger.debug("Polling operation: %s", operation_name)
             corpus_name = await self._poll_operation(
                 operation_name=operation_name,
@@ -234,12 +268,12 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         """
         import asyncio
 
-        base_url = get_vertex_base_url(self.location)
+        base_url: Final = get_vertex_base_url(self.location)
         # Operation name is like: projects/{project}/locations/{location}/operations/{operation_id}
         # We need to construct the full URL
-        url = f"{base_url}/v1beta1/{operation_name}"
+        url: Final = f"{base_url}/v1beta1/{operation_name}"
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
             params={"timeout": 60.0},
         )
@@ -257,12 +291,13 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 verbose_logger.error(error_msg)
                 raise Exception(error_msg)
 
-            operation_data = response.json()
+            operation_view: _RagOperationView = {"operation": response.json()}
+            operation_data: VertexRagOperation = operation_view["operation"]
 
             if operation_data.get("done"):
                 # Check for errors
                 if "error" in operation_data:
-                    error = operation_data["error"]
+                    error = operation_data.get("error")
                     raise Exception(f"Operation failed: {error}")
 
                 # Extract corpus name from response
@@ -304,49 +339,40 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         )
 
         # Construct upload URL using vertex base URL helper
-        base_url = get_vertex_base_url(self.location)
-        url = f"{base_url}/upload/v1beta1/{rag_corpus_id}/ragFiles:upload"
+        base_url: Final = get_vertex_base_url(self.location)
+        url: Final = f"{base_url}/upload/v1beta1/{rag_corpus_id}/ragFiles:upload"
 
         # Build metadata for the file with snake_case keys (as per upload API docs)
-        metadata: dict[str, Any] = {
-            "rag_file": {
-                "display_name": filename,
-            }
+        description: Final = self.vector_store_config.get("file_description")
+        rag_file: Final = {
+            "display_name": filename,
+            **_present_fields((("description", description),)),
         }
 
-        # Add description if provided
-        description = self.vector_store_config.get("file_description")
-        if description:
-            metadata["rag_file"]["description"] = description
-
         # Add chunking configuration if provided
-        chunking_strategy = self.chunking_strategy
-        if chunking_strategy and isinstance(chunking_strategy, dict):
-            chunk_size = chunking_strategy.get("chunk_size")
-            chunk_overlap = chunking_strategy.get("chunk_overlap")
-
-            if chunk_size or chunk_overlap:
-                if "upload_rag_file_config" not in metadata:
-                    metadata["upload_rag_file_config"] = {}
-
-                metadata["upload_rag_file_config"]["rag_file_transformation_config"] = {
-                    "rag_file_chunking_config": {"fixed_length_chunking": {}}
+        chunking_strategy: Final[Mapping[str, object]] = self.chunking_strategy
+        chunk_size: Final = chunking_strategy.get("chunk_size")
+        chunk_overlap: Final = chunking_strategy.get("chunk_overlap")
+        fixed_length_chunking: Final = _present_fields((("chunk_size", chunk_size), ("chunk_overlap", chunk_overlap)))
+        upload_rag_file_config: Final = (
+            {
+                "rag_file_transformation_config": {
+                    "rag_file_chunking_config": {"fixed_length_chunking": fixed_length_chunking}
                 }
-
-                chunking_config = metadata["upload_rag_file_config"]["rag_file_transformation_config"][
-                    "rag_file_chunking_config"
-                ]["fixed_length_chunking"]
-
-                if chunk_size:
-                    chunking_config["chunk_size"] = chunk_size
-                if chunk_overlap:
-                    chunking_config["chunk_overlap"] = chunk_overlap
+            }
+            if fixed_length_chunking
+            else None
+        )
+        metadata: Final = {
+            "rag_file": rag_file,
+            **_present_fields((("upload_rag_file_config", upload_rag_file_config),)),
+        }
 
         verbose_logger.debug("Uploading file to RAG corpus: %s", url)
         verbose_logger.debug("Metadata: %s", json.dumps(metadata, indent=2))
 
         # Prepare multipart form data
-        files = {
+        files: Final = {
             "metadata": (None, json.dumps(metadata), "application/json"),
             "file": (
                 filename,
@@ -354,12 +380,12 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 content_type or "application/octet-stream",
             ),
         }
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
             params={"timeout": 300.0},  # Longer timeout for large files
         )
 
-        response = await client.post(
+        response: Final = await client.post(
             url,
             files=files,
             headers={
@@ -369,17 +395,17 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         )
 
         if response.status_code not in [200, 201]:
-            error_msg = f"Failed to upload file: {response.text}"
+            error_msg: Final = f"Failed to upload file: {response.text}"
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
 
         # Parse response to get file ID
         try:
-            response_data = response.json()
+            upload_view: Final[_RagFileUploadView] = {"upload": response.json()}
+            response_data: Final = upload_view["upload"]
             # The response should contain the rag_file resource name
-            file_id = response_data.get("ragFile", {}).get("name", "")
-            if not file_id:
-                file_id = response_data.get("name", "")
+            rag_file_name: Final = response_data.get("ragFile", {}).get("name", "")
+            file_id: Final = rag_file_name or response_data.get("name", "")
 
             verbose_logger.debug("Upload complete. File ID: %s", file_id)
             return file_id
@@ -410,38 +436,43 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         )
 
         # Construct import URL using vertex base URL helper
-        base_url = get_vertex_base_url(self.location)
-        url = f"{base_url}/v1beta1/{rag_corpus_id}/ragFiles:import"
-
-        # Build request body with camelCase keys (Vertex AI API format)
-        request_body: dict[str, Any] = {"importRagFilesConfig": {"gcsSource": {"uris": gcs_uris}}}
+        base_url: Final = get_vertex_base_url(self.location)
+        url: Final = f"{base_url}/v1beta1/{rag_corpus_id}/ragFiles:import"
 
         # Add chunking configuration if provided
-        chunking_strategy = self.chunking_strategy
-        if chunking_strategy and isinstance(chunking_strategy, dict):
-            chunk_size = chunking_strategy.get("chunk_size")
-            chunk_overlap = chunking_strategy.get("chunk_overlap")
-
-            if chunk_size or chunk_overlap:
-                request_body["importRagFilesConfig"]["ragFileChunkingConfig"] = {
-                    "chunkSize": chunk_size or 1024,
-                    "chunkOverlap": chunk_overlap or 200,
-                }
+        chunking_strategy: Final[Mapping[str, object]] = self.chunking_strategy
+        chunk_size: Final = chunking_strategy.get("chunk_size")
+        chunk_overlap: Final = chunking_strategy.get("chunk_overlap")
 
         # Add max embedding requests per minute if specified
-        max_embedding_qpm = self.vector_store_config.get("max_embedding_requests_per_min")
-        if max_embedding_qpm:
-            request_body["importRagFilesConfig"]["maxEmbeddingRequestsPerMin"] = max_embedding_qpm
+        max_embedding_qpm: Final = self.vector_store_config.get("max_embedding_requests_per_min")
+
+        # Build request body with camelCase keys (Vertex AI API format)
+        chunking_config: Final = (
+            {"chunkSize": chunk_size or 1024, "chunkOverlap": chunk_overlap or 200}
+            if chunk_size or chunk_overlap
+            else None
+        )
+        import_config: Final = {
+            "gcsSource": {"uris": gcs_uris},
+            **_present_fields(
+                (
+                    ("ragFileChunkingConfig", chunking_config),
+                    ("maxEmbeddingRequestsPerMin", max_embedding_qpm),
+                )
+            ),
+        }
+        request_body: Final = {"importRagFilesConfig": import_config}
 
         verbose_logger.debug("Importing files from GCS: %s", url)
         verbose_logger.debug("Request body: %s", json.dumps(request_body, indent=2))
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
             params={"timeout": 60.0},
         )
 
-        response = await client.post(
+        response: Final = await client.post(
             url,
             json=request_body,
             headers={
@@ -451,12 +482,13 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         )
 
         if response.status_code not in [200, 201]:
-            error_msg = f"Failed to import files: {response.text}"
+            error_msg: Final = f"Failed to import files: {response.text}"
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
 
-        response_data = response.json()
-        operation_name = response_data.get("name", "")
+        operation_view: Final[_RagOperationView] = {"operation": response.json()}
+        response_data: Final = operation_view["operation"]
+        operation_name: Final = response_data.get("name", "")
 
         verbose_logger.debug("Import operation started: %s", operation_name)
         return operation_name

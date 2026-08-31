@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.bedrock.image_generation.image_handler import BedrockImageGeneration
 from litellm.types.utils import ImageResponse
 
@@ -13,7 +15,7 @@ def cost_calculator(
 
     Handles both Stability 1 and Stability 3 models
     """
-    config_class = BedrockImageGeneration.get_config_class(model=model)
+    config_class: Final = BedrockImageGeneration.get_config_class(model=model)
     return config_class.cost_calculator(
         model=model,
         image_response=image_response,

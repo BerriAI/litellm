@@ -36,7 +36,8 @@ Example: block when response rejects the user (input_type response only):
 
 import asyncio
 import threading
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
 
@@ -59,9 +60,9 @@ if TYPE_CHECKING:
 class CustomCodeGuardrailError(Exception):
     """Raised when custom code guardrail execution fails."""
 
-    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+    def __init__(self, message: str, details: Mapping[str, object] | None = None) -> None:
         super().__init__(message)
-        self.details = details or {}
+        self.details: Mapping[str, object] = details or {}
 
 
 class CustomCodeCompilationError(CustomCodeGuardrailError):
@@ -116,8 +117,8 @@ class CustomCodeGuardrail(CustomGuardrail):
             guardrail_name: Name of this guardrail instance
             **kwargs: Additional arguments passed to CustomGuardrail
         """
-        self.custom_code = custom_code
-        self._compiled_function: Any | None = None
+        self.custom_code: str = custom_code
+        self._compiled_function: Callable[..., object] | None = None
         self._compile_lock = threading.Lock()
         self._compile_error: str | None = None
 
@@ -148,8 +149,8 @@ class CustomCodeGuardrail(CustomGuardrail):
 
     def _do_compile(self) -> None:
         """Internal compilation method without lock. Expected to run inside _compile_lock."""
-        exec_globals = build_sandbox_globals()
-        compiled = compile_sandboxed(self.custom_code)
+        exec_globals: Final = build_sandbox_globals()
+        compiled: Final = compile_sandboxed(self.custom_code)
         exec(compiled, exec_globals)  # noqa: S102
 
         if "apply_guardrail" not in exec_globals:
@@ -158,7 +159,7 @@ class CustomCodeGuardrail(CustomGuardrail):
                 "Expected signature: apply_guardrail(inputs, request_data, input_type)"
             )
 
-        apply_fn = exec_globals["apply_guardrail"]
+        apply_fn: Final = exec_globals["apply_guardrail"]
         if not callable(apply_fn):
             raise CustomCodeCompilationError("'apply_guardrail' must be a callable function")
 
@@ -191,7 +192,7 @@ class CustomCodeGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -230,18 +231,17 @@ class CustomCodeGuardrail(CustomGuardrail):
             # Prepare inputs dict for the function
 
             # Prepare request_data with safe subset of information
-            safe_request_data = self._prepare_safe_request_data(request_data)
+            safe_request_data: Final = self._prepare_safe_request_data(request_data)
 
             # Execute the custom function - handle both sync and async functions
-            result = self._compiled_function(inputs, safe_request_data, input_type)
+            raw_result: Final = self._compiled_function(inputs, safe_request_data, input_type)
 
             # If the function is async (returns a coroutine), await it
-            if asyncio.iscoroutine(result):
-                result = await result
+            resolved_result: Final[object] = await raw_result if asyncio.iscoroutine(raw_result) else raw_result
 
             # Process the result
             return self._process_result(
-                result=result,
+                result=resolved_result,
                 inputs=inputs,
                 request_data=request_data,
                 input_type=input_type,
@@ -263,7 +263,7 @@ class CustomCodeGuardrail(CustomGuardrail):
                 },
             ) from e
 
-    def _prepare_safe_request_data(self, request_data: dict) -> dict[str, Any]:
+    def _prepare_safe_request_data(self, request_data: Mapping[str, object]) -> dict[str, object]:
         """
         Prepare a safe subset of request_data for code execution.
 
@@ -286,9 +286,9 @@ class CustomCodeGuardrail(CustomGuardrail):
 
     def _process_result(
         self,
-        result: Any,
+        result: object,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
     ) -> GenericGuardrailAPIInputs:
         """
@@ -314,21 +314,21 @@ class CustomCodeGuardrail(CustomGuardrail):
             )
             return inputs
 
-        action = result.get("action", "allow")
+        action: Final = result.get("action", "allow")
 
         if action == "allow":
             verbose_proxy_logger.debug("Custom code guardrail '%s': Allowing %s", self.guardrail_name, input_type)
             return inputs
 
         elif action == "block":
-            reason = result.get("reason", "Blocked by custom code guardrail")
-            detection_info = result.get("detection_info", {})
+            reason: Final = result.get("reason", "Blocked by custom code guardrail")
+            detection_info: Final = result.get("detection_info", {})
 
             verbose_proxy_logger.info(
                 "Custom code guardrail '%s': Blocking %s - %s", self.guardrail_name, input_type, reason
             )
 
-            is_output = input_type == "response"
+            is_output: Final = input_type == "response"
 
             # For pre-call, raise passthrough exception to return synthetic response
             if not is_output:
@@ -352,7 +352,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Custom code guardrail '%s': Modifying %s", self.guardrail_name, input_type)
 
             # Apply modifications
-            modified_inputs = dict(inputs)
+            modified_inputs: Final = dict(inputs)
 
             if "texts" in result and result["texts"] is not None:
                 modified_inputs["texts"] = result["texts"]
@@ -386,8 +386,8 @@ class CustomCodeGuardrail(CustomGuardrail):
         """
         with self._compile_lock:
             # Reset state
-            old_function = self._compiled_function
-            old_code = self.custom_code
+            old_function: Final = self._compiled_function
+            old_code: Final = self.custom_code
             self._compiled_function = None
             self._compile_error = None
 

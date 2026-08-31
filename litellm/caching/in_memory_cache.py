@@ -13,7 +13,7 @@ import json
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
@@ -67,7 +67,7 @@ class InMemoryCache(BaseCache):
 
             # Handle special types without full conversion when possible
             if hasattr(value, "__sizeof__"):  # Use __sizeof__ if available
-                size = value.__sizeof__() / 1024
+                size: Final = value.__sizeof__() / 1024
                 return size <= self.max_size_per_item
 
             # Fallback for complex types
@@ -111,7 +111,7 @@ class InMemoryCache(BaseCache):
         - 3. the size of in-memory cache is bounded
 
         """
-        current_time = time.time()
+        current_time: Final = time.time()
 
         # Step 1: Remove expired or outdated items
         while self.expiration_heap:
@@ -144,7 +144,7 @@ class InMemoryCache(BaseCache):
         """
         Check if ttl is set for a key
         """
-        ttl_time = self.ttl_dict.get(key)
+        ttl_time: Final = self.ttl_dict.get(key)
         if ttl_time is None or float(ttl_time) < time.time():  # if ttl is not set, allow override
             return True
         else:
@@ -186,7 +186,7 @@ class InMemoryCache(BaseCache):
         Add value to set
         """
         # get the value
-        init_value = self.get_cache(key=key) or set()
+        init_value: Final = self.get_cache(key=key) or set()
         for val in value:
             init_value.add(val)
         self.set_cache(key, init_value, ttl=ttl)
@@ -207,7 +207,7 @@ class InMemoryCache(BaseCache):
         if key in self.cache_dict:
             if self.evict_element_if_expired(key):
                 return None
-            original_cached_response = self.cache_dict[key]
+            original_cached_response: Final = self.cache_dict[key]
             try:
                 cached_response = json.loads(original_cached_response)
             except Exception:
@@ -216,7 +216,7 @@ class InMemoryCache(BaseCache):
         return None
 
     def batch_get_cache(self, keys: list, **kwargs):
-        return_val = []
+        return_val: Final = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
@@ -225,7 +225,7 @@ class InMemoryCache(BaseCache):
     def increment_cache(self, key, value: float, **kwargs) -> float:
         with self._increment_lock:
             # keep read-modify-write atomic
-            init_value = self.get_cache(key=key) or 0
+            init_value: Final = self.get_cache(key=key) or 0
             value = init_value + value
             self.set_cache(key, value, **kwargs)
             return value
@@ -234,7 +234,7 @@ class InMemoryCache(BaseCache):
         return self.get_cache(key=key, **kwargs)
 
     async def async_batch_get_cache(self, keys: list, **kwargs):
-        return_val = []
+        return_val: Final = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
@@ -246,7 +246,7 @@ class InMemoryCache(BaseCache):
     async def async_increment_pipeline(
         self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs
     ) -> list[float] | None:
-        results = []
+        results: Final = []
         for increment in increment_list:
             result = await self.async_increment(increment["key"], increment["increment_value"], **kwargs)
             results.append(result)
@@ -274,5 +274,5 @@ class InMemoryCache(BaseCache):
         Get the oldest n keys in the cache
         """
         # sorted ttl dict by ttl
-        sorted_ttl_dict = sorted(self.ttl_dict.items(), key=lambda x: x[1])
+        sorted_ttl_dict: Final = sorted(self.ttl_dict.items(), key=lambda x: x[1])
         return [key for key, _ in sorted_ttl_dict[:n]]

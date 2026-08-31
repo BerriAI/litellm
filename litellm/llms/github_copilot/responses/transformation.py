@@ -9,7 +9,7 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -52,7 +52,7 @@ def github_copilot_supports_responses_api(model: str) -> bool:
     register_model, which also clears the cache used here).
     """
     try:
-        info = _cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
+        info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
     except Exception as e:
         verbose_logger.debug(
             "github_copilot_supports_responses_api: get_model_info failed for %s: %s",
@@ -61,7 +61,7 @@ def github_copilot_supports_responses_api(model: str) -> bool:
         )
         return False
 
-    mode = info.get("mode")
+    mode: Final = info.get("mode")
     if mode == "responses":
         return True
     if mode == "chat":
@@ -69,9 +69,9 @@ def github_copilot_supports_responses_api(model: str) -> bool:
 
     # supported_endpoints is dropped by ModelInfoBase; read it from the raw
     # model_cost entry via the resolved key.
-    key = info.get("key")
-    raw_info = litellm.model_cost.get(key) if isinstance(key, str) else None
-    endpoints = raw_info.get("supported_endpoints") if isinstance(raw_info, dict) else None
+    key: Final = info.get("key")
+    raw_info: Final = litellm.model_cost.get(key) if isinstance(key, str) else None
+    endpoints: Final = raw_info.get("supported_endpoints") if isinstance(raw_info, dict) else None
     return isinstance(endpoints, list) and "/v1/responses" in endpoints
 
 
@@ -154,7 +154,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         State is keyed by output_index on this config, which
         ProviderConfigManager builds fresh per request, so it is stream-scoped.
         """
-        output_index = parsed_chunk.get("output_index")
+        output_index: Final = parsed_chunk.get("output_index")
         if not isinstance(output_index, int):
             return parsed_chunk
 
@@ -164,7 +164,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 self._stream_item_ids_by_output_index[output_index] = item["id"]
             return parsed_chunk
 
-        stable_id = self._stream_item_ids_by_output_index.get(output_index)
+        stable_id: Final = self._stream_item_ids_by_output_index.get(output_index)
         if stable_id is None:
             return parsed_chunk
 
@@ -200,7 +200,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         try:
             # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key()
+            api_key: Final = self.authenticator.get_api_key()
 
             if not api_key:
                 raise AuthenticationError(
@@ -210,17 +210,17 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
 
             # Get default headers (from copilot-api configuration)
-            default_headers = get_copilot_default_headers(api_key)
+            default_headers: Final = get_copilot_default_headers(api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
-            merged_headers = {**default_headers, **headers}
+            merged_headers: Final = {**default_headers, **headers}
 
             # Analyze input to determine additional headers
-            input_param = self._get_input_from_params(litellm_params)
+            input_param: Final = self._get_input_from_params(litellm_params)
 
             # Add X-Initiator header based on input analysis
             if input_param is not None:
-                initiator = self._get_initiator(input_param)
+                initiator: Final = self._get_initiator(input_param)
                 merged_headers["X-Initiator"] = initiator
                 verbose_logger.debug("GitHub Copilot Responses API: Set X-Initiator=%s", initiator)
 
@@ -276,11 +276,11 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if item.get("type") == "reasoning":
             # Preserve encrypted_content before parent processing
-            encrypted_content = item.get("encrypted_content")
+            encrypted_content: Final = item.get("encrypted_content")
 
             # Filter out None values for known problematic fields,
             # but preserve encrypted_content even if it exists
-            filtered_item: dict[str, Any] = {}
+            filtered_item: Final[dict[str, Any]] = {}
             for k, v in item.items():
                 # Always include encrypted_content if present (even if None)
                 if k == "encrypted_content":
@@ -396,7 +396,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return False
 
         # Check if this item is an input_image
-        item_type = value.get("type")
+        item_type: Final = value.get("type")
         if isinstance(item_type, str) and item_type.lower() == "input_image":
             return True
 

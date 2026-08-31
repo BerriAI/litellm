@@ -1,7 +1,7 @@
 import json
 import re
 import traceback
-from typing import Any, Protocol, cast
+from typing import Any, Final, Protocol, cast
 
 import httpx
 
@@ -34,12 +34,16 @@ class ExceptionCheckers:
     """
 
     @staticmethod
-    def is_error_str_rate_limit(error_str: str) -> bool:
+    def is_error_str_rate_limit(error_str: str, status_code: int | None = None) -> bool:
         """
         Check if an error string indicates a rate limit error.
 
         Args:
             error_str: The error string to check
+            status_code: The HTTP status the provider returned, when known. Gates only the
+                bare-number branch: providers echo the request back in validation errors and
+                429 is an ordinary token id, so an echoed prompt can put a standalone 429 in
+                the body of a 400. The phrase branches stay ungated (#11455).
 
         Returns:
             True if the error indicates a rate limit, False otherwise
@@ -47,11 +51,12 @@ class ExceptionCheckers:
         if not isinstance(error_str, str):
             return False
 
-        # Only treat 429 as a rate limit signal when it appears as a standalone token
-        if re.search(r"\b429\b", error_str):
+        # A standalone 429 counts unless the provider's own status says otherwise. The
+        # status is read off an arbitrary exception, so a non-integer means "unknown".
+        if re.search(r"\b429\b", error_str) and (not isinstance(status_code, int) or status_code == 429):
             return True
 
-        _error_str_lower = error_str.lower()
+        _error_str_lower: Final = error_str.lower()
 
         # Match "rate limit" (including variations like rate-limit / rate_limit)
         if re.search(r"rate[\s_\-]*limit", _error_str_lower):
@@ -70,13 +75,13 @@ class ExceptionCheckers:
         """
         Check if an error string indicates a context window exceeded error.
         """
-        _error_str_lowercase = error_str.lower()
+        _error_str_lowercase: Final = error_str.lower()
         # Exclude param validation errors (e.g. OpenAI "user" param max 64 chars)
         if "string_above_max_length" in _error_str_lowercase:
             return False
         if "invalid 'user'" in _error_str_lowercase and "string too long" in _error_str_lowercase:
             return False
-        known_exception_substrings = [
+        known_exception_substrings: Final = [
             "exceed context limit",
             "this model's maximum context length is",
             "string too long. expected a string with maximum length",
@@ -105,8 +110,8 @@ class ExceptionCheckers:
         """
         Check if an error string indicates a content policy violation error.
         """
-        _lower = error_str.lower()
-        known_exception_substrings = [
+        _lower: Final = error_str.lower()
+        known_exception_substrings: Final = [
             "content_policy_violation",
             "responsibleaipolicyviolation",
             "the response was filtered due to the prompt triggering azure openai's content management",
@@ -149,14 +154,14 @@ def get_error_message(error_obj) -> str | None:
             return None
 
         if hasattr(error_obj, "body"):
-            _error_obj_body = getattr(error_obj, "body")
+            _error_obj_body: Final = getattr(error_obj, "body")
             if isinstance(_error_obj_body, dict):
                 # OpenAI-style: {"message": "...", "type": "...", ...}
                 if _error_obj_body.get("message"):
                     return _error_obj_body.get("message")
 
                 # Azure-style: {"error": {"message": "...", ...}}
-                nested_error = _error_obj_body.get("error")
+                nested_error: Final = _error_obj_body.get("error")
                 if isinstance(nested_error, dict):
                     return nested_error.get("message")
 
@@ -170,8 +175,8 @@ def get_error_message(error_obj) -> str | None:
 def _get_body_error_code(error_str: str) -> int | None:
     """Return error.code from a JSON error body, or None if not parseable."""
     try:
-        body = json.loads(error_str)
-        code = body.get("error", {}).get("code")
+        body: Final = json.loads(error_str)
+        code: Final = body.get("error", {}).get("code")
         return int(code) if code is not None else None
     except Exception:
         return None
@@ -186,7 +191,7 @@ def _get_response_headers(original_exception: Exception) -> httpx.Headers | None
     _response_headers: httpx.Headers | None = None
     try:
         _response_headers = getattr(original_exception, "headers", None)
-        error_response = getattr(original_exception, "response", None)
+        error_response: Final = getattr(original_exception, "response", None)
         if not _response_headers and error_response:
             _response_headers = getattr(error_response, "headers", None)
         if not _response_headers:
@@ -210,16 +215,16 @@ def extract_and_raise_litellm_exception(
 
     Relevant Issue: https://github.com/BerriAI/litellm/issues/7259
     """
-    pattern = r"litellm\.\w+Error"
+    pattern: Final = r"litellm\.\w+Error"
 
     # Search for the exception in the error string
-    match = re.search(pattern, error_str)
+    match: Final = re.search(pattern, error_str)
 
     # Extract the exception if found
     if match:
         exception_name = match.group(0)
         exception_name = exception_name.strip().replace("litellm.", "")
-        raised_exception_obj = getattr(litellm, exception_name, None)
+        raised_exception_obj: Final = getattr(litellm, exception_name, None)
         if raised_exception_obj:
             # Try with response parameter first, fall back to without it
             # Some exceptions (e.g., APIConnectionError) don't accept response param
@@ -280,7 +285,9 @@ def _map_openai_exception(
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-    if ExceptionCheckers.is_error_str_rate_limit(error_str):
+    if ExceptionCheckers.is_error_str_rate_limit(
+        error_str, status_code=getattr(original_exception, "status_code", None)
+    ):
         raise RateLimitError(
             message=f"RateLimitError: {exception_provider} - {message}",
             model=model,
@@ -323,7 +330,7 @@ def _map_openai_exception(
             litellm_debug_info=extra_information,
         )
     elif "invalid_encrypted_content" in error_str or "could not be verified" in error_str:
-        helpful_message = (
+        helpful_message: Final = (
             f"{exception_provider} - {message}\n\n"
             " This error occurs when load balancing Responses API across deployments with different API keys.\n"
             "   Encrypted content is tied to the organization that created it and cannot be decrypted by other organizations.\n\n"
@@ -380,7 +387,7 @@ def _map_openai_exception(
             litellm_debug_info=extra_information,
         )
     elif "Mistral API raised a streaming error" in error_str:
-        _request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        _request: Final = httpx.Request(method="POST", url="https://api.openai.com/v1")
         raise APIError(
             status_code=500,
             message=f"{exception_provider} - {message}",
@@ -543,6 +550,13 @@ def _map_anthropic_exception(
                 llm_provider="anthropic",
                 model=model,
             )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"AnthropicException - {error_str}",
+                llm_provider="anthropic",
+                model=model,
+                response=original_exception.response,
+            )
         elif original_exception.status_code == 400 or original_exception.status_code == 413:
             raise BadRequestError(
                 message=f"AnthropicException - {error_str}",
@@ -703,7 +717,7 @@ def _map_openai_like_exception(
         # Predibase returns the raw API Key in the response - this block ensures it's not returned in the exception
         if error_str is not None and isinstance(error_str, str) and "bearer" in error_str.lower():
             # only keep the first 10 chars after the occurnence of "bearer"
-            _bearer_token_start_index = error_str.lower().find("bearer")
+            _bearer_token_start_index: Final = error_str.lower().find("bearer")
             error_str = error_str[: _bearer_token_start_index + 14]
             error_str += "XXXXXXX" + '"'
 
@@ -748,11 +762,18 @@ def _map_openai_like_exception(
                 llm_provider=custom_llm_provider,
                 model=model,
             )
-        elif original_exception.status_code == 401 or original_exception.status_code == 403:
+        elif original_exception.status_code == 401:
             raise AuthenticationError(
                 message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                 llm_provider=custom_llm_provider,
                 model=model,
+            )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=_response_or_stub(original_exception, status_code=403),
             )
         elif original_exception.status_code == 400:
             raise BadRequestError(
@@ -804,6 +825,24 @@ def _map_openai_like_exception(
             )
 
 
+_BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN: Final = re.compile(r"prompt tokens \((\d+)\) exceed model maximum \((\d+)\)")
+
+
+def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
+    """
+    Mantle reports context overflow as a structured validation error rather than
+    the plain-text patterns Bedrock itself uses, so it needs its own detection and a
+    message clients recognize as context overflow (litellm/litellm#36546).
+    """
+    if "invalid_request_error" not in error_str and "validation_error" not in error_str:
+        return None
+    match = _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN.search(error_str)
+    if match is None:
+        return None
+    prompt_tokens, max_tokens = match.groups()
+    return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
+
+
 def _map_bedrock_exception(
     *,
     model: str,
@@ -814,6 +853,14 @@ def _map_bedrock_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
+    if custom_llm_provider == "bedrock_mantle":
+        mantle_context_window_message = _get_bedrock_mantle_context_window_message(error_str)
+        if mantle_context_window_message is not None:
+            raise ContextWindowExceededError(
+                message=mantle_context_window_message,
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
     if (
         "too many tokens" in error_str
         or "expected maxLength:" in error_str
@@ -1109,7 +1156,7 @@ def _map_vertex_exception(
             response=httpx.Response(
                 status_code=500,
                 content=str(original_exception),
-                request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),
             ),
             litellm_debug_info=extra_information,
         )
@@ -1270,7 +1317,7 @@ def _map_vertex_exception(
                 response=httpx.Response(
                     status_code=500,
                     content=str(original_exception),
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         if original_exception.status_code == 502:
@@ -1869,18 +1916,16 @@ def _map_azure_exception(
     # payload in addition to string matching.
     azure_error_code: str | None = None
     try:
-        body_dict = getattr(original_exception, "body", None) or {}
+        body_dict: Final = getattr(original_exception, "body", None) or {}
         if isinstance(body_dict, dict):
             if isinstance(body_dict.get("error"), dict):
-                azure_error_code = body_dict["error"].get("code")  # type: ignore[index]
+                azure_error_code = body_dict["error"].get("code")
                 # Also check inner_error for
                 # ResponsibleAIPolicyViolation which indicates a
                 # content policy violation even when the top-level
                 # code is generic (e.g. "invalid_request_error").
                 if azure_error_code != "content_policy_violation":
-                    _inner = body_dict["error"].get("inner_error") or body_dict[  # type: ignore[index]
-                        "error"
-                    ].get("innererror")  # type: ignore[index]
+                    _inner: Final = body_dict["error"].get("inner_error") or body_dict["error"].get("innererror")
                     if isinstance(_inner, dict) and _inner.get("code") == "ResponsibleAIPolicyViolation":
                         azure_error_code = "content_policy_violation"
             else:
@@ -1926,7 +1971,7 @@ def _map_azure_exception(
             original_exception=original_exception,
         )
     elif azure_error_code == "invalid_encrypted_content" or "could not be verified" in error_str:
-        helpful_message = (
+        helpful_message: Final = (
             f"AzureException - {message}\n\n"
             "This error occurs when load balancing Responses API across deployments with different API keys.\n"
             "   Encrypted content is tied to the organization that created it and cannot be decrypted by other organizations.\n\n"
@@ -2156,7 +2201,123 @@ def _map_openrouter_exception(
         )
 
 
-def exception_type(  # type: ignore
+def _response_or_stub(original_exception: _ProviderHTTPException, status_code: int) -> httpx.Response:
+    response: Final = original_exception.response if hasattr(original_exception, "response") else None
+    if response is not None:
+        return response
+    return httpx.Response(
+        status_code=status_code, request=httpx.Request(method="POST", url="https://docs.litellm.ai/docs")
+    )
+
+
+def _map_exception_by_status(
+    *,
+    model: str,
+    original_exception: _ProviderHTTPException,
+    custom_llm_provider: str,
+    error_str: str,
+    exception_provider: str,
+    extra_information: str,
+) -> None:
+    status_code: Final = original_exception.status_code if hasattr(original_exception, "status_code") else None
+    if not isinstance(status_code, int) or status_code < 400:
+        return
+    if getattr(original_exception, "status_code_is_synthesized", False):
+        return
+    message: Final = f"{exception_provider} - {error_str}"
+    response: Final = original_exception.response if hasattr(original_exception, "response") else None
+    match status_code:
+        case 401:
+            raise AuthenticationError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 403:
+            raise PermissionDeniedError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=_response_or_stub(original_exception, status_code=status_code),
+                litellm_debug_info=extra_information,
+            )
+        case 404:
+            raise NotFoundError(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 408:
+            raise Timeout(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                litellm_debug_info=extra_information,
+            )
+        case 429:
+            raise RateLimitError(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 500:
+            raise InternalServerError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 502:
+            raise BadGatewayError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 503:
+            raise ServiceUnavailableError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 504:
+            raise Timeout(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                litellm_debug_info=extra_information,
+                exception_status_code=status_code,
+            )
+        case _ if status_code < 500:
+            raise BadRequestError(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case _:
+            raise APIError(
+                status_code=status_code,
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                request=original_exception.request if hasattr(original_exception, "request") else None,
+                litellm_debug_info=extra_information,
+            )
+
+
+def exception_type(
     model,
     original_exception,
     custom_llm_provider,
@@ -2168,7 +2329,7 @@ def exception_type(  # type: ignore
         return original_exception
     exception_mapping_worked = False
     exception_provider = custom_llm_provider
-    mappable_exception: _ProviderHTTPException = cast("_ProviderHTTPException", original_exception)
+    mappable_exception: Final[_ProviderHTTPException] = cast("_ProviderHTTPException", original_exception)
     if litellm.suppress_debug_info is False:
         print()  # noqa: T201
         print(  # noqa: T201
@@ -2179,9 +2340,10 @@ def exception_type(  # type: ignore
         )
         print()  # noqa: T201
 
-    litellm_response_headers = _get_response_headers(original_exception=original_exception)
+    litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
     try:
         error_str = redact_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
+        extra_information = ""
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
@@ -2198,15 +2360,14 @@ def exception_type(  # type: ignore
             # Common Extra information needed for all providers
             # We pass num retries, api_base, vertex_deployment etc to the exception here
             ################################################################################
-            extra_information = ""
             try:
-                _api_base = litellm.get_api_base(model=model, optional_params=extra_kwargs)
-                messages = litellm.get_first_chars_messages(kwargs=completion_kwargs)
-                _vertex_project = extra_kwargs.get("vertex_project")
-                _vertex_location = extra_kwargs.get("vertex_location")
-                _metadata = extra_kwargs.get("metadata", {}) or {}
-                _model_group = _metadata.get("model_group")
-                _deployment = _metadata.get("deployment")
+                _api_base: Final = litellm.get_api_base(model=model, optional_params=extra_kwargs)
+                messages: Final = litellm.get_first_chars_messages(kwargs=completion_kwargs)
+                _vertex_project: Final = extra_kwargs.get("vertex_project")
+                _vertex_location: Final = extra_kwargs.get("vertex_location")
+                _metadata: Final = extra_kwargs.get("metadata", {}) or {}
+                _model_group: Final = _metadata.get("model_group")
+                _deployment: Final = _metadata.get("deployment")
                 extra_information = f"\nModel: {model}"
 
                 if isinstance(custom_llm_provider, str) and len(custom_llm_provider) > 0:
@@ -2270,6 +2431,7 @@ def exception_type(  # type: ignore
                 or custom_llm_provider == "custom_openai"
                 or custom_llm_provider in litellm.openai_compatible_providers
                 or custom_llm_provider == "mistral"
+                or custom_llm_provider == "runwayml"
             ):
                 _map_openai_exception(
                     model=model,
@@ -2310,7 +2472,7 @@ def exception_type(  # type: ignore
                     exception_provider=exception_provider,
                     extra_information=extra_information,
                 )
-            elif custom_llm_provider == "bedrock":
+            elif custom_llm_provider in ("bedrock", "bedrock_mantle"):
                 _map_bedrock_exception(
                     model=model,
                     original_exception=mappable_exception,
@@ -2469,6 +2631,14 @@ def exception_type(  # type: ignore
             For unmapped exceptions - raise the exception with traceback - https://github.com/BerriAI/litellm/issues/4201
             """
             exception_mapping_worked = True
+            _map_exception_by_status(
+                model=model,
+                original_exception=mappable_exception,
+                custom_llm_provider=custom_llm_provider,
+                error_str=error_str,
+                exception_provider=exception_provider,
+                extra_information=extra_information,
+            )
             if hasattr(original_exception, "request"):
                 raise APIConnectionError(
                     message=f"{exception_provider} - {error_str}",
@@ -2503,7 +2673,7 @@ def exception_type(  # type: ignore
                 if isinstance(e, error_type):
                     setattr(e, "litellm_response_headers", litellm_response_headers)
                     raise e  # it's already mapped
-            raised_exc = APIConnectionError(
+            raised_exc: Final = APIConnectionError(
                 message=f"{original_exception}\n{_redact_string(traceback.format_exc())}",
                 llm_provider="",
                 model="",
@@ -2521,7 +2691,7 @@ def exception_logging(
     exception=None,
 ):
     try:
-        model_call_details = {}
+        model_call_details: Final = {}
         if exception:
             model_call_details["exception"] = exception
         model_call_details["additional_args"] = additional_args
@@ -2553,8 +2723,8 @@ def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
     [Non-Blocking helper function]
     """
     try:
-        _api_key_name = metadata.get("user_api_key_alias", None)
-        _user_api_key_team_alias = metadata.get("user_api_key_team_alias", None)
+        _api_key_name: Final = metadata.get("user_api_key_alias", None)
+        _user_api_key_team_alias: Final = metadata.get("user_api_key_team_alias", None)
         if _api_key_name is not None:
             request_info = f"\n\nKey Name: `{_api_key_name}`\nTeam: `{_user_api_key_team_alias}`" + request_info
 

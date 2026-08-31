@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -21,7 +21,7 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import _hash_token_if_needed
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
-LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
+LITELLM_PREFIX_STORED_VIRTUAL_KEYS: Final = "litellm/"
 
 
 class KeyManagementEventHooks:
@@ -43,6 +43,7 @@ class KeyManagementEventHooks:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -53,9 +54,8 @@ class KeyManagementEventHooks:
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to send key created email: %s", e)
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
-            _updated_values = response.model_dump_json(exclude_none=True)
+        if is_audit_logging_enabled():
+            _updated_values: Final = response.model_dump_json(exclude_none=True)
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -103,12 +103,12 @@ class KeyManagementEventHooks:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
-            _updated_values = json.dumps(data.json(exclude_none=True), default=str)
+        if is_audit_logging_enabled():
+            _updated_values: Final = json.dumps(data.json(exclude_none=True), default=str)
 
             _before_value = existing_key_row.json(exclude_none=True)
             _before_value = json.dumps(_before_value, default=str)
@@ -144,19 +144,20 @@ class KeyManagementEventHooks:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         # Store the generated key in the secret manager - non-blocking, independent operation
         if data is not None and response.token_id is not None:
             try:
-                initial_secret_name = existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}"
-                new_secret_name = response.key_alias or data.key_alias or initial_secret_name
+                initial_secret_name: Final = existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}"
+                new_secret_name: Final = response.key_alias or data.key_alias or initial_secret_name
                 verbose_proxy_logger.info(
                     "Updating secret in secret manager: secret_name=%s",
                     new_secret_name,
                 )
-                team_id = getattr(existing_key_row, "team_id", None)
+                team_id: Final = getattr(existing_key_row, "team_id", None)
                 await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
                     current_secret_name=initial_secret_name,
                     new_secret_name=new_secret_name,
@@ -180,7 +181,7 @@ class KeyManagementEventHooks:
             verbose_proxy_logger.warning("Failed to send key rotated email: %s", e)
 
         # store the audit log
-        if litellm.store_audit_logs is True and existing_key_row.token is not None:
+        if is_audit_logging_enabled() and existing_key_row.token is not None:
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -218,12 +219,12 @@ class KeyManagementEventHooks:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-        if litellm.store_audit_logs is True and data.keys is not None:
+        if is_audit_logging_enabled() and data.keys is not None:
             # make an audit log for each key deleted
             for key in keys_being_deleted:
                 if key.token is None:
@@ -269,9 +270,9 @@ class KeyManagementEventHooks:
 
                 # store the key in the secret manager
                 if isinstance(litellm.secret_manager_client, BaseSecretManager):
-                    tags = getattr(litellm._key_management_settings, "tags", None)
-                    description = getattr(litellm._key_management_settings, "description", None)
-                    optional_params = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
+                    tags: Final = getattr(litellm._key_management_settings, "tags", None)
+                    description: Final = getattr(litellm._key_management_settings, "description", None)
+                    optional_params: Final = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
                     verbose_proxy_logger.debug(
                         "Creating secret with %s and tags=%s and description=%s", secret_name, tags, description
                     )
@@ -308,7 +309,7 @@ class KeyManagementEventHooks:
 
                 # store the key in the secret manager
                 if isinstance(litellm.secret_manager_client, BaseSecretManager):
-                    optional_params = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
+                    optional_params: Final = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
                     await litellm.secret_manager_client.async_rotate_secret(
                         current_secret_name=KeyManagementEventHooks._get_secret_name(current_secret_name),
                         new_secret_name=KeyManagementEventHooks._get_secret_name(new_secret_name),
@@ -340,7 +341,7 @@ class KeyManagementEventHooks:
                 )
 
                 if isinstance(litellm.secret_manager_client, BaseSecretManager):
-                    team_settings_cache: dict[str | None, dict | None] = {}
+                    team_settings_cache: Final[dict[str | None, dict | None]] = {}
                     for key in keys_being_deleted:
                         if key.key_alias is not None:
                             team_id = getattr(key, "team_id", None)
@@ -371,8 +372,8 @@ class KeyManagementEventHooks:
         except ImportError:
             return None
 
-        prisma_client = getattr(proxy_server_module, "prisma_client", None)
-        user_api_key_cache = getattr(proxy_server_module, "user_api_key_cache", None)
+        prisma_client: Final = getattr(proxy_server_module, "prisma_client", None)
+        user_api_key_cache: Final = getattr(proxy_server_module, "user_api_key_cache", None)
 
         if prisma_client is None or user_api_key_cache is None:
             return None
@@ -380,7 +381,7 @@ class KeyManagementEventHooks:
         try:
             from litellm.proxy.auth.auth_checks import get_team_object
 
-            team_obj = await get_team_object(
+            team_obj: Final = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -399,7 +400,7 @@ class KeyManagementEventHooks:
         if not isinstance(metadata, dict):
             return None
 
-        team_settings = metadata.get("secret_manager_settings")
+        team_settings: Final = metadata.get("secret_manager_settings")
         if isinstance(team_settings, dict) and team_settings:
             return dict(team_settings)
 
@@ -419,7 +420,7 @@ class KeyManagementEventHooks:
                 BaseEmailLogger,
             )
 
-            initialized_email_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+            initialized_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=BaseEmailLogger
             )
             if len(initialized_email_loggers) > 0:
@@ -461,7 +462,7 @@ class KeyManagementEventHooks:
                 SendKeyCreatedEmailEvent,
             )
 
-            initialized_email_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+            initialized_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=BaseEmailLogger
             )
             if len(initialized_email_loggers) > 0:
@@ -540,7 +541,7 @@ class KeyManagementEventHooks:
             verbose_proxy_logger.debug("Enterprise types not available, skipping key rotated email")
             return
 
-        event = SendKeyRotatedEmailEvent(
+        event: Final = SendKeyRotatedEmailEvent(
             virtual_key=response.get("key", ""),
             event="key_rotated",
             event_group=Litellm_EntityType.KEY,
@@ -556,7 +557,7 @@ class KeyManagementEventHooks:
         ##########################
         # v2 integration for emails
         ##########################
-        initialized_email_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        initialized_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
             callback_type=BaseEmailLogger
         )
         if len(initialized_email_loggers) > 0:

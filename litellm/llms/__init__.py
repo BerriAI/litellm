@@ -1,6 +1,6 @@
 import importlib
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import CallTypes
@@ -12,6 +12,21 @@ if TYPE_CHECKING:
         BaseTranslation,
     )
     from litellm.types.utils import ModelInfo, Usage
+
+
+def get_cost_for_google_maps_grounding_request(
+    custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo"
+) -> float | None:
+    """
+    Get the cost of Grounding with Google Maps for a given model. Only Gemini models on the
+    Gemini API and Vertex AI can populate the Maps grounding counter, so every other provider
+    returns None.
+    """
+    if custom_llm_provider != "gemini" and not custom_llm_provider.startswith("vertex_ai"):
+        return None
+    from .gemini.cost_calculator import cost_per_google_maps_grounding_request
+
+    return cost_per_google_maps_grounding_request(usage=usage, model_info=model_info)
 
 
 def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo") -> float | None:
@@ -35,7 +50,7 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
         # Anthropic Claude models on Vertex AI populate server_tool_use.web_search_requests
         # (same as the direct Anthropic API), not prompt_tokens_details.web_search_requests
         # (which is the Gemini field). Route claude-* models to the Anthropic calculator.
-        model_key: str = model_info.get("key", "") if model_info else ""
+        model_key: Final[str] = model_info.get("key", "") if model_info else ""
         if "claude" in model_key.lower():
             from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
 
@@ -74,12 +89,12 @@ def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTrans
     Returns:
         Dict[CallTypes, Type[BaseTranslation]]: A dictionary mapping call types to their translation handler classes
     """
-    discovered_mappings: dict[CallTypes, type[BaseTranslation]] = {}
+    discovered_mappings: Final[dict[CallTypes, type[BaseTranslation]]] = {}
 
     try:
         # Get the path to the llms directory
-        current_dir = os.path.dirname(__file__)
-        llms_dir = current_dir
+        current_dir: Final = os.path.dirname(__file__)
+        llms_dir: Final = current_dir
 
         if not os.path.exists(llms_dir):
             verbose_logger.debug("llms directory not found")

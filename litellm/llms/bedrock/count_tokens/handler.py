@@ -4,7 +4,7 @@ AWS Bedrock CountTokens API handler.
 Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -46,7 +46,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug("Processing CountTokens request for resolved model: %s", resolved_model)
 
             # Get AWS region using existing LiteLLM function
-            aws_region_name = self._get_aws_region_name(
+            aws_region_name: Final = self._get_aws_region_name(
                 optional_params=litellm_params,
                 model=resolved_model,
                 model_id=None,
@@ -55,14 +55,14 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug("Retrieved AWS region: %s", aws_region_name)
 
             # Transform request to Bedrock format (supports both Converse and InvokeModel)
-            bedrock_request = self.transform_anthropic_to_bedrock_count_tokens(request_data=request_data)
+            bedrock_request: Final = self.transform_anthropic_to_bedrock_count_tokens(request_data=request_data)
 
             verbose_logger.debug("Transformed request: %s", bedrock_request)
 
             # Get endpoint URL using simplified function
-            api_base = litellm_params.get("api_base", None)
-            aws_bedrock_runtime_endpoint = litellm_params.get("aws_bedrock_runtime_endpoint", None)
-            endpoint_url = self.get_bedrock_count_tokens_endpoint(
+            api_base: Final = litellm_params.get("api_base", None)
+            aws_bedrock_runtime_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint", None)
+            endpoint_url: Final = self.get_bedrock_count_tokens_endpoint(
                 model=resolved_model,
                 aws_region_name=aws_region_name,
                 api_base=api_base,
@@ -73,8 +73,8 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
 
             # Use existing _sign_request method from BaseAWSLLM
             # Extract api_key for bearer token auth if provided
-            api_key = litellm_params.get("api_key", None)
-            headers = {"Content-Type": "application/json"}
+            api_key: Final = litellm_params.get("api_key", None)
+            headers: Final = {"Content-Type": "application/json"}
             signed_headers, signed_body = self._sign_request(
                 service_name="bedrock",
                 headers=headers,
@@ -85,9 +85,9 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 api_key=api_key,
             )
 
-            async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
+            async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
 
-            response = await async_client.post(
+            response: Final = await async_client.post(
                 endpoint_url,
                 headers=signed_headers,
                 data=signed_body,
@@ -97,19 +97,19 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug("Response status: %s", response.status_code)
 
             if response.status_code != 200:
-                error_text = response.text
+                error_text: Final = response.text
                 verbose_logger.error("AWS Bedrock error: %s", error_text)
                 raise BedrockError(
                     status_code=response.status_code,
                     message=error_text,
                 )
 
-            bedrock_response = response.json()
+            bedrock_response: Final = response.json()
 
             verbose_logger.debug("Bedrock response: %s", bedrock_response)
 
             # Transform response back to expected format
-            final_response = self.transform_bedrock_response_to_anthropic(bedrock_response)
+            final_response: Final = self.transform_bedrock_response_to_anthropic(bedrock_response)
 
             verbose_logger.debug("Final response: %s", final_response)
 

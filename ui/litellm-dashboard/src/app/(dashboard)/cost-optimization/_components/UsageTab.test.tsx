@@ -7,6 +7,18 @@ import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
 const mockGetToolSpend = vi.fn();
 
+const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: useAuthorizedMock,
+}));
+
+// useCan reaches useOrganizations (react-query) through useIsOrgAdmin; stub the
+// org-admin leg so role gating flows through hasCapability without a QueryClient
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
+  default: () => false,
+}));
+
 vi.mock("@/components/networking", () => ({
   getToolSpend: (...args: unknown[]) => mockGetToolSpend(...args),
 }));
@@ -88,11 +100,18 @@ interface RenderOptions {
   toolSpend?: ToolSpendResponse;
   from?: Date;
   to?: Date;
+  userRole?: string;
 }
 
 const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
-  const { toolSpend = emptyToolSpend, from = new Date(2026, 6, 1), to = new Date(2026, 6, 14) } = options;
+  const {
+    toolSpend = emptyToolSpend,
+    from = new Date(2026, 6, 1),
+    to = new Date(2026, 6, 14),
+    userRole = "Admin",
+  } = options;
   mockGetToolSpend.mockResolvedValue(toolSpend);
+  useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
   return render(
     <UsageTab
       accessToken="test-token"
@@ -102,6 +121,9 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
         results,
         loading: false,
         isFetchingMore: false,
+        progress: { currentPage: 1, totalPages: 1 },
+        cancelled: false,
+        cancel: vi.fn(),
       }}
     />,
   );
@@ -115,28 +137,33 @@ describe("UsageTab", () => {
   });
 
   it("sums compression and caching dollars across days into the summary cards", () => {
-    const { getByText } = renderWith([
-      day("2026-07-12", {
-        compression_savings_spend: 0.04,
-        prompt_caching_savings_spend: 0.006,
-        compression_saved_tokens: 40000,
-      }),
-      day("2026-07-13", {
-        compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.01,
-        compression_saved_tokens: 100000,
-      }),
-    ]);
+    // Total caching and the LiteLLM-injected share deliberately differ so these
+    // assertions pin which one each figure uses: the caching headline and the
+    // Total-saved tile take the injected share, the secondary keeps the total.
+    const firstDay: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.04,
+      prompt_caching_savings_spend: 0.006,
+      gateway_injected_caching_savings_spend: 0.004,
+      compression_saved_tokens: 40000,
+    };
+    const secondDay: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.1,
+      prompt_caching_savings_spend: 0.01,
+      gateway_injected_caching_savings_spend: 0.006,
+      compression_saved_tokens: 100000,
+    };
+    const { getByText } = renderWith([day("2026-07-12", firstDay), day("2026-07-13", secondDay)]);
 
-    expect(getByText("$0.1560")).toBeInTheDocument();
+    expect(getByText("$0.1500")).toBeInTheDocument();
     expect(getByText("$0.1400")).toBeInTheDocument();
+    expect(getByText("$0.0100")).toBeInTheDocument();
     expect(getByText("$0.0160")).toBeInTheDocument();
     expect(getByText("140,000 tokens compressed")).toBeInTheDocument();
   });
 
   const twoDays = () => [
-    day("2026-07-12", { compression_savings_spend: 0.04, prompt_caching_savings_spend: 0.006 }),
-    day("2026-07-13", { compression_savings_spend: 0.1, prompt_caching_savings_spend: 0.01 }),
+    day("2026-07-12", { compression_savings_spend: 0.04, gateway_injected_caching_savings_spend: 0.006 }),
+    day("2026-07-13", { compression_savings_spend: 0.1, gateway_injected_caching_savings_spend: 0.01 }),
   ];
 
   it("opens on a running total anchored at $0 at the start of the range", () => {
@@ -157,7 +184,7 @@ describe("UsageTab", () => {
     // synthetic start anchor gives the line a zero origin to climb from.
     const oneDay = new Date(2026, 6, 24);
     const { getByTestId } = renderWith(
-      [day("2026-07-24", { compression_savings_spend: 0.2, prompt_caching_savings_spend: 0.05 })],
+      [day("2026-07-24", { compression_savings_spend: 0.2, gateway_injected_caching_savings_spend: 0.05 })],
       { from: oneDay, to: oneDay },
     );
 
@@ -172,8 +199,8 @@ describe("UsageTab", () => {
     // still read left to right in time, and the running total must climb toward
     // the newest day, not fall away from it.
     const newestFirst = [
-      day("2026-07-13", { prompt_caching_savings_spend: 0.1 }),
-      day("2026-07-12", { prompt_caching_savings_spend: 0.04 }),
+      day("2026-07-13", { gateway_injected_caching_savings_spend: 0.1 }),
+      day("2026-07-12", { gateway_injected_caching_savings_spend: 0.04 }),
     ];
     const { getByTestId, getByRole } = renderWith(newestFirst);
 
@@ -199,7 +226,7 @@ describe("UsageTab", () => {
 
     // Per day switches to a bar chart of the unaccumulated daily savings, with no
     // synthetic anchor prepended.
-    expect(queryByTestId("area-chart")).toBeNull();
+    expect(queryByTestId("area-chart")).not.toBeInTheDocument();
     const series = readSeries(getByTestId("bar-chart"));
     expect(series).toHaveLength(2);
     expect(series[0]).toMatchObject({ Compression: 0.04, "Prompt caching": 0.006 });
@@ -209,9 +236,9 @@ describe("UsageTab", () => {
   it("says what the line means and over what range", async () => {
     const { getByText, getByRole } = renderWith(twoDays());
 
-    expect(getByText("Running total saved · Jul 1 – Jul 14")).toBeInTheDocument();
+    expect(getByText("Running total saved · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
     await userEvent.click(getByRole("tab", { name: "Per day" }));
-    expect(getByText("Saved per day · Jul 1 – Jul 14")).toBeInTheDocument();
+    expect(getByText("Saved per day · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
   });
 
   it("builds the per-driver donut from the range totals, not the running total", () => {
@@ -238,14 +265,14 @@ describe("UsageTab", () => {
     const { getByRole, getByTestId } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.02,
+        gateway_injected_caching_savings_spend: 0.02,
         autorouter_savings_spend: -0.05,
       }),
     ]);
 
     await userEvent.click(getByRole("tab", { name: "Per day" }));
     const bars = getByTestId("bar-chart");
-    expect(bars.getAttribute("data-stack")).toBe("false");
+    expect(bars).toHaveAttribute("data-stack", "false");
     expect(readSeries(bars)[0]).toMatchObject({ "Auto-router": -0.05 });
   });
 
@@ -271,7 +298,7 @@ describe("UsageTab", () => {
     expect(before.action.contains(getByRole("tablist"))).toBe(true);
     // the subtitle lives outside that slot, so its length cannot reposition the controls
     expect(before.action.contains(before.description)).toBe(false);
-    expect(before.description.textContent).toContain("Running total saved");
+    expect(before.description).toHaveTextContent(/Running total saved/);
 
     await userEvent.click(getByRole("tab", { name: "Per day" }));
 
@@ -279,8 +306,8 @@ describe("UsageTab", () => {
     expect(after.action).toBe(before.action);
     expect(after.cardHeader).toBe(before.cardHeader);
     expect(after.action.contains(after.description)).toBe(false);
-    expect(after.description.textContent).toContain("Saved per day");
-    expect(container.textContent).toContain("Savings");
+    expect(after.description).toHaveTextContent(/Saved per day/);
+    expect(container).toHaveTextContent(/Savings/);
   });
 
   it("subtracts a losing auto-router route from the total and keeps it out of the donut", () => {
@@ -290,7 +317,7 @@ describe("UsageTab", () => {
     const { getByText, getByTestId } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.02,
+        gateway_injected_caching_savings_spend: 0.02,
         autorouter_savings_spend: -0.05,
       }),
     ]);
@@ -300,19 +327,19 @@ describe("UsageTab", () => {
 
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices.map((d: { driver: string }) => d.driver)).toEqual(["Compression", "Prompt caching"]);
-    expect(getByTestId("donut-chart").getAttribute("data-label")).toBe("$0.1200");
+    expect(getByTestId("donut-chart")).toHaveAttribute("data-label", "$0.1200");
   });
 
   it("carries auto-router savings into the summary card, donut slice, and cumulative series", () => {
     const { getByText, getByTestId } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.04,
-        prompt_caching_savings_spend: 0.006,
+        gateway_injected_caching_savings_spend: 0.006,
         autorouter_savings_spend: 0.02,
       }),
       day("2026-07-13", {
         compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.01,
+        gateway_injected_caching_savings_spend: 0.01,
         autorouter_savings_spend: 0.05,
       }),
     ]);
@@ -351,7 +378,7 @@ describe("UsageTab", () => {
     expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
     // The 64px bar cap is this card's opt-in; the shared BarChart must not cap
     // by default (other consumers keep their pre-existing geometry).
-    expect(bars[0].getAttribute("data-max-bar-size")).toBe("64");
+    expect(bars[0]).toHaveAttribute("data-max-bar-size", "64");
   });
 
   it("renders the tool legend once outside the charts, with both charts sharing the tool colors", async () => {
@@ -368,10 +395,44 @@ describe("UsageTab", () => {
 
     const bars = await findAllByTestId("bar-chart");
     const [totalByTool, dailyByTool] = bars.slice(-2);
-    expect(dailyByTool.getAttribute("data-show-legend")).toBe("false");
-    expect(totalByTool.getAttribute("data-colors")).toBe(dailyByTool.getAttribute("data-colors"));
+    expect(dailyByTool).toHaveAttribute("data-show-legend", "false");
+    expect(totalByTool).toHaveAttribute("data-colors", dailyByTool.getAttribute("data-colors"));
 
     const toolLegends = getAllByTestId("chart-legend").filter((legend) => legend.textContent === "search,read_file");
     expect(toolLegends).toHaveLength(1);
+  });
+
+  // `/v1/tool/spend` is proxy-admin-only while the daily-activity charts around
+  // it are not, so this one card is dropped rather than the whole tab.
+  describe("proxy-admin-only spend-by-tool card", () => {
+    const toolSpend = {
+      by_tool: [{ tool_name: "search", spend: 4.0, call_count: 3, total_tokens: 150 }],
+      daily: [{ date: "2026-07-12", tool_name: "search", spend: 4.0, call_count: 3 }],
+      start_date: "2026-07-12",
+      end_date: "2026-07-12",
+    };
+
+    it.each(["Internal User", "Internal Viewer", "Org Admin"])(
+      "hides the card and never calls the endpoint for %s",
+      async (userRole) => {
+        const { queryByText, getByTestId } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })], {
+          toolSpend,
+          userRole,
+        });
+
+        // Liveness gate: the daily-activity charts still render for this role,
+        // so the absence below is the gate, not an empty tab.
+        expect(getByTestId("donut-chart")).toBeInTheDocument();
+        expect(queryByText("Spend by tool")).not.toBeInTheDocument();
+        await vi.waitFor(() => expect(mockGetToolSpend).not.toHaveBeenCalled());
+      },
+    );
+
+    it("keeps the card and the endpoint call for an admin", async () => {
+      const { findByText } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })], { toolSpend });
+
+      expect(await findByText("Spend by tool")).toBeInTheDocument();
+      expect(mockGetToolSpend).toHaveBeenCalled();
+    });
   });
 });

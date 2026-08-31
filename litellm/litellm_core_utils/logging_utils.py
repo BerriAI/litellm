@@ -3,8 +3,9 @@ import functools
 import inspect
 import re
 import time
+from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     )
 
     LiteLLMModelResponse = _ModelResponse
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     LiteLLMModelResponse = Any
     LiteLLMLoggingObject = Any
@@ -36,21 +37,21 @@ import litellm
 Helper utils used for logging callbacks
 """
 
-_BYTES_PER_KIB = 1024
-_BYTES_PER_MIB = 1024 * 1024
+_BYTES_PER_KIB: Final = 1024
+_BYTES_PER_MIB: Final = 1024 * 1024
 
 # Regex matching data-URI base64 content: "data:<mime>;base64,<payload>"
 # Captures: group(1)=mime_type, group(2)=base64_payload
-_DATA_URI_RE = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
+_DATA_URI_RE: Final = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
 
 # Maximum nesting depth for _truncate_base64_in_value to guard against
 # pathological payloads. OpenAI message format is typically 3-4 levels deep.
-_MAX_TRUNCATION_DEPTH = 20
+_MAX_TRUNCATION_DEPTH: Final = 20
 
 
 def _format_base64_size(num_chars: int) -> str:
     """Return a human-readable byte-size estimate from a base64 character count."""
-    num_bytes = num_chars * 3 / 4
+    num_bytes: Final = num_chars * 3 / 4
     if num_bytes >= _BYTES_PER_MIB:
         return f"{num_bytes / _BYTES_PER_MIB:.2f}MB"
     if num_bytes >= _BYTES_PER_KIB:
@@ -60,11 +61,11 @@ def _format_base64_size(num_chars: int) -> str:
 
 def _base64_data_uri_replacer(match: re.Match) -> str:
     """Replace a single base64 data-URI match with a size placeholder if too long."""
-    mime_type = match.group(1)
-    payload = match.group(2)
+    mime_type: Final = match.group(1)
+    payload: Final = match.group(2)
     if len(payload) <= MAX_BASE64_LENGTH_FOR_LOGGING:
         return match.group(0)
-    size_str = _format_base64_size(len(payload))
+    size_str: Final = _format_base64_size(len(payload))
     return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
 
 
@@ -89,8 +90,8 @@ def _truncate_base64_in_value(value: Any) -> Any:
         return value
 
     # Shallow-copy the root so we don't mutate the caller's data.
-    root = {k: v for k, v in value.items()} if isinstance(value, dict) else list(value)
-    stack: list = [(root, 0)]
+    root: Final = {k: v for k, v in value.items()} if isinstance(value, dict) else list(value)
+    stack: Final[list] = [(root, 0)]
 
     while stack:
         container, depth = stack.pop()
@@ -242,7 +243,7 @@ def _assemble_complete_response_from_streaming_chunks(
                 end_time=end_time,
             )
         except Exception as e:
-            log_message = "Error occurred building stream chunk in {} success logging: {}".format(
+            log_message: Final = "Error occurred building stream chunk in {} success logging: {}".format(
                 "async" if is_async else "sync", str(e)
             )
             verbose_logger.exception(log_message)
@@ -259,13 +260,23 @@ def _set_duration_in_model_call_details(
 ):
     """Helper to set duration in model_call_details, with error handling"""
     try:
-        duration_ms = (end_time - start_time).total_seconds() * 1000
+        duration_ms: Final = (end_time - start_time).total_seconds() * 1000
         if logging_obj and hasattr(logging_obj, "model_call_details"):
             logging_obj.model_call_details["llm_api_duration_ms"] = duration_ms
         else:
             verbose_logger.debug("`logging_obj` not found - unable to track `llm_api_duration_ms")
     except Exception as e:
         verbose_logger.warning("Error setting `llm_api_duration_ms`: %s", e)
+
+
+def speech_request_body(model: str, voice: str, optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    """Speech request body for telemetry, without the caller headers the provider SDKs
+    take as request kwargs rather than body fields."""
+    return {  # mutable-ok: loggers isinstance-check the request body as a dict
+        "model": model,
+        "voice": voice,
+        **{key: value for key, value in optional_params.items() if key != "extra_headers"},
+    }
 
 
 def track_llm_api_timing():
@@ -278,20 +289,20 @@ def track_llm_api_timing():
     def decorator(func):
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
-            start_time = datetime.now()
-            start_time_float = time.time()
-            logging_obj = kwargs.get("logging_obj", None)
+            start_time: Final = datetime.now()
+            start_time_float: Final = time.time()
+            logging_obj: Final = kwargs.get("logging_obj", None)
 
             # Extract parent OTEL span from logging object
-            parent_otel_span = _get_parent_otel_span_from_logging_obj(logging_obj)
+            parent_otel_span: Final = _get_parent_otel_span_from_logging_obj(logging_obj)
 
             try:
-                result = await func(*args, **kwargs)
+                result: Final = await func(*args, **kwargs)
                 return result
             finally:
-                end_time = datetime.now()
-                end_time_float = time.time()
-                duration = end_time_float - start_time_float
+                end_time: Final = datetime.now()
+                end_time_float: Final = time.time()
+                duration: Final = end_time_float - start_time_float
 
                 # Set duration in model call details
                 _set_duration_in_model_call_details(
@@ -304,10 +315,10 @@ def track_llm_api_timing():
                 try:
                     from litellm.types.services import ServiceTypes
 
-                    service_logger = _get_service_logger()
+                    service_logger: Final = _get_service_logger()
 
                     # Get function name for call_type
-                    call_type = f"{func.__name__} <- track_llm_api_timing"
+                    call_type: Final = f"{func.__name__} <- track_llm_api_timing"
 
                     # Create async task for service logging (similar to Redis cache pattern)
                     asyncio.create_task(
@@ -325,20 +336,20 @@ def track_llm_api_timing():
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
-            start_time = datetime.now()
-            start_time_float = time.time()
-            logging_obj = kwargs.get("logging_obj", None)
+            start_time: Final = datetime.now()
+            start_time_float: Final = time.time()
+            logging_obj: Final = kwargs.get("logging_obj", None)
 
             # Extract parent OTEL span from logging object
-            parent_otel_span = _get_parent_otel_span_from_logging_obj(logging_obj)
+            parent_otel_span: Final = _get_parent_otel_span_from_logging_obj(logging_obj)
 
             try:
-                result = func(*args, **kwargs)
+                result: Final = func(*args, **kwargs)
                 return result
             finally:
-                end_time = datetime.now()
-                end_time_float = time.time()
-                duration = end_time_float - start_time_float
+                end_time: Final = datetime.now()
+                end_time_float: Final = time.time()
+                duration: Final = end_time_float - start_time_float
 
                 # Set duration in model call details
                 _set_duration_in_model_call_details(
@@ -351,10 +362,10 @@ def track_llm_api_timing():
                 try:
                     from litellm.types.services import ServiceTypes
 
-                    service_logger = _get_service_logger()
+                    service_logger: Final = _get_service_logger()
 
                     # Get function name for call_type
-                    call_type = f"{func.__name__} <- track_llm_api_timing"
+                    call_type: Final = f"{func.__name__} <- track_llm_api_timing"
 
                     # Use sync service logging for sync functions
                     service_logger.service_success_hook(

@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, TypeAdapter
@@ -16,12 +16,11 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.management_v1.common import (
-    MANAGEMENT_V1_PREFIX,
+from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
 )
-from litellm.proxy.management_endpoints.management_v1.list_framework import (
+from litellm.proxy.list_api.list_framework import (
     FilterSpec,
     ListSpec,
     Predicate,
@@ -34,15 +33,16 @@ from litellm.proxy.management_endpoints.management_v1.list_framework import (
     order_by_sql,
     where_sql,
 )
+from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListResponse,
     ProblemDetail,
 )
 
-router = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
+router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
-BUDGET_TABLE = '"LiteLLM_BudgetTable"'
+BUDGET_TABLE: Final = '"LiteLLM_BudgetTable"'
 
 
 class BudgetListItem(BaseModel):
@@ -68,10 +68,10 @@ class _RowCount(BaseModel):
     count: int
 
 
-_BUDGET_ROWS = TypeAdapter(tuple[BudgetListItem, ...])
-_ROW_COUNTS = TypeAdapter(tuple[_RowCount, ...])
+_BUDGET_ROWS: Final = TypeAdapter(tuple[BudgetListItem, ...])
+_ROW_COUNTS: Final = TypeAdapter(tuple[_RowCount, ...])
 
-SELECTED_COLUMNS = ", ".join(f'"{name}"' for name in BudgetListItem.model_fields)
+SELECTED_COLUMNS: Final = ", ".join(f'"{name}"' for name in BudgetListItem.model_fields)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,20 +83,20 @@ class PrismaBudgetListExecutor:
 
     async def count(self, where: tuple[Predicate, ...]) -> int:
         clauses, params = where_sql(where)
-        sql = f"SELECT COUNT(*) AS count FROM {BUDGET_TABLE}" + (f" WHERE {clauses}" if clauses else "")
-        rows = await self.prisma_client.db.query_raw(sql, *params)
-        counted = _ROW_COUNTS.validate_python(rows)
+        sql: Final = f"SELECT COUNT(*) AS count FROM {BUDGET_TABLE}" + (f" WHERE {clauses}" if clauses else "")
+        rows: Final = await self.prisma_client.db.query_raw(sql, *params)
+        counted: Final = _ROW_COUNTS.validate_python(rows)
         return counted[0].count if counted else 0
 
     async def find_many(self, plan: QueryPlan) -> Sequence[BudgetListItem]:
         clauses, params = where_sql(plan.where)
-        sql = (
+        sql: Final = (
             f"SELECT {SELECTED_COLUMNS} FROM {BUDGET_TABLE}"
             + (f" WHERE {clauses}" if clauses else "")
             + f" ORDER BY {order_by_sql(plan.order)}"
             + f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         )
-        rows = await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip)
+        rows: Final = await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip)
         return _BUDGET_ROWS.validate_python(rows)
 
 
@@ -113,7 +113,7 @@ def _scope(caller: UserAPIKeyAuth) -> Scope:
 
 # budget_duration is deliberately absent from `sortable`: the column holds strings
 # like "7d" and "30d", so a lexicographic ORDER BY puts "30d" ahead of "7d".
-BUDGET_FILTERS: Mapping[str, FilterSpec] = MappingProxyType(
+BUDGET_FILTERS: Final[Mapping[str, FilterSpec]] = MappingProxyType(
     {  # mutable-ok: an immutable mapping has no literal form; MappingProxyType freezes this one and it never escapes
         "budget_duration": FilterSpec(type=str, ops=frozenset(("in", "is_null"))),
         "max_budget": FilterSpec(type=float, ops=frozenset(("gte", "lte", "is_null"))),
@@ -121,7 +121,7 @@ BUDGET_FILTERS: Mapping[str, FilterSpec] = MappingProxyType(
     }
 )
 
-BUDGETS_LIST_SPEC: ListSpec[BudgetListItem, BudgetListItem] = ListSpec(
+BUDGETS_LIST_SPEC: Final[ListSpec[BudgetListItem, BudgetListItem]] = ListSpec(
     resource="budgets",
     sortable=frozenset(("budget_id", "max_budget", "tpm_limit", "rpm_limit", "created_at")),
     searchable=frozenset(("budget_id",)),

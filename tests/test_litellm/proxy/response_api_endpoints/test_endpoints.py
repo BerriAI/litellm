@@ -851,8 +851,9 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
 
     app.dependency_overrides[user_api_key_auth] = _auth_override
     try:
-        with patch.object(ps, "llm_router", mock_router), patch.object(
-            ps, "_read_request_body", side_effect=capturing_read_request_body
+        with patch.object(ps, "llm_router", mock_router), patch(
+            "litellm.proxy.response_api_endpoints.endpoints._read_request_body",
+            side_effect=capturing_read_request_body,
         ):
             client = TestClient(app)
             response = client.post(
@@ -1352,6 +1353,8 @@ class TestParseCursorModelVariant:
             ("claude-opus-5-fast", "claude-opus-5", None),
             ("gpt-5.6-sol", "gpt-5.6-sol", None),
             ("foo-thinking-ultra-fast", "foo-thinking-ultra", None),
+            ("gpt-5.6-thinking-max", "gpt-5.6", "max"),
+            ("foo-thinking-mega-fast", "foo-thinking-mega", None),
             ("-thinking-high", "-thinking-high", None),
         ],
     )
@@ -1479,6 +1482,12 @@ def _router_serving_only(base_model: str) -> MagicMock:
     mock_router.model_names = set()
     mock_router.model_group_alias = {}
     mock_router.team_public_model_names = frozenset()
+    mock_router.is_recognized_model.side_effect = lambda model: (
+        model in mock_router.model_names or model in mock_router.model_group_alias
+    )
+    mock_router.router_general_settings.pass_through_all_models = False
+    mock_router.default_deployment = None
+    mock_router.pattern_router.patterns = {base_model: ["anthropic/*"]}
     mock_router.pattern_router.get_pattern.side_effect = (
         lambda model: [{"model_name": "anthropic/*"}] if model == base_model else None
     )
@@ -1568,3 +1577,262 @@ class TestCursorModelSuffixResolutionEndToEnd:
         assert mock_router.aresponses.call_args is not None
         assert mock_router.aresponses.call_args.kwargs["model"] == "claude-opus-5"
         assert mock_router.aresponses.call_args.kwargs["reasoning"] == {"effort": "high"}
+
+
+def _cursor_budget_auth_env(base_model: str, spend: float):
+    from litellm import Router
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-cursor-budget-test",
+        token="hashed-cursor-budget-token",
+        model_max_budget={base_model: {"budget_limit": 0.00001, "time_period": "1d"}},
+    )
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter.dual_cache.in_memory_cache.set_cache(
+        key=f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{valid_token.token}:{base_model}:1d",
+        value=spend,
+    )
+    router = Router(
+        model_list=[{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "fake"}}]
+    )
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    proxy_server_attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": DualCache(),
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": router,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": limiter,
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    return valid_token, proxy_server_attrs
+
+
+def _post_cursor_with_real_auth(valid_token, proxy_server_attrs, request_model: str):
+    with (
+        patch.multiple("litellm.proxy.proxy_server", **proxy_server_attrs),
+        patch(
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+            new_callable=AsyncMock,
+            return_value=valid_token,
+        ),
+    ):
+        client = TestClient(app)
+        return client.post(
+            "/cursor/chat/completions",
+            json={"model": request_model, "input": [{"role": "user", "content": "hi"}]},
+            headers={"Authorization": "Bearer sk-cursor-budget-test"},
+        )
+
+
+class TestCursorVariantPerModelBudgetEnforcement:
+    """Regression tests for the per-model budget bypass on /cursor/chat/completions.
+
+    user_api_key_auth enforced key model_max_budget against the raw request model,
+    but _resolve_cursor_model_variant only rewrote minted aliases like
+    <base>-thinking-<level> to <base> inside the handler, after auth had already
+    run. A key whose budget for <base> was exhausted could keep calling <base>
+    through any unconfigured alias. The variant must now be resolved in a
+    route-level dependency that runs before user_api_key_auth, so these tests
+    exercise the real dependency chain (real auth, real budget limiter) through
+    TestClient and fail if that ordering ever breaks."""
+
+    def test_minted_alias_rejected_when_base_model_budget_exhausted(self):
+        valid_token, attrs = _cursor_budget_auth_env(base_model="claude-opus-5", spend=1.0)
+
+        response = _post_cursor_with_real_auth(valid_token, attrs, request_model="claude-opus-5-thinking-high")
+
+        assert response.status_code == 429, response.text
+        error = response.json()["error"]
+        assert error["type"] == "budget_exceeded"
+        assert "exceeded budget for model=claude-opus-5" in error["message"]
+
+    def test_alias_rejection_matches_base_model_rejection(self):
+        valid_token, attrs = _cursor_budget_auth_env(base_model="claude-opus-5", spend=1.0)
+
+        base_response = _post_cursor_with_real_auth(valid_token, attrs, request_model="claude-opus-5")
+        alias_response = _post_cursor_with_real_auth(valid_token, attrs, request_model="claude-opus-5-fast")
+
+        assert base_response.status_code == 429, base_response.text
+        assert alias_response.status_code == 429, alias_response.text
+        assert alias_response.json() == base_response.json()
+
+
+class TestCursorVariantResolvedBeforeAuth:
+    """The route-level resolver dependency must rewrite the parsed body before
+    user_api_key_auth reads it, so every auth check (model access, key and
+    end-user model budgets, rate limits) sees the base model, and names the
+    router already serves must reach auth untouched."""
+
+    def _run_with_recording_auth(self, mock_router, request_model: str):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+        from fastapi import Request
+
+        bodies_seen_by_auth = []
+
+        async def recording_auth(request: Request) -> UserAPIKeyAuth:
+            bodies_seen_by_auth.append(await _read_request_body(request=request))
+            return UserAPIKeyAuth(api_key="sk-test-cursor")
+
+        async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
+            return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
+
+        app.dependency_overrides[user_api_key_auth] = recording_auth
+        try:
+            with (
+                patch("litellm.proxy.proxy_server.llm_router", new=mock_router),
+                patch("litellm.proxy.proxy_server.chat_completion", new=fake_chat_completion),
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json={"model": request_model, "messages": [{"role": "user", "content": "hi"}]},
+                    headers={"Authorization": "Bearer sk-test-cursor"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200, response.text
+        assert len(bodies_seen_by_auth) == 1
+        return bodies_seen_by_auth[0]
+
+    def test_auth_sees_base_model_for_minted_alias(self):
+        auth_body = self._run_with_recording_auth(
+            mock_router=_router_serving_only("claude-opus-5"),
+            request_model="claude-opus-5-thinking-xhigh-fast",
+        )
+        assert auth_body["model"] == "claude-opus-5"
+        assert auth_body["reasoning_effort"] == "xhigh"
+
+    def test_auth_sees_servable_model_name_untouched(self):
+        mock_router = _router_serving_only("claude-opus-5")
+        mock_router.model_names = {"claude-opus-5-thinking-high"}
+
+        auth_body = self._run_with_recording_auth(
+            mock_router=mock_router,
+            request_model="claude-opus-5-thinking-high",
+        )
+        assert auth_body["model"] == "claude-opus-5-thinking-high"
+        assert "reasoning_effort" not in auth_body
+
+
+class TestCursorGateRecognizesRoutingGroups:
+    def test_group_name_variant_is_not_mangled(self):
+        from litellm import Router
+        from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
+
+        router = Router(
+            model_list=[
+                {"model_name": "member-fast", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}
+            ],
+            routing_groups=[
+                {"group_name": "grouped-thinking-high", "models": ["member-fast"], "routing_strategy": "simple-shuffle"}
+            ],
+        )
+        body = {"model": "grouped-thinking-high", "messages": [{"role": "user", "content": "hi"}]}
+        resolved = _resolve_cursor_model_variant(body, router)
+        assert resolved["model"] == "grouped-thinking-high"
+        assert "reasoning_effort" not in resolved
+
+
+class TestGuardrailBlockedResponsesUsage:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/36880.
+
+    The ModifyResponseException handler in responses_api hardcoded the synthetic
+    blocked reply's usage to zeros, discarding the real token counts the blocked
+    upstream call consumed. The blocked reply must carry the usage from
+    e.original_response, exactly like /v1/chat/completions already does."""
+
+    def _post_blocked_responses(self, original_response):
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        exc = ModifyResponseException(
+            message="Content flagged by policy, response withheld",
+            model="gpt-4o-mini",
+            request_data={"model": "gpt-4o-mini", "input": "hi"},
+            guardrail_name="zero-usage-regression",
+            original_response=original_response,
+        )
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="sk-test", request_route="/v1/responses"
+        )
+        try:
+            with (
+                patch(
+                    "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+                    new=AsyncMock(side_effect=exc),
+                ),
+                patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+            ):
+                client = TestClient(app)
+                return client.post(
+                    "/v1/responses",
+                    json={"model": "gpt-4o-mini", "input": "Write a haiku about token accounting"},
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+    def test_post_call_block_reports_real_upstream_usage(self):
+        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+        original = ResponsesAPIResponse(
+            id="resp_upstream",
+            created_at=1,
+            model="gpt-4o-mini",
+            object="response",
+            output=[],
+            status="completed",
+            usage=ResponseAPIUsage(input_tokens=14, output_tokens=20, total_tokens=34),
+        )
+
+        response = self._post_blocked_responses(original)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["output"][0]["content"][0]["text"] == "Content flagged by policy, response withheld"
+        assert body["usage"]["input_tokens"] == 14
+        assert body["usage"]["output_tokens"] == 20
+        assert body["usage"]["total_tokens"] == 34
+
+    def test_post_call_block_maps_bridged_chat_usage(self):
+        original = litellm.ModelResponse()
+        original.usage = litellm.Usage(prompt_tokens=14, completion_tokens=18, total_tokens=32)
+
+        response = self._post_blocked_responses(original)
+
+        assert response.status_code == 200, response.text
+        usage = response.json()["usage"]
+        assert usage["input_tokens"] == 14
+        assert usage["output_tokens"] == 18
+        assert usage["total_tokens"] == 32
+
+    def test_pre_call_block_reports_zero_usage(self):
+        response = self._post_blocked_responses(None)
+
+        assert response.status_code == 200, response.text
+        usage = response.json()["usage"]
+        assert usage["input_tokens"] == 0
+        assert usage["output_tokens"] == 0
+        assert usage["total_tokens"] == 0

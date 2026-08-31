@@ -28,6 +28,7 @@ the upstream, or LiteLLM 500 on a transformation bug).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
@@ -42,10 +43,14 @@ from e2e_http import (
     ValidationError,
 )
 from models import (
+    AnthropicAssistantTurn,
     AnthropicCustomTool,
+    AnthropicMessage,
     AnthropicMessagesBody,
     AnthropicMessagesResponse,
     AnthropicTool,
+    AnthropicToolResultBlock,
+    AnthropicToolResultTurn,
     AnthropicToolSearchTool,
     ChatMessage,
     CountTokensBody,
@@ -132,6 +137,7 @@ def probe_tool_search(
     client: ProxyClient,
     api_key: str,
     model: str,
+    max_tokens: int = 64,
     rate_limiter: RateLimiter | None = None,
 ) -> Result[AnthropicMessagesResponse]:
     """POST to `/v1/messages` with a `tool_search_tool_regex_20251119` tool
@@ -155,9 +161,111 @@ def probe_tool_search(
         api_key,
         AnthropicMessagesBody(
             model=model,
-            max_tokens=64,
+            max_tokens=max_tokens,
             messages=[ChatMessage(role="user", content=_TOOL_SEARCH_PROMPT)],
             tools=list(_TOOL_SEARCH_TOOLS),
+        ),
+    )
+
+
+_TOOL_SEARCH_FOLLOW_UP = "Thanks. Now reply with the word 'done'."
+_TOOL_RESULT_STUB = "3"
+# A `server_tool_use` block and the `tool_search_tool_result` answering it are
+# one indivisible pair: replaying the request without its result is malformed
+# Anthropic and 400s on any provider. 64 output tokens is not enough room for
+# both, so the turn we replay is generated with a budget that fits the whole
+# discovery round trip.
+_REPLAY_SOURCE_MAX_TOKENS = 1024
+_REPLAYED_SERVER_BLOCKS = frozenset({"server_tool_use", "tool_search_tool_result"})
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSearchReplay:
+    """Both turns of the multi-turn probe plus the history the second turn
+    carried, so a failing cell can report which turn broke and what was on the
+    wire when it did."""
+
+    first_turn: Result[AnthropicMessagesResponse]
+    history: tuple[AnthropicMessage, ...]
+    second_turn: Result[AnthropicMessagesResponse] | None
+
+
+def _replayed_server_block_types(history: tuple[AnthropicMessage, ...]) -> frozenset[str]:
+    return frozenset(
+        block.type
+        for turn in history
+        if isinstance(turn, AnthropicAssistantTurn)
+        for block in turn.content
+        if block.type in _REPLAYED_SERVER_BLOCKS
+    )
+
+
+def _replay_history(answer: AnthropicMessagesResponse) -> tuple[AnthropicMessage, ...]:
+    """Turn a real first-turn answer into a well-formed two-turn history.
+
+    Every client-side `tool_use` the model emitted gets a `tool_result` keyed on
+    the id the model actually returned; a turn with none gets a plain follow-up
+    instead. An unanswered `tool_use`, or a `tool_result` pointing at an invented
+    id, is malformed Anthropic and 400s on any provider, which would make this
+    probe measure our own request rather than the provider's handling of the
+    replayed server-tool blocks."""
+    blocks = tuple(answer.content or ())
+    pending = tuple(block.id for block in blocks if block.type == "tool_use" and block.id is not None)
+    reply: AnthropicMessage = (
+        AnthropicToolResultTurn(
+            content=[
+                AnthropicToolResultBlock(tool_use_id=tool_use_id, content=_TOOL_RESULT_STUB)
+                for tool_use_id in pending
+            ]
+        )
+        if pending
+        else ChatMessage(role="user", content=_TOOL_SEARCH_FOLLOW_UP)
+    )
+    return (
+        ChatMessage(role="user", content=_TOOL_SEARCH_PROMPT),
+        AnthropicAssistantTurn(content=list(blocks)),
+        reply,
+    )
+
+
+def probe_tool_search_multiturn(
+    *,
+    client: ProxyClient,
+    api_key: str,
+    model: str,
+    rate_limiter: RateLimiter | None = None,
+) -> ToolSearchReplay:
+    """Run `probe_tool_search`, then send the real assistant turn back as
+    history with the same tools still declared.
+
+    The first turn only proves the proxy attaches the tool-search beta header on
+    the way out. Nothing proves the provider accepts the `server_tool_use` and
+    `tool_search_tool_result` blocks it produced when they come back in
+    `messages`, which is every turn of a real Claude Code session after the
+    first."""
+    first_turn = probe_tool_search(
+        client=client,
+        api_key=api_key,
+        model=model,
+        max_tokens=_REPLAY_SOURCE_MAX_TOKENS,
+        rate_limiter=rate_limiter,
+    )
+    if not isinstance(first_turn, Success):
+        return ToolSearchReplay(first_turn=first_turn, history=(), second_turn=None)
+
+    history = _replay_history(first_turn.data)
+    _acquire(model, rate_limiter)
+    return ToolSearchReplay(
+        first_turn=first_turn,
+        history=history,
+        second_turn=client.messages(
+            api_key,
+            AnthropicMessagesBody(
+                model=model,
+                max_tokens=64,
+                messages=list(history),
+                tools=list(_TOOL_SEARCH_TOOLS),
+            ),
         ),
     )
 
@@ -205,6 +313,40 @@ def assert_tool_search_shape(result: Result[AnthropicMessagesResponse]) -> str |
             return None
         case _:
             return _failure_diagnostic(result, "/v1/messages")
+
+
+def assert_tool_search_replay_shape(replay: ToolSearchReplay) -> str | None:
+    """Return None on success, else describe the first violation.
+
+    Acceptance criteria:
+
+      1. The first turn succeeded, on the same terms as `assert_tool_search_shape`.
+      2. That turn produced a complete `server_tool_use` / `tool_search_tool_result`
+         pair to replay. Without both the second turn carries either an ordinary
+         text history or a half-finished tool call, and the cell would report on
+         our own request rather than on the provider's handling of server-tool
+         blocks in history.
+      3. The provider accepted the history containing those blocks.
+    """
+    first_error = assert_tool_search_shape(replay.first_turn)
+    if first_error is not None:
+        return f"first turn: {first_error}"
+
+    replayed = _replayed_server_block_types(replay.history)
+    missing = _REPLAYED_SERVER_BLOCKS - replayed
+    if missing:
+        return (
+            f"first turn returned no {' or '.join(sorted(missing))} block to replay, so the history "
+            "proves nothing about server-tool handling; a turn truncated at max_tokens looks like this"
+        )
+
+    if replay.second_turn is None:
+        return "second turn was never sent"
+
+    second_error = assert_tool_search_shape(replay.second_turn)
+    if second_error is not None:
+        return f"history replaying {sorted(replayed)} rejected: {second_error}"
+    return None
 
 
 def assert_count_tokens_shape(result: Result[CountTokensResponse]) -> str | None:

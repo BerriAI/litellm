@@ -2,6 +2,8 @@
 Support for gpt model family
 """
 
+from typing import Final
+
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
@@ -67,7 +69,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         temperature: float | None = None,
         top_p: float | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -85,7 +87,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             ## RESPONSE OBJECT
             if response_object is None or model_response_object is None:
                 raise ValueError("Error in response object format")
-            choice_list: list[Choices] = []
+            choice_list: Final[list[Choices]] = []
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["text"],
@@ -98,7 +100,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
                     logprobs=choice.get("logprobs", None),
                 )
                 choice_list.append(choice)
-            model_response_object.choices = choice_list  # type: ignore
+            model_response_object.choices = choice_list
 
             if "usage" in response_object:
                 setattr(model_response_object, "usage", response_object["usage"])
@@ -148,7 +150,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        prompt = _transform_prompt(messages)
+        prompt: Final = _transform_prompt(messages)
         return {
             "model": model,
             "prompt": prompt,

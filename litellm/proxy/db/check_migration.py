@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from typing import Final
 
 from litellm._logging import verbose_logger
 
@@ -15,9 +16,9 @@ def extract_sql_commands(diff_output: str) -> list[str]:
         List[str]: A list of SQL commands extracted from the diff output.
     """
     # Split the output into lines and remove empty lines
-    lines = [line.strip() for line in diff_output.split("\n") if line.strip()]
+    lines: Final = [line.strip() for line in diff_output.split("\n") if line.strip()]
 
-    sql_commands = []
+    sql_commands: Final = []
     current_command = ""
     in_sql_block = False
 
@@ -55,7 +56,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
     """
     verbose_logger.debug("Checking for Prisma schema diff...")
     try:
-        result = subprocess.run(
+        result: Final = subprocess.run(
             [
                 "prisma",
                 "migrate",
@@ -72,7 +73,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
         )
 
         # return True, "Migration diff generated successfully."
-        sql_commands = extract_sql_commands(result.stdout)
+        sql_commands: Final = extract_sql_commands(result.stdout)
 
         if sql_commands:
             print("Changes to DB Schema detected")  # noqa: T201
@@ -83,7 +84,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
         else:
             return False, []
     except subprocess.CalledProcessError as e:
-        error_message = f"Failed to generate migration diff. Error: {e.stderr}"
+        error_message: Final = f"Failed to generate migration diff. Error: {e.stderr}"
         print(error_message)  # noqa: T201
         return False, []
 

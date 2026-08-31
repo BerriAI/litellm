@@ -7,7 +7,7 @@ Docs - https://jina.ai/embeddings/
 """
 
 import types
-from typing import cast
+from typing import Final, cast
 
 import httpx
 
@@ -31,7 +31,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
     def __init__(
         self,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -80,12 +80,9 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
                 - api_base: str
                 - dynamic_api_key: str
         """
-        api_base = api_base or get_secret_str("JINA_AI_API_BASE") or "https://api.jina.ai/v1"  # type: ignore
-        dynamic_api_key = api_key or (
-            get_secret_str("JINA_AI_API_KEY")
-            or get_secret_str("JINA_AI_API_KEY")
-            or get_secret_str("JINA_AI_API_KEY")
-            or get_secret_str("JINA_AI_TOKEN")
+        api_base = api_base or get_secret_str("JINA_AI_API_BASE") or "https://api.jina.ai/v1"
+        dynamic_api_key: Final = api_key or (
+            get_secret_str("JINA_AI_API_KEY") or get_secret_str("JINA_API_KEY") or get_secret_str("JINA_AI_TOKEN")
         )
         return LlmProviders.JINA_AI.value, api_base, dynamic_api_key
 
@@ -107,10 +104,10 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        data = {"model": model, **optional_params}
+        data: Final = {"model": model, **optional_params}
         input = cast(list[str], input) if isinstance(input, list) else [input]
         if any(is_base64_encoded(x) for x in input):
-            transformed_input = []
+            transformed_input: Final = []
             for value in input:
                 if isinstance(value, str):
                     if is_base64_encoded(value):
@@ -134,7 +131,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> EmbeddingResponse:
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
         ## LOGGING
         logging_obj.post_call(
             input=input,
@@ -154,7 +151,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
         }
         if api_key:

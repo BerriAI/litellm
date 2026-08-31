@@ -36,7 +36,10 @@ a healed fleet has no null rows and the backfill exits after one query.
 
 import json
 from collections import Counter
-from typing import Any, Literal
+from collections.abc import Mapping, Sequence
+from typing import Final, Literal, Protocol
+
+from pydantic import JsonValue
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.db import _decode_oauth_payload, decrypt_credentials
@@ -52,12 +55,62 @@ BackfillRule = Literal[
     "interactive_default",
 ]
 
-_BACKFILL_AUDIT_ACTOR = "oauth2_flow_backfill"
+_BACKFILL_AUDIT_ACTOR: Final = "oauth2_flow_backfill"
 
 
-def _decrypted_credentials(raw_credentials: Any) -> MCPCredentials | None:
+class _MCPServerRow(Protocol):
+    """The ``LiteLLM_MCPServerTable`` columns this backfill reads."""
+
+    @property
+    def server_id(self) -> str: ...
+
+    @property
+    def authorization_url(self) -> str | None: ...
+
+    @property
+    def registration_url(self) -> str | None: ...
+
+    @property
+    def token_url(self) -> str | None: ...
+
+    @property
+    def credentials(self) -> str | Mapping[str, JsonValue] | None: ...
+
+
+class _MCPUserCredentialRow(Protocol):
+    """The ``LiteLLM_MCPUserCredentials`` columns this backfill reads."""
+
+    @property
+    def server_id(self) -> str: ...
+
+    @property
+    def credential_b64(self) -> str: ...
+
+
+class _MCPServerTable(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_MCPServerRow]: ...
+
+    async def update_many(self, *, where: Mapping[str, object], data: Mapping[str, str]) -> object: ...
+
+
+class _MCPUserCredentialsTable(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_MCPUserCredentialRow]: ...
+
+
+def _mcp_server_table(prisma_client: PrismaClient) -> _MCPServerTable:
+    """The MCP server table, typed so the untyped prisma client surface stops here."""
+    return prisma_client.db.litellm_mcpservertable
+
+
+def _mcp_user_credentials_table(prisma_client: PrismaClient) -> _MCPUserCredentialsTable:
+    """The per-user MCP credential table, typed so the untyped prisma client surface stops here."""
+    return prisma_client.db.litellm_mcpusercredentials
+
+
+def _decrypted_credentials(raw_credentials: str | Mapping[str, JsonValue] | None) -> MCPCredentials | None:
     if raw_credentials is None:
         return None
+    parsed: JsonValue | Mapping[str, JsonValue]
     if isinstance(raw_credentials, str):
         try:
             parsed = json.loads(raw_credentials)
@@ -92,21 +145,21 @@ def classify_null_flow_row(
 async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[BackfillRule, int]:
     """Classify every ``auth_type=oauth2`` row whose ``oauth2_flow`` is null; stamp the provable
     ones, warn on the ambiguous ones, and return counts per rule."""
-    null_rows: list[Any] = await prisma_client.db.litellm_mcpservertable.find_many(
+    null_rows: Final[Sequence[_MCPServerRow]] = await _mcp_server_table(prisma_client).find_many(
         where={"auth_type": "oauth2", "oauth2_flow": None},
     )
     if not null_rows:
         return {}
 
-    server_ids = [row.server_id for row in null_rows]
-    token_rows: list[Any] = await prisma_client.db.litellm_mcpusercredentials.find_many(
+    server_ids: Final = [row.server_id for row in null_rows]
+    token_rows: Final[Sequence[_MCPUserCredentialRow]] = await _mcp_user_credentials_table(prisma_client).find_many(
         where={"server_id": {"in": server_ids}},
     )
-    server_ids_with_oauth_tokens: set[str] = {
+    server_ids_with_oauth_tokens: Final[set[str]] = {
         token_row.server_id for token_row in token_rows if _decode_oauth_payload(token_row.credential_b64) is not None
     }
 
-    classified = tuple(
+    classified: Final = tuple(
         (
             row,
             classify_null_flow_row(
@@ -138,15 +191,15 @@ async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[Backfi
                 rule,
             )
 
-    stamped_flows = {flow for _, (flow, _) in classified if flow is not None}
+    stamped_flows: Final = {flow for _, (flow, _) in classified if flow is not None}
     for stamped_flow in stamped_flows:
         server_ids_for_flow = [row.server_id for row, (row_flow, _) in classified if row_flow == stamped_flow]
-        await prisma_client.db.litellm_mcpservertable.update_many(
+        await _mcp_server_table(prisma_client).update_many(
             where={"server_id": {"in": server_ids_for_flow}, "oauth2_flow": None},
             data={"oauth2_flow": stamped_flow, "updated_by": _BACKFILL_AUDIT_ACTOR},
         )
 
-    counts: dict[BackfillRule, int] = dict(Counter(rule for _, (_, rule) in classified))
+    counts: Final[dict[BackfillRule, int]] = dict(Counter(rule for _, (_, rule) in classified))
     verbose_proxy_logger.info(
         "oauth2_flow backfill: processed %d oauth2 server row(s): %s",
         len(null_rows),

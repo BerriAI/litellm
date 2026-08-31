@@ -5,7 +5,7 @@ Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import ContextWindowExceededError
@@ -85,14 +85,14 @@ class SemanticMCPToolFilter:
 
         try:
             # Get all servers from registry without auth checks
-            registry = global_mcp_server_manager.get_registry()
+            registry: Final = global_mcp_server_manager.get_registry()
             if not registry:
                 verbose_logger.warning("MCP registry is empty")
                 self.tool_router = None
                 return
 
             # Fetch tools from all servers in parallel
-            all_tools = []
+            all_tools: Final = []
             for server_id, server in registry.items():
                 try:
                     tools = await global_mcp_server_manager.get_tools_for_server(server_id)
@@ -146,7 +146,7 @@ class SemanticMCPToolFilter:
         try:
             self.context_window_error = None
             # Convert tools to routes
-            routes = []
+            routes: Final = []
             self._tool_map = {}
 
             for tool in tools:
@@ -221,12 +221,12 @@ class SemanticMCPToolFilter:
             return
 
         async with self._index_sync_lock:
-            missing = self._tools_missing_from_index(available_tools)
+            missing: Final = self._tools_missing_from_index(available_tools)
             if not missing:
                 return
 
-            descriptions = {name: self._extract_tool_info(tool)[1] for name, tool in missing.items()}
-            routes = [
+            descriptions: Final = {name: self._extract_tool_info(tool)[1] for name, tool in missing.items()}
+            routes: Final = [
                 Route(
                     name=name,
                     description=description,
@@ -237,7 +237,7 @@ class SemanticMCPToolFilter:
             ]
 
             if self.tool_router is None:
-                router = SemanticRouter(
+                router: Final = SemanticRouter(
                     routes=[],
                     encoder=LiteLLMRouterEncoder(
                         litellm_router_instance=self.router_instance,
@@ -299,19 +299,19 @@ class SemanticMCPToolFilter:
                 verbose_logger.warning("Semantic router could not be built from the request's tools")
                 return available_tools
 
-            available_names = [name for name in (self._extract_tool_info(t)[0] for t in available_tools) if name]
+            available_names: Final = [name for name in (self._extract_tool_info(t)[0] for t in available_tools) if name]
             if not available_names:
                 return available_tools
 
-            limit = top_k or self.top_k
+            limit: Final = top_k or self.top_k
             self.tool_router.top_k = max(self.tool_router.top_k, limit)
-            matches = self.tool_router(text=query, limit=limit, route_filter=available_names)
-            matched_tool_names = self._extract_tool_names_from_matches(matches)
+            matches: Final = self.tool_router(text=query, limit=limit, route_filter=available_names)
+            matched_tool_names: Final = self._extract_tool_names_from_matches(matches)
 
             if not matched_tool_names:
                 return available_tools
 
-            filtered_tools = self._get_tools_by_names(matched_tool_names, available_tools)
+            filtered_tools: Final = self._get_tools_by_names(matched_tool_names, available_tools)
             if not filtered_tools:
                 return available_tools
             return filtered_tools
@@ -382,7 +382,7 @@ class SemanticMCPToolFilter:
             return False
         if not client_name.endswith(canonical):
             return False
-        separator = client_name[-len(canonical) - 1]
+        separator: Final = client_name[-len(canonical) - 1]
         return separator in ("_", "-")
 
     def _get_tools_by_names(self, tool_names: list[str], available_tools: list[Any]) -> list[Any]:
@@ -401,14 +401,14 @@ class SemanticMCPToolFilter:
         # Exact matches win over suffix matches when both are present, and
         # each incoming tool is returned at most once even if two canonical
         # names happen to be tail-compatible with the same incoming name.
-        available_by_name: dict[str, Any] = {}
+        available_by_name: Final[dict[str, Any]] = {}
         for tool in available_tools:
             client_name, _ = self._extract_tool_info(tool)
             if client_name and client_name not in available_by_name:
                 available_by_name[client_name] = tool
 
-        matched: list[Any] = []
-        used_ids: set = set()
+        matched: Final[list[Any]] = []
+        used_ids: Final[set] = set()
         for canonical in tool_names:
             tool = available_by_name.get(canonical)
             if tool is None:

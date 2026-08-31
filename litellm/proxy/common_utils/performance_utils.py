@@ -15,21 +15,21 @@ import inspect
 import threading
 from collections.abc import Callable
 from pathlib import Path as PathLib
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 
 # Global profiling state
-_profile_lock = threading.Lock()
+_profile_lock: Final = threading.Lock()
 _profiler = None
 _last_profile_file_path = None
 _sample_counter = 0
-_sample_counter_lock = threading.Lock()
+_sample_counter_lock: Final = threading.Lock()
 
 # Global line_profiler state
 _line_profiler: Any | None = None
-_line_profiler_lock = threading.Lock()
-_wrapped_functions: dict[str, Callable] = {}  # Store original functions
+_line_profiler_lock: Final = threading.Lock()
+_wrapped_functions: Final[dict[str, Callable]] = {}  # Store original functions
 
 
 def _should_sample(profile_sampling_rate: float) -> bool:
@@ -44,7 +44,7 @@ def _should_sample(profile_sampling_rate: float) -> bool:
     with _sample_counter_lock:
         _sample_counter += 1
         # Sample based on rate (e.g., 0.1 means sample every 10th request)
-        should_sample = (_sample_counter % int(1.0 / profile_sampling_rate)) == 0
+        should_sample: Final = (_sample_counter % int(1.0 / profile_sampling_rate)) == 0
         return should_sample
 
 
@@ -106,11 +106,11 @@ def profile_endpoint(sampling_rate: float = 1.0):
 
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                is_sampling = _start_profiling_for_request(sampling_rate)
-                file_path_obj = PathLib("endpoint_profile.pstat")
+                is_sampling: Final = _start_profiling_for_request(sampling_rate)
+                file_path_obj: Final = PathLib("endpoint_profile.pstat")
                 set_last_profile_path(file_path_obj)
                 try:
-                    result = await func(*args, **kwargs)
+                    result: Final = await func(*args, **kwargs)
                     if is_sampling:
                         _save_stats(file_path_obj)
                     return result
@@ -124,11 +124,11 @@ def profile_endpoint(sampling_rate: float = 1.0):
 
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                is_sampling = _start_profiling_for_request(sampling_rate)
-                file_path_obj = PathLib("endpoint_profile.pstat")
+                is_sampling: Final = _start_profiling_for_request(sampling_rate)
+                file_path_obj: Final = PathLib("endpoint_profile.pstat")
                 set_last_profile_path(file_path_obj)
                 try:
-                    result = func(*args, **kwargs)
+                    result: Final = func(*args, **kwargs)
                     if is_sampling:
                         _save_stats(file_path_obj)
                     return result
@@ -176,7 +176,7 @@ def wrap_function_with_line_profiler(module: Any, function_name: str) -> bool:
         return False
 
     try:
-        original_function = getattr(module, function_name, None)
+        original_function: Final = getattr(module, function_name, None)
         if original_function is None:
             verbose_proxy_logger.warning("Function %s not found in module %s", function_name, module.__name__)
             return False
@@ -186,7 +186,7 @@ def wrap_function_with_line_profiler(module: Any, function_name: str) -> bool:
             _wrapped_functions[function_name] = original_function
 
         # Wrap with line_profiler
-        profiled_function = _line_profiler(original_function)
+        profiled_function: Final = _line_profiler(original_function)
         setattr(module, function_name, profiled_function)
 
         verbose_proxy_logger.info("Wrapped %s.%s with line_profiler", module.__name__, function_name)
@@ -224,7 +224,7 @@ def wrap_function_directly(func: Callable) -> Callable:
         warnings.filterwarnings("ignore", message=".*__wrapped__.*", category=UserWarning)
         # Add function to line_profiler and wrap it
         _line_profiler.add_function(func)
-        profiled_function = _line_profiler(func)
+        profiled_function: Final = _line_profiler(func)
 
     verbose_proxy_logger.info("Wrapped function %s with line_profiler", func.__name__)
     return profiled_function
@@ -249,16 +249,16 @@ def collect_line_profiler_stats(output_file: str | None = None) -> None:
         try:
             if output_file:
                 # Save to file
-                output_path = PathLib(output_file)
+                output_path: Final = PathLib(output_file)
                 _line_profiler.dump_stats(str(output_path))
                 verbose_proxy_logger.info("Line profiler stats saved to %s", output_path)
             else:
                 # Print to stdout
                 from io import StringIO
 
-                stream = StringIO()
+                stream: Final = StringIO()
                 _line_profiler.print_stats(stream=stream)
-                stats_output = stream.getvalue()
+                stats_output: Final = stream.getvalue()
                 verbose_proxy_logger.info("Line profiler stats:\n" + stats_output)
         except Exception as e:
             verbose_proxy_logger.error("Error collecting line profiler stats: %s", e)

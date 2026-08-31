@@ -6,7 +6,7 @@ This handler provides fake streaming by converting non-streaming responses into 
 """
 
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
@@ -50,7 +50,7 @@ class PydanticAIHandler:
         verbose_logger.info("Pydantic AI: Routing to Pydantic AI agent at %s", api_base)
 
         # Send request directly to Pydantic AI agent
-        response_data = await PydanticAITransformation.send_non_streaming_request(
+        response_data: Final = await PydanticAITransformation.send_non_streaming_request(
             api_base=api_base,
             request_id=request_id,
             params=params,
@@ -95,7 +95,7 @@ class PydanticAIHandler:
         verbose_logger.info("Pydantic AI: Faking streaming for Pydantic AI agent at %s", api_base)
 
         # Get raw task response first (not the transformed A2A format)
-        raw_response = await PydanticAITransformation.send_and_get_raw_response(
+        raw_response: Final = await PydanticAITransformation.send_and_get_raw_response(
             api_base=api_base,
             request_id=request_id,
             params=params,

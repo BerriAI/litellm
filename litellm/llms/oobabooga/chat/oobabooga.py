@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -9,7 +9,10 @@ from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 from ..common_utils import OobaboogaError
 from .transformation import OobaboogaConfig
 
-oobabooga_config = OobaboogaConfig()
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+oobabooga_config: Final = OobaboogaConfig()
 
 
 def completion(
@@ -27,7 +30,7 @@ def completion(
     logger_fn=None,
     default_max_tokens_to_sample=None,
 ):
-    headers = oobabooga_config.validate_environment(
+    headers: Final = oobabooga_config.validate_environment(
         api_key=api_key,
         headers={},
         model=model,
@@ -47,7 +50,7 @@ def completion(
     model = model
 
     completion_url = completion_url + "/v1/chat/completions"
-    data = oobabooga_config.transform_request(
+    data: Final = oobabooga_config.transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -62,8 +65,8 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    client = _get_httpx_client()
-    response = client.post(
+    client: Final = _get_httpx_client()
+    response: Final = client.post(
         completion_url,
         headers=headers,
         data=json.dumps(data),
@@ -92,7 +95,7 @@ def embedding(
     model_response: EmbeddingResponse,
     api_key: str | None,
     api_base: str | None,
-    logging_obj: Any,
+    logging_obj: "LiteLLMLoggingObj",
     optional_params: dict,
     encoding=None,
 ):
@@ -108,7 +111,7 @@ def embedding(
         )
 
     # Prepare request data
-    data = {"input": input}
+    data: Final = {"input": input}
     if optional_params:
         data.update(optional_params)
 
@@ -117,7 +120,7 @@ def embedding(
         logging_obj.pre_call(input=input, api_key=api_key, additional_args={"complete_input_dict": data})
 
     # Send POST request
-    headers = oobabooga_config.validate_environment(
+    headers: Final = oobabooga_config.validate_environment(
         api_key=api_key,
         headers={},
         model=model,
@@ -125,8 +128,8 @@ def embedding(
         optional_params=optional_params,
         litellm_params={},
     )
-    response = litellm.module_level_client.post(embeddings_url, headers=headers, json=data)
-    completion_response = response.json()
+    response: Final = litellm.module_level_client.post(embeddings_url, headers=headers, json=data)
+    completion_response: Final = response.json()
 
     # Check for errors in response
     if "error" in completion_response:
@@ -144,7 +147,7 @@ def embedding(
         }
     ]
 
-    num_tokens = len(completion_response["data"][0]["embedding"])
+    num_tokens: Final = len(completion_response["data"][0]["embedding"])
     # Adding metadata to response
     setattr(
         model_response,
