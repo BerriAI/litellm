@@ -1,9 +1,8 @@
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import openai
 import pytest
-
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -83,11 +82,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     """
 
     # Determine which client class to mock based on whether the test is async
-    client_path = (
-        "litellm.llms.openai.openai.AsyncOpenAI"
-        if is_async
-        else "litellm.llms.openai.openai.OpenAI"
-    )
+    client_path = "litellm.llms.openai.openai.AsyncOpenAI" if is_async else "litellm.llms.openai.openai.OpenAI"
 
     # Create the appropriate patches
     with (
@@ -97,9 +92,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     ):
         # Setup the mock to return None first time (cache miss) then a client for subsequent calls
         mock_client = MagicMock()
-        mock_get_cache.side_effect = [None] + [
-            mock_client
-        ] * 9  # First call returns None, rest return the mock client
+        mock_get_cache.side_effect = [None] + [mock_client] * 9  # First call returns None, rest return the mock client
 
         # Make 10 API calls
         for _ in range(10):
@@ -117,9 +110,9 @@ async def test_openai_client_reuse(function_name, is_async, args):
                 pass
 
         # Verify client was created only once
-        assert (
-            mock_client_class.call_count == 1
-        ), f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        assert mock_client_class.call_count == 1, (
+            f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        )
 
         # Verify the client was cached
         assert mock_set_cache.call_count == 1, "Client should be cached once"
@@ -143,12 +136,8 @@ def test_precomputed_init_params_match_inspect_signature():
         _OPENAI_INIT_PARAMS,
     )
 
-    expected_openai = tuple(
-        p for p in inspect.signature(OpenAI.__init__).parameters if p != "self"
-    )
-    expected_azure = tuple(
-        p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self"
-    )
+    expected_openai = tuple(p for p in inspect.signature(OpenAI.__init__).parameters if p != "self")
+    expected_azure = tuple(p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self")
 
     assert _OPENAI_INIT_PARAMS == expected_openai
     assert _AZURE_OPENAI_INIT_PARAMS == expected_azure
@@ -172,6 +161,60 @@ def test_get_openai_client_cache_key(client_type):
     )
     assert isinstance(key, str)
     assert "api_key=sk-test" in key
+
+
+def test_get_openai_client_cache_key_includes_ssl_verify():
+    first_key = BaseOpenAILLM.get_openai_client_cache_key(
+        client_initialization_params={"api_key": "sk-test", "ssl_verify": "/tmp/first-ca.pem"},
+        client_type="openai",
+    )
+    second_key = BaseOpenAILLM.get_openai_client_cache_key(
+        client_initialization_params={"api_key": "sk-test", "ssl_verify": "/tmp/second-ca.pem"},
+        client_type="openai",
+    )
+
+    assert first_key != second_key
+
+
+def test_get_sync_http_client_uses_per_call_ssl_verify(monkeypatch):
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(litellm, "network_mock", False)
+    result = BaseOpenAILLM._get_sync_http_client(ssl_verify=False)
+
+    assert result is not None
+    assert result._transport._pool._ssl_context.check_hostname is False
+    result.close()
+
+
+@pytest.mark.asyncio
+async def test_get_async_http_client_uses_per_call_ssl_verify(monkeypatch):
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr(litellm, "network_mock", False)
+    result = BaseOpenAILLM._get_async_http_client(ssl_verify=False)
+
+    assert result is not None
+    assert result._transport._ssl_verify is False
+    await result.aclose()
+
+
+def test_openai_client_uses_per_call_ssl_verify(monkeypatch):
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(litellm, "network_mock", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    client = OpenAIChatCompletion()._get_openai_client(
+        is_async=False,
+        api_key="sk-test",
+        api_base="https://example.test/v1",
+        max_retries=2,
+        ssl_verify=False,
+    )
+
+    assert client is not None
+    assert client._client._transport._pool._ssl_context.check_hostname is False
+    client.close()
 
 
 def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open(monkeypatch):
