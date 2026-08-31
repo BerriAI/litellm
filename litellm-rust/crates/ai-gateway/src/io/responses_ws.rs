@@ -29,7 +29,8 @@ type UpstreamRx = SplitStream<ResponsesUpstreamWs>;
 
 #[derive(Clone)]
 pub struct ResponsesWebSocketConnection {
-    socket: Arc<Mutex<Option<ResponsesUpstreamWs>>>,
+    sender: Arc<Mutex<Option<UpstreamTx>>>,
+    receiver: Arc<Mutex<Option<UpstreamRx>>>,
 }
 
 impl ResponsesWebSocketConnection {
@@ -63,49 +64,54 @@ impl ResponsesWebSocketConnection {
             },
             other => CoreError::Network(other.to_string()),
         })?;
+        let (sender, receiver) = socket.split();
         Ok(Self {
-            socket: Arc::new(Mutex::new(Some(socket))),
+            sender: Arc::new(Mutex::new(Some(sender))),
+            receiver: Arc::new(Mutex::new(Some(receiver))),
         })
     }
 
     pub async fn send_text(&self, text: String) -> CoreResult<()> {
-        let mut socket = self.socket.lock().await;
-        let Some(socket) = socket.as_mut() else {
+        let mut sender = self.sender.lock().await;
+        let Some(sender) = sender.as_mut() else {
             return Err(CoreError::Network(
                 "Responses WebSocket is closed".to_string(),
             ));
         };
-        socket
+        sender
             .send(Message::Text(text))
             .await
             .map_err(|error| CoreError::Network(error.to_string()))
     }
 
     pub async fn recv_text(&self) -> CoreResult<Option<String>> {
-        let mut socket_guard = self.socket.lock().await;
-        let Some(socket) = socket_guard.as_mut() else {
+        let mut receiver = self.receiver.lock().await;
+        let Some(receiver) = receiver.as_mut() else {
             return Ok(None);
         };
-        match socket.next().await {
-            Some(Ok(Message::Text(text))) => Ok(Some(text)),
-            Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
-                .map(Some)
-                .map_err(|error| CoreError::InvalidResponse(error.to_string())),
-            Some(Ok(Message::Close(_))) | None => Ok(None),
-            Some(Ok(_)) => Ok(None),
-            Some(Err(error)) => Err(CoreError::Network(error.to_string())),
+        loop {
+            match receiver.next().await {
+                Some(Ok(Message::Text(text))) => return Ok(Some(text)),
+                Some(Ok(Message::Binary(bytes))) => {
+                    return String::from_utf8(bytes.to_vec())
+                        .map(Some)
+                        .map_err(|error| CoreError::InvalidResponse(error.to_string()));
+                }
+                Some(Ok(Message::Close(_))) | None => return Ok(None),
+                Some(Ok(_)) => {}
+                Some(Err(error)) => return Err(CoreError::Network(error.to_string())),
+            }
         }
     }
 
     pub async fn close(&self) -> CoreResult<()> {
-        let mut socket = self.socket.lock().await;
-        if let Some(socket) = socket.as_mut() {
-            socket
-                .close(None)
-                .await
-                .map_err(|error| CoreError::Network(error.to_string()))?;
+        let mut sender = self.sender.lock().await;
+        if let Some(sender) = sender.as_mut() {
+            let _ = sender.send(Message::Close(None)).await;
+            let _ = sender.close().await;
         }
-        *socket = None;
+        *sender = None;
+        *self.receiver.lock().await = None;
         Ok(())
     }
 }
@@ -487,6 +493,73 @@ mod tests {
         assert!(result.is_ok());
         assert!(output_rx.next().await.is_none());
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn send_completes_while_receive_is_pending() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let mut socket = accept_async(stream).await.expect("handshake");
+            let message = socket.next().await.expect("message").expect("valid frame");
+            assert_eq!(message, Message::Text("outbound".to_string()));
+            socket
+                .send(Message::Text("inbound".to_string()))
+                .await
+                .expect("reply");
+            let _ = socket.next().await;
+        });
+        let connection = ResponsesWebSocketConnection::connect_url(
+            &format!("ws://{address}"),
+            &HashMap::new(),
+            Some(Duration::from_secs(1)),
+        )
+        .await
+        .expect("connect");
+        let receive = {
+            let connection = connection.clone();
+            tokio::spawn(async move { connection.recv_text().await })
+        };
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            connection.send_text("outbound".to_string()),
+        )
+        .await
+        .expect("send must not wait for receive")
+        .expect("send succeeds");
+        assert_eq!(
+            receive
+                .await
+                .expect("receive task")
+                .expect("receive succeeds"),
+            Some("inbound".to_string())
+        );
+        connection.close().await.expect("close");
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn remote_close_and_explicit_close_are_clean() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let mut socket = accept_async(stream).await.expect("handshake");
+            socket.close(None).await.expect("remote close");
+        });
+        let connection = ResponsesWebSocketConnection::connect_url(
+            &format!("ws://{address}"),
+            &HashMap::new(),
+            Some(Duration::from_secs(1)),
+        )
+        .await
+        .expect("connect");
+
+        assert_eq!(connection.recv_text().await.expect("receive close"), None);
+        connection.close().await.expect("idempotent local close");
+        connection.close().await.expect("repeated close");
+        server.await.expect("server task");
     }
 
     #[tokio::test]
