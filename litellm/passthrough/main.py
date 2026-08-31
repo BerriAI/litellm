@@ -54,6 +54,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         self._raw_bytes: list[bytes] = []  # mutable-ok: instance buffer for streaming chunks
         self._flush_scheduled = False
         self._background_tasks: set[asyncio.Task] = set()  # mutable-ok: instance set for background task tracking
+        self._hidden_params: dict[str, object] = {}  # mutable-ok: router attaches response headers here in place
 
     @property
     def status_code(self) -> int:
@@ -125,6 +126,9 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
             )
 
     def __aiter__(self) -> AsyncPassthroughStreamingResponse:
+        return self
+
+    def aiter_bytes(self) -> AsyncPassthroughStreamingResponse:
         return self
 
     async def __anext__(self) -> bytes:
@@ -556,7 +560,18 @@ def llm_passthrough_route(
         else:
             # Sync path - client.client.send returns Response directly
             response: httpx.Response = client.client.send(request=request, stream=is_streaming_request)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
+                try:
+                    response.read()
+                except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                    pass
+                try:
+                    response.close()
+                except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                    pass
+                raise
 
             if hasattr(response, "iter_bytes") and is_streaming_request:
                 return PassthroughStreamingResponse(response, litellm_logging_obj, provider_config)

@@ -496,8 +496,6 @@ def get_llm_provider(
             custom_llm_provider = "amazon_nova"
         elif model.startswith("sap/"):
             custom_llm_provider = "sap"
-        elif model in litellm.gigachat_models or model.startswith("gigachat/"):
-            custom_llm_provider = "gigachat"
 
         # Last resort for an otherwise-unknown model: a declarative
         # fallback-generalization routing rule (e.g. routes future claude-* to anthropic).
