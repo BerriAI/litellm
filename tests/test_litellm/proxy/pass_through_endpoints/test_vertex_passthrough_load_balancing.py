@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _base_vertex_proxy_route,
@@ -295,6 +296,76 @@ def test_get_available_deployment_still_uses_default_fallback_for_normal_complet
     assert deployment is not None
     deployments = deployment if isinstance(deployment, list) else [deployment]
     assert any(d["litellm_params"]["model"] == "vertex_ai/gemini-2.5-flash" for d in deployments)
+
+
+@pytest.mark.asyncio
+async def test_vertex_passthrough_route_makes_no_upstream_request_when_model_not_resolved():
+    """
+    Regression test for the authorization gap flagged on the fix for
+    https://github.com/BerriAI/litellm/issues/20727: when the router rejects
+    a pass-through model (BadRequestError -- not configured / no healthy
+    deployment), _base_vertex_proxy_route must not fall through to forwarding
+    the caller's raw, unvalidated model/project/location to Vertex using the
+    proxy's default credentials. No upstream request should be made at all.
+    """
+    mock_request = MagicMock()
+    mock_response = MagicMock()
+    mock_handler = MagicMock()
+
+    mock_router = MagicMock()
+    mock_router.get_available_deployment_for_pass_through.side_effect = litellm.BadRequestError(
+        message="You passed in model=gemini-3-flash-preview. There are no healthy deployments for this model",
+        model="gemini-3-flash-preview",
+        llm_provider="",
+    )
+
+    with (
+        patch(
+            "litellm.llms.vertex_ai.common_utils.get_vertex_model_id_from_url",
+            return_value="gemini-3-flash-preview",
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch(
+            "litellm.llms.vertex_ai.common_utils.get_vertex_project_id_from_url",
+            return_value=None,
+        ),
+        patch(
+            "litellm.llms.vertex_ai.common_utils.get_vertex_location_from_url",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+        ) as mock_pt_router,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers",
+            new_callable=AsyncMock,
+        ) as mock_prep_headers,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+            new_callable=AsyncMock,
+        ) as mock_auth,
+    ):
+        mock_pt_router.get_vertex_credentials.return_value = MagicMock()
+        mock_prep_headers.return_value = ({}, "https://test.url", False, None, None)
+
+        mock_endpoint_func = AsyncMock()
+        mock_create_route.return_value = mock_endpoint_func
+        mock_auth.return_value = {}
+
+        with pytest.raises(litellm.BadRequestError):
+            await _base_vertex_proxy_route(
+                endpoint="https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-3-flash-preview:generateContent",
+                request=mock_request,
+                fastapi_response=mock_response,
+                get_vertex_pass_through_handler=mock_handler,
+            )
+
+        # The core assertion: no upstream request handler was ever invoked --
+        # the caller's model request never reached Vertex.
+        mock_endpoint_func.assert_not_called()
 
 
 def test_get_available_deployment_for_pass_through_load_balancing():
