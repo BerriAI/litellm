@@ -9700,6 +9700,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/openai/v1/responses/input_tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Responses Input Tokens
+         * @description Count the input tokens of a Responses API request without calling the model.
+         *
+         *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
+         *
+         *     ```bash
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *         "model": "gpt-4o",
+         *         "input": "Hello, how are you?"
+         *     }'
+         *     ```
+         *
+         *     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
+         */
+        post: operations["responses_input_tokens_openai_v1_responses_input_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/openai/v1/responses/{response_id}": {
         parameters: {
             query?: never;
@@ -12613,6 +12644,37 @@ export interface paths {
          *     ```
          */
         post: operations["compact_response_responses_compact_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/responses/input_tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Responses Input Tokens
+         * @description Count the input tokens of a Responses API request without calling the model.
+         *
+         *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
+         *
+         *     ```bash
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *         "model": "gpt-4o",
+         *         "input": "Hello, how are you?"
+         *     }'
+         *     ```
+         *
+         *     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
+         */
+        post: operations["responses_input_tokens_responses_input_tokens_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -19178,6 +19240,37 @@ export interface paths {
          *     ```
          */
         post: operations["compact_response_v1_responses_compact_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/responses/input_tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Responses Input Tokens
+         * @description Count the input tokens of a Responses API request without calling the model.
+         *
+         *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
+         *
+         *     ```bash
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *         "model": "gpt-4o",
+         *         "input": "Hello, how are you?"
+         *     }'
+         *     ```
+         *
+         *     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
+         */
+        post: operations["responses_input_tokens_v1_responses_input_tokens_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -51476,6 +51569,26 @@ export interface operations {
             };
         };
     };
+    responses_input_tokens_openai_v1_responses_input_tokens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_response_openai_v1_responses__response_id__get: {
         parameters: {
             query?: never;
@@ -54421,6 +54534,26 @@ export interface operations {
         };
     };
     compact_response_responses_compact_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    responses_input_tokens_responses_input_tokens_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -62843,6 +62976,26 @@ export interface operations {
         };
     };
     compact_response_v1_responses_compact_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    responses_input_tokens_v1_responses_input_tokens_post: {
         parameters: {
             query?: never;
             header?: never;
