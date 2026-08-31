@@ -1835,6 +1835,63 @@ async def test_should_reconcile_reserved_counter_to_actual_spend(
     ) == pytest.approx(0.2)
 
 
+@pytest.mark.parametrize(
+    ("counter_state", "initial_value"),
+    (("missing", None), ("reset", 0.1), ("non-numeric", "stale")),
+)
+@pytest.mark.parametrize(
+    "actual_cost",
+    (0.7, 0.4, 0.1),
+    ids=("greater-than-reservation", "equal-to-reservation", "less-than-reservation"),
+)
+@pytest.mark.asyncio
+async def test_reseeded_reservation_counter_is_incremented_with_actual_cost(
+    spend_counter_state,
+    counter_state,
+    initial_value,
+    actual_cost,
+):
+    import litellm.proxy.proxy_server as ps
+
+    counter_cache, _ = spend_counter_state
+    token = f"key-budget-reseed-{counter_state}-{actual_cost}"
+    counter_key = f"spend:key:{token}"
+    if initial_value is not None:
+        counter_cache.in_memory_cache.set_cache(
+            key=counter_key,
+            value=initial_value,
+        )
+    reservation = {
+        "reserved_cost": 0.4,
+        "entries": [
+            {
+                "counter_key": counter_key,
+                "reserved_cost": 0.4,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=SimpleNamespace(spend=1.0)
+    )
+    ps.prisma_client = prisma_client
+
+    await ps.increment_spend_counters(
+        token=token,
+        team_id=None,
+        user_id=None,
+        response_cost=actual_cost,
+        budget_reservation=reservation,
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(1.0 + actual_cost)
+    assert reservation["entries"][0]["applied_adjustment"] == 0.0
+    assert reservation["finalized"] is True
+    prisma_client.db.litellm_verificationtoken.find_unique.assert_awaited_once_with(where={"token": token})
+
+
 @pytest.mark.asyncio
 async def test_should_release_reservation_on_failure(spend_counter_state):
     counter_cache, key_cache = spend_counter_state

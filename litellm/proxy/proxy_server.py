@@ -2854,14 +2854,12 @@ async def _reconcile_budget_reservation_for_counter_update(
         return set()
 
     from litellm.proxy.spend_tracking.budget_reservation import (
-        get_reserved_counter_keys,
         invalidate_budget_reservation_counters,
         reconcile_budget_reservation,
     )
 
-    reserved_counter_keys: Final = get_reserved_counter_keys(budget_reservation=budget_reservation)
     try:
-        await reconcile_budget_reservation(
+        reconciled_counter_keys: Final = await reconcile_budget_reservation(
             budget_reservation=budget_reservation,
             actual_cost=response_cost or 0.0,
             finalize=False,
@@ -2878,7 +2876,7 @@ async def _reconcile_budget_reservation_for_counter_update(
                 "Failed to invalidate reserved counters after reservation reconciliation failed"
             )
         return set()
-    return reserved_counter_keys
+    return reconciled_counter_keys
 
 
 async def _increment_end_user_and_tag_spend_counters(
