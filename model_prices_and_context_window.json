@@ -47489,32 +47489,36 @@
     },
     "databricks/databricks-deepseek-v4-flash-0731": {
         "input_cost_per_token": 1.4e-07,
+        "input_dbu_cost_per_token": 2e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 10000,
         "max_tokens": 10000,
         "metadata": {
-            "notes": "Pricing follows DeepSeek official API rates ($0.14/$0.28 per 1M input/output tokens, https://deepseek.ai/pricing). Databricks has not published a pay-per-token rate for this endpoint yet; these prices are the model's list rates for reference."
+            "notes": "Pricing derived from Databricks Foundation Model Serving DBU rates (2.0 in / 4.0 out DBU per 1M tokens \u00d7 $0.07/DBU). Matches DeepSeek official list rates ($0.14/$0.28 per 1M)."
         },
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
-        "source": "https://deepseek.ai/pricing",
+        "output_dbu_cost_per_token": 4e-06,
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-deepseek-v4-pro-0813": {
-        "input_cost_per_token": 4.35e-07,
+        "input_cost_per_token": 1.31999e-06,
+        "input_dbu_cost_per_token": 1.8857e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "metadata": {
-            "notes": "Pricing follows DeepSeek official API rates ($0.435/$0.87 per 1M input/output tokens, https://deepseek.ai/pricing). Databricks has not published a pay-per-token rate for this endpoint yet; these prices are the model's list rates for reference."
+            "notes": "Pricing derived from Databricks Foundation Model Serving DBU rates (18.857 in / 56.571 out DBU per 1M tokens \u00d7 $0.07/DBU = $1.32/$3.96 per 1M). Note: applies a Databricks markup over DeepSeek official list rates ($0.435/$0.87 per 1M)."
         },
         "mode": "chat",
-        "output_cost_per_token": 8.7e-07,
-        "source": "https://deepseek.ai/pricing",
+        "output_cost_per_token": 3.95997e-06,
+        "output_dbu_cost_per_token": 5.6571e-05,
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
