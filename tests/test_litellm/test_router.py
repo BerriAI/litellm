@@ -4801,6 +4801,10 @@ def test_get_deployment_credentials_with_provider_rejects_other_team_exact_id():
     assert owner_credentials is not None
     assert owner_credentials["api_key"] == "team-b-key"
 
+    unscoped_credentials = router.get_deployment_credentials_with_provider(model_id="team-b-deployment")
+    assert unscoped_credentials is not None
+    assert unscoped_credentials["api_key"] == "team-b-key"
+
     assert (
         router.get_deployment_credentials_with_provider(
             model_id="team-b-deployment", team_id="team-a"

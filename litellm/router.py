@@ -9558,12 +9558,12 @@ class Router:
 
         Args:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
-            team_id: Optional team id of the caller. When set, team-scoped
-                deployments (indexed by team public model name, including team
-                wildcard models like "openai/*") are also considered. Name and
-                wildcard lookups never resolve a deployment owned by a
-                different team, so shared model names can't leak another
-                team's credentials.
+             team_id: Optional team id of the caller. When set, team-scoped
+                 deployments (indexed by team public model name, including team
+                 wildcard models like "openai/*") are also considered. Exact-ID,
+                 name, and wildcard lookups never resolve a deployment owned by
+                 a different team. Callers without a team id retain legacy
+                 exact-ID behavior for internal credential-resolution flows.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
