@@ -823,6 +823,22 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    modality_routing: bool = Field(
+        default=False,
+        description=(
+            "Route image-bearing requests only to tier models that can accept image input. "
+            "The complexity classifier reads text alone, so an image request whose text "
+            "classifies cheap otherwise lands on a text-only model and fails with a provider "
+            "400. When enabled, a request carrying an image content part is served by the "
+            "nearest tier (preferring higher) whose pool has a model not explicitly declared "
+            "supports_vision false, falling back to default_model when no tier qualifies, and "
+            "rejected with a clear 400 when nothing can serve it. Only an explicit "
+            "supports_vision false (deployment model_info or the model cost map) excludes a "
+            "model, so unmapped custom names stay routable. A session-affinity pin still wins: "
+            "a session pinned to a text-only model keeps it even when an image arrives."
+        ),
+    )
+
     # Semantic (embedding) matching for keyword_tier_rules instead of literal text matching
     semantic_keyword_matching: bool = Field(
         default=False,

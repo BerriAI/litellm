@@ -30,6 +30,7 @@ from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
+from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import (
@@ -58,6 +59,7 @@ from .config import (
     ComplexityTier,
     TierDefinition,
 )
+from .modality_gate import ModalityGate, ModalityPlacement
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -706,11 +708,16 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
     of the three: an agent names the conversation on its first turn, so the cheapest tier would be
     the pin every session starts with, and the real work that follows would run there for the whole
     TTL. It describes what that one call is, never what the session's traffic looks like.
+
+    A modality escalation is transient the same way: it describes what this one call carries (an
+    image), not what the session's traffic looks like, and pinning it would hold every following
+    text turn on the vision-capable model the image forced.
     """
     return decision is None or decision.get("cause") not in (
         "default_model_fallback",
         "plan_mode",
         "housekeeping",
+        "modality_escalation",
     )
 
 
@@ -1612,12 +1619,14 @@ class ComplexityRouter(CustomLogger):
 
         return "\n".join(part for group in parts for part in group)
 
-    def get_model_for_tier(self, tier: ComplexityTier | str) -> str:
+    def get_model_for_tier(self, tier: ComplexityTier | str, eligible_models: frozenset[str] | None = None) -> str:
         """
         Get the model name for a given complexity tier.
 
         Args:
             tier: The complexity tier.
+            eligible_models: When set, the modality gate's per-request constraint; the pick is
+                restricted to pool members in this set.
 
         Returns:
             The model name configured for that tier.
@@ -1625,14 +1634,14 @@ class ComplexityRouter(CustomLogger):
         tier_key: Final = tier.value if isinstance(tier, ComplexityTier) else tier
 
         if tier_key in self.config.tiers:
-            return self._pick_from_tier_value(self.config.tiers[tier_key], tier_key)
+            return self._pick_from_tier_value(self.config.tiers[tier_key], tier_key, eligible_models)
 
         if self.config.default_model:
             return self.config.default_model
 
         medium_key: Final = ComplexityTier.MEDIUM.value
         if medium_key in self.config.tiers:
-            return self._pick_from_tier_value(self.config.tiers[medium_key], medium_key)
+            return self._pick_from_tier_value(self.config.tiers[medium_key], medium_key, eligible_models)
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
@@ -1644,12 +1653,16 @@ class ComplexityRouter(CustomLogger):
         return entry.litellm_params if entry is not None else MappingProxyType({})
 
     @staticmethod
-    def _pick_from_tier_value(model: str | list[str], tier_key: str) -> str:
-        if isinstance(model, str):
-            return model
-        if not model:
+    def _pick_from_tier_value(
+        model: str | Sequence[str], tier_key: str, eligible_models: frozenset[str] | None = None
+    ) -> str:
+        pool: Final = (model,) if isinstance(model, str) else tuple(model)
+        candidates: Final = (
+            pool if eligible_models is None else tuple(entry for entry in pool if entry in eligible_models)
+        )
+        if not candidates:
             raise ValueError(f"Empty model pool for tier {tier_key}")
-        return random.choice(model)
+        return random.choice(candidates)
 
     def _tier_pools(self) -> dict[str, list[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
@@ -1660,15 +1673,20 @@ class ComplexityRouter(CustomLogger):
         raw_messages: list[dict[str, Any]] | None,
         resolved_messages: list[dict[str, Any]] | None,
         request_kwargs: dict,
+        eligible_models: frozenset[str] | None = None,
     ) -> str:
         if not self.config.plugins:
-            return self.get_model_for_tier(tier)
+            return self.get_model_for_tier(tier, eligible_models)
 
         from litellm.types.router import RoutingContext
 
         tier_key: Final = _tier_name(tier)
         metadata_key: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
-        pool: Final = tuple(self._tier_pools().get(tier_key, ()))
+        pool: Final = tuple(
+            entry
+            for entry in self._tier_pools().get(tier_key, ())
+            if eligible_models is None or entry in eligible_models
+        )
         if not pool:
             # Nothing for the plugins to filter. Falling through would raise the
             # plugin-filtering error below and send the operator hunting for a policy
@@ -1762,6 +1780,7 @@ class ComplexityRouter(CustomLogger):
         request_kwargs: dict[str, Any] | None = None,
         hard_floor: ComplexityTier | str | None = None,
         hard_ceiling: ComplexityTier | str | None = None,
+        eligible_models: frozenset[str] | None = None,
     ) -> str:
         """hard_floor excludes every candidate whose tiers all sit below it, turning this pick's
         soft floors (a distance penalty a high-scoring cheap model can outweigh) into a hard
@@ -1785,12 +1804,16 @@ class ComplexityRouter(CustomLogger):
         if adaptive is None or not isinstance(classified_tier, ComplexityTier):
             # Custom tier names have no severity index; adaptive is rejected alongside
             # tier_definitions, so this guard is the contract for any future caller.
-            return self.get_model_for_tier(classified_tier)
+            return self.get_model_for_tier(classified_tier, eligible_models)
 
         request_type: Final = classify_prompt(user_message)
         classified_idx: Final = TIER_SEVERITY_ORDER.index(classified_tier)
         pools: Final = self._tier_pools()
-        classified_candidates: Final = tuple(pools.get(_tier_name(classified_tier), ()))
+        classified_candidates: Final = tuple(
+            model
+            for model in pools.get(_tier_name(classified_tier), ())
+            if eligible_models is None or model in eligible_models
+        )
         cold_start_candidates: Final = tuple(
             model for model in classified_candidates if adaptive._cells[(request_type, model)].total_samples == 0
         )
@@ -1820,9 +1843,13 @@ class ComplexityRouter(CustomLogger):
         if self.config.adaptive_eligible == "classified_tier":
             candidates = list(classified_candidates)
             if not candidates:
-                return self.get_model_for_tier(classified_tier)
+                return self.get_model_for_tier(classified_tier, eligible_models)
         else:
-            candidates = list(adaptive.config.available_models)
+            candidates = tuple(
+                model
+                for model in adaptive.config.available_models
+                if eligible_models is None or model in eligible_models
+            )
 
         all_costs: Final = [adaptive.model_to_cost.get(m, 0.0) for m in candidates]
         quality_weight: Final = self.config.adaptive_weights.quality
@@ -1869,7 +1896,7 @@ class ComplexityRouter(CustomLogger):
                 best_score = score
                 best_model = model
         if best_model is None:
-            return self.get_model_for_tier(classified_tier)
+            return self.get_model_for_tier(classified_tier, eligible_models)
         if request_kwargs is not None:
             metadata = request_kwargs.setdefault("metadata", {})
             if isinstance(metadata, dict):
@@ -2011,11 +2038,13 @@ class ComplexityRouter(CustomLogger):
         )
         return higher_tiers[0] if higher_tiers else tier
 
-    def _escalated_pin(self, pinned_model: str) -> str | None:
+    def _escalated_pin(self, pinned_model: str, gate: ModalityGate) -> str | None:
         """Bump a session's pinned model to the next-higher configured tier.
 
         Returns None when the pin no longer maps to any configured tier, signalling
-        a full reclassification instead.
+        a full reclassification instead. The escalated pick is a NEW placement rather than the
+        kept pin, so the modality gate applies to it, bounded below by the pinned tier; keeping
+        the pin untouched stays ungated by design.
         """
         pinned_tier: Final = self._tier_for_model(pinned_model)
         if pinned_tier is None:
@@ -2023,7 +2052,75 @@ class ComplexityRouter(CustomLogger):
         escalated_tier: Final = self._escalate_tier(pinned_tier)
         if escalated_tier == pinned_tier:
             return pinned_model
-        return self.get_model_for_tier(escalated_tier)
+        placement: Final = gate.place(escalated_tier, floor=pinned_tier, default_priority="never")
+        return self.get_model_for_tier(
+            placement.tier if placement.tier is not None else escalated_tier, gate.pool_filter()
+        )
+
+    def _model_accepts_image_input(self, model_name: str) -> bool:
+        """Whether a tier pool entry can serve an image request.
+
+        Resolved through the deployments that would actually serve the name; a name with no
+        deployment on the router is served by the SDK directly and is checked against the model
+        cost map itself. Only an explicit supports_vision false excludes, a deployment-level
+        model_info override first and the map otherwise, so unmapped custom names stay routable.
+
+        A multi-deployment group must accept on EVERY deployment: the router picks a deployment
+        inside the group after this gate runs, so a mixed group marked eligible could still hand
+        the image to its text-only member and fail with the exact 400 the gate exists to prevent.
+        A mixed group is treated text-only and escalated past; deployment-level filtering inside
+        a group is the generic router's layer.
+        """
+        from litellm.utils import is_vision_explicitly_disabled
+
+        def deployment_accepts(deployment: Mapping[str, Any]) -> bool:
+            declared: Final = (deployment.get("model_info") or EMPTY_MAPPING).get("supports_vision")
+            if declared is not None:
+                return declared is True
+            litellm_model: Final = (deployment.get("litellm_params") or EMPTY_MAPPING).get("model") or model_name
+            return not is_vision_explicitly_disabled(litellm_model)
+
+        deployments: Final = self.litellm_router_instance.get_model_list(model_name=model_name)
+        if not deployments:
+            return not is_vision_explicitly_disabled(model_name)
+        return all(deployment_accepts(deployment) for deployment in deployments)
+
+    def _modality_eligible_models(self) -> frozenset[str]:
+        """Every configured pool entry, plus default_model, that can serve an image request."""
+        names: Final = frozenset(entry for pool in self._tier_pools().values() for entry in pool) | frozenset(
+            name for name in (self.config.default_model,) if name
+        )
+        return frozenset(name for name in names if self._model_accepts_image_input(name))
+
+    def _build_modality_gate(self, resolved_messages: Sequence[Mapping[str, object]] | None) -> ModalityGate:
+        """This request's capability constraint; INACTIVE (and free of lookups) unless
+        modality_routing is on and the request carries an image content part."""
+        active: Final = (
+            self.config.modality_routing
+            and resolved_messages is not None
+            and request_contains_image_content(resolved_messages)
+        )
+        eligible: Final = self._modality_eligible_models() if active else frozenset()
+        return ModalityGate(
+            active=active,
+            eligible=eligible,
+            tier_names=tuple(self.config.tier_names()),
+            pools=self._tier_pools(),
+            default_model=self.config.default_model,
+            default_model_available=bool(self.config.default_model) and not self.config.plugins,
+            default_model_eligible=bool(self.config.default_model)
+            and (not active or self.config.default_model in eligible),
+            has_custom_tiers=self.config.has_custom_tiers,
+            router_name=self.model_name,
+        )
+
+    def _placed_default_model(self) -> str:
+        """The default_model behind a placement whose tier is None, which the gate only emits
+        when the config carries one; the raise is the type-level proof, not a reachable path."""
+        model: Final = self.config.default_model
+        if model is None:
+            raise ValueError(f"Auto-router {self.model_name}: modality gate routed to an unset default_model")
+        return model
 
     def _lexical_tier_override(self, user_message: str) -> KeywordOverride | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.
@@ -2309,7 +2406,6 @@ class ComplexityRouter(CustomLogger):
             pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value)
             if pinned_pin is not None:
-                routed_model: str | None = pinned_pin.model
                 pin_escalation_keyword: str | None = None
                 if self.escalation_keywords:
                     user_message: Final = (
@@ -2317,8 +2413,17 @@ class ComplexityRouter(CustomLogger):
                     )
                     if user_message is not None:
                         pin_escalation_keyword = self._matched_escalation_keyword(user_message)
-                    if pin_escalation_keyword is not None:
-                        routed_model = self._escalated_pin(pinned_pin.model)
+                pin_plan_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
+                # A kept pin is ungated by design, so the gate's capability lookups are priced
+                # only when a REPLACEMENT pick (escalation or plan floor) can occur on this turn.
+                pin_gate: Final = self._build_modality_gate(
+                    resolved_messages if pin_escalation_keyword is not None or pin_plan_sentinel is not None else None
+                )
+                routed_model: str | None = (
+                    self._escalated_pin(pinned_pin.model, pin_gate)
+                    if pin_escalation_keyword is not None
+                    else pinned_pin.model
+                )
                 if routed_model is not None:
                     escalated: Final = routed_model != pinned_pin.model
                     resolved_pin_tier: Final = (
@@ -2331,14 +2436,20 @@ class ComplexityRouter(CustomLogger):
                     # the floor, and the stored pin deliberately keeps the session's own model so
                     # the first turn after plan mode exits auto-routes exactly as it would have.
                     # Escalation is the opposite on purpose -- an explicit ask to re-pin higher.
-                    pin_plan_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
                     pinned_tier: Final = resolved_pin_tier if pin_plan_sentinel is not None else None
                     plan_floored: Final = (
                         pinned_tier is not None and self._apply_plan_mode_floor(pinned_tier) != pinned_tier
                     )
                     session_model: Final = routed_model
                     if plan_floored and pinned_tier is not None:
-                        routed_model = self.get_model_for_tier(self._apply_plan_mode_floor(pinned_tier))
+                        floored_pin_tier: Final = self._apply_plan_mode_floor(pinned_tier)
+                        pin_placement: Final = pin_gate.place(
+                            floored_pin_tier, floor=floored_pin_tier, default_priority="never"
+                        )
+                        routed_model = self.get_model_for_tier(
+                            pin_placement.tier if pin_placement.tier is not None else floored_pin_tier,
+                            pin_gate.pool_filter(),
+                        )
                     # Refresh the TTL on every hit so an active session doesn't lose its
                     # pin mid-conversation just because it outlives the original write.
                     await self.litellm_router_instance.cache.async_set_cache(
@@ -2379,6 +2490,7 @@ class ComplexityRouter(CustomLogger):
                                 escalated=escalated,
                                 conversation_continuing=conversation_continuing,
                                 tier_litellm_params=session_tier_litellm_params,
+                                signals=pin_gate.decision_signals(ModalityPlacement(None, None, False)),
                             ),
                         )
                     )
@@ -2412,6 +2524,48 @@ class ComplexityRouter(CustomLogger):
                 ttl=self.config.session_affinity_ttl_seconds,
             )
         return self._with_session_deployment_affinity(response)
+
+    async def _route_without_ask(
+        self,
+        gate: ModalityGate,
+        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to list-typed hook params
+        resolved_messages: Sequence[Mapping[str, object]],
+        request_kwargs: dict,  # mutable-ok: same shape _classify_and_route receives
+        has_original_messages: bool,
+        conversation_continuing: bool,
+    ) -> PreRoutingHookResponse:
+        """Route a request with no extractable user ask (e.g. an image-only prompt)."""
+        from litellm.types.router import PreRoutingHookResponse
+
+        no_ask_floor: Final = (
+            self._resolve_plan_mode_floor()
+            if gate.active and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is not None
+            else None
+        )
+        placement: Final = gate.place(ComplexityTier.MEDIUM, floor=no_ask_floor, default_priority="first")
+        if placement.tier is None:
+            # No plugins configured: preserve the pre-existing default_model-first
+            # priority exactly (changing it would be a silent behavior change for
+            # every non-plugin user, not just a security fix).
+            routed_model = self._placed_default_model()
+        else:
+            # Plugins configured, no usable default, or the gate displaced it: the pool
+            # pick runs, and with plugins the plugin pipeline runs with it. default_model
+            # is never checked against the plugins, so it must not bypass them here.
+            routed_model = await self._pick_model_for_tier(
+                placement.tier, messages, resolved_messages, request_kwargs, gate.pool_filter()
+            )
+        return PreRoutingHookResponse(
+            model=routed_model,
+            messages=messages if has_original_messages else None,
+            routing_decision=self._build_routing_decision(
+                routed_model=routed_model,
+                cause=gate.decision_cause(placement, "default_fallback"),
+                tier=placement.tier,
+                conversation_continuing=conversation_continuing,
+                signals=gate.decision_signals(placement),
+            ),
+        )
 
     async def _classify_and_route(
         self,
@@ -2453,33 +2607,14 @@ class ComplexityRouter(CustomLogger):
         # Determine whether the original request used messages directly
         has_original_messages: Final = messages is not None and len(messages) > 0
 
+        gate: Final = self._build_modality_gate(resolved_messages)
+
         user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, self._reminder_markers)
 
         if user_message is None:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
-            default_model_first: Final = not self.config.plugins and self.config.default_model
-            if default_model_first:
-                # No plugins configured: preserve the pre-existing default_model-first
-                # priority exactly (changing it would be a silent behavior change for
-                # every non-plugin user, not just a security fix).
-                routed_model = self.config.default_model
-            else:
-                # Plugins configured: default_model must never bypass them, so it's not
-                # checked here at all -- _pick_model_for_tier -> get_model_for_tier still
-                # falls back to it (after the MEDIUM tier) once the plugin pipeline runs.
-                routed_model = await self._pick_model_for_tier(
-                    ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
-                )
-            fallback_tier: Final = None if default_model_first else ComplexityTier.MEDIUM
-            return PreRoutingHookResponse(
-                model=routed_model,
-                messages=messages if has_original_messages else None,
-                routing_decision=self._build_routing_decision(
-                    routed_model=routed_model,
-                    cause="default_fallback",
-                    tier=fallback_tier,
-                    conversation_continuing=conversation_continuing,
-                ),
+            return await self._route_without_ask(
+                gate, messages, resolved_messages, request_kwargs, has_original_messages, conversation_continuing
             )
 
         newest_ask: Final = _newest_turn_ask(resolved_messages, self._reminder_markers)
@@ -2491,10 +2626,19 @@ class ComplexityRouter(CustomLogger):
             # No configured tier outranks the floor, so neither the keyword rules nor the
             # classifier could change the answer -- routing directly saves the classifier call
             # on every plan-mode turn.
-            routed_model = await self._pick_model_for_tier(plan_floor, messages, resolved_messages, request_kwargs)
+            plan_placement: Final = gate.place(plan_floor, floor=plan_floor)
+            routed_model = (
+                await self._pick_model_for_tier(
+                    plan_placement.tier, messages, resolved_messages, request_kwargs, gate.pool_filter()
+                )
+                if plan_placement.tier is not None
+                else self._placed_default_model()
+            )
+            plan_cause: Final = gate.decision_cause(plan_placement, "plan_mode")
             verbose_router_logger.info(
-                "ComplexityRouter: routing decision cause=plan_mode, tier=%s, routed_model=%s",
-                _tier_name(plan_floor),
+                "ComplexityRouter: routing decision cause=%s, tier=%s, routed_model=%s",
+                plan_cause,
+                _tier_name(plan_placement.tier) if plan_placement.tier is not None else "n/a",
                 routed_model,
             )
             return PreRoutingHookResponse(
@@ -2503,11 +2647,12 @@ class ComplexityRouter(CustomLogger):
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     conversation_continuing=conversation_continuing,
-                    cause="plan_mode",
-                    tier=plan_floor,
+                    cause=plan_cause,
+                    tier=plan_placement.tier,
                     matched_keyword=plan_mode_sentinel,
                     escalation_keyword=escalation_keyword,
                     escalated=False,
+                    signals=gate.decision_signals(plan_placement),
                 ),
             )
 
@@ -2521,18 +2666,26 @@ class ComplexityRouter(CustomLogger):
                 self._apply_plan_mode_floor(escalated_tier) if plan_floor is not None else escalated_tier
             )
             keyword_plan_floored: Final = routed_tier != escalated_tier
-            routed_model = await self._pick_model_for_tier(routed_tier, messages, resolved_messages, request_kwargs)
-            keyword_tier_litellm_params: Final = self._litellm_params_for_model(routed_tier, routed_model)
-            keyword_cause: Final[RoutingDecisionCause] = (
+            keyword_placement: Final = gate.place(routed_tier, floor=plan_floor)
+            routed_model = (
+                await self._pick_model_for_tier(
+                    keyword_placement.tier, messages, resolved_messages, request_kwargs, gate.pool_filter()
+                )
+                if keyword_placement.tier is not None
+                else self._placed_default_model()
+            )
+            keyword_tier_litellm_params: Final = self._litellm_params_for_model(keyword_placement.tier, routed_model)
+            keyword_cause: Final[RoutingDecisionCause] = gate.decision_cause(
+                keyword_placement,
                 "plan_mode"
                 if keyword_plan_floored
-                else ("semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match")
+                else ("semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"),
             )
             verbose_router_logger.info(
                 "ComplexityRouter: routing decision cause=%s, escalated=%s, tier=%s, routed_model=%s",
                 keyword_cause,
                 keyword_escalated,
-                _tier_name(routed_tier),
+                _tier_name(keyword_placement.tier) if keyword_placement.tier is not None else "n/a",
                 routed_model,
             )
             return PreRoutingHookResponse(
@@ -2543,11 +2696,12 @@ class ComplexityRouter(CustomLogger):
                     routed_model=routed_model,
                     conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
-                    tier=routed_tier,
+                    tier=keyword_placement.tier,
                     matched_keyword=plan_mode_sentinel if keyword_plan_floored else override.matched_keyword,
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
                     tier_litellm_params=keyword_tier_litellm_params,
+                    signals=gate.decision_signals(keyword_placement),
                 ),
             )
 
@@ -2580,7 +2734,12 @@ class ComplexityRouter(CustomLogger):
         # pool that holds it, or MEDIUM when none does), so a placeholder at or above the floor
         # would otherwise route a plan-mode request to a model the floor cannot vouch for. The
         # clamped tier's pool is the destination the floor can guarantee.
-        if outcome.cause == "default_model_fallback" and fallback_model is not None and plan_mode_sentinel is None:
+        failure_default_placement: Final = (
+            gate.place(tier, default_priority="first")
+            if outcome.cause == "default_model_fallback" and fallback_model is not None and plan_mode_sentinel is None
+            else None
+        )
+        if failure_default_placement is not None and failure_default_placement.tier is None:
             # Classification failed and the operator asked for default_model, so route there
             # directly. Neither the tier pool nor the adaptive bandit gets a say: both answer
             # "which model suits this tier", and no tier was decided. Escalation is skipped for
@@ -2603,12 +2762,23 @@ class ComplexityRouter(CustomLogger):
                     routed_model=fallback_model,
                     conversation_continuing=conversation_continuing,
                     cause=outcome.cause,
-                    signals=outcome.signals,
+                    signals=gate.decision_signals(failure_default_placement, outcome.signals),
                     escalation_keyword=escalation_keyword,
                     escalated=False,
                 ),
             )
-        if self.config.adaptive:
+        # A classifier-failure default the gate displaced keeps its default-first intent, so the
+        # displacement is recorded on whichever placement finally serves the request.
+        main_placement: Final = gate.place(
+            tier, floor=plan_floor, default_priority="first" if failure_default_placement is not None else "last"
+        )
+        if main_placement.tier is None:
+            routed_model = self._placed_default_model()
+            verbose_router_logger.info(
+                "ComplexityRouter: routing decision cause=modality_escalation, tier=n/a, routed_model=%s",
+                routed_model,
+            )
+        elif self.config.adaptive:
             # hard_floor rather than a hard pick, and passed whenever the sentinel is present
             # rather than only when the floor moved the tier: a request classified AT the floor
             # has plan_floored False, yet adaptive_eligible="all" scores every model and only
@@ -2618,9 +2788,14 @@ class ComplexityRouter(CustomLogger):
             # and the plan-mode floor both move a housekeeping call up, and a ceiling still naming
             # the cheapest tier would then contradict the floor and bound the pick below the tier
             # the decision reports.
-            housekeeping_ceiling: Final = tier if outcome.cause == "housekeeping" else None
+            housekeeping_ceiling: Final = main_placement.tier if outcome.cause == "housekeeping" else None
             routed_model = self._soft_floor_pick(
-                tier, user_message, request_kwargs, hard_floor=plan_floor, hard_ceiling=housekeeping_ceiling
+                main_placement.tier,
+                user_message,
+                request_kwargs,
+                hard_floor=plan_floor,
+                hard_ceiling=housekeeping_ceiling,
+                eligible_models=gate.pool_filter(),
             )
             adaptive: Final = self._ensure_adaptive_router()
             if adaptive is not None:
@@ -2631,23 +2806,25 @@ class ComplexityRouter(CustomLogger):
             verbose_router_logger.info(
                 "ComplexityRouter[adaptive]: routing decision cause=%s, tier=%s, score=%s, signals=%s, routed_model=%s",
                 outcome.cause,
-                _tier_name(tier),
+                _tier_name(main_placement.tier),
                 score_repr,
                 signals,
                 routed_model,
             )
         else:
-            routed_model = await self._pick_model_for_tier(tier, messages, resolved_messages, request_kwargs)
+            routed_model = await self._pick_model_for_tier(
+                main_placement.tier, messages, resolved_messages, request_kwargs, gate.pool_filter()
+            )
             verbose_router_logger.info(
                 "ComplexityRouter: routing decision cause=%s, tier=%s, score=%s, signals=%s, routed_model=%s",
                 outcome.cause,
-                _tier_name(tier),
+                _tier_name(main_placement.tier),
                 score_repr,
                 signals,
                 routed_model,
             )
 
-        tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
+        tier_litellm_params: Final = self._litellm_params_for_model(main_placement.tier, routed_model)
         classifier_model: Final = (
             self.config.classifier_llm_config.model
             if outcome.cause == "llm_classifier" and self.config.classifier_llm_config is not None
@@ -2662,14 +2839,19 @@ class ComplexityRouter(CustomLogger):
         # failure path where no tier was decided and reporting one would fabricate a
         # classification.
         classified_pool_tier: Final = (
-            None if outcome.cause == "default_model_fallback" and plan_mode_sentinel is None else tier
+            None
+            if (outcome.cause == "default_model_fallback" and plan_mode_sentinel is None) or main_placement.tier is None
+            else main_placement.tier
         )
-        decision_signals: Final = (
-            (*signals, f"plugin-filtered-pool:{_tier_name(tier)}")
-            if outcome.cause == "default_model_fallback" and self.config.plugins
+        base_signals: Final = (
+            (*signals, f"plugin-filtered-pool:{_tier_name(main_placement.tier)}")
+            if outcome.cause == "default_model_fallback" and self.config.plugins and main_placement.tier is not None
             else signals
         )
-        decision_cause: Final[RoutingDecisionCause] = "plan_mode" if plan_floored else outcome.cause
+        decision_signals: Final = gate.decision_signals(main_placement, base_signals)
+        decision_cause: Final[RoutingDecisionCause] = gate.decision_cause(
+            main_placement, "plan_mode" if plan_floored else outcome.cause
+        )
         decision_keyword: Final = (
             plan_mode_sentinel if plan_floored else (housekeeping_sentinel if outcome.cause == "housekeeping" else None)
         )

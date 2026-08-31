@@ -479,7 +479,7 @@ class TestModelSelection:
                 "default_model": "mid",
             },
         )
-        pool = ["cheap", "premium"]
+        pool = ("cheap", "premium")
         with patch(
             "litellm.router_strategy.complexity_router.complexity_router.random.choice",
             return_value="premium",
@@ -3023,7 +3023,7 @@ class TestAdaptiveSoftFloors:
                 "default_model": "mid",
             },
         )
-        pool = ["cheap", "premium"]
+        pool = ("cheap", "premium")
         with patch(
             "litellm.router_strategy.complexity_router.complexity_router.random.choice",
             return_value="premium",
@@ -5291,7 +5291,7 @@ class TestEscalationKeywords:
             complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}},
         )
         for pinned in ("o1-a", "o1-b", "o1-c"):
-            assert router._escalated_pin(pinned) == pinned
+            assert router._escalated_pin(pinned, router._build_modality_gate(None)) == pinned
 
     @pytest.mark.asyncio
     async def test_session_escalation_at_ceiling_keeps_multi_model_pin(self, mock_router_instance):
@@ -9762,3 +9762,345 @@ class TestHeuristicFirst:
         )
         outcome = await router.aclassify(NO_SIGNAL_PROMPT)
         assert outcome.cause == "default_model_fallback"
+
+
+IMG_PART = {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}}
+
+
+def _gate(**overrides):
+    from litellm.router_strategy.complexity_router.modality_gate import ModalityGate
+
+    base = {
+        "active": True,
+        "eligible": frozenset({"vision-mid", "vision-big", "vision-default"}),
+        "tier_names": ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"),
+        "pools": {
+            "SIMPLE": ("text-cheap",),
+            "MEDIUM": ("vision-mid",),
+            "COMPLEX": ("vision-big",),
+        },
+        "default_model": "vision-default",
+        "default_model_available": True,
+        "default_model_eligible": True,
+        "has_custom_tiers": False,
+        "router_name": "gate-test-router",
+    }
+    return ModalityGate(**{**base, **overrides})
+
+
+class TestModalityGatePlacement:
+    """place() owns every bound: capability walk, floor, and the default_model arms."""
+
+    @pytest.mark.parametrize(
+        "priority, expected_tier",
+        [("first", None), ("last", ComplexityTier.SIMPLE), ("never", ComplexityTier.SIMPLE)],
+    )
+    def test_inactive_gate_reproduces_preexisting_behavior(self, priority, expected_tier):
+        placement = _gate(active=False).place(ComplexityTier.SIMPLE, default_priority=priority)
+        assert placement == (expected_tier, None, False)
+
+    def test_default_first_serves_an_eligible_default(self):
+        assert _gate().place(ComplexityTier.SIMPLE, default_priority="first").tier is None
+
+    @pytest.mark.parametrize(
+        "overrides, floor",
+        [
+            ({"default_model_eligible": False}, None),
+            ({}, ComplexityTier.MEDIUM),
+            ({"default_model_available": False}, None),
+        ],
+    )
+    def test_default_first_is_displaced_by_ineligibility_floor_or_plugins(self, overrides, floor):
+        placement = _gate(**overrides).place(ComplexityTier.SIMPLE, floor=floor, default_priority="first")
+        assert placement.tier == ComplexityTier.MEDIUM
+        assert placement.displaced_default_model is (overrides != {"default_model_available": False})
+
+    def test_walk_goes_up_then_down_and_records_displacement(self):
+        up = _gate().place(ComplexityTier.SIMPLE)
+        assert up == (ComplexityTier.MEDIUM, ComplexityTier.SIMPLE, False)
+        down = _gate(eligible=frozenset({"vision-mid"})).place(ComplexityTier.REASONING)
+        assert down == (ComplexityTier.MEDIUM, ComplexityTier.REASONING, False)
+
+    def test_floor_bounds_both_walk_directions(self):
+        above = _gate().place(ComplexityTier.SIMPLE, floor=ComplexityTier.COMPLEX)
+        assert above.tier == ComplexityTier.COMPLEX
+        with pytest.raises(litellm.BadRequestError):
+            _gate(eligible=frozenset({"vision-mid"})).place(ComplexityTier.COMPLEX, floor=ComplexityTier.COMPLEX)
+
+    def test_no_capable_tier_falls_to_default_last_then_raises(self):
+        to_default = _gate(eligible=frozenset({"vision-default"})).place(ComplexityTier.SIMPLE)
+        assert to_default == (None, ComplexityTier.SIMPLE, False)
+        with pytest.raises(litellm.BadRequestError, match="no model"):
+            _gate(eligible=frozenset()).place(ComplexityTier.SIMPLE, default_priority="never")
+
+    def test_custom_set_normalizes_an_unknown_stand_in_to_its_cheapest_tier(self):
+        gate = _gate(
+            has_custom_tiers=True,
+            tier_names=("cheap", "premium"),
+            pools={"cheap": ("cheap-model",), "premium": ("premium-model",)},
+            eligible=frozenset({"premium-model"}),
+        )
+        placement = gate.place(ComplexityTier.MEDIUM, default_priority="never")
+        assert placement == ("premium", "cheap", False)
+
+    def test_decision_owner_stamps_cause_and_signals_only_when_moved(self):
+        gate = _gate()
+        moved = gate.place(ComplexityTier.SIMPLE)
+        kept = gate.place(ComplexityTier.MEDIUM)
+        assert gate.decision_cause(moved, "heuristic_scorer") == "modality_escalation"
+        assert gate.decision_cause(kept, "heuristic_scorer") == "heuristic_scorer"
+        assert gate.decision_signals(moved) == ("modality:image", "modality_escalated_from:SIMPLE")
+        assert gate.decision_signals(kept, ("base",)) == ("base", "modality:image")
+        assert _gate(active=False).decision_signals(kept) is None
+
+
+class TestModalityRouting:
+    """modality_routing end to end: image requests only route to models accepting image input."""
+
+    IMAGE_MESSAGE = [{"role": "user", "content": [{"type": "text", "text": "What color is this?"}, IMG_PART]}]
+    PLAN_BODY = {
+        "messages": [
+            {"role": "system", "content": [{"type": "text", "text": "Plan mode is active. Do not execute."}]}
+        ]
+    }
+
+    @staticmethod
+    def _router(mock_router_instance, config, vision_by_model):
+        """vision_by_model: pool entry -> True/False (deployment model_info) or None (undeclared)."""
+
+        def get_model_list(model_name=None):
+            if model_name not in vision_by_model:
+                return []
+            declared = vision_by_model[model_name]
+            return [
+                {
+                    "model_name": model_name,
+                    "litellm_params": {"model": f"openai/unmapped-{model_name}"},
+                    "model_info": {
+                        "adaptive_router_preferences": {"quality_tier": 2},
+                        **({} if declared is None else {"supports_vision": declared}),
+                    },
+                }
+            ]
+
+        mock_router_instance.get_model_list = get_model_list
+        return ComplexityRouter(
+            model_name="modality-test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+
+    BASE_TIERS = {"SIMPLE": "text-cheap", "MEDIUM": "vision-mid", "COMPLEX": "vision-big"}
+    BASE_VISION = {"text-cheap": False, "vision-mid": True, "vision-big": True, "vision-default": True}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "config_extra, vision, messages, expected_model, expected_cause, gate_active",
+        [
+            ({}, {"text-cheap": False}, "image", "text-cheap", "heuristic_scorer", False),
+            ({"modality_routing": True}, {"text-cheap": False}, "text", "text-cheap", "heuristic_scorer", False),
+            ({"modality_routing": True}, {"text-cheap": None}, "image", "text-cheap", "heuristic_scorer", True),
+        ],
+        ids=["flag_off", "no_image", "undeclared_model_stays_eligible"],
+    )
+    async def test_gate_is_inert_without_flag_image_or_declaration(
+        self, mock_router_instance, config_extra, vision, messages, expected_model, expected_cause, gate_active
+    ):
+        router = self._router(mock_router_instance, {"tiers": dict(self.BASE_TIERS), **config_extra}, vision)
+        request = (
+            self.IMAGE_MESSAGE if messages == "image" else [{"role": "user", "content": "What color is the sky?"}]
+        )
+        result = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=request)
+        assert result.model == expected_model
+        assert result.routing_decision["cause"] == expected_cause
+        assert ("modality:image" in (result.routing_decision.get("signals") or ())) is gate_active
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "part",
+        [
+            IMG_PART,
+            {"type": "input_image", "image_url": "data:image/png;base64,aGk="},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}},
+            {"type": "tool_result", "tool_use_id": "tu_1", "content": [dict(IMG_PART, type="image")]},
+        ],
+        ids=["image_url", "input_image", "anthropic_image", "tool_result_nested"],
+    )
+    async def test_every_image_dialect_escalates(self, mock_router_instance, part):
+        router = self._router(
+            mock_router_instance, {"tiers": dict(self.BASE_TIERS), "modality_routing": True}, dict(self.BASE_VISION)
+        )
+        message = [{"role": "user", "content": [{"type": "text", "text": "What color is this?"}, part]}]
+        result = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=message)
+        assert result.model == "vision-mid"
+        assert result.routing_decision["cause"] == "modality_escalation"
+        assert "modality_escalated_from:SIMPLE" in result.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path, expected_model, expected_cause",
+        [
+            ("classifier", "vision-mid", "modality_escalation"),
+            ("mixed_pool_same_tier", "vision-cheap", "heuristic_scorer"),
+            ("keyword", "vision-mid", "modality_escalation"),
+            ("no_ask_default_first", "vision-default", "default_fallback"),
+            ("no_ask_displaced_default", "vision-mid", "modality_escalation"),
+            ("custom_tiers", "premium-model", "modality_escalation"),
+            ("pin_escalation", "vision-big", "session_affinity_escalation"),
+            ("pin_plan_floor", "vision-big", "plan_mode"),
+            ("adaptive", "vision-mid", "modality_escalation"),
+        ],
+    )
+    async def test_placements_across_decision_paths(self, mock_router_instance, path, expected_model, expected_cause):
+        config = {"tiers": dict(self.BASE_TIERS), "modality_routing": True}
+        vision = dict(self.BASE_VISION)
+        request_kwargs = {}
+        messages = self.IMAGE_MESSAGE
+        if path == "mixed_pool_same_tier":
+            config["tiers"]["SIMPLE"] = ["text-cheap", "vision-cheap"]
+            vision["vision-cheap"] = True
+        elif path == "keyword":
+            config["keyword_tier_rules"] = [{"keywords": ["quick lookup"], "tier": "SIMPLE"}]
+            messages = [
+                {"role": "user", "content": [{"type": "text", "text": "quick lookup: what is this?"}, IMG_PART]}
+            ]
+        elif path == "no_ask_default_first":
+            config["default_model"] = "vision-default"
+            messages = [{"role": "user", "content": [IMG_PART]}]
+        elif path == "no_ask_displaced_default":
+            config["default_model"] = "text-default"
+            vision["text-default"] = False
+            messages = [{"role": "user", "content": [IMG_PART]}]
+        elif path == "custom_tiers":
+            config = {
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "gpt-4o-mini"},
+                "fallback_tier": "cheap",
+                "tier_definitions": [
+                    {"name": "cheap", "description": "trivial asks"},
+                    {"name": "premium", "description": "hard asks"},
+                ],
+                "tiers": {"cheap": "cheap-model", "premium": "premium-model"},
+                "keyword_tier_rules": [{"keywords": ["quick lookup"], "tier": "cheap"}],
+                "modality_routing": True,
+            }
+            vision = {"cheap-model": False, "premium-model": True}
+            messages = [
+                {"role": "user", "content": [{"type": "text", "text": "quick lookup: what is this?"}, IMG_PART]}
+            ]
+        elif path in ("pin_escalation", "pin_plan_floor"):
+            cache = AsyncMock()
+            cache.async_get_cache = AsyncMock(return_value={"model": "vision-cheap", "tier": "SIMPLE"})
+            mock_router_instance.cache = cache
+            config["tiers"]["SIMPLE"] = "vision-cheap"
+            config["tiers"]["MEDIUM"] = "text-mid"
+            vision.update({"vision-cheap": True, "text-mid": False})
+            config["session_affinity"] = True
+            request_kwargs = {"metadata": {"session_id": "s1"}}
+            if path == "pin_escalation":
+                messages = [
+                    {"role": "user", "content": [{"type": "text", "text": "LITELLM ESCALATE describe this"}, IMG_PART]}
+                ]
+            else:
+                config["plan_mode_min_tier"] = "MEDIUM"
+                request_kwargs["proxy_server_request"] = {"body": self.PLAN_BODY}
+        elif path == "adaptive":
+            config["adaptive"] = True
+            mock_router_instance.model_list = []
+            mock_router_instance.model_name_to_deployment_indices = {}
+        router = self._router(mock_router_instance, config, vision)
+        result = await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=messages)
+        assert result.model == expected_model
+        assert result.routing_decision["cause"] == expected_cause
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "default_model, default_vision, expect_error",
+        [(None, None, True), ("text-default", False, True), ("vision-default", True, False)],
+        ids=["no_default", "text_only_default", "vision_default_serves"],
+    )
+    async def test_no_capable_tier_uses_default_or_rejects(
+        self, mock_router_instance, default_model, default_vision, expect_error
+    ):
+        config = {"tiers": {"SIMPLE": "text-cheap", "COMPLEX": "text-big"}, "modality_routing": True}
+        vision = {"text-cheap": False, "text-big": False}
+        if default_model is not None:
+            config["default_model"] = default_model
+            vision[default_model] = default_vision
+        router = self._router(mock_router_instance, config, vision)
+        if expect_error:
+            with pytest.raises(litellm.BadRequestError, match="no model"):
+                await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.IMAGE_MESSAGE)
+        else:
+            result = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.IMAGE_MESSAGE)
+            assert result.model == "vision-default"
+            assert result.routing_decision["cause"] == "modality_escalation"
+
+    @pytest.mark.asyncio
+    async def test_floor_blocks_default_and_below_floor_tiers_on_gated_no_ask_turns(self, mock_router_instance):
+        config = {
+            "tiers": {"SIMPLE": "vision-cheap", "MEDIUM": "text-mid", "COMPLEX": "vision-big"},
+            "default_model": "vision-default",
+            "plan_mode_min_tier": "MEDIUM",
+            "modality_routing": True,
+        }
+        vision = {"vision-cheap": True, "text-mid": False, "vision-big": True, "vision-default": True}
+        router = self._router(mock_router_instance, config, vision)
+        result = await router.async_pre_routing_hook(
+            model="m",
+            request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": [IMG_PART]}],
+        )
+        assert result.model == "vision-big"
+        assert result.routing_decision["cause"] == "modality_escalation"
+
+    @pytest.mark.asyncio
+    async def test_mixed_deployment_group_is_treated_text_only(self, mock_router_instance):
+        def get_model_list(model_name=None):
+            deployments = {
+                "mixed-group": [True, False],
+                "vision-big": [True],
+            }.get(model_name)
+            if deployments is None:
+                return []
+            return [
+                {
+                    "model_name": model_name,
+                    "litellm_params": {"model": f"openai/unmapped-{model_name}-{i}"},
+                    "model_info": {"supports_vision": declared},
+                }
+                for i, declared in enumerate(deployments)
+            ]
+
+        mock_router_instance.get_model_list = get_model_list
+        router = ComplexityRouter(
+            model_name="modality-test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "mixed-group", "COMPLEX": "vision-big"},
+                "modality_routing": True,
+            },
+        )
+        result = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.IMAGE_MESSAGE)
+        assert result.model == "vision-big"
+        assert result.routing_decision["cause"] == "modality_escalation"
+
+    @pytest.mark.asyncio
+    async def test_kept_pin_bypasses_the_gate_and_escalations_are_never_pinned(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.complexity_router import _decision_is_pinnable
+
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        mock_router_instance.cache = cache
+        router = self._router(
+            mock_router_instance,
+            {"tiers": dict(self.BASE_TIERS), "modality_routing": True, "session_affinity": True},
+            dict(self.BASE_VISION),
+        )
+        result = await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=self.IMAGE_MESSAGE
+        )
+        assert result.model == "text-cheap"
+        assert result.routing_decision["cause"] == "session_affinity_pin"
+        assert _decision_is_pinnable({"cause": "modality_escalation"}) is False
+        assert _decision_is_pinnable({"cause": "heuristic_scorer"}) is True

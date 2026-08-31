@@ -1433,3 +1433,65 @@ class TestFlattenTopLevelSchemaCombinators:
         flatten_top_level_schema_combinators(schema)
 
         assert schema == snapshot
+
+
+class TestRequestContainsImageContent:
+    """One detector for every dialect that reaches pre-routing hooks untranslated."""
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}},
+            {"type": "input_image", "image_url": "data:image/png;base64,aGk="},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}},
+        ],
+    )
+    def test_detects_every_image_dialect(self, part):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
+
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}, part]}]
+        assert request_contains_image_content(messages) is True
+
+    def test_detects_image_nested_in_tool_result(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [
+                            {"type": "text", "text": "screenshot taken"},
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}},
+                        ],
+                    }
+                ],
+            }
+        ]
+        assert request_contains_image_content(messages) is True
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [{"role": "user", "content": "plain string"}],
+            [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "x"}}]}],
+            [{"role": "user", "content": [{"type": "tool_result", "content": [{"type": "text", "text": "done"}]}]}],
+            [{"role": "user", "content": None}],
+            [],
+        ],
+    )
+    def test_ignores_text_audio_and_degenerate_shapes(self, messages):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
+
+        assert request_contains_image_content(messages) is False
+
+    def test_hostile_nesting_is_depth_bounded(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
+
+        nested: dict = {"type": "image", "source": {"type": "base64", "data": "aGk="}}
+        for _ in range(50):
+            nested = {"type": "tool_result", "content": [nested]}
+        assert request_contains_image_content([{"role": "user", "content": [nested]}]) is False

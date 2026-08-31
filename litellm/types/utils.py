@@ -2840,6 +2840,12 @@ RoutingDecisionCause = Literal[
     # never called. The matched sentinel rides in matched_keyword. Distinct from the keyword causes,
     # which are operator-authored rules; these sentinels ship with the router.
     "housekeeping",
+    # modality_routing displaced the decided placement: the request carries an image and the
+    # decided tier had no model accepting image input, so the request was served by the nearest
+    # capable tier or default_model instead. The displaced tier rides in signals as
+    # "modality_escalated_from:<TIER>". Distinct from the escalation causes above, which raise a
+    # tier for what the request asks; this one moves it for what the request physically carries.
+    "modality_escalation",
     "session_affinity_pin",
     "session_affinity_escalation",
     "default_fallback",
