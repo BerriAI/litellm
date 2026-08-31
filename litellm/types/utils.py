@@ -3525,6 +3525,7 @@ bedrock_batch_litellm_params: Final = (
     "s3_region_name",
     "s3_output_bucket_name",
     "bedrock_tags",
+    "bedrock_batch_timeout_hours",
 )
 
 all_litellm_params = (

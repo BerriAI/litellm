@@ -255,7 +255,9 @@ def test_create_request_no_timeout_for_non_24h_window(config):
     assert "timeoutDurationInHours" not in mock_sign.call_args.kwargs["data"]
 
 
-def test_create_request_bedrock_batch_timeout_hours_from_litellm_params(config):  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+def test_create_request_bedrock_batch_timeout_hours_from_litellm_params(  # test-quality-ok: like bedrock_tags
+    config,
+):
     with patch.object(
         config.common_utils,
         "generate_unique_job_name",
@@ -274,7 +276,9 @@ def test_create_request_bedrock_batch_timeout_hours_from_litellm_params(config):
     assert mock_sign.call_args.kwargs["data"]["timeoutDurationInHours"] == 72
 
 
-def test_create_request_bedrock_batch_timeout_hours_from_optional_params(config):  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+def test_create_request_bedrock_batch_timeout_hours_from_optional_params(  # test-quality-ok: like bedrock_tags
+    config,
+):
     with patch.object(
         config.common_utils,
         "generate_unique_job_name",
@@ -290,7 +294,7 @@ def test_create_request_bedrock_batch_timeout_hours_from_optional_params(config)
     assert mock_sign.call_args.kwargs["data"]["timeoutDurationInHours"] == 100
 
 
-def test_create_request_bedrock_batch_timeout_hours_litellm_params_takes_precedence_over_optional_params(  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+def test_create_request_bedrock_batch_timeout_hours_prefers_litellm_params(  # test-quality-ok: like bedrock_tags
     config,
 ):
     with patch.object(
@@ -311,7 +315,9 @@ def test_create_request_bedrock_batch_timeout_hours_litellm_params_takes_precede
     assert mock_sign.call_args.kwargs["data"]["timeoutDurationInHours"] == 168
 
 
-def test_create_request_bedrock_batch_timeout_hours_overrides_completion_window(config):  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+def test_create_request_bedrock_batch_timeout_hours_overrides_completion_window(  # test-quality-ok: like bedrock_tags
+    config,
+):
     with patch.object(
         config.common_utils,
         "generate_unique_job_name",
@@ -333,7 +339,7 @@ def test_create_request_bedrock_batch_timeout_hours_overrides_completion_window(
     assert mock_sign.call_args.kwargs["data"]["timeoutDurationInHours"] == 96
 
 
-def test_create_request_bedrock_batch_timeout_hours_absent_falls_back_to_completion_window(  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+def test_create_request_bedrock_batch_timeout_hours_default_completion_window(  # test-quality-ok: like bedrock_tags
     config,
 ):
     with patch.object(

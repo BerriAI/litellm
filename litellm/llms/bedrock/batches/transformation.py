@@ -68,7 +68,7 @@ _BEDROCK_BATCH_TIMEOUT_HOURS_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(int)
 
 def _validate_bedrock_batch_timeout_hours(raw_value: object) -> int:
     try:
-        hours = _BEDROCK_BATCH_TIMEOUT_HOURS_ADAPTER.validate_python(raw_value, strict=True)
+        hours: Final = _BEDROCK_BATCH_TIMEOUT_HOURS_ADAPTER.validate_python(raw_value, strict=True)
     except ValidationError as e:
         raise ValueError(
             f"Invalid 'bedrock_batch_timeout_hours' value {raw_value!r}. Expected an int between "

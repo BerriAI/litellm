@@ -297,6 +297,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # reachable with the deployment's shared AWS credentials.
     "aws_bedrock_project_id",
     "bedrock_tags",
+    "bedrock_batch_timeout_hours",
     # Provider-specific endpoint overrides that flow into the outbound
     # request via ``optional_params``. Same threat as ``api_base``:
     # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
