@@ -83,8 +83,12 @@ run "tasks_in_public_subnets_replaces_the_nat_gateway" {
     condition = alltrue([
       aws_ecs_service.gateway.network_configuration[0].assign_public_ip == true,
       aws_ecs_service.gateway.network_configuration[0].subnets == toset(["subnet-module-public"]),
+      aws_ecs_service.backend.network_configuration[0].assign_public_ip == true,
+      aws_ecs_service.backend.network_configuration[0].subnets == toset(["subnet-module-public"]),
+      aws_ecs_service.ui.network_configuration[0].assign_public_ip == true,
+      aws_ecs_service.ui.network_configuration[0].subnets == toset(["subnet-module-public"]),
     ])
-    error_message = "The gateway must land in the public subnets with a public IP, which is the only egress left once the NAT gateway is gone."
+    error_message = "The gateway, backend, and UI services must all land in the public subnets with a public IP, which is the only egress left once the NAT gateway is gone."
   }
 
   # The private subnets stay for Aurora and ElastiCache, so the route table is
@@ -114,8 +118,12 @@ run "tasks_in_public_subnets_is_inert_on_a_caller_supplied_vpc" {
     condition = alltrue([
       aws_ecs_service.gateway.network_configuration[0].assign_public_ip == false,
       aws_ecs_service.gateway.network_configuration[0].subnets == toset(["subnet-priv-a", "subnet-priv-b"]),
+      aws_ecs_service.backend.network_configuration[0].assign_public_ip == false,
+      aws_ecs_service.backend.network_configuration[0].subnets == toset(["subnet-priv-a", "subnet-priv-b"]),
+      aws_ecs_service.ui.network_configuration[0].assign_public_ip == false,
+      aws_ecs_service.ui.network_configuration[0].subnets == toset(["subnet-priv-a", "subnet-priv-b"]),
     ])
-    error_message = "tasks_in_public_subnets must be ignored when vpc_id is set, leaving the tasks in the caller's private subnets with no public IP."
+    error_message = "tasks_in_public_subnets must be ignored when vpc_id is set, leaving all three services in the caller's private subnets with no public IP."
   }
 }
 
