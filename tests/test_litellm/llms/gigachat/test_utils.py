@@ -26,7 +26,7 @@ class TestConvertUsage:
         )
 
     def test_usage_with_precached_prompt_tokens(self):
-        """Test convert_usage adds precached_prompt_tokens to prompt_tokens and total_tokens."""
+        """precached_prompt_tokens is a subset of prompt_tokens (OpenAI cached_tokens semantics), never additive."""
         result = convert_usage(
             {
                 "prompt_tokens": 10,
@@ -37,9 +37,9 @@ class TestConvertUsage:
         )
 
         assert result == Usage(
-            prompt_tokens=13,
+            prompt_tokens=10,
             completion_tokens=5,
-            total_tokens=18,
+            total_tokens=15,
             prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=3),
         )
 

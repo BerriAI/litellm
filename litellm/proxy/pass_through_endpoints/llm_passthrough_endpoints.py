@@ -2957,16 +2957,21 @@ async def handle_gigachat_passthrough_router_model(
         request=request
     )  # mutable-ok: mutated in place by proxy pipeline; pyright: ignore[reportExplicitAny]  # Any needed for proxy pipeline
     if user_api_key_dict is not None:
-        if data.get("metadata") is None:
-            data["metadata"] = {}  # mutable-ok: metadata dict mutated in place
-        if hasattr(user_api_key_dict, "user_id") and user_api_key_dict.user_id is not None:
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        if hasattr(user_api_key_dict, "team_id") and user_api_key_dict.team_id is not None:
-            data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
-        if hasattr(user_api_key_dict, "org_id") and user_api_key_dict.org_id is not None:
-            data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
-        if hasattr(user_api_key_dict, "agent_id") and user_api_key_dict.agent_id is not None:
-            data["metadata"]["agent_id"] = user_api_key_dict.agent_id
+        auth_metadata: Final = {
+            metadata_key: value
+            for metadata_key, value in (
+                ("user_api_key_user_id", getattr(user_api_key_dict, "user_id", None)),
+                ("user_api_key_team_id", getattr(user_api_key_dict, "team_id", None)),
+                ("user_api_key_org_id", getattr(user_api_key_dict, "org_id", None)),
+                ("agent_id", getattr(user_api_key_dict, "agent_id", None)),
+            )
+            if value is not None
+        }
+        existing_metadata: Final = data.get("metadata")
+        data["metadata"] = {
+            **(existing_metadata if isinstance(existing_metadata, dict) else {}),
+            **auth_metadata,
+        }
 
     verbose_proxy_logger.debug(
         "Gigachat router passthrough: model='%s', endpoint='%s', streaming=%s", model, endpoint, is_streaming

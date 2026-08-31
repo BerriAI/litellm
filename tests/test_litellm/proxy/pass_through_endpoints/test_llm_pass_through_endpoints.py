@@ -2124,6 +2124,77 @@ class TestGigachatProxyRoute:
         assert isinstance(result, Response)
 
     @pytest.mark.asyncio
+    async def test_gigachat_router_handler_keeps_cached_body_and_payload_metadata_pristine(self):
+        """Regression: auth-metadata injection must not leak into the cached parsed body or the upstream payload."""
+        from litellm.proxy.common_utils.http_parsing_utils import get_request_body
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            handle_gigachat_passthrough_router_model,
+        )
+
+        body = json.dumps(
+            {
+                "model": "gigachat-router",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"client_tag": "user-supplied"},
+            }
+        ).encode()
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "path": "/gigachat/chat/completions",
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request = Request(scope, receive)
+        request_body = await get_request_body(request)
+
+        captured: dict = {}
+
+        class _CapturingProcessor:
+            def __init__(self, data: dict):
+                captured["data"] = data
+
+            async def base_passthrough_process_llm_request(self, **kwargs):
+                return Response(content=b"{}", status_code=200)
+
+        with patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+            _CapturingProcessor,
+        ):
+            await handle_gigachat_passthrough_router_model(
+                model="gigachat-router",
+                endpoint="/chat/completions",
+                request=request,
+                request_body=request_body,
+                fastapi_response=Response(),
+                llm_router=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(user_id="user-1", team_id="team-1"),
+                proxy_logging_obj=MagicMock(),
+                general_settings={},
+                proxy_config=MagicMock(),
+                select_data_generator=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                version=None,
+            )
+
+        data = captured["data"]
+        assert data["json"] is request_body
+        assert request_body["metadata"] == {"client_tag": "user-supplied"}
+        assert data["metadata"]["client_tag"] == "user-supplied"
+        assert data["metadata"]["user_api_key_user_id"] == "user-1"
+        assert data["metadata"]["user_api_key_team_id"] == "team-1"
+        cached_reread = await get_request_body(request)
+        assert cached_reread["metadata"] == {"client_tag": "user-supplied"}
+
+    @pytest.mark.asyncio
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
         return_value={"model": "other-model"},
