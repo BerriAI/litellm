@@ -6,6 +6,7 @@ Covers:
 """
 
 import io
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,6 +46,35 @@ def client_internal_user():
         yield TestClient(app)
     finally:
         app.dependency_overrides = original_overrides
+
+
+def test_rag_ingest_rejects_unsupported_provider_before_execution(
+    client_internal_user: TestClient,
+) -> None:
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new_callable=AsyncMock,
+            return_value={"status": "completed", "vector_store_id": "vs_unexpected"},
+        ) as mock_aingest,
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        response: Final = client_internal_user.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": "file-test",
+                "ingest_options": {"vector_store": {"custom_llm_provider": "milvus"}},
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": {
+            "error": "Provider 'milvus' is not supported for RAG ingestion. "
+            "Supported providers: openai, bedrock, gemini, s3_vectors, vertex_ai"
+        }
+    }
+    mock_aingest.assert_not_awaited()
 
 
 def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(
