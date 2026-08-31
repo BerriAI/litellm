@@ -1229,3 +1229,66 @@ class TestOpenAIResponsesHandlerToolInjection:
         names = [t.get("name") for t in result["tools"]]
         assert "get_weather" in names
         assert "injected_tool" in names
+
+
+class TestBuildBlockSseChunks:
+    """build_block_sse_chunks turns a streaming ModifyResponseException into 200 SSE events"""
+
+    def _exc(self, original_response=None):
+        from litellm.exceptions import ModifyResponseException
+
+        return ModifyResponseException(
+            message="Blocked by policy.",
+            model="gpt-5.4-mini",
+            request_data={},
+            guardrail_name="test",
+            original_response=original_response,
+        )
+
+    def _payloads(self, chunks):
+        import json
+
+        return [json.loads(chunk.decode().removeprefix("data: ").strip()) for chunk in chunks]
+
+    def test_standalone_block_emits_complete_synthetic_stream(self):
+        handler = OpenAIResponsesHandler()
+        payloads = self._payloads(handler.build_block_sse_chunks(self._exc(), stream_started=False))
+        types = [payload["type"] for payload in payloads]
+        assert types[0] == "response.created"
+        assert types[-1] == "response.completed"
+        completed = payloads[-1]["response"]
+        assert completed["id"].startswith("resp_")
+        assert completed["model"] == "gpt-5.4-mini"
+        assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
+
+    def test_continuation_appends_item_at_next_output_index_with_real_usage(self):
+        handler = OpenAIResponsesHandler()
+        yielded = [
+            {"type": "response.created", "response": {"id": "resp_live", "model": "gpt-5.4-mini-2026-01-01"}},
+            {"type": "response.output_item.added", "output_index": 2, "item": {"id": "msg_orig"}},
+        ]
+        original = yielded + [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_live",
+                    "model": "gpt-5.4-mini-2026-01-01",
+                    "output": [],
+                    "usage": {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28},
+                },
+            }
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=original), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert "response.created" not in types
+        assert types[0] == "response.output_item.added"
+        assert payloads[0]["output_index"] == 3
+        completed = payloads[-1]["response"]
+        assert completed["id"] == "resp_live"
+        assert completed["model"] == "gpt-5.4-mini-2026-01-01"
+        assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
+        assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}

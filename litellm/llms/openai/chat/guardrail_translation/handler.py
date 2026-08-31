@@ -14,7 +14,13 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+import json
+import time
+import uuid
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Union, cast
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -23,6 +29,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_chat_stream_usage,
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -31,6 +38,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     openai_tool_name,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
+    stream_item_field,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -46,7 +54,10 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_guardrail import (
+        CustomGuardrail,
+        ModifyResponseException,
+    )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
@@ -1000,3 +1011,107 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 else:
                                     # Subsequent chunks - clear the text
                                     content_item["text"] = ""
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes]:
+        """
+        Build OpenAI chat-completions SSE chunks that deliver the guardrail
+        block message and terminate the stream cleanly, mirroring the
+        non-streaming block response: ``finish_reason`` ``content_filter`` plus
+        the real usage the upstream call consumed.
+
+        - ``stream_started`` False (buffered / pre-stream): nothing has been
+          sent, so open a standalone completion with a ``role`` delta.
+        - ``stream_started`` True (sampling / mid-stream): chunks already
+          reached the client, so continue the in-progress completion (reuse its
+          id/created/model, content-only delta).
+
+        The proxy's data generator appends ``data: [DONE]`` itself.
+        """
+        chunk_id, created, model = _blocked_stream_identity(exc, responses_so_far or ())
+        prompt_tokens, completion_tokens = blocked_chat_stream_usage(exc.original_response)
+        continuation_delta: Final[_BlockedChunkDelta] = {"content": exc.message}
+        standalone_delta: Final[_BlockedChunkDelta] = {"role": "assistant", "content": exc.message}
+        message_chunk: Final[_BlockedChunk] = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": (
+                {
+                    "index": 0,
+                    "delta": continuation_delta if stream_started else standalone_delta,
+                    "finish_reason": None,
+                },
+            ),
+        }
+        final_chunk: Final[_BlockedChunk] = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": ({"index": 0, "delta": {}, "finish_reason": "content_filter"},),
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        }
+        return _chat_sse_chunk(message_chunk), _chat_sse_chunk(final_chunk)
+
+
+class _BlockedChunkDelta(TypedDict, total=False):
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+
+
+class _BlockedChunkChoice(TypedDict):
+    index: ReadOnly[int]
+    delta: ReadOnly[_BlockedChunkDelta]
+    finish_reason: ReadOnly[str | None]
+
+
+class _BlockedChunkUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class _BlockedChunk(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    choices: ReadOnly[tuple[_BlockedChunkChoice, ...]]
+    usage: NotRequired[ReadOnly[_BlockedChunkUsage]]
+
+
+def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+def _blocked_stream_identity(
+    exc: "ModifyResponseException", responses_so_far: Sequence[object]
+) -> tuple[str, int, str]:
+    identified: Final = next(
+        (
+            (chunk_id, item)
+            for item in responses_so_far
+            if isinstance(chunk_id := stream_item_field(item, "id"), str) and chunk_id
+        ),
+        None,
+    )
+    if identified is None:
+        return f"chatcmpl-{uuid.uuid4()}", int(time.time()), exc.model
+    chunk_id, source = identified
+    created: Final = stream_item_field(source, "created")
+    model: Final = stream_item_field(source, "model")
+    return (
+        chunk_id,
+        created if isinstance(created, int) else int(time.time()),
+        model if isinstance(model, str) and model else exc.model,
+    )
