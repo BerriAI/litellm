@@ -510,12 +510,9 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason") or "stop"
-                # Override finish_reason when tool_calls were streamed in any chunk,
-                # not just the final one. Ollama emits tool_calls mid-stream and the
-                # done chunk carries none, which left finish_reason at "stop" and
-                # made the Anthropic /v1/messages bridge emit stop_reason "end_turn".
-                # Fixes: https://github.com/BerriAI/litellm/issues/18922 and
-                # https://github.com/BerriAI/litellm/issues/34692
+                # Override finish_reason when tool_calls appeared in any chunk
+                # Fixes: https://github.com/BerriAI/litellm/issues/18922
+                # Fixes: https://github.com/BerriAI/litellm/issues/34692
                 if self.seen_tool_calls:
                     finish_reason = "tool_calls"
                 choices = [
