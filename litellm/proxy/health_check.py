@@ -759,7 +759,9 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
       the provider request body (#38941)
     """
     # Copy first: callers pass the live deployment litellm_params dict.
-    litellm_params = dict(litellm_params)  # mutable-ok: copy so probe mutations don't rewrite the shared deployment dict  # rebind-ok: local probe copy
+    litellm_params = dict(
+        litellm_params
+    )  # mutable-ok: copy so probe mutations don't rewrite the shared deployment dict  # rebind-ok: local probe copy
     mode: Final = _resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict
