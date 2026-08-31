@@ -63,6 +63,15 @@ class TestResolveConfig:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
         assert resolve_openai_workload_identity_config(api_key=None, api_base=None) is None
 
+    def test_empty_env_openai_api_key_counts_as_unset(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "")
+        assert resolve_openai_workload_identity_config(api_key=None, api_base=None) == wif_env
+
+    def test_empty_api_key_param_counts_as_unset(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
+        assert resolve_openai_workload_identity_config(api_key="", api_base=None) == wif_env
+
     def test_foreign_api_base_disables(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
         assert resolve_openai_workload_identity_config(api_key=None, api_base="https://my-vllm.internal/v1") is None
 

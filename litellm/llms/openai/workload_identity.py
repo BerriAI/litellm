@@ -45,7 +45,7 @@ def resolve_openai_workload_identity_config(
     api_key: str | None,
     api_base: str | None,
 ) -> OpenAIWorkloadIdentityConfig | None:
-    if api_key is not None or get_secret_str("OPENAI_API_KEY") is not None:
+    if api_key or get_secret_str("OPENAI_API_KEY"):
         return None
     effective_api_base: Final = (
         api_base or litellm.api_base or get_secret_str("OPENAI_BASE_URL") or get_secret_str("OPENAI_API_BASE")
