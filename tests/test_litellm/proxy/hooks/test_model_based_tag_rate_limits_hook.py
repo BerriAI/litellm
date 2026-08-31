@@ -276,6 +276,107 @@ def test_extract_team_id_ignores_a_forged_value_in_the_non_authoritative_field()
     assert _extract_team_id(request_kwargs, "litellm_metadata") == "real-team"
 
 
+@pytest.mark.asyncio
+async def test_filter_deployments_ignores_a_forged_empty_litellm_metadata_key(time_controller):
+    """
+    get_metadata_variable_name_from_kwargs picks "litellm_metadata" whenever
+    that key is merely present, regardless of its value. A caller adding an
+    empty "litellm_metadata" to an ordinary chat completions request made
+    admission read no tags/team at all, sailing past every configured limit.
+    """
+    limiter = _make_limiter(time_controller)
+    deployment = _deployment(
+        "grp",
+        "dep-1",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
+    router = litellm.Router(model_list=[deployment])
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    request_kwargs = {"metadata": {"tags": ["end_user_id:u1"]}, "litellm_metadata": {}}
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_reads_metadata_when_litellm_metadata_is_present_but_none(time_controller):
+    """
+    Same misresolution, naturally occurring rather than attacker-forged: a
+    plain chat completion's kwargs carries a "litellm_metadata" key that is
+    always present but set to None, alongside the real, populated "metadata"
+    dict.
+    """
+    limiter = _make_limiter(time_controller)
+    deployment = _deployment(
+        "grp",
+        "dep-1",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
+    router = litellm.Router(model_list=[deployment])
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    request_kwargs = {"metadata": {"tags": ["end_user_id:u1"]}, "litellm_metadata": None}
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_ignores_a_forged_populated_litellm_metadata_key(time_controller):
+    """
+    Requiring litellm_metadata to be merely non-empty is still forgeable: a
+    caller can populate it with its own, unrelated keys on an ordinary
+    route, which is non-empty but carries none of the real identity the
+    proxy wrote into "metadata". Only add_litellm_data_to_request's own
+    "user_api_key_auth" marker, stripped from any bucket the caller doesn't
+    own, proves a bucket is authoritative.
+    """
+    limiter = _make_limiter(time_controller)
+    deployment = _deployment(
+        "grp",
+        "dep-1",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
+    router = litellm.Router(model_list=[deployment])
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    request_kwargs = {
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "litellm_metadata": {"x": 1},
+    }
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+
 # ---------------------------------------------------------------------------
 # TagRateLimitEntry -- limit validation
 # ---------------------------------------------------------------------------
@@ -1757,7 +1858,7 @@ async def test_log_success_event_reads_nested_litellm_metadata_when_that_is_auth
     kwargs = {
         "litellm_params": {
             "metadata": {"tags": []},
-            "litellm_metadata": {"tags": ["end_user_id:u1"]},
+            "litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_auth": {}},
         },
         "standard_logging_object": {
             "model_group": "grp",
@@ -2083,7 +2184,9 @@ async def test_log_success_event_accounts_against_the_team_id_admission_checked(
 
     # LITELLM_METADATA_ROUTES shape: litellm_metadata is the authoritative
     # field, and team-alias resolution requires the real team_id from it.
-    request_kwargs = {"litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1"}}
+    request_kwargs = {
+        "litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1", "user_api_key_auth": {}}
+    }
     result = await limiter.async_filter_deployments(
         model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
@@ -2093,7 +2196,9 @@ async def test_log_success_event_accounts_against_the_team_id_admission_checked(
     # real one in litellm_params.litellm_metadata, simulating litellm_logging.py
     # resolving a different field than the one admission used.
     kwargs = {
-        "litellm_params": {"litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1"}},
+        "litellm_params": {
+            "litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1", "user_api_key_auth": {}}
+        },
         "standard_logging_object": {
             "model_group": "team-alias-name",
             "model_id": "dep-1",
@@ -3737,6 +3842,61 @@ def test_build_limits_index_is_also_keyed_by_team_public_model_name():
     assert [c.entry for c in by_name] == [c.entry for c in by_alias]
     assert by_name[0].team_scope == "team-1"
     assert by_alias[0].team_scope == "team-1"
+
+
+def test_build_limits_index_computes_identical_bucket_key_for_alias_and_internal_model_name():
+    """
+    Matching team_scope alone does not unify the two paths' buckets, because
+    _hash_tag hashes the caller-visible model_group by default, and that
+    name is `real-model-name` on the by_model_name path but
+    `team-alias-name` on the by_team_alias path. Both entries must also
+    share the identical resolved_group (the team's own alias) so _hash_tag
+    hashes both under one name -- otherwise a team calling its own internal
+    model_name lands on a different Redis counter than the same team
+    calling its public alias, doubling its effective quota.
+    """
+    deployment = _deployment(
+        "real-model-name",
+        "dep-1",
+        {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}},
+    )
+    deployment["model_info"]["team_id"] = "team-1"
+    deployment["model_info"]["team_public_model_name"] = "team-alias-name"
+    index = _build_limits_index([deployment])
+    by_name = index.resolve("real-model-name", team_id=None)[0]
+    by_alias = index.resolve("team-alias-name", team_id="team-1")[0]
+
+    key_via_internal_name = _bucket_key("real-model-name", by_name, tag_value="u1", bucket_id=0)
+    key_via_alias = _bucket_key("team-alias-name", by_alias, tag_value="u1", bucket_id=0)
+    assert key_via_internal_name == key_via_alias
+
+
+def test_resolve_any_preserves_team_alias_resolved_group_through_routing_group_fallback():
+    """
+    resolve_any's routing-group fallback always restamped resolved_group
+    with the candidate's own model_name, discarding the
+    team_public_model_name _build_limits_index already stamped there -- so a
+    team-owned deployment reachable both via its team alias and via a
+    routing group split one team's usage across two buckets depending on
+    which path a caller took.
+    """
+    deployment = _deployment(
+        "real-model-name",
+        "dep-1",
+        {"token_limits": {"limits": [{"name": "daily", "limit": 500, "period_seconds": 86400}]}},
+    )
+    deployment["model_info"]["team_id"] = "team-1"
+    deployment["model_info"]["team_public_model_name"] = "team-alias-name"
+    index = _build_limits_index([deployment])
+
+    via_alias = index.resolve("team-alias-name", team_id="team-1")[0]
+    via_routing_group_fallback = index.resolve_any(
+        "my-group", team_id="team-1", candidate_model_names=["real-model-name"]
+    )[0]
+
+    key_via_alias = _bucket_key("team-alias-name", via_alias, tag_value="u1", bucket_id=0)
+    key_via_fallback = _bucket_key("my-group", via_routing_group_fallback, tag_value="u1", bucket_id=0)
+    assert key_via_alias == key_via_fallback
 
 
 def test_build_limits_index_preserves_key_ttl_seconds_and_max_in_memory_cache_size():

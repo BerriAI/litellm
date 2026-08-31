@@ -18,7 +18,6 @@ from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching dynamic_rate_limiter_v3's identical import
-    get_metadata_variable_name_from_kwargs,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -281,22 +280,30 @@ def _deployment_id(deployment: Mapping[str, object]) -> str | None:
     return _sub_mapping(deployment, "model_info").get("id")
 
 
-def _resolve_success_event_metadata_variable_name(
-    litellm_params_for_metadata: Mapping[str, object],
+def _resolve_authoritative_metadata_variable_name(
+    metadata_source: Mapping[str, object],
 ) -> Literal["metadata", "litellm_metadata"]:
     """`get_metadata_variable_name_from_kwargs` only checks key presence, which
-    misresolves at `async_log_success_event` time: `kwargs["litellm_params"]`
-    always carries a `litellm_metadata` key (typically `None`) alongside the
-    real, populated `metadata` dict for a standard (non
-    LITELLM_METADATA_ROUTES) request, so the key-presence check always picks
-    `litellm_metadata` there and silently reads no tags/identity at all.
-    Requiring the value to actually be a populated dict, matching
-    `_get_request_tags`'s own truthiness check in litellm_logging.py, only
-    ever prefers `litellm_metadata` when it is genuinely the field the proxy
-    wrote identity/tags into (LITELLM_METADATA_ROUTES pre-seed it before
-    admission runs, so it is always a populated dict by success time there)."""
-    litellm_metadata: Final = litellm_params_for_metadata.get("litellm_metadata")
-    if isinstance(litellm_metadata, Mapping) and litellm_metadata:
+    misresolves both at admission time and at `async_log_success_event` time: a
+    caller can forge an empty (or merely present-but-`None`) `litellm_metadata`
+    on an ordinary request -- `kwargs["litellm_params"]` also always carries a
+    `litellm_metadata` key (typically `None`) alongside the real, populated
+    `metadata` dict for a standard (non LITELLM_METADATA_ROUTES) request -- and
+    the key-presence check always picks `litellm_metadata` in both cases,
+    silently reading no tags/identity at all and admitting the request against
+    every configured limit.
+
+    Merely requiring the value to be a non-empty dict is not enough either: a
+    caller can populate its own, unrelated keys on the non-authoritative bucket
+    (e.g. `{"litellm_metadata": {"x": 1}}` on an ordinary route), which is
+    non-empty but still not the field the proxy wrote identity into.
+    `add_litellm_data_to_request` unconditionally stamps `user_api_key_auth`
+    into whichever bucket the route actually resolved as authoritative, and
+    strips any `user_api_key_`-prefixed key a caller pre-populates on the
+    other bucket -- so requiring that marker's presence, not mere truthiness,
+    can't be forged onto the wrong side."""
+    litellm_metadata: Final = metadata_source.get("litellm_metadata")
+    if isinstance(litellm_metadata, Mapping) and "user_api_key_auth" in litellm_metadata:
         return "litellm_metadata"
     return "metadata"
 
@@ -557,6 +564,13 @@ class _LimitsIndex:
         workers resolving the identical candidate set could otherwise pick
         different members as `resolved_group` and end up checking/accounting
         against different Redis keys for what's meant to be one shared bucket.
+
+        A candidate's own entry can already carry `resolved_group` set to its
+        team's `team_public_model_name` (see `_build_limits_index`) -- that
+        stamp is left untouched rather than overwritten with `name` here, or
+        a team-owned deployment reachable through *both* its team alias and a
+        routing group would hash to two different buckets depending on which
+        path a caller happened to take.
         """
         direct: Final = self.resolve(model, team_id)
         if direct:
@@ -578,7 +592,9 @@ class _LimitsIndex:
                     limit.deployment_scope,
                     limit.team_scope,
                 )
-                deduped.setdefault(key, replace(limit, resolved_group=name))  # mutable-ok: see docstring above
+                deduped.setdefault(  # mutable-ok: see docstring above
+                    key, limit if limit.resolved_group is not None else replace(limit, resolved_group=name)
+                )
         return tuple(deduped.values())
 
 
@@ -642,12 +658,16 @@ def _build_limits_index(model_list: Sequence[Mapping[str, object]]) -> _LimitsIn
                 # model_name, not only its team_public_model_name alias
                 # (litellm auto-generates a name unique per (team_id, uuid),
                 # so every deployment in this group shares one team_id when
-                # any does) -- stamping the identical team_scope here as the
-                # alias entry below gets keeps both paths resolving to the
-                # same bucket, so a caller can't split its usage across two
-                # independent counters just by alternating which name it calls.
-                tuple(replace(limit, team_scope=team_scope) for limit in configured)
-                if (team_scope := next((key[0] for dep in group if (key := _team_alias_key(dep))), None)) is not None
+                # any does). Stamping team_scope alone is not enough to unify
+                # this with the alias entry below: `_hash_tag` still hashes
+                # the caller-visible name by default, and that name differs
+                # between the two paths. Also stamping `resolved_group` with
+                # the team's own alias forces both paths to hash under the
+                # identical name, so a caller can't split its usage across
+                # two independent counters just by alternating which name it
+                # calls.
+                tuple(replace(limit, team_scope=team_key[0], resolved_group=team_key[1]) for limit in configured)
+                if (team_key := next((key for dep in group if (key := _team_alias_key(dep))), None)) is not None
                 else configured
             )
             for model_name, deployment_group in groupby(sorted_by_model_name, key=_model_name)
@@ -666,8 +686,13 @@ def _build_limits_index(model_list: Sequence[Mapping[str, object]]) -> _LimitsIn
             for alias_key, alias_group in groupby(sorted_by_alias, key=lambda pair: pair[0])
             for aliased_group in (tuple(dep for _key, dep in alias_group),)
             if (
+                # resolved_group is already the caller-visible name on this
+                # path (the caller reached this group by dialing the alias
+                # directly), but stamping it explicitly keeps both index
+                # branches symmetric and independent of whatever value the
+                # caller happens to pass as `model_group` into `_hash_tag`.
                 alias_configured := tuple(
-                    replace(limit, team_scope=alias_key[0])
+                    replace(limit, team_scope=alias_key[0], resolved_group=alias_key[1])
                     for unit in _LIMIT_UNITS
                     for limit in _build_group_limits(aliased_group, unit)
                 )
@@ -1360,7 +1385,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
 
         resolved_request_kwargs: Final = request_kwargs or _EMPTY_MAPPING
         stale_request_keys: Final = await self._release_stale_hop_reservations(resolved_request_kwargs)
-        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(resolved_request_kwargs)
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(resolved_request_kwargs)
         team_id: Final = _extract_team_id(resolved_request_kwargs, metadata_variable_name)
         # Built from the full routing-group membership, not `healthy_deployments`
         # (Router's own cooldown-filtered list for this hop): a member that's
@@ -1717,12 +1742,12 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             # check): at this point `kwargs` is `model_call_details`, which
             # carries `litellm_metadata` present-but-`None` alongside the
             # real, populated `metadata` for a standard request -- see
-            # `_resolve_success_event_metadata_variable_name`'s own docstring.
+            # `_resolve_authoritative_metadata_variable_name`'s own docstring.
             litellm_params_raw: Final = kwargs.get("litellm_params")
             litellm_params_for_metadata: Final = (
                 litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
             )
-            metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
+            metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
             key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
             try:
                 await self.internal_usage_cache.dual_cache.async_delete_cache(
@@ -1869,7 +1894,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # Logging.update_environment_variables).
         litellm_params_raw: Final = kwargs.get("litellm_params")
         litellm_params_for_metadata: Final = litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
-        metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
         team_id: Final = _extract_team_id(litellm_params_for_metadata, metadata_variable_name)
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
