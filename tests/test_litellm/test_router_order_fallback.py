@@ -14,6 +14,7 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+from litellm.types.router import RouterRateLimitError
 from litellm.utils import _get_deployment_order, _get_order_filtered_deployments
 
 # ---------------------------------------------------------------------------
@@ -454,13 +455,12 @@ async def test_router_order_fallback_does_not_reselect_order_1_when_order_2_is_f
     )
     litellm.callbacks.append(drop_order_2)
     try:
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(RouterRateLimitError, match="No deployments available") as exc_info:
             await router.acompletion(
                 model="test-model",
                 messages=[{"role": "user", "content": "hi"}],
             )
         assert "success from order 2" not in str(exc_info.value)
-        assert getattr(exc_info.value, "_hidden_params", {}).get("model_id") != "1"
     finally:
         litellm.callbacks.remove(drop_order_2)
 
