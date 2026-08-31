@@ -25,6 +25,6 @@ runs:
           ~/.cargo/registry
           ~/.cargo/git
           litellm-rust/target
-        key: ${{ runner.os }}-cargo-dev-${{ hashFiles('litellm-rust/Cargo.lock') }}
+        key: ${{ runner.os }}-maturin-dev-${{ hashFiles('litellm-rust/Cargo.lock') }}
         restore-keys: |
-          ${{ runner.os }}-cargo-dev-
+          ${{ runner.os }}-maturin-dev-
