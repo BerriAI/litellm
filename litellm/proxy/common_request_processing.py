@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -3138,10 +3138,31 @@ class ProxyBaseLLMRequestProcessing:
 
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        async def _on_deferred_native_stream_complete(
-            logging_coroutine: Coroutine[object, object, object],
-        ) -> None:
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+        _captured_native_logging_obj: Final = logging_obj
+
+        async def _on_deferred_native_stream_complete(*args: object) -> None:
+            # 1-arg (logging_coroutine,) is what the native passthrough/responses
+            # iterators write; 2-arg (assembled_response, cache_hit) is what the
+            # /v1/messages completion bridge writes via its inner CustomStreamWrapper.
+            # The proxy sees a bare byte generator in both cases, so arity dispatch
+            # here is the only place we can tell them apart.
+            if len(args) == 1 and asyncio.iscoroutine(args[0]):
+                GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=args[0])
+                return
+            if len(args) == 2:
+                assembled_response, cache_hit = args
+                await _as_success_dispatcher(_captured_native_logging_obj).dispatch_success_handlers(
+                    assembled_response,
+                    cache_hit=cache_hit,
+                    start_time=None,
+                    end_time=None,
+                    prefer_async_handlers=True,
+                )
+                return
+            verbose_proxy_logger.error(
+                "Deferred stream logging received unexpected args shape (len=%d); dropping to avoid double-logging",
+                len(args),
+            )
 
         logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
 

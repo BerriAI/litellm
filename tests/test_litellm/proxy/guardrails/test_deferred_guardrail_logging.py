@@ -1416,6 +1416,34 @@ class TestArmDeferredStreamDispatch:
         coro.close()
 
     @pytest.mark.asyncio
+    async def test_native_stream_closure_accepts_bridge_two_arg_shape(self):
+        """/v1/messages via the completion bridge returns a bare byte generator,
+        so arming lands in the native branch. But the inner CustomStreamWrapper
+        writes the 2-arg (assembled_response, cache_hit) shape at end-of-stream,
+        which the pre-fix 1-arg closure blew up on."""
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
+
+        async def _agen():
+            yield b"x"
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=_agen(),
+            route_type="anthropic_messages",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+        closure = logging_obj._on_deferred_stream_complete
+        assert closure is not None
+
+        assembled = object()
+        await closure(assembled, False)
+        await asyncio.sleep(0)
+
+        assert recorded["result"] is assembled
+        assert recorded["cache_hit"] is False
+        assert recorded["prefer_async_handlers"] is True
+
+    @pytest.mark.asyncio
     async def test_csw_closure_routes_through_deferred_stream_guardrails(self, monkeypatch):
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
