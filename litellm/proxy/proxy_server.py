@@ -12478,11 +12478,21 @@ async def supported_openai_params(model: str):
         --header 'Authorization: Bearer sk-1234'
     ```
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
     global llm_router
     try:
-        resolved_models: Final = llm_router.resolved_litellm_models(model) if llm_router is not None else ()
-        litellm_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=resolved_models[0] if resolved_models else model
+        resolved_models: Final = (
+            llm_router.resolved_litellm_models(model)
+            if llm_router is not None and declared_authenticating_provider(model) is None
+            else ()
+        )
+        target_model: Final = resolved_models[0] if resolved_models else model
+        declared_provider: Final = declared_authenticating_provider(target_model)
+        litellm_model, custom_llm_provider = (
+            (target_model.removeprefix(f"{declared_provider}/"), declared_provider)
+            if declared_provider is not None
+            else litellm.get_llm_provider(model=target_model)[:2]
         )
         return {
             "supported_openai_params": litellm.get_supported_openai_params(

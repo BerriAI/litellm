@@ -8,7 +8,7 @@ from re import Match
 from typing import Final
 
 from litellm._logging import verbose_router_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
 
 
 class PatternUtils:
@@ -215,18 +215,17 @@ class PatternMatchRouter:
         Returns:
             bool: True if pattern exists, False otherwise
         """
-        if custom_llm_provider is None:
-            try:
-                (
-                    _,
-                    custom_llm_provider,
-                    _,
-                    _,
-                ) = get_llm_provider(model=model)
-            except Exception:
-                # get_llm_provider raises exception when provider is unknown
-                pass
-        return self.route(model) or self.route(f"{custom_llm_provider}/{model}")
+        provider: Final = (
+            custom_llm_provider or declared_authenticating_provider(model) or self._resolved_provider(model)
+        )
+        return self.route(model) or self.route(f"{provider}/{model}")
+
+    @staticmethod
+    def _resolved_provider(model: str) -> str | None:
+        try:
+            return get_llm_provider(model=model)[1]
+        except Exception:  # noqa: BLE001  # get_llm_provider raises when the provider is unknown; the name then routes as-is
+            return None
 
     def get_deployments_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> list[dict]:
         """
