@@ -46504,25 +46504,7 @@
             }
         ]
     },
-    "coralbricks/glm-5.2-fp4": {
-        "cache_read_input_token_cost": 0.0,
-        "input_cost_per_token": 1.12e-06,
-        "litellm_provider": "coralbricks",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "chat",
-        "output_cost_per_token": 4.4e-06,
-        "source": "https://www.coralbricks.ai/docs",
-        "supported_endpoints": [
-            "/v1/chat/completions"
-        ],
-        "supports_function_calling": true,
-        "supports_native_streaming": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_vision": false
-    },
+
     "coralbricks/glm-5.3-fp4": {
         "cache_read_input_token_cost": 0.0,
         "input_cost_per_token": 1.12e-06,
