@@ -24,7 +24,8 @@ test.describe("Models and Endpoints responsive header", () => {
     expect(tabsBox).not.toBeNull();
     expect(refreshBox).not.toBeNull();
 
-    const sharesARow = refreshBox!.y < tabsBox!.y + tabsBox!.height && refreshBox!.y + refreshBox!.height > tabsBox!.y;
+    const refreshCenterY = refreshBox!.y + refreshBox!.height / 2;
+    const sharesARow = refreshCenterY > tabsBox!.y && refreshCenterY < tabsBox!.y + tabsBox!.height;
     expect(sharesARow, "refresh wrapped onto its own row below the tabs").toBe(true);
   });
 });
