@@ -12315,7 +12315,8 @@
         "output_cost_per_token": 1e-05,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "deprecation_date": "2027-02-26"
     },
     "claude-haiku-4-5-20251001": {
         "deprecation_date": "2026-10-15",
@@ -17767,7 +17768,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "deprecation_date": "2027-01-08"
     },
     "eu.anthropic.claude-opus-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -25327,7 +25329,7 @@
         "supports_vision": true
     },
     "gpt-4o-audio-preview": {
-        "deprecation_date": "2027-01-20",
+        "deprecation_date": "2026-05-07",
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
@@ -25650,7 +25652,7 @@
         "supports_vision": true
     },
     "gpt-4o-mini-audio-preview": {
-        "deprecation_date": "2027-01-20",
+        "deprecation_date": "2026-05-07",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "openai",
@@ -25688,7 +25690,7 @@
     "gpt-4o-mini-realtime-preview": {
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 3e-07,
-        "deprecation_date": "2027-01-20",
+        "deprecation_date": "2026-05-07",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
@@ -25787,7 +25789,8 @@
         "output_cost_per_token": 5e-06,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "deprecation_date": "2027-02-26"
     },
     "gpt-4o-mini-tts": {
         "input_cost_per_token": 2.5e-06,
@@ -25809,7 +25812,7 @@
     },
     "gpt-4o-realtime-preview": {
         "cache_read_input_token_cost": 2.5e-06,
-        "deprecation_date": "2027-01-20",
+        "deprecation_date": "2026-05-07",
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "openai",
@@ -25828,7 +25831,7 @@
     },
     "gpt-4o-realtime-preview-2024-12-17": {
         "cache_read_input_token_cost": 2.5e-06,
-        "deprecation_date": "2027-01-20",
+        "deprecation_date": "2026-05-07",
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "openai",
@@ -25847,7 +25850,7 @@
     },
     "gpt-4o-realtime-preview-2025-06-03": {
         "cache_read_input_token_cost": 2.5e-06,
-        "deprecation_date": "2027-01-20",
+        "deprecation_date": "2026-05-07",
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "openai",
@@ -25926,7 +25929,8 @@
         "output_cost_per_token": 1e-05,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "deprecation_date": "2027-02-26"
     },
     "gpt-image-1.5": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -38321,7 +38325,7 @@
         "source": "https://docs.mistral.ai/capabilities/code_generation/"
     },
     "text-embedding-004": {
-        "deprecation_date": "2026-01-14",
+        "deprecation_date": "2027-04-01",
         "input_cost_per_character": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "vertex_ai-embedding-models",
@@ -44100,7 +44104,8 @@
         "output_cost_per_second": 0.0001,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
-        ]
+        ],
+        "deprecation_date": "2027-02-26"
     },
     "xai/grok-3": {
         "cache_read_input_token_cost": 2e-07,
