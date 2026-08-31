@@ -4,7 +4,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 from urllib.parse import quote
 
 from redis.credentials import CredentialProvider
@@ -172,7 +172,7 @@ class ElastiCacheIAMCredentialProvider(CredentialProvider):
             self._region,
             expires=self._token_lifetime_seconds,
         ).add_auth(request)
-        return self._user_name, request.url.removeprefix("https://")
+        return self._user_name, cast(str, request.url).removeprefix("https://")
 
     def get_credentials(self) -> tuple[str, str]:
         return self._get_credentials()
