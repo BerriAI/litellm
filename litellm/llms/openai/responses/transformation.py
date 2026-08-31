@@ -393,12 +393,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
         headers.setdefault("Content-Type", "application/json")
-        workload_identity_config: Final = resolve_openai_workload_identity_config(
-            api_key=api_key,
-            api_base=litellm_params.api_base
-            or litellm.api_base
-            or get_secret_str("OPENAI_BASE_URL")
-            or get_secret_str("OPENAI_API_BASE"),
+        workload_identity_config: Final = (
+            resolve_openai_workload_identity_config(api_key=api_key, api_base=litellm_params.api_base)
+            if self.custom_llm_provider is LlmProviders.OPENAI
+            else None
         )
         if workload_identity_config is not None:
             headers["Authorization"] = f"Bearer {get_workload_identity_bearer_token(workload_identity_config)}"
