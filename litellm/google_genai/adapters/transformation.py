@@ -108,7 +108,6 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
 
     def __init__(self, completion_stream: object):
         self.sent_first_chunk = False
-        # State tracking for accumulating partial tool calls
         self.accumulated_tool_calls = dict[int, _ToolCallAccumulator]()
         self._returned_response = False
         super().__init__(completion_stream)

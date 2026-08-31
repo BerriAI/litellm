@@ -859,12 +859,28 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _image_sources(block: Mapping[str, object]) -> tuple[str, ...]:
+        """Normalize an Anthropic image block into strings a guardrail can read.
+
+        base64 becomes a data URI so the format travels with the payload, which is what
+        the OpenAI path already puts in this field. A file source yields nothing: those
+        bytes live behind the Files API and this extractor has no client to fetch them.
+        """
         source: Final = block.get("source")
         if not isinstance(source, Mapping):
             return ()
-        # Could be base64 or url
+
+        source_type: Final = source.get("type")
+        if source_type == "url":
+            url: Final = source.get("url")
+            return (url,) if isinstance(url, str) and url else ()
+
         data: Final = source.get("data")
-        return (data,) if data else ()
+        if not isinstance(data, str) or not data:
+            return ()
+        media_type: Final = source.get("media_type")
+        if isinstance(media_type, str) and media_type:
+            return (f"data:{media_type};base64,{data}",)
+        return (data,)
 
     async def _apply_guardrail_responses_to_input(
         self,
