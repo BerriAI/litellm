@@ -42,7 +42,7 @@ def test_runtime_stage_adds_public_wolfi_repo():
     runtime_stage = _runtime_stage(contents)
 
     assert re.search(
-        r'echo\s+"https://packages\.wolfi\.dev/os"\s*>>\s*/etc/apk/repositories',
+        r"echo\s+[\"']?https://packages\.wolfi\.dev/os[\"']?\s*>>\s*/etc/apk/repositories",
         runtime_stage,
     ), (
         "Runtime stage must append the public Wolfi apk repo "
