@@ -29,8 +29,8 @@ def cache() -> RedisCache:
     # RedisCache imports these from litellm._redis inside __init__, so they have
     # to be patched at the source module rather than on redis_cache.
     with (
-        patch("litellm._redis.get_redis_client", return_value=MagicMock()),
-        patch("litellm._redis.get_redis_connection_pool", return_value=MagicMock()),
+        patch("litellm._redis.get_redis_client", return_value=MagicMock()),  # test-quality-ok: connection factory, no HTTP boundary to fake
+        patch("litellm._redis.get_redis_connection_pool", return_value=MagicMock()),  # test-quality-ok: connection factory, no HTTP boundary to fake
     ):
         redis_cache = RedisCache(host="localhost", port=6379)
 
