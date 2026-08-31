@@ -260,6 +260,69 @@ def test_messages_to_responses_input_drops_unmappable_blocks():
     )
 
 
+def test_messages_to_responses_input_assistant_blocks_collapse_to_a_string():
+    """An assistant turn must never forward chat `text` blocks.
+
+    The Responses API only accepts output_text and refusal inside an assistant turn, so
+    forwarding them 400s the whole request and silently drops the count back to the local
+    tokenizer, which is exactly what defeats the image fix above.
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Paris."}]},
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [
+        {"role": "user", "content": "What is the capital of France?"},
+        {"role": "assistant", "content": "Paris."},
+    ]
+
+
+def test_messages_to_responses_input_assistant_image_block_is_dropped():
+    """An image part is illegal inside an assistant turn, so it must not reach the provider."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Here it is"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [{"role": "assistant", "content": "Here it is"}]
+
+
+def test_messages_to_responses_input_keeps_user_image_alongside_an_assistant_turn():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "A cat."}]},
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [
+        {
+            "role": "user",
+            "content": (
+                {"type": "input_text", "text": "What is in this image?"},
+                {"type": "input_image", "image_url": "https://example.com/cat.png", "detail": "auto"},
+            ),
+        },
+        {"role": "assistant", "content": "A cat."},
+    ]
+
+
 def test_validate_request_valid():
     """Test that valid requests pass validation."""
     config = OpenAICountTokensConfig()

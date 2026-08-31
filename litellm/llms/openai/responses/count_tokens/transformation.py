@@ -23,6 +23,8 @@ class ResponsesInputImagePart(TypedDict):
 
 ResponsesInputPart = ResponsesInputTextPart | ResponsesInputImagePart
 
+ResponsesContentRole = Literal["user", "assistant"]
+
 
 def _chat_image_block_to_responses_part(image_url: object) -> ResponsesInputImagePart | None:
     url: Final = image_url.get("url") if isinstance(image_url, Mapping) else image_url
@@ -37,7 +39,7 @@ def _chat_image_block_to_responses_part(image_url: object) -> ResponsesInputImag
     return part
 
 
-def _chat_block_to_responses_part(block: object) -> ResponsesInputPart | None:
+def _chat_block_to_responses_part(block: object, role: ResponsesContentRole) -> ResponsesInputPart | None:
     if isinstance(block, str):
         bare: Final[ResponsesInputTextPart] = {"type": "input_text", "text": block}
         return bare
@@ -51,7 +53,7 @@ def _chat_block_to_responses_part(block: object) -> ResponsesInputPart | None:
                 "text": text_value if isinstance(text_value, str) else "",
             }
             return text
-        case "image_url":
+        case "image_url" if role == "user":
             return _chat_image_block_to_responses_part(block.get("image_url"))
         case _:
             return None
@@ -59,10 +61,15 @@ def _chat_block_to_responses_part(block: object) -> ResponsesInputPart | None:
 
 def chat_content_blocks_to_responses_content(
     content: Sequence[object],
+    role: ResponsesContentRole,
 ) -> str | tuple[ResponsesInputPart, ...]:
-    """Text-only content collapses to a joined string, so text-only counts stay unchanged."""
+    """Text-only content collapses to a joined string, which every role accepts and counts identically.
+
+    Only a user turn may carry an image part: the Responses API rejects any part but
+    output_text and refusal inside an assistant turn.
+    """
     parts: Final = tuple(
-        part for part in (_chat_block_to_responses_part(block) for block in content) if part is not None
+        part for part in (_chat_block_to_responses_part(block, role) for block in content) if part is not None
     )
     if any(part["type"] != "input_text" for part in parts):
         return parts
@@ -182,11 +189,13 @@ class OpenAICountTokensConfig:
                     instructions_parts.append("\n".join(text_parts))
             elif role == "user":
                 if isinstance(content, list):
-                    content = chat_content_blocks_to_responses_content(content)
+                    content = chat_content_blocks_to_responses_content(content, "user")
                 input_items.append({"role": "user", "content": content})
             elif role == "assistant":
                 # Map tool_calls to Responses API function_call items
                 tool_calls = msg.get("tool_calls")
+                if isinstance(content, list):
+                    content = chat_content_blocks_to_responses_content(content, "assistant")
                 if content:
                     input_items.append({"role": "assistant", "content": content})
                 if tool_calls:
