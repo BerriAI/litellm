@@ -85,6 +85,7 @@ describe("ComplexityRouterConfig", () => {
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     const list = screen.getByText(/Score < 0.15/).closest<HTMLUListElement>("ul");
     expect(list).toBeInTheDocument();
+    expect(list).toHaveClass("text-muted-foreground");
     expect(list?.style.color).toBe("");
   });
 
