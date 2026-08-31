@@ -7,6 +7,7 @@ Handles guardrail execution for passthrough endpoints with:
 - Automatic inheritance from org/team/key levels when enabled
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
@@ -274,7 +275,7 @@ class PassthroughGuardrailHandler:
         return guardrails_to_run if guardrails_to_run else None
 
     @staticmethod
-    def has_applicable_post_call_guardrail(data: dict) -> bool:
+    def has_applicable_post_call_guardrail(data: Mapping[str, object]) -> bool:
         """
         Check whether any registered guardrail would run post_call for ``data``.
 

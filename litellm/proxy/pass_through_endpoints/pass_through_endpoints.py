@@ -1391,7 +1391,12 @@ async def pass_through_request(
             # here so post-call enforcement sees the same request-level attach.
             # Endpoint-level guardrails keep precedence: a top-level "guardrails"
             # key would shadow the metadata entry in get_guardrail_from_metadata.
-            request_level_guardrails: Final = (kwargs.get("litellm_params") or {}).get("guardrails") if kwargs else None
+            _request_litellm_params: Final[object] = (  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # kwargs is an untyped dict
+                kwargs.get("litellm_params") if kwargs else None
+            )
+            request_level_guardrails: Final[object] = (  # pyright: ignore[reportUnknownVariableType]  # value read out of the untyped kwargs dict
+                _request_litellm_params.get("guardrails") if isinstance(_request_litellm_params, dict) else None  # pyright: ignore[reportUnknownMemberType]  # isinstance narrows to an unparameterized dict
+            )
             if request_level_guardrails and not guardrails_to_run and "guardrails" not in hook_data:
                 hook_data["guardrails"] = request_level_guardrails
             # Endpoint-level opt-in is not the only way a post-call guardrail
@@ -1401,7 +1406,9 @@ async def pass_through_request(
             # guardrails were configured to block. Only invoke the hook when
             # a guardrail would actually run, so plain pass-through traffic
             # does not start triggering non-guardrail callback hooks.
-            if guardrails_to_run or PassthroughGuardrailHandler.has_applicable_post_call_guardrail(hook_data):
+            if guardrails_to_run or PassthroughGuardrailHandler.has_applicable_post_call_guardrail(
+                hook_data  # pyright: ignore[reportUnknownArgumentType]  # hook_data mirrors the untyped _parsed_body dict
+            ):
                 post_call_guardrail_data = hook_data
                 response_body = await proxy_logging_obj.post_call_success_hook(
                     data=hook_data,

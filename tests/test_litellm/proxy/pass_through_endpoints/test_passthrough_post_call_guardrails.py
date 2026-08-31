@@ -416,7 +416,10 @@ def _real_dispatch_patches(upstream_body: dict, request_body: dict):
             return_value=mock_response,
         ),
         patch(f"{_PT_MOD}._is_streaming_response", return_value=False),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        patch(  # test-quality-ok: inject the real ProxyLogging that pass_through_request imports at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            proxy_logging_obj,
+        ),
         patch(f"{_PT_MOD}.pass_through_endpoint_logging", mock_pt_logging),
         patch(f"{_PT_MOD}.get_async_httpx_client", return_value=mock_async_client_obj),
         patch(
