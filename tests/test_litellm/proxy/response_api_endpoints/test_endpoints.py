@@ -1914,6 +1914,21 @@ class TestResponsesInputTokens:
         }
         counter.assert_not_awaited()
 
+    @pytest.mark.parametrize("empty_input", ["", []])
+    def test_empty_input_returns_openai_400(self, empty_input):
+        response, counter = self._post_input_tokens({"model": "gpt-4o", "input": empty_input})
+
+        assert response.status_code == 400, response.text
+        assert response.json() == {
+            "error": {
+                "message": """One of "input" or "previous_response_id" or 'prompt' or 'conversation' must be provided.""",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "missing_required_parameter",
+            }
+        }
+        counter.assert_not_awaited()
+
     def test_invalid_tools_returns_openai_400(self):
         response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "hi", "tools": "not-a-list"})
 

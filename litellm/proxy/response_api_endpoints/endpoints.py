@@ -1142,6 +1142,12 @@ async def responses_input_tokens(
         return _missing_responses_param_response("model")
     if input_value is None:
         return _missing_responses_param_response("input")
+    if isinstance(input_value, (str, list)) and not input_value:
+        return _responses_invalid_request_response(
+            message="""One of "input" or "previous_response_id" or 'prompt' or 'conversation' must be provided.""",
+            param=None,
+            code="missing_required_parameter",
+        )
 
     try:
         payload: Final[_TokenCountPayload] = {
