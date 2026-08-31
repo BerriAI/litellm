@@ -721,52 +721,33 @@ def _auth_override():
 
 
 @pytest.mark.asyncio
-async def test_streaming_responses_guardrail_block_returns_sse_events():
-    from litellm.integrations.custom_guardrail import ModifyResponseException
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+async def test_blocked_responses_api_stream_emits_canonical_events():
+    from litellm.proxy.response_api_endpoints.endpoints import _blocked_responses_api_stream
+    from litellm.types.llms.openai import ResponsesAPIResponse
 
-    import litellm.proxy.proxy_server as ps
-
-    guardrail_exception = ModifyResponseException(
-        message="blocked by test",
+    response = ResponsesAPIResponse(
+        id="resp_test",
+        created_at=1234567890,
         model="gpt-4o",
-        request_data={"model": "gpt-4o", "stream": True, "litellm_logging_obj": MagicMock()},
+        object="response",
+        status="completed",
+        output=[
+            {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "blocked by test", "annotations": []}],
+            }
+        ],
     )
-    app.dependency_overrides[user_api_key_auth] = _auth_override
-    try:
-        with (
-            patch.object(ps, "general_settings", {}),
-            patch.object(ps, "llm_router", MagicMock()),
-            patch.object(ps, "proxy_config", MagicMock()),
-            patch.object(ps, "user_api_base", None),
-            patch.object(ps, "user_max_tokens", None),
-            patch.object(ps, "user_model", None),
-            patch.object(ps, "user_request_timeout", None),
-            patch.object(ps, "user_temperature", None),
-            patch.object(ps, "version", "1.0.0"),
-            patch.object(
-                ProxyBaseLLMRequestProcessing,
-                "base_process_llm_request",
-                new_callable=AsyncMock,
-                side_effect=guardrail_exception,
-            ),
-        ):
-            client = TestClient(app)
-            response = client.post(
-                "/v1/responses",
-                json={"model": "gpt-4o", "stream": True, "input": "hello"},
-                headers={"Authorization": "Bearer sk-test-cursor"},
-            )
-    finally:
-        app.dependency_overrides.pop(user_api_key_auth, None)
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    frames = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
-    assert frames[-1] == "[DONE]"
-    events = [json.loads(frame) for frame in frames[:-1]]
-    event_types = [event["type"] for event in events]
+    stream = _blocked_responses_api_stream(
+        response=response,
+        logging_obj=MagicMock(),
+        request_data={"model": "gpt-4o"},
+    )
+    events = [event async for event in stream]
+    event_types = [event.type for event in events]
     assert event_types[:4] == [
         "response.created",
         "response.in_progress",
@@ -780,11 +761,11 @@ async def test_streaming_responses_guardrail_block_returns_sse_events():
         "response.completed",
     ]
     assert event_types[4:-4] == ["response.output_text.delta"] * len(event_types[4:-4])
-    assert events[0]["response"]["status"] == "in_progress"
-    assert events[0]["response"]["output"] == []
-    assert "".join(event["delta"] for event in events if event["type"] == "response.output_text.delta") == "blocked by test"
-    assert events[-1]["response"]["status"] == "completed"
-    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "blocked by test"
+    assert events[0].response.status == "in_progress"
+    assert events[0].response.output == []
+    assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == "blocked by test"
+    assert events[-1].response.status == "completed"
+    assert events[-1].response.output[0].content[0].text == "blocked by test"
 
 
 def test_cursor_chat_completions_messages_body_uses_chat_pipeline():

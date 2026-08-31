@@ -48,6 +48,19 @@ _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
 _EMPTY_TOOL_PAYLOAD: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
+def _blocked_responses_api_stream(
+    response: ResponsesAPIResponse,
+    logging_obj: object,
+    request_data: dict,
+) -> CachedResponsesAPIStreamingIterator:
+    return CachedResponsesAPIStreamingIterator(
+        response=response,
+        logging_obj=logging_obj,
+        request_data=request_data,
+        call_type="aresponses",
+    )
+
+
 def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
     if key != "format" or not isinstance(value, dict):
         return value
@@ -437,11 +450,10 @@ async def responses_api(
             usage=_blocked_responses_api_usage(e.original_response),
         )
         if data.get("stream") is True:
-            streaming_response: Final = CachedResponsesAPIStreamingIterator(
+            streaming_response: Final = _blocked_responses_api_stream(
                 response=response_obj,
                 logging_obj=_logging_obj,
                 request_data=_data,
-                call_type="aresponses",
             )
             selected_data_generator: Final = select_data_generator(
                 response=streaming_response,
