@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use litellm_ai_gateway::io::audio_transcription::{
-    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
-};
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_core::audio_transcription::{
+    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
+};
 use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
 use litellm_core::chat_completions::{
     chat_completions as run_chat_completions, chat_completions_decline_reason,
@@ -325,10 +325,6 @@ fn transcription(
                 extra_headers,
                 optional_params,
                 timeout,
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
-                request_metadata: Default::default(),
-                litellm_call_id: None,
             },
         ))
     });
@@ -369,10 +365,6 @@ fn atranscription(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
         })
         .await
         .map_err(core_error_to_pyerr)?;
