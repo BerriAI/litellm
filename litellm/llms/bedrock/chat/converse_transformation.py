@@ -7,7 +7,7 @@ import json
 import time
 import types
 from collections.abc import Mapping
-from typing import Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
 
@@ -65,6 +65,7 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionMessageToolCall,
     CompletionTokensDetailsWrapper,
     Function,
@@ -92,6 +93,9 @@ from ..common_utils import (
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
 )
+
+if TYPE_CHECKING:
+    import tiktoken
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS: Final = [
@@ -418,12 +422,16 @@ class AmazonConverseConfig(BaseConfig):
         Handle the reasoning_effort parameter based on the model type.
 
         - GPT-OSS models: passed through unchanged via additionalModelRequestFields.
+        - OpenAI GPT-5.x models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
         if "gpt-oss" in model:
             optional_params["reasoning_effort"] = reasoning_effort
+        elif "openai.gpt-5" in model:
+            reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
+            optional_params["reasoning"] = reasoning
         elif self._is_nova_2_model(model):
             reasoning_config: Final = self._transform_reasoning_effort_to_reasoning_config(reasoning_effort)
             optional_params.update(reasoning_config)
@@ -555,7 +563,7 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "gpt-oss" in model:
+        if "gpt-oss" in model or "openai.gpt-5" in model or "openai.gpt-5" in base_model:
             supported_params.append("reasoning_effort")
         elif self._is_nova_2_model(model):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
@@ -903,7 +911,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
-            if param == "thinking":
+            if param == "thinking" and "openai.gpt-5" not in model:
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
@@ -916,7 +924,7 @@ class AmazonConverseConfig(BaseConfig):
                         custom_llm_provider="bedrock",
                     )
                     capped = (
-                        AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
                         if legacy_thinking is not None
                         else None
                     )
@@ -1538,6 +1546,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues] | None = None,
         headers: dict | None = None,
         drop_params: bool = False,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> CommonRequestObject:
         ## VALIDATE REQUEST
         """
@@ -1600,6 +1609,16 @@ class AmazonConverseConfig(BaseConfig):
                 if point.get("location") == "tool_config":
                     cache_point = self._build_cache_point_block(point.get("control"), model)
                     bedrock_tools.append(ToolBlock(cachePoint=cache_point))
+                    # Spend attribution credits the gateway only for breakpoints it placed, and
+                    # this is the one place a tool_config point becomes one. The hook that reads
+                    # the configuration cannot record it: whether a cachePoint lands depends on
+                    # this provider and on the request carrying tools, neither of which it sees.
+                    if litellm_params is not None:
+                        from litellm.integrations.anthropic_cache_control_hook import (
+                            AnthropicCacheControlHook,
+                        )
+
+                        AnthropicCacheControlHook.record_gateway_injection(litellm_params, 1)
                     break
 
         bedrock_tool_config: ToolConfigBlock | None = None
@@ -1617,6 +1636,8 @@ class AmazonConverseConfig(BaseConfig):
         }
         if additional_request_params:
             data["additionalModelRequestFields"] = additional_request_params
+            if "thinking" in additional_request_params:
+                data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:
             data["system"] = system_content_blocks
 
@@ -1660,6 +1681,7 @@ class AmazonConverseConfig(BaseConfig):
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
+            litellm_params=litellm_params,
         )
 
         bedrock_messages: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -1719,6 +1741,7 @@ class AmazonConverseConfig(BaseConfig):
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
+            litellm_params=litellm_params,
         )
 
         ## TRANSFORMATION ##
@@ -1750,7 +1773,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -1802,6 +1825,37 @@ class AmazonConverseConfig(BaseConfig):
         return thinking_blocks_list
 
     @staticmethod
+    def _parse_cache_details(usage: ConverseTokenUsageBlock) -> "CacheCreationTokenDetails | None":
+        """Split ``cacheDetails`` into 5m/1h buckets, or ``None`` unless the split fully
+        accounts for ``cacheWriteInputTokens``, since a partial or unrecognized-ttl
+        breakdown would understate the cache-write cost.
+
+        https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html
+        """
+        cache_details: Final = usage.get("cacheDetails")
+        if not cache_details:
+            return None
+        tokens_5m: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "5m")
+        tokens_1h: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "1h")
+        if tokens_5m + tokens_1h != usage.get("cacheWriteInputTokens", 0):
+            return None
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=tokens_5m,
+            ephemeral_1h_input_tokens=tokens_1h,
+        )
+
+    @staticmethod
+    def thinking_tokens_from_additional_fields(additional_fields: object) -> int | None:
+        """Converse omits thinking tokens from its usage block; they only arrive under
+        ``additionalModelResponseFields`` when ``/usage/output_tokens_details`` is requested."""
+        if not isinstance(additional_fields, Mapping):
+            return None
+        usage: Final = additional_fields.get("usage")
+        if not isinstance(usage, Mapping):
+            return None
+        return AnthropicConfig.thinking_tokens_from_usage(usage)
+
+    @staticmethod
     def is_converse_usage_shape(usage_object: Mapping[str, object]) -> bool:
         """Converse-family models report camelCase token counts, not Anthropic's snake_case."""
         return "inputTokens" in usage_object or "outputTokens" in usage_object
@@ -1842,6 +1896,7 @@ class AmazonConverseConfig(BaseConfig):
         usage: ConverseTokenUsageBlock,
         reasoning_content: str | None = None,
         thinking_ran: bool = False,
+        provider_reasoning_tokens: int | None = None,
     ) -> Usage:
         input_tokens = usage["inputTokens"]
         output_tokens: Final = usage["outputTokens"]
@@ -1860,10 +1915,16 @@ class AmazonConverseConfig(BaseConfig):
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
+            cache_creation_token_details=self._parse_cache_details(usage),
             text_tokens=raw_input_tokens,
         )
-        reasoning_tokens: Final = (
+        estimated_reasoning_tokens: Final = (
             token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
+        )
+        reasoning_tokens: Final = (
+            min(max(0, provider_reasoning_tokens), output_tokens)
+            if provider_reasoning_tokens is not None
+            else estimated_reasoning_tokens
         )
         completion_tokens_details: Final = (
             CompletionTokensDetailsWrapper(
@@ -2272,6 +2333,9 @@ class AmazonConverseConfig(BaseConfig):
             completion_response["usage"],
             reasoning_content=chat_completion_message.get("reasoning_content"),
             thinking_ran=reasoningContentBlocks is not None,
+            provider_reasoning_tokens=self.thinking_tokens_from_additional_fields(
+                completion_response.get("additionalModelResponseFields")
+            ),
         )
 
         ## HANDLE TOOL CALLS

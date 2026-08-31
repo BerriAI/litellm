@@ -40,7 +40,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import ReadOnly, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -164,6 +164,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: bool | None
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
+    reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -287,6 +289,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
+    google_maps_grounding_cost_per_query: ReadOnly[float | None]
     citation_cost_per_token: float | None  # Cost per citation token for Perplexity
     tiered_pricing: list[dict[str, Any]] | None  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
@@ -541,6 +544,8 @@ CallTypesLiteral = Literal[
     "_arealtime",
     "create_batch",
     "acreate_batch",
+    "create_file",
+    "acreate_file",
     "pass_through_endpoint",
     "allm_passthrough_route",
     "anthropic_messages",
@@ -1613,6 +1618,9 @@ class PromptTokensDetailsWrapper(
     web_search_requests: int | None = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 
+    google_maps_grounding_requests: int | None = None
+    """Number of Grounding with Google Maps requests made by the tool call. Used for Gemini to calculate Maps cost."""
+
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
 
@@ -1671,6 +1679,8 @@ class PromptTokensDetailsWrapper(
             del self.audio_length_seconds
         if self.web_search_requests is None:
             del self.web_search_requests
+        if self.google_maps_grounding_requests is None:
+            del self.google_maps_grounding_requests
         if self.tool_use_tokens is None:
             del self.tool_use_tokens
         if self.cache_write_tokens is None:
@@ -2802,6 +2812,12 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
+    # or below heuristic_first_max_tier, so it decided the tier and the LLM classifier was never
+    # called. Distinct from "heuristic_scorer", which is a router whose only classifier IS the
+    # scorer, and from "classifier_fallback", which is the scorer running because a call failed:
+    # only this cause means an LLM classifier was configured, reachable, and deliberately skipped.
+    "heuristic_first_short_circuit",
     # The operator's classifier plugin (classifier_type 'custom') decided the tier.
     "classifier_plugin",
     # The LLM classifier or classifier plugin failed on a router with an operator-defined
@@ -2819,6 +2835,11 @@ RoutingDecisionCause = Literal[
     # keyword rule, or session pin), or the floor was already the top configured tier and the
     # classifier was skipped. The matched sentinel rides in matched_keyword.
     "plan_mode",
+    # A client housekeeping sentinel (a coding agent's conversation-title prompt) was detected on
+    # the newest ask, so the request routed to the cheapest configured tier and the classifier was
+    # never called. The matched sentinel rides in matched_keyword. Distinct from the keyword causes,
+    # which are operator-authored rules; these sentinels ship with the router.
+    "housekeeping",
     "session_affinity_pin",
     "session_affinity_escalation",
     "default_fallback",
@@ -2828,13 +2849,19 @@ RoutingDecisionCause = Literal[
 ]
 
 
-InternalCallOrigin = Literal["autorouter_classifier", "shadow_eval_router", "shadow_eval_judge"]
+InternalCallOrigin = Literal[
+    "autorouter_classifier",
+    "shadow_eval_router",
+    "shadow_eval_judge",
+    "background_response_cost_poll",
+]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
 
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
 SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
 SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
+BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
@@ -2930,6 +2957,8 @@ class StandardLoggingHiddenParams(TypedDict):
     litellm_overhead_time_ms: float | None
     additional_headers: StandardLoggingAdditionalHeaders | None
     batch_models: list[str] | None
+    batch_successful_requests: ReadOnly[int | None]
+    batch_failed_requests: ReadOnly[int | None]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -3065,7 +3094,13 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_cost: ReadOnly[float | None]
     """USD cost of this guardrail invocation, priced from ``guardrail_usage`` by the
     provider hook. Summed into the request's ``response_cost`` so it counts against
-    spend and budgets like token cost."""
+    spend and budgets like token cost, unless ``guardrail_cost_in_spend`` is False."""
+
+    guardrail_cost_in_spend: ReadOnly[bool | None]
+    """Whether ``guardrail_cost`` participates in the request's ``response_cost`` and
+    the spend/budget aggregates built from it. Absent, None, or True keeps the default
+    (cost counts against spend, the Bedrock behavior); False reports the cost on
+    logs, OTEL spans, and the UI while every spend and budget total ignores it."""
 
 
 class EvalVerdict(TypedDict, total=False):
@@ -3112,6 +3147,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]
+    guardrail_cost_in_spend: ReadOnly[bool | None]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3154,7 +3190,7 @@ class CostBreakdown(TypedDict, total=False):
     reasoning_cost: float  # Cost of reasoning tokens (subset of output_cost)
     total_cost: ReadOnly[float]  # Total cost (input + output + tool usage + guardrail)
     tool_usage_cost: float  # Cost of usage of built-in tools
-    guardrail_cost: ReadOnly[float]  # Cost of guardrail invocations billed by the guardrail provider
+    guardrail_cost: ReadOnly[float]  # Cost counted in spend; report-only (guardrail_cost_in_spend=False) is excluded
     additional_costs: dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
@@ -3224,6 +3260,7 @@ class StandardLoggingPayload(TypedDict):
     cache_key: str | None
     saved_cache_cost: float
     request_tags: list
+    request_model_access_groups: NotRequired[ReadOnly[Sequence[str]]]
     end_user: str | None
     requester_ip_address: str | None
     user_agent: str | None
@@ -3272,6 +3309,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret: str | None
     langfuse_secret_key: str | None
     langfuse_host: str | None
+    langfuse_environment: ReadOnly[str | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None
@@ -3405,6 +3443,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
@@ -3467,6 +3506,7 @@ agentic_loop_internal_litellm_params: Final = [
     "_code_interpreter_interception_converted_stream",
     "_websearch_interception_emit_native_blocks",
     "_websearch_interception_converted_stream",
+    "_headroom_interception_converted_stream",
 ]
 
 # Proxy-owned callback credentials, stamped from admin-configured team/key callback

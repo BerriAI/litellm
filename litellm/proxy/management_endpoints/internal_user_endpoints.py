@@ -15,9 +15,9 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final, Literal, Protocol, cast
+from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -58,6 +58,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
@@ -86,15 +87,6 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
 if TYPE_CHECKING:
     from prisma import models as prisma_models
     from prisma import types as prisma_types
-    from prisma.actions import (
-        LiteLLM_InvitationLinkActions,
-        LiteLLM_OrganizationMembershipActions,
-        LiteLLM_OrganizationTableActions,
-        LiteLLM_TeamMembershipActions,
-        LiteLLM_TeamTableActions,
-        LiteLLM_UserTableActions,
-        LiteLLM_VerificationTokenActions,
-    )
 
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.proxy_server import PrismaClient
@@ -105,31 +97,31 @@ router: Final = APIRouter()
 
 def _user_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_UserTableActions[prisma_models.LiteLLM_UserTable]":
-    user_table: Final[LiteLLM_UserTableActions[prisma_models.LiteLLM_UserTable]] = UserRepository(prisma_client).table
+) -> "TableActions[prisma_models.LiteLLM_UserTable]":
+    user_table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = UserRepository(prisma_client).table
     return user_table
 
 
 def _team_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_TeamTableActions[prisma_models.LiteLLM_TeamTable]":
-    team_table: Final[LiteLLM_TeamTableActions[prisma_models.LiteLLM_TeamTable]] = TeamRepository(prisma_client).table
+) -> "TableActions[prisma_models.LiteLLM_TeamTable]":
+    team_table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = TeamRepository(prisma_client).table
     return team_table
 
 
 def _verification_token_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_VerificationTokenActions[prisma_models.LiteLLM_VerificationToken]":
-    token_table: Final[LiteLLM_VerificationTokenActions[prisma_models.LiteLLM_VerificationToken]] = (
-        VerificationTokenRepository(prisma_client).table
-    )
+) -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
+    token_table: Final[TableActions[prisma_models.LiteLLM_VerificationToken]] = VerificationTokenRepository(
+        prisma_client
+    ).table
     return token_table
 
 
 def _organization_membership_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_OrganizationMembershipActions[prisma_models.LiteLLM_OrganizationMembership]":
-    membership_table: Final[LiteLLM_OrganizationMembershipActions[prisma_models.LiteLLM_OrganizationMembership]] = (
+) -> "TableActions[prisma_models.LiteLLM_OrganizationMembership]":
+    membership_table: Final[TableActions[prisma_models.LiteLLM_OrganizationMembership]] = (
         OrganizationMembershipRepository(prisma_client).table
     )
     return membership_table
@@ -137,8 +129,8 @@ def _organization_membership_table(
 
 def _invitation_link_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_InvitationLinkActions[prisma_models.LiteLLM_InvitationLink]":
-    invitation_table: LiteLLM_InvitationLinkActions[prisma_models.LiteLLM_InvitationLink] = InvitationLinkRepository(
+) -> "TableActions[prisma_models.LiteLLM_InvitationLink]":
+    invitation_table: Final[TableActions[prisma_models.LiteLLM_InvitationLink]] = InvitationLinkRepository(
         prisma_client
     ).table
     return invitation_table
@@ -146,19 +138,19 @@ def _invitation_link_table(
 
 def _organization_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_OrganizationTableActions[prisma_models.LiteLLM_OrganizationTable]":
-    organization_table: Final[LiteLLM_OrganizationTableActions[prisma_models.LiteLLM_OrganizationTable]] = (
-        OrganizationRepository(prisma_client).table
-    )
+) -> "TableActions[prisma_models.LiteLLM_OrganizationTable]":
+    organization_table: Final[TableActions[prisma_models.LiteLLM_OrganizationTable]] = OrganizationRepository(
+        prisma_client
+    ).table
     return organization_table
 
 
 def _team_membership_table(
     prisma_client: "PrismaClient | None",
-) -> "LiteLLM_TeamMembershipActions[prisma_models.LiteLLM_TeamMembership]":
-    team_membership_table: Final[LiteLLM_TeamMembershipActions[prisma_models.LiteLLM_TeamMembership]] = (
-        TeamMembershipRepository(prisma_client).table
-    )
+) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+    team_membership_table: Final[TableActions[prisma_models.LiteLLM_TeamMembership]] = TeamMembershipRepository(
+        prisma_client
+    ).table
     return team_membership_table
 
 
@@ -294,7 +286,7 @@ async def _add_user_to_organizations(
         organization_member_add,
     )
 
-    tasks: Final = []
+    tasks: Final[list[Awaitable[object]]] = []
     for organization_id in organizations:
         tasks.append(
             organization_member_add(
@@ -406,7 +398,7 @@ async def add_new_user_to_default_team(
     teams: list[str] | list[NewUserRequestTeam],
     prisma_client: "PrismaClient",
 ):
-    tasks: Final = []
+    tasks: Final[list[Awaitable[object]]] = []
     for team in teams:
         user_role: Literal["user", "admin"] = "user"
         max_budget_in_team: float | None = None
@@ -743,10 +735,44 @@ def _enforce_user_info_access(user_id: str | None, user_api_key_dict: UserAPIKey
     )
 
 
-async def _get_user_info_teams(
-    prisma_client: Any,
+class _UserInfoDataClient(Protocol):
+    @overload
+    async def get_data(self, *, user_id: str) -> "prisma_models.LiteLLM_UserTable | None": ...
+
+    @overload
+    async def get_data(
+        self,
+        *,
+        user_id: str | None,
+        table_name: Literal["key"],
+        query_type: Literal["find_all"],
+    ) -> "Sequence[LiteLLM_VerificationToken] | None": ...
+
+    @overload
+    async def get_data(
+        self,
+        *,
+        team_id_list: list[str],
+        table_name: Literal["team"],
+        query_type: Literal["find_all"],
+    ) -> "Sequence[TeamListResponseObject] | None": ...
+
+
+async def _get_user_info_keys(
+    prisma_client: "_UserInfoDataClient",
     user_id: str | None,
-    user_info: Any | None,
+) -> "Sequence[LiteLLM_VerificationToken] | None":
+    return await prisma_client.get_data(
+        user_id=user_id,
+        table_name="key",
+        query_type="find_all",
+    )
+
+
+async def _get_user_info_teams(
+    prisma_client: "_UserInfoDataClient",
+    user_id: str | None,
+    user_info: "prisma_models.LiteLLM_UserTable",
     user_api_key_dict: UserAPIKeyAuth,
 ) -> tuple[list[TeamListResponseObject], list[TeamListResponseObject] | None]:
     """Fetch and merge teams from membership + user.teams field."""
@@ -767,7 +793,7 @@ async def _get_user_info_teams(
         team_list = teams_1
         team_id_list = [team.team_id for team in teams_1]
 
-    teams_2: list[TeamListResponseObject] | None = None
+    teams_2: Sequence[TeamListResponseObject] | None = None
     target_team_ids: Final = getattr(user_info, "teams", None)
 
     if target_team_ids and isinstance(target_team_ids, list):
@@ -777,8 +803,8 @@ async def _get_user_info_teams(
             query_type="find_all",
         )
     elif user_api_key_dict.user_id is not None and user_id is None:
-        caller_user_info: Final[object] = await prisma_client.get_data(user_id=user_api_key_dict.user_id)
-        caller_team_ids: Final = getattr(caller_user_info, "teams", None)
+        caller_user_info: Final = await prisma_client.get_data(user_id=user_api_key_dict.user_id)
+        caller_team_ids: Final = caller_user_info.teams if caller_user_info is not None else None
         if caller_team_ids:
             teams_2 = await prisma_client.get_data(
                 team_id_list=caller_team_ids,
@@ -815,7 +841,7 @@ def _redact_scim_enterprise_metadata(
 def _build_user_info_response(
     user_id: str | None,
     user_info: Any | None,
-    keys: list[LiteLLM_VerificationToken] | None,
+    keys: Sequence[LiteLLM_VerificationToken] | None,
     team_list: list[TeamListResponseObject],
     teams_1: list[TeamListResponseObject] | None,
     model_max_budget_usage: dict[str, dict[str, object]] | None = None,
@@ -902,11 +928,7 @@ async def user_info(
         )
 
         ## GET ALL KEYS ##
-        keys: Final = await prisma_client.get_data(
-            user_id=user_id,
-            table_name="key",
-            query_type="find_all",
-        )
+        keys: Final = await _get_user_info_keys(prisma_client, user_id)
 
         response_data: Final = _build_user_info_response(
             user_id=user_id,
@@ -1085,6 +1107,12 @@ async def user_info_v2(
         raise handle_exception_on_proxy(e)
 
 
+async def _fetch_admin_teams_and_keys_rows(
+    prisma_client: "PrismaClient", sql_query: str
+) -> Sequence[Mapping[str, Sequence[Mapping[str, object]] | None]]:
+    return await prisma_client.db.query_raw(sql_query)
+
+
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     """
     Admin UI Endpoint - Returns All Teams and Keys when Proxy Admin is querying
@@ -1108,22 +1136,25 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
-    results: Final = await prisma_client.db.query_raw(sql_query)
+    results: Final = await _fetch_admin_teams_and_keys_rows(prisma_client, sql_query)
 
     verbose_proxy_logger.debug("results_keys: %s", results)
 
-    _keys_in_db: Final[Sequence[dict[str, object]]] = results[0]["keys"] or []
+    _keys_in_db: Final[Sequence[Mapping[str, object]]] = results[0]["keys"] or []
     # cast all keys to LiteLLM_VerificationToken
     keys_in_db: Final = []
     for key in _keys_in_db:
-        if key.get("models") is None:
-            key["models"] = []
-        keys_in_db.append(LiteLLM_VerificationToken.model_validate(key))
+        key_payload = dict[str, object](key)
+        if key_payload.get("models") is None:
+            key_payload["models"] = []
+        keys_in_db.append(LiteLLM_VerificationToken.model_validate(key_payload))
 
     # cast all teams to LiteLLM_TeamTable
-    _teams_in_db: list[LiteLLM_TeamTable] = results[0]["teams"] or []
-    _teams_in_db = [LiteLLM_TeamTable.model_validate(team) for team in _teams_in_db]
-    _teams_in_db.sort(key=lambda x: getattr(x, "team_alias", "") or "")
+    _teams_rows: Final[Sequence[Mapping[str, object]]] = results[0]["teams"] or []
+    _teams_in_db: Final = sorted(
+        (LiteLLM_TeamTable.model_validate(team) for team in _teams_rows),
+        key=lambda x: getattr(x, "team_alias", "") or "",
+    )
     returned_keys: Final = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
 
     # Get admin's own user_id and user_info
@@ -1148,7 +1179,7 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
 
 
 def _process_keys_for_user_info(
-    keys: list[LiteLLM_VerificationToken] | None,
+    keys: Sequence[LiteLLM_VerificationToken] | None,
     all_teams: list[LiteLLM_TeamTable] | list[TeamListResponseObject] | None,
 ):
     from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
@@ -1239,7 +1270,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
 
 
 async def _schedule_user_update_audit_log(
-    response: dict[str, Any],
+    response: Mapping[str, object],
     existing_user_row: BaseModel | None,
     litellm_changed_by: str | None,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1479,7 +1510,8 @@ async def _update_single_user_helper(
             # Create new user if not found
             non_default_values["user_id"] = str(uuid.uuid4())
             non_default_values["user_email"] = user_request.user_email
-            response = await prisma_client.insert_data(data=non_default_values, table_name="user")
+            inserted_user_row: Final = await prisma_client.insert_data(data=non_default_values, table_name="user")
+            response = inserted_user_row  # pyright: ignore[reportAssignmentType]  # insert_data returns a prisma row
 
     if response is not None:
         await _schedule_user_update_audit_log(
@@ -1795,7 +1827,9 @@ async def bulk_user_update(
 
         # Apply update transformations (reuse existing logic)
         data_json: Final[dict] = data.user_updates.model_dump(exclude_unset=True)
-        non_default_values: Final = _update_internal_user_params(data_json=data_json, data=data.user_updates)
+        non_default_values: Final[dict[str, object]] = _update_internal_user_params(
+            data_json=data_json, data=data.user_updates
+        )
 
         # Remove user identification fields since we're updating by user_id
         non_default_values.pop("user_id", None)
@@ -2149,7 +2183,7 @@ async def get_users(
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
 
-    users: Sequence[prisma_models.LiteLLM_UserTable] | None = await UserRepository(prisma_client).table.find_many(
+    users: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await UserRepository(prisma_client).table.find_many(
         where=where_conditions,
         skip=skip,
         take=page_size,
@@ -2160,10 +2194,7 @@ async def get_users(
     total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where_conditions)
 
     # Get key count for each user
-    if users is not None:
-        user_key_counts = await get_user_key_counts(prisma_client, [user.user_id for user in users])
-    else:
-        user_key_counts = {}
+    user_key_counts: Final = await get_user_key_counts(prisma_client, [user.user_id for user in users])
 
     verbose_proxy_logger.debug("Total count of users: %s", total_count)
 
@@ -2172,17 +2203,14 @@ async def get_users(
 
     # Prepare response
     user_list: list[LiteLLM_UserTableWithKeyCount] = []
-    if users is not None:
-        for user in users:
-            user_dump = user.model_dump()
-            user_dump["metadata"] = _redact_scim_enterprise_metadata(user_dump.get("metadata"))
-            user_list.append(
-                LiteLLM_UserTableWithKeyCount.model_validate(
-                    {**user_dump, "key_count": user_key_counts.get(user.user_id, 0)}
-                )
+    for user in users:
+        user_dump = user.model_dump()
+        user_dump["metadata"] = _redact_scim_enterprise_metadata(user_dump.get("metadata"))
+        user_list.append(
+            LiteLLM_UserTableWithKeyCount.model_validate(
+                {**user_dump, "key_count": user_key_counts.get(user.user_id, 0)}
             )
-    else:
-        user_list = []
+        )
 
     return {
         "users": user_list,
@@ -2191,13 +2219,6 @@ async def get_users(
         "page_size": page_size,
         "total_pages": total_pages,
     }
-
-
-class _DeleteTeamRow(Protocol):
-    team_id: str
-    members_with_roles: object
-
-    def model_dump(self) -> Mapping[str, object]: ...
 
 
 @router.post(
@@ -2258,9 +2279,9 @@ async def delete_user(
     # loop an org-admin of org-A could delete users in org-B by supplying
     # {"user_ids": [victim_in_org_B], "organization_id": "org-A"}.
     caller_is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    caller_admin_org_ids: set = set()
+    caller_admin_org_ids: set[str] = set()
     if not caller_is_proxy_admin:
-        caller_memberships: Final = (
+        caller_memberships: Final[Sequence[prisma_models.LiteLLM_OrganizationMembership]] = (
             await _organization_membership_table(prisma_client).find_many(
                 where={
                     "user_id": user_api_key_dict.user_id,
@@ -2279,7 +2300,7 @@ async def delete_user(
 
     # Batch-fetch target memberships once before the per-user loop. Avoids
     # an N+1 DB call when delete_user is called with a large user_ids list.
-    target_org_ids_by_user: Final[dict[str, set]] = {}
+    target_org_ids_by_user: Final[dict[str, set[str]]] = {}
     if not caller_is_proxy_admin:
         all_target_memberships: Final = await _organization_membership_table(prisma_client).find_many(
             where={"user_id": {"in": data.user_ids}}
@@ -2319,7 +2340,7 @@ async def delete_user(
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
         if is_audit_logging_enabled():
             # make an audit log for each team deleted
-            _user_row = user_row.json(exclude_none=True)
+            _user_row = user_row.model_dump_json(exclude_none=True)
 
             asyncio.create_task(
                 create_audit_log_for_update(
@@ -2342,10 +2363,10 @@ async def delete_user(
             )
 
         ## CLEANUP MEMBERS_WITH_ROLES
-        fetch_all_teams: Sequence[_DeleteTeamRow] = await TeamRepository(prisma_client).table.find_many(
-            where={"team_id": {"in": user_row.teams}}
-        )
-        teams_to_update = []
+        fetch_all_teams: Sequence[prisma_models.LiteLLM_TeamTable] = await TeamRepository(
+            prisma_client
+        ).table.find_many(where={"team_id": {"in": user_row.teams}})
+        teams_to_update: list[tuple[str, str]] = []
         for team in fetch_all_teams:
             removed_team_members, new_team_members = _cleanup_members_with_roles(
                 existing_team_row=LiteLLM_TeamTable.model_validate(team.model_dump()),
@@ -2357,15 +2378,14 @@ async def delete_user(
             )
             if removed_team_members:
                 _db_new_team_members: list[dict] = [m.model_dump() for m in new_team_members]
-                team.members_with_roles = json.dumps(_db_new_team_members)
-                teams_to_update.append(team)
+                teams_to_update.append((team.team_id, json.dumps(_db_new_team_members)))
 
         ## update teams
 
-        for team in teams_to_update:
+        for team_id, members_with_roles in teams_to_update:
             await TeamRepository(prisma_client).table.update(
-                where={"team_id": team.team_id},
-                data={"members_with_roles": team.members_with_roles},
+                where={"team_id": team_id},
+                data={"members_with_roles": members_with_roles},
             )
     # End of Audit logging
 
