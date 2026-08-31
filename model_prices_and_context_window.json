@@ -553,6 +553,26 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
+    "amazon.nova-sonic-v1:0": {
+        "input_cost_per_audio_token": 3.4e-06,
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "bedrock",
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.36e-05,
+        "output_cost_per_token": 2.4e-07,
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
+    "amazon.nova-2-sonic-v1:0": {
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 3.3e-07,
+        "litellm_provider": "bedrock",
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2.75e-06,
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
     "amazon.rerank-v1:0": {
         "input_cost_per_query": 0.001,
         "input_cost_per_token": 0.0,
