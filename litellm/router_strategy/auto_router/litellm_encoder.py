@@ -153,7 +153,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             batch = docs[i : i + EMBEDDING_BATCH_SIZE]
 
             try:
-                embeds: Final = await self.litellm_router_instance.aembedding(
+                embeds = await self.litellm_router_instance.aembedding(  # rebind-ok: one result per batch
                     input=self._clamp(batch),
                     model=self.model_name,
                     **kwargs,
