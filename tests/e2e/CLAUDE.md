@@ -94,9 +94,9 @@ E2E_FIXTURE_MODE=record E2E_FIXTURE_DIR=/tmp/e2e-fixtures E2E_RESET_SPEND_LOGS=1
 E2E_FIXTURE_MODE=replay E2E_FIXTURE_DIR=/tmp/e2e-fixtures E2E_RESET_SPEND_LOGS=1 uv run pytest tests/e2e/llm_translation/test_chat_completions_contract_e2e.py
 ```
 
-Point the proxy at bogus provider credentials for the replay run and it still has to pass: that is the whole proof that nothing left the process. Bundles are never committed. `tests/e2e/.fixtures` is gitignored because a bundle holds verbatim provider response bodies and hard-fails after seven days, and publishing one for CI is LIT-5748
+Point the proxy at bogus provider credentials for the replay run and it still has to pass: that is the whole proof that nothing left the process. Bundles are never committed. `tests/e2e/.fixtures` is gitignored because a bundle holds verbatim provider response bodies and hard-fails after seven days. CI records and replays this lane on a schedule in `.github/workflows/e2e_record_replay.yml`, publishing the bundle as a private `e2e-fixtures-bundle` artifact instead of committing it, selecting the tests with the `@pytest.mark.replayable` marker, and proving the bogus-credentials replay hermetic by counting provider egress with `.github/scripts/e2e_egress_sentinel.py`
 
-Current limits: CI wiring is LIT-5748, Bedrock cannot be mounted (SigV4 signs the Host header, so a rewritten api_base fails signature verification), deployments baked into the proxy's config file cannot be edge-wired (only `/model/new` registrations can carry the edge api_base), and a file upload routed by `custom_llm_provider` through the proxy's `files_settings` block never passes a deployment at all, so the batches `model_param` and `provider_fallback` scenarios keep uploading live in every mode
+Current limits: Bedrock cannot be mounted (SigV4 signs the Host header, so a rewritten api_base fails signature verification), deployments baked into the proxy's config file cannot be edge-wired (only `/model/new` registrations can carry the edge api_base), and a file upload routed by `custom_llm_provider` through the proxy's `files_settings` block never passes a deployment at all, so the batches `model_param` and `provider_fallback` scenarios keep uploading live in every mode
 
 ## Typing
 
@@ -177,15 +177,15 @@ quota_management.<behavior>.<variant>.<assertion>
   behavior  : ratelimit | budget | spend_tracking
   variant   : <ratelimit>      rpm | tpm | priority_generous | priority_strict
               <budget>         key | internal_user | end_user | organization | team | team_member | tag
-                               | model_max | soft | key_multi_window | team_multi_window
-                               | fallback | spend_counter
+                               | model_access_group | model_max | soft | key_multi_window
+                               | team_multi_window | fallback | spend_counter
               <spend_tracking> chat_completions | stream | messages_bridge | embeddings
                                | cache_hit | key_rollup | concurrent_burst | tags | end_user
                                | per_model | failure | spend_calculate | pagination
   assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
               | blocks_then_resets | resets_windows_independently | alerts_without_blocking
-              | isolates_per_model | isolates_per_member | enforced_across_keys | routes_to_fallback
-              | reseed_matches_db | logs_cost | zero_cost
+              | isolates_per_model | isolates_per_member | isolates_per_group | enforced_across_keys
+              | routes_to_fallback | reseed_matches_db | reports_spend | logs_cost | zero_cost
               | matches_sum_of_logs | loses_no_spend | attributes_spend | writes_own_rows
               | writes_failure_row | returns_cost | keeps_total
   e.g.  quota_management.ratelimit.rpm.blocks_over_limit           exercised_on=[chat_completions, messages]
