@@ -801,56 +801,94 @@ def test_responses_api_bridge_check_gpt_5_5_tools_plus_reasoning_routes_to_respo
     assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_forwards_api_base_to_model_info_helper():
+_OLLAMA_SHOW_RESPONSE: Final = {
+    "model_info": {"llama.context_length": 8192},
+    "capabilities": ["completion"],
+}
+
+_OLLAMA_GENERATE_RESPONSE: Final = {
+    "model": "llama3-custom",
+    "response": "hello from ollama",
+    "done": True,
+    "done_reason": "stop",
+    "prompt_eval_count": 5,
+    "eval_count": 4,
+}
+
+_OLLAMA_CHAT_RESPONSE: Final = {
+    "model": "llama3-custom",
+    "message": {"role": "assistant", "content": "hello from ollama"},
+    "done": True,
+    "done_reason": "stop",
+    "prompt_eval_count": 5,
+    "eval_count": 4,
+}
+
+
+def test_responses_api_bridge_check_forwards_api_base_to_model_info_lookup(respx_mock: respx.MockRouter):
     """Regression test for https://github.com/BerriAI/litellm/issues/37041 -- the bridge
     check's model-info lookup must hit the request's api_base, not fall back to the
     provider default (localhost:11434 for ollama)."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
-        mock_get_model_info.return_value = {"mode": "chat"}
-        responses_api_bridge_check(
-            model="llama3",
-            custom_llm_provider="ollama",
-            api_base="http://my-host:30000",
-        )
+    show_route = respx_mock.post("http://my-host:30000/api/show").respond(json=_OLLAMA_SHOW_RESPONSE)
 
-    assert mock_get_model_info.call_args.kwargs["api_base"] == "http://my-host:30000"
+    litellm.get_model_info.cache_clear()
+    model_info, model = responses_api_bridge_check(
+        model="llama3-custom",
+        custom_llm_provider="ollama",
+        api_base="http://my-host:30000",
+    )
+
+    assert show_route.called
+    assert model == "llama3-custom"
+    assert model_info["max_tokens"] == 8192
 
 
-@pytest.mark.parametrize("model", ["ollama/llama3", "ollama_chat/llama3"])
-def test_ollama_completion_explicit_api_base_overrides_global(model, monkeypatch):
+@pytest.mark.parametrize(
+    "model, completion_path, completion_response",
+    [
+        ("ollama/llama3-custom", "/api/generate", _OLLAMA_GENERATE_RESPONSE),
+        ("ollama_chat/llama3-custom", "/api/chat", _OLLAMA_CHAT_RESPONSE),
+    ],
+)
+def test_ollama_completion_explicit_api_base_overrides_global(
+    model, completion_path, completion_response, monkeypatch, respx_mock: respx.MockRouter
+):
     """Regression test for https://github.com/BerriAI/litellm/issues/26170 -- the explicit
     api_base kwarg must win over the litellm.api_base global, matching the openai provider."""
-    monkeypatch.setattr(litellm, "api_base", "https://api.deepseek.com")
+    monkeypatch.setattr(litellm, "api_base", "https://unrelated-global.example.com")
+    respx_mock.post("http://my-host:30000/api/show").respond(json=_OLLAMA_SHOW_RESPONSE)
+    completion_route = respx_mock.post(f"http://my-host:30000{completion_path}").respond(json=completion_response)
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info, patch.object(
-        litellm_main.base_llm_http_handler, "completion"
-    ) as mock_completion:
-        mock_get_model_info.return_value = {"mode": "chat"}
-        mock_completion.return_value = litellm.ModelResponse()
-        litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            api_base="http://my-host:30000",
-        )
+    litellm.get_model_info.cache_clear()
+    response = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="http://my-host:30000",
+    )
 
-    assert mock_completion.call_args.kwargs["api_base"] == "http://my-host:30000"
+    assert completion_route.called
+    assert response.choices[0].message.content == "hello from ollama"
 
 
-def test_ollama_embedding_explicit_api_base_overrides_global(monkeypatch):
+def test_ollama_embedding_explicit_api_base_overrides_global(monkeypatch, respx_mock: respx.MockRouter):
     """Regression test for https://github.com/BerriAI/litellm/issues/26170 (embedding path)."""
-    monkeypatch.setattr(litellm, "api_base", "https://api.deepseek.com")
+    monkeypatch.setattr(litellm, "api_base", "https://unrelated-global.example.com")
+    respx_mock.post("http://my-host:30000/api/show").respond(json=_OLLAMA_SHOW_RESPONSE)
+    embed_route = respx_mock.post("http://my-host:30000/api/embed").respond(
+        json={"model": "qwen3-embedding:0.6b", "embeddings": [[0.1, 0.2, 0.3]], "prompt_eval_count": 2}
+    )
 
-    with patch("litellm.main.ollama.ollama_embeddings") as mock_embeddings:
-        mock_embeddings.return_value = litellm.EmbeddingResponse()
-        litellm.embedding(
-            model="ollama/qwen3-embedding:0.6b",
-            input="hello",
-            api_base="http://my-host:30000",
-        )
+    litellm.get_model_info.cache_clear()
+    response = litellm.embedding(
+        model="ollama/qwen3-embedding:0.6b",
+        input="hello",
+        api_base="http://my-host:30000",
+    )
 
-    assert mock_embeddings.call_args.kwargs["api_base"] == "http://my-host:30000"
+    assert embed_route.called
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
 
 def test_responses_api_bridge_check_azure_gpt_5_4_tools_plus_reasoning_routes_to_responses():
