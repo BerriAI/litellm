@@ -46,6 +46,23 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 
+_BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS: Final = {
+    "vertex_credentials",
+    "vertex_ai_credentials",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_web_identity_token",
+    "aws_role_name",
+    "aws_session_name",
+    "aws_profile_name",
+    "aws_sts_endpoint",
+    "aws_external_id",
+    "azure_ad_token",
+    "api_key",
+    "api_base",
+}
+
 
 class _RAGIngestErrorDetail(TypedDict):
     error: ReadOnly[str]
@@ -222,6 +239,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
 
     vector_store_config: Final = ingest_options.get("vector_store", {})
     custom_llm_provider: Final = vector_store_config.get("custom_llm_provider")
+    credential_name: Final = vector_store_config.get("litellm_credential_name")
 
     # Extract litellm_vector_store_params for custom name and description
     litellm_vector_store_params: Final = ingest_options.get("litellm_vector_store_params", {})
@@ -231,7 +249,12 @@ async def _save_vector_store_to_db_from_rag_ingest(
     # Extract provider-specific params from vector_store_config to save as litellm_params
     # This ensures params like aws_region_name, embedding_model, etc. are available for search
     provider_specific_params: Final = {}
-    excluded_keys: Final = {"custom_llm_provider", "vector_store_id"}
+    excluded_keys: Final = {
+        "custom_llm_provider",
+        "vector_store_id",
+        "litellm_credential_name",
+        *_BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS,
+    }
     for key, value in vector_store_config.items():
         if key not in excluded_keys and value is not None:
             provider_specific_params[key] = value
@@ -268,6 +291,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
                 vector_store_description=vector_store_description,
                 vector_store_metadata=initial_metadata,
                 litellm_params=(provider_specific_params if provider_specific_params else None),
+                litellm_credential_name=credential_name,
                 team_id=user_api_key_dict.team_id,
                 user_id=user_api_key_dict.user_id,
             )
@@ -411,22 +435,6 @@ async def parse_rag_ingest_request(
     # google-auth's identity_pool credential refresh.
     # api_base is also blocked: a user-controlled base URL causes the server
     # to send its configured provider credentials to an attacker endpoint.
-    _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS: Final = {
-        "vertex_credentials",
-        "vertex_ai_credentials",
-        "aws_access_key_id",
-        "aws_secret_access_key",
-        "aws_session_token",
-        "aws_web_identity_token",
-        "aws_role_name",
-        "aws_session_name",
-        "aws_profile_name",
-        "aws_sts_endpoint",
-        "aws_external_id",
-        "azure_ad_token",
-        "api_key",
-        "api_base",
-    }
     vector_store_opts: Final[object] = ingest_options.get("vector_store", {})
     if isinstance(vector_store_opts, dict):
         for field in _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS:

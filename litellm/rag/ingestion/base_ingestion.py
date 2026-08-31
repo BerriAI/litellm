@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -60,7 +61,9 @@ class BaseRAGIngestion(ABC):
             ingest_options.get("chunking_strategy") or {"type": "auto"},
         )
         self.embedding_config = ingest_options.get("embedding")
-        self.vector_store_config: dict[str, Any] = cast(dict[str, Any], ingest_options.get("vector_store") or {})
+        self.vector_store_config: dict[str, Any] = deepcopy(
+            cast(dict[str, Any], ingest_options.get("vector_store") or {})
+        )
         self.ingest_name = ingest_options.get("name")
 
         # Load credentials from litellm_credential_name if provided in vector_store config

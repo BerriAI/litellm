@@ -6,6 +6,7 @@ Covers:
 """
 
 import io
+import json
 from copy import deepcopy
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -107,7 +108,9 @@ def test_rag_ingest_rejects_non_string_provider_before_execution(
 
 
 @pytest.mark.asyncio
-async def test_rag_ingest_named_credentials_are_request_local_and_not_persisted() -> None:
+async def test_rag_ingest_named_credentials_are_request_local_and_not_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy.rag_endpoints.endpoints import _save_vector_store_to_db_from_rag_ingest
     from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
 
@@ -133,32 +136,40 @@ async def test_rag_ingest_named_credentials_are_request_local_and_not_persisted(
         },
     )
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    vector_store_table: Final = prisma_client.db.litellm_managedvectorstorestable
+    vector_store_table.find_unique = AsyncMock(return_value=None)
+    created_vector_store: Final = MagicMock()
+    created_vector_store.model_dump.return_value = {
+        "vector_store_id": "vs_named_credential",
+        "custom_llm_provider": "openai",
+        "litellm_credential_name": "rag-openai",
+        "litellm_params": '{"ttl_days": 7}',
+    }
+    vector_store_table.create = AsyncMock(return_value=created_vector_store)
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
 
-    with (
-        patch.object(litellm, "credential_list", [credential]),
-        patch(
-            "litellm.proxy.vector_store_endpoints.management_endpoints.create_vector_store_in_db",
-            new_callable=AsyncMock,
-        ) as create_vector_store,
-    ):
-        OpenAIRAGIngestion(ingest_options=ingest_options)
-        await _save_vector_store_to_db_from_rag_ingest(
-            response={"vector_store_id": "vs_named_credential"},
-            ingest_options=ingest_options,
-            prisma_client=prisma_client,
-            user_api_key_dict=UserAPIKeyAuth(user_id="user-123", team_id="team-123"),
-        )
+    OpenAIRAGIngestion(ingest_options=ingest_options)
+    await _save_vector_store_to_db_from_rag_ingest(
+        response={"vector_store_id": "vs_named_credential"},
+        ingest_options=ingest_options,
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-123", team_id="team-123"),
+    )
 
-    persistence_args: Final = create_vector_store.await_args.kwargs
+    persistence_data: Final = vector_store_table.create.await_args.kwargs["data"]
+    persisted_params: Final = json.loads(persistence_data["litellm_params"])
+    credential_keys: Final = {*credential.credential_values, "litellm_credential_name"}
     assert {
         "caller_request": ingest_options,
-        "credential_column": persistence_args.get("litellm_credential_name"),
-        "litellm_params": persistence_args["litellm_params"],
+        "credential_column": persistence_data.get("litellm_credential_name"),
+        "provider_setting": persisted_params.get("ttl_days"),
+        "persisted_credential_keys": credential_keys.intersection(persisted_params),
     } == {
         "caller_request": original_ingest_options,
         "credential_column": "rag-openai",
-        "litellm_params": {"ttl_days": 7},
+        "provider_setting": 7,
+        "persisted_credential_keys": set(),
     }
 
 
