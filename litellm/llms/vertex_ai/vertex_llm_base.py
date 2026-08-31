@@ -29,9 +29,11 @@ from .common_utils import (
 
 
 def _graft_default_vertex_path(api_base: str, default_url: str) -> str:
+    parsed_api_base: Final = urlparse(api_base)
     default_segments: Final = urlparse(default_url).path.lstrip("/").split("/")
     graft_segments: Final = default_segments[1:] if default_segments[0] in ("v1", "v1beta1") else default_segments
-    return api_base.rstrip("/") + "/" + "/".join(graft_segments)
+    grafted_path: Final = parsed_api_base.path.rstrip("/") + "/" + "/".join(graft_segments)
+    return parsed_api_base._replace(path=grafted_path).geturl()
 
 
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
