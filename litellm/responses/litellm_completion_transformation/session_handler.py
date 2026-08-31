@@ -1,6 +1,10 @@
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
+
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -27,7 +31,24 @@ else:
 # Cold Storage Handler
 ########################################################
 COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+_VISIBLE_TEXT_TYPES: Final = frozenset(("text", "input_text", "output_text"))
 ########################################################
+
+
+class ResponsesVisibleMessage(TypedDict):
+    type: ReadOnly[Literal["message"]]
+    role: ReadOnly[Literal["user", "assistant"]]
+    content: ReadOnly[str]
+
+
+class ResponsesVisibleHistory(NamedTuple):
+    input: tuple[ResponsesVisibleMessage, ...]
+    litellm_session_id: str
+
+
+class ResponsesSessionHistoryTooLongError(ValueError):
+    pass
 
 
 def _normalize_redacted_tool_call_arguments(message: Message) -> None:
@@ -42,6 +63,168 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
 
 
 class ResponsesSessionHandler:
+    @staticmethod
+    def _visible_message(role: Literal["user", "assistant"], content: str) -> ResponsesVisibleMessage:
+        message: Final[ResponsesVisibleMessage] = {"type": "message", "role": role, "content": content}
+        return message
+
+    @staticmethod
+    def _visible_text_from_content(content: object) -> str | None:
+        if isinstance(content, str):
+            return content or None
+        if not isinstance(content, list):
+            return None
+        text_parts: Final = tuple(
+            text
+            for part in content
+            if isinstance(part, Mapping) and part.get("type") in _VISIBLE_TEXT_TYPES
+            for text in (part.get("text"),)
+            if isinstance(text, str) and text
+        )
+        return "\n\n".join(text_parts) or None
+
+    @staticmethod
+    def _visible_input_messages(
+        proxy_server_request: Mapping[str, object],
+    ) -> tuple[ResponsesVisibleMessage, ...]:
+        request_input: Final = proxy_server_request.get("input", proxy_server_request.get("messages"))
+        if isinstance(request_input, str):
+            return (ResponsesSessionHandler._visible_message("user", request_input),)
+        if not isinstance(request_input, list):
+            return ()
+        return tuple(
+            ResponsesSessionHandler._visible_message(role, text)
+            for item in request_input
+            if isinstance(item, Mapping)
+            for role in (item.get("role"),)
+            if role in ("user", "assistant")
+            for text in (ResponsesSessionHandler._visible_text_from_content(item.get("content")),)
+            if text is not None
+        )
+
+    @staticmethod
+    def _visible_response_messages(response: object) -> tuple[ResponsesVisibleMessage, ...]:
+        parsed_response: Final = ResponsesSessionHandler._parse_stored_response(response)
+        if parsed_response is None:
+            return ()
+        choices: Final = parsed_response.get("choices")
+        if isinstance(choices, list):
+            return tuple(
+                ResponsesSessionHandler._visible_message("assistant", text)
+                for choice in choices
+                if isinstance(choice, Mapping)
+                for message in (choice.get("message"),)
+                if isinstance(message, Mapping)
+                for text in (ResponsesSessionHandler._visible_text_from_content(message.get("content")),)
+                if text is not None
+            )
+        output: Final = parsed_response.get("output")
+        if not isinstance(output, list):
+            return ()
+        return tuple(
+            ResponsesSessionHandler._visible_message("assistant", text)
+            for item in output
+            if isinstance(item, Mapping) and item.get("type") == "message"
+            for text in (ResponsesSessionHandler._visible_text_from_content(item.get("content")),)
+            if text is not None
+        )
+
+    @staticmethod
+    def _parse_stored_response(response: object) -> Mapping[str, object] | None:
+        if isinstance(response, str):
+            try:
+                parsed_response: Final = json.loads(response)
+            except json.JSONDecodeError:
+                return None
+            return parsed_response if isinstance(parsed_response, Mapping) else None
+        if not isinstance(response, Mapping):
+            return None
+        return response
+
+    @staticmethod
+    async def get_visible_history_for_previous_response_id(
+        previous_response_id: str,
+        api_key_hash: str | None = None,
+    ) -> ResponsesVisibleHistory | None:
+        spend_logs: Final = await ResponsesSessionHandler.get_spend_logs_for_visible_replay(
+            previous_response_id=previous_response_id,
+            api_key_hash=api_key_hash,
+        )
+        if not spend_logs:
+            return None
+        session_id: Final = spend_logs[0].get("session_id")
+        if not session_id:
+            return None
+        proxy_server_requests: Final = await asyncio.gather(
+            *(
+                ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
+                for spend_log in spend_logs
+            )
+        )
+        messages: Final = tuple(
+            message
+            for spend_log, proxy_server_request in zip(spend_logs, proxy_server_requests)
+            for message in (
+                *ResponsesSessionHandler._visible_input_messages(proxy_server_request or _EMPTY_MAPPING),
+                *ResponsesSessionHandler._visible_response_messages(spend_log.get("response")),
+            )
+        )
+        if not messages:
+            return None
+        return ResponsesVisibleHistory(input=messages, litellm_session_id=session_id)
+
+    @staticmethod
+    async def get_spend_logs_for_visible_replay(
+        previous_response_id: str,
+        api_key_hash: str | None = None,
+    ) -> tuple[SpendLogsPayload, ...]:
+        from litellm.constants import (
+            RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS,
+            RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL,
+            RESPONSES_SESSION_MAX_SPEND_LOGS,
+        )
+        from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
+
+        response_id: Final = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+            previous_response_id
+        )
+        if prisma_client is None:
+            return ()
+
+        query: Final = """
+            WITH matching_response AS (
+                SELECT session_id, "endTime"
+                FROM "LiteLLM_SpendLogs"
+                WHERE request_id = $1
+                                    AND ($3::text IS NULL OR api_key = $3)
+            ), bounded_history AS (
+                SELECT spend_log.*
+                FROM "LiteLLM_SpendLogs" AS spend_log
+                JOIN matching_response
+                  ON spend_log.session_id = matching_response.session_id
+                 AND (spend_log."endTime", spend_log.request_id) <= (matching_response."endTime", $1)
+                WHERE $3::text IS NULL OR spend_log.api_key = $3
+                ORDER BY spend_log."endTime" DESC, spend_log.request_id DESC
+                LIMIT $2
+            )
+            SELECT * FROM bounded_history
+            ORDER BY "endTime" ASC, request_id ASC;
+        """
+        max_attempts: Final = 1 if disable_spend_logs else RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
+        for attempt in range(max_attempts):
+            if attempt:
+                await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
+            spend_logs = await prisma_client.db.query_raw(  # rebind-ok: each retry replaces the previous empty result
+                query, response_id, RESPONSES_SESSION_MAX_SPEND_LOGS + 1, api_key_hash
+            )
+            if len(spend_logs) > RESPONSES_SESSION_MAX_SPEND_LOGS:
+                raise ResponsesSessionHistoryTooLongError(
+                    f"Responses session exceeds the replay limit of {RESPONSES_SESSION_MAX_SPEND_LOGS} spend logs"
+                )
+            if spend_logs:
+                return tuple(spend_logs)
+        return ()
+
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
@@ -279,10 +462,7 @@ class ResponsesSessionHandler:
         drops the whole conversation instead of erroring. Deployments that write no spend
         logs at all have nothing to wait for, so they keep the single original query.
         """
-        from litellm.constants import (
-            RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS,
-            RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL,
-        )
+        from litellm.constants import RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS, RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL
         from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)

@@ -2,13 +2,12 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 import litellm
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    ResponsesSessionHistoryTooLongError,
     _normalize_redacted_tool_call_arguments,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -224,11 +223,10 @@ async def test_e2e_cold_storage_successful_retrieval():
         patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage,
         patch("litellm.cold_storage_custom_logger", return_value="s3"),
     ):
-
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
-        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = (
-            AsyncMock(return_value=full_proxy_request)
+        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=full_proxy_request
         )
 
         # Call the main function
@@ -282,7 +280,6 @@ async def test_e2e_cold_storage_fallback_to_truncated_payload():
         ) as mock_get_spend_logs,
         patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage,
     ):
-
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
 
@@ -349,41 +346,25 @@ async def test_should_check_cold_storage_for_full_payload():
 
     with patch("litellm.cold_storage_custom_logger", return_value="s3"):
         # Test case 1: Should return True for truncated content
-        result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_with_truncated_pdf
-        )
-        assert (
-            result1 == True
-        ), "Should return True for proxy request with truncated PDF content"
+        result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
+        assert result1 == True, "Should return True for proxy request with truncated PDF content"
 
         # Test case 2: Should return False for regular content
-        result2 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_regular
-        )
-        assert (
-            result2 == False
-        ), "Should return False for regular proxy request without truncation"
+        result2 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_regular)
+        assert result2 == False, "Should return False for regular proxy request without truncation"
 
         # Test case 3: Should return True for empty request
-        result3 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_empty
-        )
+        result3 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_empty)
         assert result3 == True, "Should return True for empty proxy request"
 
         # Test case 4: Should return True for None request
-        result4 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_none
-        )
+        result4 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_none)
         assert result4 == True, "Should return True for None proxy request"
 
     # Test case 5: Should return False when cold storage is not configured
     with patch.object(litellm, "cold_storage_custom_logger", None):
-        result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_with_truncated_pdf
-        )
-        assert (
-            result5 == False
-        ), "Should return False when cold storage is not configured, even with truncated content"
+        result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
+        assert result5 == False, "Should return False when cold storage is not configured, even with truncated content"
 
 
 @pytest.mark.asyncio
@@ -392,8 +373,6 @@ async def test_get_chat_completion_message_history_empty_response_dict():
     Test that empty response dict is handled correctly without processing.
     This tests the fix for response validation to check for empty dict responses.
     """
-    from unittest.mock import AsyncMock, patch
-
     # Mock spend logs with empty response dict
     mock_spend_logs = [
         {
@@ -413,7 +392,7 @@ async def test_get_chat_completion_message_history_empty_response_dict():
         }
     ]
 
-    with patch.object(
+    with patch.object(  # test-quality-ok: legacy handler has no spend-log repository injection seam
         ResponsesSessionHandler, "get_all_spend_logs_for_previous_response_id"
     ) as mock_get_spend_logs:
         mock_get_spend_logs.return_value = mock_spend_logs
@@ -509,9 +488,7 @@ async def test_message_history_reconstructs_list_shaped_input():
     ) as mock_get_spend_logs:
         mock_get_spend_logs.return_value = mock_spend_logs
 
-        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-            request_id
-        )
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(request_id)
 
     messages = result["messages"]
     assert [(message.get("role"), message.get("content")) for message in messages] == [
@@ -540,9 +517,7 @@ async def test_message_history_retries_a_spend_log_the_batch_writer_has_not_flus
     fake_prisma_client = _FakePrismaClient(results=[[], [spend_log]])
 
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
-        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-            request_id
-        )
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(request_id)
 
     messages = result["messages"]
     assert [(message.get("role"), message.get("content")) for message in messages] == [
@@ -609,14 +584,10 @@ async def test_message_history_looks_up_the_decoded_chat_completion_id():
         model_id="e0f302a1412e78470ebb28cbed01fff5f88c0d331c667e9f2ba4b413c6fbd282",
         response_id=request_id,
     )
-    fake_prisma_client = _FakePrismaClient(
-        results=[[_spend_log(request_id, "session-a", "Hello.", "Hi.")]]
-    )
+    fake_prisma_client = _FakePrismaClient(results=[[_spend_log(request_id, "session-a", "Hello.", "Hi.")]])
 
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
-        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
-            encoded_response_id
-        )
+        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(encoded_response_id)
 
     assert fake_prisma_client.db.calls == [(request_id,)]
 
@@ -631,8 +602,13 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
     """
     fake_prisma_client = _FakePrismaClient(results=[])
 
-    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client), patch(
-        "litellm.proxy.proxy_server.disable_spend_logs", True
+    with (
+        patch(  # test-quality-ok: legacy handler reads the proxy-global Prisma client directly
+            "litellm.proxy.proxy_server.prisma_client", fake_prisma_client
+        ),
+        patch(  # test-quality-ok: legacy handler reads the proxy-global spend-log switch directly
+            "litellm.proxy.proxy_server.disable_spend_logs", True
+        ),
     ):
         spend_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
             "chatcmpl-does-not-exist"
@@ -642,13 +618,94 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
     assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
 
 
+@pytest.mark.asyncio
+async def test_visible_history_replays_only_user_and_assistant_text():
+    mock_spend_logs = [
+        {
+            "request_id": "resp-terra",
+            "session_id": "session-terra",
+            "proxy_server_request": {
+                "input": [
+                    {"type": "message", "role": "user", "content": "My name is Chulsoo."},
+                    {"type": "reasoning", "encrypted_content": "terra-secret", "summary": []},
+                ]
+            },
+            "response": {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "I will remember that.",
+                            "reasoning_content": "private reasoning",
+                        }
+                    }
+                ]
+            },
+        }
+    ]
+
+    with patch.object(  # test-quality-ok: session handler has no repository injection seam
+        ResponsesSessionHandler,
+        "get_spend_logs_for_visible_replay",
+        new_callable=AsyncMock,
+        return_value=mock_spend_logs,
+    ):
+        history = await ResponsesSessionHandler.get_visible_history_for_previous_response_id("resp-terra")
+
+    assert history is not None
+    assert history.litellm_session_id == "session-terra"
+    assert history.input == (
+        {"type": "message", "role": "user", "content": "My name is Chulsoo."},
+        {"type": "message", "role": "assistant", "content": "I will remember that."},
+    )
+    assert "encrypted_content" not in json.dumps(history.input)
+    assert "private reasoning" not in json.dumps(history.input)
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_is_anchored_and_bounded():
+    request_id = "resp-anchor"
+    fake_prisma_client = _FakePrismaClient(results=[[_spend_log(request_id, "session-a", "Hello", "Hi")]])
+
+    with patch(  # test-quality-ok: session handler reads the proxy-global Prisma client directly
+        "litellm.proxy.proxy_server.prisma_client", fake_prisma_client
+    ):
+        await ResponsesSessionHandler.get_spend_logs_for_visible_replay(request_id)
+
+    query = fake_prisma_client.db.calls
+    assert query == [(request_id, litellm.constants.RESPONSES_SESSION_MAX_SPEND_LOGS + 1, None)]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_rejects_history_over_limit(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm.constants, "RESPONSES_SESSION_MAX_SPEND_LOGS", 1)
+    fake_prisma_client = _FakePrismaClient(
+        results=[
+            [
+                _spend_log("resp-1", "session-a", "One", "First"),
+                _spend_log("resp-2", "session-a", "Two", "Second"),
+            ]
+        ]
+    )
+
+    with patch(  # test-quality-ok: session handler reads the proxy-global Prisma client directly
+        "litellm.proxy.proxy_server.prisma_client", fake_prisma_client
+    ):
+        with pytest.raises(ResponsesSessionHistoryTooLongError, match="replay limit of 1"):
+            await ResponsesSessionHandler.get_spend_logs_for_visible_replay("resp-2")
+
+
 def test_normalize_redacted_arguments_skips_custom_tool_calls():
     """Custom tool calls have no .function; the normalizer must skip them, not crash (session replay path)."""
     message = Message(
         content=None,
         tool_calls=[
             {"id": "call_c", "type": "custom", "custom": {"name": "run_code", "input": "print(1)"}},
-            {"id": "call_f", "type": "function", "function": {"name": "get_weather", "arguments": "redacted-by-litellm"}},
+            {
+                "id": "call_f",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "redacted-by-litellm"},
+            },
         ],
     )
 
@@ -703,11 +760,13 @@ async def test_message_history_normalizes_redacted_tool_call_arguments():
         }
     ]
 
-    with patch.object(  # test-quality-ok: the handler has no DI seam for the spend-log fetch; every test in this file stubs this same boundary
-        ResponsesSessionHandler,
-        "get_all_spend_logs_for_previous_response_id",
-        new_callable=AsyncMock,
-    ) as mock_get_spend_logs:
+    with (
+        patch.object(  # test-quality-ok: the handler has no DI seam for the spend-log fetch; every test in this file stubs this same boundary
+            ResponsesSessionHandler,
+            "get_all_spend_logs_for_previous_response_id",
+            new_callable=AsyncMock,
+        ) as mock_get_spend_logs
+    ):
         mock_get_spend_logs.return_value = mock_spend_logs
 
         result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
