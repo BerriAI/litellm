@@ -28,6 +28,9 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     optional_str,
     request_tags_from_metadata,
 )
+from litellm.proxy.pass_through_endpoints.upstream_usage_headers import (
+    get_upstream_reported_usage,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -37,6 +40,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     TextCompletionResponse,
+    Usage,
 )
 
 if TYPE_CHECKING:
@@ -278,8 +282,21 @@ class AnthropicPassthroughLoggingHandler:
                 litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
             )
 
+            # An upstream that reported its own totals via the x-litellm-*
+            # response headers owns the whole request's cost and token count
+            # (see upstream_usage_headers.py); never overwrite them with a
+            # recompute from the response body. Mirrors the precedence
+            # _set_cost_per_request and the streaming path already apply.
+            upstream_usage: Final = get_upstream_reported_usage(logging_obj)
+            if upstream_usage is not None and upstream_usage.total_tokens is not None:
+                setattr(  # noqa: B010  # ModelResponse does not declare `usage` as a typed field
+                    litellm_model_response, "usage", Usage(total_tokens=upstream_usage.total_tokens)
+                )
+
             response_cost: Final = (
-                0.0
+                upstream_usage.billable_response_cost
+                if upstream_usage is not None
+                else 0.0
                 if logging_obj.model_call_details.get("cache_hit") is True
                 else litellm.completion_cost(
                     completion_response=litellm_model_response,

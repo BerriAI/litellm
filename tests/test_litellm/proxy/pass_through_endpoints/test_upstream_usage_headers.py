@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.pass_through_endpoints.upstream_usage_headers import (
     UpstreamReportedUsage,
     apply_upstream_reported_usage,
+    get_upstream_reported_usage,
     parse_upstream_reported_usage,
 )
 from litellm.types.utils import Usage
@@ -126,3 +127,16 @@ def test_apply_only_overwrites_what_upstream_reported():
 
     assert logging_obj.model_call_details["response_cost"] == 0.5
     assert logging_obj.model_call_details["combined_usage_object"] == Usage(total_tokens=42)
+
+
+def test_get_returns_what_apply_recorded_and_none_before():
+    logging_obj = _logging_obj()
+
+    assert get_upstream_reported_usage(logging_obj) is None
+
+    apply_upstream_reported_usage(
+        logging_obj=logging_obj,
+        headers=_headers(**{"x-litellm-response-cost": "0.5"}),
+    )
+
+    assert get_upstream_reported_usage(logging_obj) == UpstreamReportedUsage(response_cost=0.5, total_tokens=None)

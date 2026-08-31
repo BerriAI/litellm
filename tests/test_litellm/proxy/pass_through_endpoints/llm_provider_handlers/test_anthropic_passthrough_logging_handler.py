@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 
@@ -11,6 +12,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from litellm.proxy.pass_through_endpoints.upstream_usage_headers import (
+    apply_upstream_reported_usage,
+)
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 
 async def _drain_tasks():
@@ -2441,3 +2446,85 @@ class TestAnthropicPassthroughFastMode:
 
         assert served_standard.usage.speed == "standard"
         assert self._cost(served_standard) == pytest.approx(self._cost(standard))
+
+
+class TestUpstreamReportedUsageWinsOverBodyRecompute:
+    """A config pass-through whose path contains /messages is logged by this
+    handler even when the target is not Anthropic. When that target reported
+    its own totals via the x-litellm-response-cost / x-litellm-total-tokens
+    response headers, the non-streaming payload builder must keep them instead
+    of recomputing cost and tokens from the response body, matching the
+    precedence the streaming path already applies."""
+
+    def _logging_obj_with_reported_usage(self, headers: dict) -> LiteLLMLoggingObj:
+        logging_obj = LiteLLMLoggingObj(
+            model="my-router-alias",
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="upstream-usage-call-id",
+            function_id="upstream-usage",
+        )
+        apply_upstream_reported_usage(logging_obj=logging_obj, headers=httpx.Headers(headers))
+        return logging_obj
+
+    def _priced_body_response(self) -> ModelResponse:
+        return ModelResponse(
+            id="msg_repro",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="pong", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="gpt-4o",
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+
+    def _create_payload(self, logging_obj: LiteLLMLoggingObj, response: ModelResponse) -> dict:
+        return AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="gpt-4o",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+    def test_non_streaming_keeps_upstream_reported_cost_and_tokens(self):
+        logging_obj = self._logging_obj_with_reported_usage(
+            {"x-litellm-response-cost": "0.777777", "x-litellm-total-tokens": "4242"}
+        )
+        response = self._priced_body_response()
+
+        kwargs = self._create_payload(logging_obj, response)
+
+        assert kwargs["response_cost"] == 0.777777
+        assert logging_obj.model_call_details["response_cost"] == 0.777777
+        assert response.usage.total_tokens == 4242
+        assert logging_obj.model_call_details["combined_usage_object"] == Usage(total_tokens=4242)
+
+    def test_non_streaming_unusable_reported_cost_records_zero_not_body_estimate(self):
+        logging_obj = self._logging_obj_with_reported_usage(
+            {"x-litellm-response-cost": "not-a-number", "x-litellm-total-tokens": "4242"}
+        )
+        response = self._priced_body_response()
+
+        kwargs = self._create_payload(logging_obj, response)
+
+        assert kwargs["response_cost"] == 0.0
+        assert logging_obj.model_call_details["response_cost"] == 0.0
+        assert response.usage.total_tokens == 4242
+
+    def test_non_streaming_without_reported_usage_still_prices_from_body(self):
+        logging_obj = self._logging_obj_with_reported_usage({"content-type": "application/json"})
+        response = self._priced_body_response()
+
+        kwargs = self._create_payload(logging_obj, response)
+
+        assert kwargs["response_cost"] > 0
+        assert kwargs["response_cost"] == logging_obj.model_call_details["response_cost"]
+        assert response.usage.total_tokens == 15
