@@ -391,6 +391,86 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         assert ("gen_ai.cost.original_cost", 0.004) not in call_args_list
 
 
+class TestOpenTelemetryMetadataNoneValues(unittest.TestCase):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/29583
+
+    None-valued metadata fields (e.g. user_api_key_budget_reset_at for a key
+    with no budget configured) were being cast to "" and set on the span like
+    any other value. A field that is sometimes a real value and sometimes ""
+    sends two different shapes for the same attribute -- backends that infer
+    a field's type from the first value they see (e.g. OpenSearch's dynamic
+    mapping) lock onto whichever shape arrives first, so the other shape then
+    fails. None-valued metadata should be omitted from the span instead.
+    """
+
+    def test_none_metadata_value_is_not_set_on_span(self):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {
+                    "user_api_key_budget_reset_at": None,
+                    "user_api_key_team_id": "team-123",
+                },
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
+        set_keys = [args[0] for args in call_args_list]
+
+        assert "metadata.user_api_key_budget_reset_at" not in set_keys
+        assert ("metadata.user_api_key_budget_reset_at", "") not in call_args_list
+        mock_span.set_attribute.assert_any_call("metadata.user_api_key_team_id", "team-123")
+
+    def test_real_timestamp_metadata_value_is_still_set_on_span(self):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {
+                    "user_api_key_budget_reset_at": "2026-09-15T00:00:00+00:00",
+                },
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        mock_span.set_attribute.assert_any_call(
+            "metadata.user_api_key_budget_reset_at", "2026-09-15T00:00:00+00:00"
+        )
+
+
 class TestOpenTelemetryProviderInitialization(unittest.TestCase):
     """Test suite for verifying provider initialization respects existing providers"""
 
