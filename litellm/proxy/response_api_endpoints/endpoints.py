@@ -54,7 +54,7 @@ _EMPTY_TOOL_PAYLOAD: Final[Mapping[str, Any]] = MappingProxyType({})
 def _blocked_responses_api_stream(
     response: ResponsesAPIResponse,
     logging_obj: LiteLLMLoggingObj,
-    request_data: dict[str, object],
+    request_data: Mapping[str, object],
 ) -> CachedResponsesAPIStreamingIterator:
     return CachedResponsesAPIStreamingIterator(  # mutable-ok: the iterator stores advancing stream state
         response=response,
