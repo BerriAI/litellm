@@ -839,6 +839,21 @@ class ComplexityRouterConfig(BaseModel):
         description="Minimum cosine similarity for a semantic keyword match",
     )
 
+    classification_mode: Literal["every_request", "user_turn"] = Field(
+        default="every_request",
+        description=(
+            "When to run the complexity classifier. 'every_request' (the default) classifies every "
+            "inference request, including the tool-result continuation turns of an agentic loop. "
+            "'user_turn' classifies only requests whose newest turn is a new human ask and replays "
+            "the session's held routing decision on continuation turns, which cuts classifier "
+            "spend and eliminates mid-loop model switches. Continuations with no held decision to "
+            "replay (no resolvable session_id, expired pin, fresh restart) still classify. Unlike "
+            "session_affinity, a new human ask always re-classifies, so a session can still move "
+            "tiers between asks. Suppressed when plugins are configured, for the same reason "
+            "session_affinity is: a replayed decision would bypass the plugin pipeline."
+        ),
+    )
+
     # Session affinity: pin the first turn's routed model for the rest of the session
     session_affinity: bool = Field(
         default=False,

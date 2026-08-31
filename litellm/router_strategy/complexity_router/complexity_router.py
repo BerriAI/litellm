@@ -479,6 +479,33 @@ def _last_human_ask_index(
     )
 
 
+def _newest_turn_is_human_ask(
+    messages: Sequence[Mapping[str, object]] | None,
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
+) -> bool:
+    """Whether the request's newest turn carries a real human ask, i.e. this is a new ask rather
+    than an agent loop's continuation traffic.
+
+    Anchored on `_last_human_ask_index` so every surface's plumbing reads as a continuation:
+    chat-completions tool turns are role=tool, Messages-surface tool_result turns flatten to empty
+    human text, and a hybrid turn carrying an ask alongside a tool_result still counts as an ask.
+    Compared against the newest non-system message rather than the raw tail, because Claude Code
+    appends a system-role reminder after the human turn; that trailing plumbing is neither an ask
+    nor loop traffic and must not turn a fresh ask into a continuation. An unreadable request (no
+    messages) is treated as a continuation: there is no ask to classify, which is the same reading
+    `_extract_current_ask_and_system_prompt` gives it downstream.
+    """
+    if not messages:
+        return False
+    newest_non_system: Final = next(
+        (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") != "system"),
+        None,
+    )
+    if newest_non_system is None:
+        return False
+    return _last_human_ask_index(messages, marker_pairs) == newest_non_system
+
+
 def _iter_system_scope_texts(
     body_system: object,
     messages: Sequence[Mapping[str, object]],
@@ -2247,14 +2274,18 @@ class ComplexityRouter(CustomLogger):
 
     @property
     def _uses_tier_pin(self) -> bool:
-        return bool(self.config.session_affinity and not self.config.plugins)
+        """classification_mode 'user_turn' implies the tier pin machinery: the pin write after each
+        pinnable classification is what gives a continuation a held decision to replay."""
+        return bool(
+            (self.config.session_affinity or self.config.classification_mode == "user_turn") and not self.config.plugins
+        )
 
     @property
     def _uses_deployment_pin(self) -> bool:
-        """session_affinity implies the deployment pin: a session frozen onto one model
+        """The tier pin implies the deployment pin: a session frozen onto one model
         group but load-balanced across its deployments would still go cache-cold, which
         is the exact failure both flags exist to prevent."""
-        return bool((self.config.deployment_affinity or self.config.session_affinity) and not self.config.plugins)
+        return bool(self.config.deployment_affinity and not self.config.plugins) or self._uses_tier_pin
 
     def _with_session_deployment_affinity(
         self, response: PreRoutingHookResponse | None
@@ -2282,6 +2313,11 @@ class ComplexityRouter(CustomLogger):
         pins the model chosen on the session's first turn and reuses it for every later
         turn, skipping classification entirely. Otherwise delegates to `_classify_and_route`.
 
+        When `classification_mode` is 'user_turn', the same pin is replayed only on
+        continuation turns (an agent loop's tool traffic); a new human ask always falls
+        through to classification, so the session can still move tiers between asks.
+        With both knobs on, session_affinity's pin-first behavior wins.
+
         Skipped entirely when `plugins` are configured: reusing a stale pin would bypass
         the plugin pipeline on every turn after the first, since a pinned model was never
         re-checked against a policy plugin whose decision can change between turns (e.g. a
@@ -2305,7 +2341,13 @@ class ComplexityRouter(CustomLogger):
         session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
-        if cache_key is not None:
+        # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
+        # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
+        pin_replay_allowed: Final = bool(self.config.session_affinity) or not _newest_turn_is_human_ask(
+            resolved_messages, self._reminder_markers
+        )
+
+        if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value)
             if pinned_pin is not None:
@@ -2354,10 +2396,11 @@ class ComplexityRouter(CustomLogger):
                         kwargs_metadata: Final = request_kwargs.setdefault("metadata", {})
                         if isinstance(kwargs_metadata, dict):
                             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = routed_model
+                    replay_cause: Final[RoutingDecisionCause] = (
+                        "session_affinity_pin" if self.config.session_affinity else "user_turn_continuation"
+                    )
                     cause: RoutingDecisionCause = (
-                        "plan_mode"
-                        if plan_floored
-                        else ("session_affinity_escalation" if escalated else "session_affinity_pin")
+                        "plan_mode" if plan_floored else ("session_affinity_escalation" if escalated else replay_cause)
                     )
                     verbose_router_logger.info(
                         "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model

@@ -13,6 +13,8 @@ from .auth import context_secret_vault, get_stored_api_key, login
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
 ANTHROPIC_API_KEY_ENV: Final = "ANTHROPIC_API_KEY"
+ENABLE_TOOL_SEARCH_ENV: Final = "ENABLE_TOOL_SEARCH"
+ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 
@@ -61,7 +63,10 @@ def build_agent_env(
     Anthropic clients (Claude Code) append /v1/messages to ANTHROPIC_BASE_URL,
     so it stays the bare proxy root; OpenAI clients (Codex, OpenCode) expect the
     /v1 suffix on OPENAI_BASE_URL. ANTHROPIC_API_KEY is dropped so a stray
-    Anthropic key cannot win over the bearer token we set.
+    Anthropic key cannot win over the bearer token we set. ENABLE_TOOL_SEARCH
+    defaults to true because Claude Code turns tool search off when
+    ANTHROPIC_BASE_URL is not a first-party Anthropic host; a value already in
+    the environment is left alone.
     """
     env: Final = dict(base_env)
     root: Final = base_url.rstrip("/")
@@ -69,6 +74,8 @@ def build_agent_env(
         env[ANTHROPIC_BASE_URL_ENV] = root
         env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
         env.pop(ANTHROPIC_API_KEY_ENV, None)
+        if ENABLE_TOOL_SEARCH_ENV not in env:
+            env[ENABLE_TOOL_SEARCH_ENV] = ENABLE_TOOL_SEARCH_VALUE
     if PROFILE_OPENAI in profiles:
         env[OPENAI_BASE_URL_ENV] = root + "/v1"
         env[OPENAI_API_KEY_ENV] = api_key

@@ -806,6 +806,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
+    "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
 
@@ -1728,6 +1729,7 @@ SENTRY_DENYLIST: Final = [
     "jwt_token",
     "private_key",
     "SLACK_WEBHOOK_URL",
+    "ALERTING_WEBHOOK_URL",
     "webhook_url",
     "LANGFUSE_SECRET_KEY",
     # Email Configuration
