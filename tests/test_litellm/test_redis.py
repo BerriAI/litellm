@@ -1,3 +1,4 @@
+import inspect
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -598,6 +599,73 @@ def test_reconnect_kwargs_in_cluster_kwargs():
     kwargs = _get_redis_cluster_kwargs()
     assert "health_check_interval" in kwargs
     assert "socket_keepalive" in kwargs
+
+
+def test_retry_attempts_in_cluster_kwargs():
+    """cluster_error_retry_attempts must survive the cluster kwarg allow-list so
+    operators can bound worst-case retry latency on a Redis Cluster: it was being
+    silently dropped because the allow-list was built from redis.RedisCluster's
+    decorated __init__ without unwrapping it, so getfullargspec saw an empty
+    (self, *args, **kwargs) wrapper signature."""
+    kwargs = _get_redis_cluster_kwargs()
+    assert "cluster_error_retry_attempts" in kwargs
+
+
+def test_async_only_retry_kwargs_in_cluster_kwargs_when_async_client_requested():
+    """connection_error_retry_attempts exists only on the async cluster client's
+    constructor. Introspecting the sync class regardless of which client is
+    actually built silently drops it for every async cluster caller."""
+    sync_kwargs = _get_redis_cluster_kwargs()
+    async_kwargs = _get_redis_cluster_kwargs(async_redis.RedisCluster)
+
+    assert "connection_error_retry_attempts" not in sync_kwargs
+    assert "connection_error_retry_attempts" in async_kwargs
+
+
+@patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class")
+def test_async_cluster_forwards_retry_attempts(mock_get_cluster_class):
+    """Regression: cluster_error_retry_attempts must reach the constructed async
+    cluster client. Silently dropping it removes an operator's only lever for
+    bounding a stuck node's worst-case retry latency, and the client falls back
+    to redis-py's own default (3 retries) instead."""
+    mock_cluster_cls = mock_get_cluster_class.return_value
+    get_redis_async_client(
+        startup_nodes=[{"host": "cluster-node", "port": 6379}],
+        cluster_error_retry_attempts=2,
+    )
+
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert call_kwargs["cluster_error_retry_attempts"] == 2
+
+
+@patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class")
+def test_async_cluster_passes_async_only_kwargs(mock_get_cluster_class):
+    """Regression: decode_responses is an async-cluster-only constructor arg. When
+    the allow-list came from the sync class it was filtered out and values came
+    back as bytes instead of str."""
+    mock_cluster_cls = mock_get_cluster_class.return_value
+    get_redis_async_client(
+        startup_nodes=[{"host": "cluster-node", "port": 6379}],
+        decode_responses=True,
+    )
+
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert call_kwargs["decode_responses"] is True
+
+
+@pytest.mark.parametrize("cluster_client", [redis.RedisCluster, async_redis.RedisCluster], ids=["sync", "async"])
+def test_cluster_kwargs_exclude_variadic_parameters(cluster_client):
+    """*args / **kwargs are signature placeholders, not connection settings, and
+    must never land in the allow-list regardless of which cluster client is
+    introspected."""
+    variadic = {
+        name
+        for name, param in inspect.signature(cluster_client).parameters.items()
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD)
+    }
+
+    leaked = variadic & set(_get_redis_cluster_kwargs(cluster_client))
+    assert not leaked, f"variadic params leaked into the allow-list: {leaked}"
 
 
 @patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class")
