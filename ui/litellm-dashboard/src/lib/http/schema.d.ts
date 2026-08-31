@@ -16212,6 +16212,11 @@ export interface paths {
          *
          *     Meant to optimize querying spend data for analytics for a user.
          *
+         *     Reads daily spend records that only ever accumulate and are never affected by budget
+         *     resets. Their total can legitimately exceed the `spend` field returned by
+         *     `/v2/user/info`, which is a running budget counter that every budget reset sets back
+         *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
+         *
          *     Returns:
          *     (by date)
          *     - spend
@@ -16243,6 +16248,11 @@ export interface paths {
          * Get User Daily Activity Aggregated
          * @description Aggregated analytics for a user's daily activity without pagination.
          *     Returns the same response shape as the paginated endpoint with page metadata set to single-page.
+         *
+         *     Reads daily spend records that only ever accumulate and are never affected by budget
+         *     resets. Their total can legitimately exceed the `spend` field returned by
+         *     `/v2/user/info`, which is a running budget counter that every budget reset sets back
+         *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
          */
         get: operations["get_user_daily_activity_aggregated_user_daily_activity_aggregated_get"];
         put?: never;
@@ -21005,6 +21015,14 @@ export interface paths {
          *
          *     This is the v2 replacement for /user/info, designed to avoid the "god endpoint" problem
          *     where the old endpoint loaded all keys and teams into memory.
+         *
+         *     Note on `spend`: this is the user's running budget counter, which the budget reset job
+         *     resets whenever `budget_reset_at` elapses (see `budget_duration`): to zero by default,
+         *     or to the overage above `max_budget` when `budget_rollover` is enabled. It is NOT
+         *     lifetime or per-period historical spend. For historical spend over a date range, use
+         *     `/user/daily/activity` or `/user/daily/activity/aggregated`, which read daily spend
+         *     records that only ever accumulate and are never reset. The two values are expected to
+         *     diverge once a budget reset has occurred within the queried period.
          *
          *     Access control:
          *     - Proxy admins can query any user
