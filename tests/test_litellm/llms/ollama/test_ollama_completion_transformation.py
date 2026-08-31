@@ -502,3 +502,55 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+
+class TestOllamaTextCompletionStreamingToolCalls:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/35711"""
+
+    def _stream(self, responses):
+        iterator = OllamaTextCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunks = [
+            iterator.chunk_parser({"model": "qwen3", "created_at": "t", "done": False, "response": r})
+            for r in responses
+        ]
+        done = iterator.chunk_parser(
+            {
+                "model": "qwen3",
+                "created_at": "t",
+                "done": True,
+                "done_reason": "stop",
+                "response": "",
+                "prompt_eval_count": 10,
+                "eval_count": 5,
+            }
+        )
+        return chunks, done
+
+    def test_streamed_function_call_json_reconstructed_as_tool_call(self):
+        chunks, done = self._stream(['{"name": "get_weather",', ' "arguments": {"location": "Paris"}}'])
+
+        for chunk in chunks:
+            assert isinstance(chunk, ModelResponseStream)
+            assert not chunk.choices[0].delta.content
+
+        assert isinstance(done, ModelResponseStream)
+        tool_calls = done.choices[0].delta.tool_calls
+        assert tool_calls is not None and len(tool_calls) == 1
+        assert tool_calls[0].function.name == "get_weather"
+        assert json.loads(tool_calls[0].function.arguments) == {"location": "Paris"}
+        assert done.choices[0].finish_reason == "tool_calls"
+
+    def test_streamed_regular_json_emitted_as_content_on_done(self):
+        chunks, done = self._stream(['{"answer":', ' 42}'])
+
+        assert isinstance(done, ModelResponseStream)
+        assert done.choices[0].delta.tool_calls is None
+        assert done.choices[0].delta.content == '{"answer": 42}'
+        assert done.choices[0].finish_reason == "stop"
+
+    def test_plain_text_still_streams_incrementally(self):
+        chunks, done = self._stream(["Hello", " world"])
+
+        assert chunks[0].choices[0].delta.content == "Hello"
+        assert chunks[1].choices[0].delta.content == " world"
+        assert done["finish_reason"] == "stop"

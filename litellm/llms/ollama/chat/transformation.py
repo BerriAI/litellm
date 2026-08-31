@@ -338,6 +338,13 @@ class OllamaChatConfig(BaseConfig):
 
         response_json: Final = raw_response.json()
 
+        if "error" in response_json:
+            raise OllamaError(
+                message=str(response_json["error"]),
+                status_code=raw_response.status_code if raw_response.status_code >= 400 else 400,
+                headers=dict(raw_response.headers),
+            )
+
         ## RESPONSE OBJECT
         _done_reason: Final = map_finish_reason(response_json.get("done_reason") or "stop")
         model_response.choices[0].finish_reason = _done_reason
@@ -380,7 +387,7 @@ class OllamaChatConfig(BaseConfig):
             model_response.choices[0].message = message
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-            _message: Final = litellm.Message(**response_json_message)
+            _message: Final = litellm.Message(**(response_json_message or {}))
             model_response.choices[0].message = _message
             # Set finish_reason to "tool_calls" when tool_calls are present
             # Fixes: https://github.com/BerriAI/litellm/issues/18922
@@ -389,9 +396,8 @@ class OllamaChatConfig(BaseConfig):
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
         prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))
-        completion_tokens: Final = response_json.get(
-            "eval_count",
-            litellm.token_counter(text=response_json["message"]["content"]),
+        completion_tokens: Final = response_json.get("eval_count") or litellm.token_counter(
+            text=(response_json_message or {}).get("content") or ""
         )
         setattr(
             model_response,
@@ -423,6 +429,7 @@ class OllamaChatConfig(BaseConfig):
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
+    stream_tool_call_count: int = 0
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -465,11 +472,23 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             """
             from litellm.types.utils import Delta, StreamingChoices
 
+            if "error" in chunk:
+                raise OllamaError(
+                    message=str(chunk["error"]),
+                    status_code=400,
+                    headers={"Content-Type": "application/json"},
+                )
+
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
             if tool_calls is not None:
                 for tool_call in tool_calls:
-                    function_args = tool_call.get("function").get("arguments")
+                    function = tool_call.get("function") or {}
+                    function_index = function.pop("index", None)
+                    if tool_call.get("index") is None:
+                        tool_call["index"] = function_index if function_index is not None else self.stream_tool_call_count
+                    self.stream_tool_call_count = max(self.stream_tool_call_count + 1, tool_call["index"] + 1)
+                    function_args = function.get("arguments")
                     if function_args is not None and len(function_args) > 0:
                         is_function_call_complete = self._is_function_call_complete(function_args)
                         if is_function_call_complete:
@@ -510,7 +529,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                 finish_reason = chunk.get("done_reason") or "stop"
                 # Override finish_reason when tool_calls are present
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
-                if tool_calls is not None:
+                if (tool_calls is not None or self.stream_tool_call_count > 0) and finish_reason != "length":
                     finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(

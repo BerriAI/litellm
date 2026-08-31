@@ -451,9 +451,31 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
         super().__init__(streaming_response, sync_stream, json_mode)
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
+        self.buffered_json_content: str | None = None
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         return self.chunk_parser(json.loads(str_line))
+
+    def _parse_buffered_function_call(self) -> list[dict] | None:
+        if self.buffered_json_content is None:
+            return None
+        try:
+            parsed = json.loads(self.buffered_json_content)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+            return [
+                {
+                    "id": f"call_{uuid.uuid4()}",
+                    "index": 0,
+                    "function": {
+                        "name": parsed["name"],
+                        "arguments": json.dumps(parsed["arguments"]),
+                    },
+                    "type": "function",
+                }
+            ]
+        return None
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         try:
@@ -477,6 +499,29 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         completion_tokens=eval_count,
                         total_tokens=prompt_eval_count + eval_count,
                     )
+                tool_calls: Final = self._parse_buffered_function_call()
+                if tool_calls is not None:
+                    return ModelResponseStream(
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(content=None, tool_calls=tool_calls),
+                                finish_reason="tool_calls",
+                            )
+                        ],
+                        usage=usage,
+                    )
+                if self.buffered_json_content is not None:
+                    return ModelResponseStream(
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(content=self.buffered_json_content),
+                                finish_reason=finish_reason,
+                            )
+                        ],
+                        usage=usage,
+                    )
                 return GenericStreamingChunk(
                     text=text,
                     is_finished=is_finished,
@@ -485,6 +530,16 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 )
             elif chunk["response"]:
                 text = chunk["response"]
+                if self.buffered_json_content is not None or (
+                    self.buffered_json_content is None
+                    and not self.started_reasoning_content
+                    and text.lstrip().startswith("{")
+                ):
+                    self.buffered_json_content = (self.buffered_json_content or "") + text
+                    return ModelResponseStream(
+                        choices=[StreamingChoices(index=0, delta=Delta())],
+                        usage=None,
+                    )
                 reasoning_content: str | None = None
                 content: str | None = None
                 if text is not None:

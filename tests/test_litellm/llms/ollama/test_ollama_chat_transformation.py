@@ -904,3 +904,97 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+class TestOllamaStreamingToolCallCluster:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/33678,
+    https://github.com/BerriAI/litellm/issues/35663 and https://github.com/BerriAI/litellm/issues/33622"""
+
+    def _tool_call_chunk(self, name, arguments, function_index=None):
+        function = {"name": name, "arguments": arguments}
+        if function_index is not None:
+            function["index"] = function_index
+        return {
+            "model": "qwen3",
+            "message": {"role": "assistant", "content": "", "tool_calls": [{"function": function}]},
+            "done": False,
+        }
+
+    def test_parallel_tool_calls_get_distinct_indices_from_function_index(self):
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        first = iterator.chunk_parser(self._tool_call_chunk("read_file", {"path": "a.rs"}, function_index=0))
+        second = iterator.chunk_parser(self._tool_call_chunk("read_file", {"path": "b.rs"}, function_index=1))
+
+        assert first.choices[0].delta.tool_calls[0].index == 0
+        assert second.choices[0].delta.tool_calls[0].index == 1
+
+    def test_parallel_tool_calls_get_distinct_indices_without_function_index(self):
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        first = iterator.chunk_parser(self._tool_call_chunk("read_file", {"path": "a.rs"}))
+        second = iterator.chunk_parser(self._tool_call_chunk("read_file", {"path": "b.rs"}))
+
+        assert first.choices[0].delta.tool_calls[0].index == 0
+        assert second.choices[0].delta.tool_calls[0].index == 1
+
+    def test_finish_reason_tool_calls_when_tool_call_arrives_before_done_chunk(self):
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        iterator.chunk_parser(self._tool_call_chunk("get_weather", {"location": "Paris"}, function_index=0))
+        done = iterator.chunk_parser(
+            {
+                "model": "qwen3",
+                "message": {"role": "assistant", "content": ""},
+                "done": True,
+                "done_reason": "stop",
+            }
+        )
+
+        assert done.choices[0].finish_reason == "tool_calls"
+
+    def test_finish_reason_length_not_overridden_by_tool_calls(self):
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        iterator.chunk_parser(self._tool_call_chunk("get_weather", {"location": "Paris"}, function_index=0))
+        done = iterator.chunk_parser(
+            {
+                "model": "qwen3",
+                "message": {"role": "assistant", "content": ""},
+                "done": True,
+                "done_reason": "length",
+            }
+        )
+
+        assert done.choices[0].finish_reason == "length"
+
+    def test_error_chunk_raises_ollama_error_with_provider_message(self):
+        from litellm.llms.ollama.common_utils import OllamaError
+
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        with pytest.raises(OllamaError) as exc_info:
+            iterator.chunk_parser({"error": "error parsing tool call: invalid character ']'"})
+
+        assert "error parsing tool call" in str(exc_info.value)
+        assert "KeyError" not in str(exc_info.value)
+
+    def test_transform_response_error_dict_raises_ollama_error(self):
+        import httpx
+
+        from litellm.llms.ollama.common_utils import OllamaError
+
+        raw_response = httpx.Response(
+            200,
+            json={"error": "error parsing tool call: bad json"},
+            request=httpx.Request("POST", "http://localhost:11434/api/chat"),
+        )
+        with pytest.raises(OllamaError) as exc_info:
+            OllamaChatConfig().transform_response(
+                model="qwen3",
+                raw_response=raw_response,
+                model_response=ModelResponse(),
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+        assert "error parsing tool call" in str(exc_info.value)
