@@ -144,11 +144,11 @@ def test_init_async_client_keeps_pool_local_during_concurrent_initialization():
 
     with (
         patch(
-            "litellm._redis.get_redis_connection_pool",
+            "redis.asyncio.BlockingConnectionPool",
             side_effect=[pool_a, pool_b],
         ),
         patch(
-            "litellm._redis.get_redis_async_client",
+            "redis.asyncio.Redis",
             side_effect=build_client,
         ),
         ThreadPoolExecutor(max_workers=2) as executor,
