@@ -18,7 +18,6 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from datetime import timedelta
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
 
 import litellm
@@ -112,8 +111,8 @@ class RedisCircuitBreaker:
 
     Transitions:
       CLOSED    -> OPEN      after failure_threshold consecutive hard connectivity
-                             failures, or after failure_threshold consecutive failures
-                             of any class once the streak has spanned at least
+                             failures, or after failure_threshold timeout failures in
+                             an unbroken failure streak whose timeouts span at least
                              timeout_min_duration seconds
       OPEN      -> HALF_OPEN after recovery_timeout seconds
       HALF_OPEN -> CLOSED    on success
@@ -144,9 +143,10 @@ class RedisCircuitBreaker:
         self.timeout_min_duration = timeout_min_duration
         self._failure_count = 0
         self._hard_failure_count = 0
-        self._streak_started_at: float | None = None
+        self._timeout_streak_started_at: float | None = None
         self._opened_at: float | None = None
         self._state = self.CLOSED
+        _breaker_metrics().record_state_change(None, self._state)
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
@@ -169,19 +169,20 @@ class RedisCircuitBreaker:
             return True
         if self._hard_failure_count >= self.failure_threshold:
             return True
-        if self._failure_count < self.failure_threshold:
+        if self._failure_count - self._hard_failure_count < self.failure_threshold:
             return False
-        return now - (self._streak_started_at or now) >= self.timeout_min_duration
+        return now - (self._timeout_streak_started_at or now) >= self.timeout_min_duration
 
     def record_failure(self, is_timeout: bool = False) -> None:
         if not self.enabled:
             return
         now: Final = time.time()
         self._failure_count += 1
-        if not is_timeout:
+        if is_timeout:
+            if self._timeout_streak_started_at is None:
+                self._timeout_streak_started_at = now
+        else:
             self._hard_failure_count += 1
-        if self._streak_started_at is None:
-            self._streak_started_at = now
         self._opened_at = now
         _breaker_metrics().record_failure("timeout" if is_timeout else "connectivity")
         if self._should_open(now):
@@ -202,14 +203,15 @@ class RedisCircuitBreaker:
             verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
         self._failure_count = 0
         self._hard_failure_count = 0
-        self._streak_started_at = None
+        self._timeout_streak_started_at = None
         self._set_state(self.CLOSED)
 
     def _set_state(self, state: str) -> None:
-        if state != self._state:
-            _breaker_metrics().record_transition(state)
+        if state == self._state:
+            return
+        _breaker_metrics().record_transition(state)
+        _breaker_metrics().record_state_change(self._state, state)
         self._state = state
-        _breaker_metrics().record_state(state)
 
 
 _RedisCallResult = TypeVar("_RedisCallResult")
@@ -275,10 +277,6 @@ class _BreakerMetrics:
     ``_breaker_metrics`` singleton so repeated RedisCache construction never re-registers.
     """
 
-    _STATE_VALUES: Final = MappingProxyType(
-        {RedisCircuitBreaker.CLOSED: 0, RedisCircuitBreaker.OPEN: 1, RedisCircuitBreaker.HALF_OPEN: 2}
-    )
-
     def __init__(self) -> None:
         self._state_gauge: _PromGauge | None = None
         self._transitions: _PromCounter | None = None
@@ -290,7 +288,8 @@ class _BreakerMetrics:
             return
         self._state_gauge = Gauge(
             "litellm_redis_circuit_breaker_state",
-            "Redis circuit breaker state (0=closed, 1=open, 2=half_open)",
+            "Number of Redis circuit breakers currently in each state",
+            labelnames=("state",),
         )
         self._transitions = PromCounter(
             "litellm_redis_circuit_breaker_transitions",
@@ -303,9 +302,12 @@ class _BreakerMetrics:
             labelnames=("failure_class",),
         )
 
-    def record_state(self, state: str) -> None:
-        if self._state_gauge is not None:
-            self._state_gauge.set(self._STATE_VALUES[state])
+    def record_state_change(self, old_state: str | None, new_state: str) -> None:
+        if self._state_gauge is None:
+            return
+        if old_state is not None:
+            self._state_gauge.labels(old_state).dec()
+        self._state_gauge.labels(new_state).inc()
 
     def record_transition(self, state: str) -> None:
         if self._transitions is not None:

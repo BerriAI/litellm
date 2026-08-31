@@ -701,6 +701,31 @@ async def test_persistent_timeouts_still_open_the_breaker():
 
 
 @pytest.mark.asyncio
+async def test_stale_timeout_does_not_let_sub_threshold_hard_failures_open_the_breaker():
+    """Hard connectivity failures below the threshold must not open the breaker just
+    because an old timeout already started the streak and the duration has elapsed.
+
+    Each class has to earn the open on its own terms: hard failures by reaching the
+    threshold, timeouts by reaching the threshold and spanning the minimum duration.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=0.05)
+
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    await asyncio.sleep(0.06)
+    for _ in range(breaker.failure_threshold - 1):
+        breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    assert breaker.is_open() is False, "2 hard failures and 1 stale timeout are below both thresholds"
+
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    assert breaker.is_open() is True, "the threshold-th hard failure must still open it"
+
+
+@pytest.mark.asyncio
 async def test_breaker_metrics_track_state_and_failure_class():
     """Breaker accounting must be observable: failure class, transitions, and state."""
     from prometheus_client import REGISTRY
@@ -715,6 +740,8 @@ async def test_breaker_metrics_track_state_and_failure_class():
     timeout_before = sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"})
     hard_before = sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"})
     opened_before = sample("litellm_redis_circuit_breaker_transitions_total", {"state": "open"})
+    open_gauge_before = sample("litellm_redis_circuit_breaker_state", {"state": "open"})
+    closed_gauge_before = sample("litellm_redis_circuit_breaker_state", {"state": "closed"})
 
     breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=60, timeout_min_duration=5.0)
     breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("t")))
@@ -724,7 +751,9 @@ async def test_breaker_metrics_track_state_and_failure_class():
     assert sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"}) == timeout_before + 1
     assert sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"}) == hard_before + 2
     assert sample("litellm_redis_circuit_breaker_transitions_total", {"state": "open"}) == opened_before + 1
-    assert sample("litellm_redis_circuit_breaker_state") == 1.0
+    assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before + 1
+    assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before
 
     breaker.record_success()
-    assert sample("litellm_redis_circuit_breaker_state") == 0.0
+    assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before
+    assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before + 1
