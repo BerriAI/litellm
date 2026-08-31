@@ -39,7 +39,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue
+from pydantic import BaseModel, Json, JsonValue, ValidationError
 from typing_extensions import NotRequired, assert_never
 
 from litellm._uuid import uuid
@@ -16171,6 +16171,16 @@ async def update_config_general_settings(
             status_code=400,
             detail={"error": f"Invalid type of field value={type(data.field_value)} passed in."},
         )
+
+    if data.field_name == "alerting_args":
+        try:
+            SlackAlertingArgs.model_validate(data.field_value)
+        except ValidationError as e:
+            errors: Final = "; ".join(f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}" for err in e.errors())
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Invalid alerting_args: {errors}"},
+            )
 
     ## get general settings from db
     db_general_settings: Final = await _config_param_table(prisma_client).find_first(

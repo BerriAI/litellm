@@ -10320,6 +10320,75 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_config_field_rejects_out_of_range_alerting_args(monkeypatch):
+    """Out-of-range alerting_args must be rejected at save time. If they land in the
+    DB, SlackAlertingArgs raises during the config reload and alerting breaks."""
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="alerting_args",
+                field_value={
+                    "daily_spend_per_user_threshold": -5.0,
+                    "user_spend_check_interval": 20,
+                },
+                config_type="general_settings",
+            ),
+            user_api_key_dict=admin,
+        )
+
+    assert exc_info.value.status_code == 400
+    error_msg = exc_info.value.detail["error"]
+    assert "daily_spend_per_user_threshold" in error_msg
+    assert "user_spend_check_interval" in error_msg
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_accepts_valid_alerting_args(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="alerting_args",
+            field_value={
+                "daily_spend_per_user_threshold": 5.0,
+                "user_spend_check_interval": 60,
+            },
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    written = json.loads(fake.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"])
+    assert written["alerting_args"]["daily_spend_per_user_threshold"] == 5.0
+
+
+@pytest.mark.asyncio
 async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldUpdate
