@@ -480,16 +480,37 @@ class BaseAnthropicMessagesStreamingIterator:
         _UPSTREAM_PUMP_TASKS.add(pump_task)
         pump_task.add_done_callback(_UPSTREAM_PUMP_TASKS.discard)
 
+        reached_end = False  # rebind-ok: flipped once the relay consumes the end-of-stream sentinel
         try:
             while True:
                 item = await queue.get()
                 if item is None:
+                    reached_end = True
                     break
                 if isinstance(item, BaseException):
                     raise item
                 yield item
         finally:
             client_detached.set()
+            if not reached_end:
+                self._dispatch_pending_deferred_logging()
+
+    def _dispatch_pending_deferred_logging(self) -> None:
+        """Fire deferred billing that a torn-down response would otherwise drop.
+
+        When the pump finishes draining while the client is still connected it
+        stores the logging coroutine for ProxyLogging._fire_deferred_stream_logging,
+        which the proxy only fires on a normally completed response: a client
+        disconnect (GeneratorExit / CancelledError) re-raises past it. Without
+        this dispatch that window loses the spend row entirely.
+        """
+        deferred_cb: Final = getattr(self.litellm_logging_obj, "_on_deferred_stream_complete", None)
+        deferred_args: Final = getattr(self.litellm_logging_obj, "_deferred_stream_complete_args", None)
+        if deferred_cb is None or deferred_args is None:
+            return
+        self.litellm_logging_obj._on_deferred_stream_complete = None
+        self.litellm_logging_obj._deferred_stream_complete_args = None
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=deferred_cb(*deferred_args))
 
     async def _bill_collected_chunks(
         self,
@@ -541,9 +562,10 @@ class BaseAnthropicMessagesStreamingIterator:
             return False
         try:
             queue.put_nowait(item)
-            return True
         except asyncio.QueueFull:
             pass
+        else:
+            return True
         put_task: Final = asyncio.ensure_future(queue.put(item))
         detached_task: Final = asyncio.ensure_future(client_detached.wait())
         try:
