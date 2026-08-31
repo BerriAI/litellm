@@ -15,7 +15,9 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_CHECKSUM_SEPARATOR,
     THOUGHT_SIGNATURE_SEPARATOR,
+    _decode_tool_call_id_with_signature,
     _encode_tool_call_id_with_signature,
     _get_dummy_thought_signature,
     _get_thought_signature_from_tool,
@@ -36,6 +38,7 @@ def test_encode_decode_tool_call_id_with_signature():
     # Test encoding
     encoded_id = _encode_tool_call_id_with_signature(base_id, test_signature)
     assert THOUGHT_SIGNATURE_SEPARATOR in encoded_id
+    assert THOUGHT_SIGNATURE_CHECKSUM_SEPARATOR in encoded_id
     assert encoded_id.startswith(base_id)
 
     # Test decoding using factory function with realistic tool call structure
@@ -52,7 +55,7 @@ def test_encode_decode_tool_call_id_with_signature():
     assert extracted_signature == test_signature
 
     # Verify base ID is preserved
-    decoded_base_id = encoded_id.split(THOUGHT_SIGNATURE_SEPARATOR)[0]
+    decoded_base_id, _ = _decode_tool_call_id_with_signature(encoded_id)
     assert decoded_base_id == base_id
 
 
@@ -310,16 +313,22 @@ def test_is_valid_thought_signature_tolerates_missing_padding():
     assert _is_valid_thought_signature(encoded) is True
 
 
-def test_is_valid_thought_signature_scope_is_syntactic():
-    """The extractor validates the wire encoding, not semantic integrity: a
-    client normalizer that keeps standard base64 characters produces a value
-    that still decodes even though Vertex will reject it as an unauthenticated
-    signature. Callers that need semantic verification have to compare against
-    the provider-issued signature; the ID-embedded fallback can only catch
-    encoding damage. Documented so future readers understand issue #37849's
-    guarantee is bounded."""
+def test_get_thought_signature_rejects_decodable_tampering():
+    encoded_id = _encode_tool_call_id_with_signature("call_abc123", REAL_SIGNATURE)
+    checksum = encoded_id.split(THOUGHT_SIGNATURE_CHECKSUM_SEPARATOR, 1)[1].split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
     decodable_but_wrong = base64.b64encode(b"not-the-real-signature").decode("ascii")
+    tampered_id = (
+        f"call_abc123{THOUGHT_SIGNATURE_CHECKSUM_SEPARATOR}{checksum}{THOUGHT_SIGNATURE_SEPARATOR}{decodable_but_wrong}"
+    )
+
     assert _is_valid_thought_signature(decodable_but_wrong) is True
+    assert _get_thought_signature_from_tool({"id": tampered_id, "type": "function"}) is None
+
+
+def test_get_thought_signature_rejects_unsigned_embedded_signature():
+    unsigned_id = f"call_abc123{THOUGHT_SIGNATURE_SEPARATOR}{REAL_SIGNATURE}"
+
+    assert _get_thought_signature_from_tool({"id": unsigned_id, "type": "function"}) is None
 
 
 def test_get_thought_signature_drops_client_mangled_id_suffix():
@@ -328,7 +337,7 @@ def test_get_thought_signature_drops_client_mangled_id_suffix():
     skip-validator signature (Gemini 3+) or drop the signature entirely
     (Gemini 2.x), instead of forwarding a corrupted value that Vertex would
     reject. Regression test for issue #37849."""
-    mangled_id = f"call_2156408{THOUGHT_SIGNATURE_SEPARATOR}AY89a1/_57b05e78dc"
+    mangled_id = _encode_tool_call_id_with_signature("call_2156408", "AY89a1/_57b05e78dc")
     tool = {"id": mangled_id, "type": "function"}
 
     assert _get_thought_signature_from_tool(tool) is None
