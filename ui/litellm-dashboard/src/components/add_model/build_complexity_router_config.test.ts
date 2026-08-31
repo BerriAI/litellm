@@ -29,6 +29,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierContextWindowSize: undefined,
   classifierContextBudgetChars: undefined,
   classifierContextIncludeAssistantTurns: undefined,
+  classificationPrompt: undefined,
   classifierFallback: undefined,
   sessionAffinity: false,
   deploymentAffinity: true,
@@ -814,6 +815,25 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
 
   it("turns session pinning off rather than leaving a stale true the backend rejects", () => {
     expect(build({ sessionAffinity: true }).session_affinity).toBe(false);
+  });
+
+  it("writes the operator's opening instructions, trimmed, as classification_prompt", () => {
+    expect(build({ classificationPrompt: "  Route for a payments team.\n\nExamples:\n- x -> CASUAL  " })).toMatchObject(
+      { classification_prompt: "Route for a payments team.\n\nExamples:\n- x -> CASUAL" },
+    );
+  });
+
+  it("keeps classification_prompt out of the payload when the operator wrote only whitespace", () => {
+    expect(build({ classificationPrompt: "   \n  " })).not.toHaveProperty("classification_prompt");
+  });
+
+  it("never writes classification_prompt on a built-in router, which the backend rejects without tier_definitions", () => {
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classificationPrompt: "opening instructions",
+    });
+    expect(payload).not.toHaveProperty("classification_prompt");
   });
 
   it("omits a definition on a built-in name, letting the backend rubric supply it", () => {

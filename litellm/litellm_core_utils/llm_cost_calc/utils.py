@@ -1,6 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -70,6 +71,19 @@ def _get_token_detail_value(details: object, key: str) -> int | None:
     else:
         value = getattr(details, key, None)
     return value if isinstance(value, int) else None
+
+
+_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-)\d+")
+
+
+def _requested_image_param(optional_params: Mapping[str, object] | None, key: str) -> str | None:
+    value: Final = None if optional_params is None else optional_params.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _requested_image_size(optional_params: Mapping[str, object] | None) -> str | None:
+    value: Final = _requested_image_param(optional_params, "size")
+    return value if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
 
 
 def get_web_search_requests(server_tool_use: Any) -> int | None:
@@ -1311,12 +1325,13 @@ class CostCalculatorUtils:
             cost_calculator as vertex_ai_image_cost_calculator,
         )
 
-        if size is None:
-            size = completion_response.size or "1024-x-1024"
-        if quality is None:
-            quality = completion_response.quality or "standard"
-        if n is None:
-            n = len(completion_response.data) if completion_response.data else 0
+        resolved_size: Final = (
+            size or completion_response.size or _requested_image_size(optional_params) or "1024-x-1024"
+        )
+        resolved_quality: Final = (
+            quality or completion_response.quality or _requested_image_param(optional_params, "quality") or "standard"
+        )
+        resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
 
         if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
             if isinstance(completion_response, ImageResponse):
@@ -1328,7 +1343,7 @@ class CostCalculatorUtils:
             if isinstance(completion_response, ImageResponse):
                 return bedrock_image_cost_calculator(
                     model=model,
-                    size=size,
+                    size=resolved_size,
                     image_response=completion_response,
                     optional_params=optional_params,
                 )
@@ -1424,19 +1439,19 @@ class CostCalculatorUtils:
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(
                 model=model,
-                quality=quality,
+                quality=resolved_quality,
                 custom_llm_provider=custom_llm_provider,
-                n=n,
-                size=size,
+                n=resolved_n,
+                size=resolved_size,
                 optional_params=optional_params,
             )
         else:
             return default_image_cost_calculator(
                 model=model,
-                quality=quality,
+                quality=resolved_quality,
                 custom_llm_provider=custom_llm_provider,
-                n=n,
-                size=size,
+                n=resolved_n,
+                size=resolved_size,
                 optional_params=optional_params,
             )
         return 0.0
