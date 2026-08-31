@@ -144,7 +144,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         exc: "ModifyResponseException",
         stream_started: bool = False,
-        responses_so_far: list[object] | None = None,
+        responses_so_far: Sequence[object] | None = None,
     ) -> list[bytes]:
         """
         Build an Anthropic SSE sequence delivering the guardrail block message
@@ -162,7 +162,7 @@ class AnthropicMessagesHandler(BaseTranslation):
           would make Anthropic clients reject the stream.
         """
         if stream_started:
-            return self._block_continuation_chunks(exc, responses_so_far or [])
+            return self._block_continuation_chunks(exc, responses_so_far or ())
         return self._standalone_block_chunks(exc)
 
     def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
@@ -187,7 +187,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return list(FakeAnthropicMessagesStreamIterator(response=block_response))
 
-    def _block_continuation_chunks(self, exc: "ModifyResponseException", responses_so_far: list[object]) -> list[bytes]:
+    def _block_continuation_chunks(
+        self, exc: "ModifyResponseException", responses_so_far: Sequence[object]
+    ) -> list[bytes]:
         """Continue an already-started message: close the open content block,
         append the block message as a new text block, then end the message --
         without a second message_start."""
@@ -237,7 +239,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _content_block_state(
-        responses_so_far: list[object],
+        responses_so_far: Sequence[object],
     ) -> tuple[int | None, int | None]:
         """From the SSE chunks already sent to the client, return (open
         content-block index or None, highest content-block index seen or None).
