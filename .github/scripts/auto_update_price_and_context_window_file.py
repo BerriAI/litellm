@@ -171,6 +171,8 @@ def write_to_file(file_path, data):
 # Update the existing models and add the missing models for OpenRouter
 def transform_openrouter_data(data):
     transformed = {}
+    if not data:
+        return transformed
     for row in data:
         # Add the fields 'max_tokens' and 'input_cost_per_token'
         obj = {
@@ -209,7 +211,14 @@ def transform_openrouter_data(data):
 # Update the existing models and add the missing models for Vercel AI Gateway
 def transform_vercel_ai_gateway_data(data):
     transformed = {}
+    if not data:
+        return transformed
     for row in data:
+        # Rows without token pricing or token limits (video/embedding models) previously KeyError'd the whole sync
+        if any(row.get(k) is None for k in ("context_window", "max_tokens")) or any(
+            row.get("pricing", {}).get(k) is None for k in ("input", "output")
+        ):
+            continue
         obj = {
             "max_tokens": row["context_window"],
             "input_cost_per_token": float(row["pricing"]["input"]),
