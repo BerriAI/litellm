@@ -2399,13 +2399,54 @@ class MCPServerManager:
             normalize_server_name(value) for value in (*iter_known_server_prefixes(server), server.name) if value
         )
 
+    def _has_mapped_tools(self, server: MCPServer) -> bool:
+        """Whether ``tool_name_to_mcp_server_name_mapping`` holds any tool for ``server``.
+
+        Distinguishes "this server's tools are known and the name is not among them" from
+        "nothing is known about this server's tools", which the mapping alone cannot express.
+        """
+        owned: Final = self._owned_mapping_values(server)
+        return any(
+            normalize_server_name(owner) in owned for owner in self.tool_name_to_mcp_server_name_mapping.values()
+        )
+
     def _server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
+        """Whether ``server`` is known NOT to expose ``tool_name``.
+
+        ``tool_name_to_mcp_server_name_mapping`` is a routing cache, not an inventory. It is
+        filled by a tool listing, which for a server whose credential comes from the caller
+        only happens inside an authenticated request: the startup warm-up skips
+        ``needs_user_oauth_token`` servers and swallows the upstream 401 for the rest. So on a
+        second replica, or on any replica after a restart, the mapping is empty for exactly
+        those servers and treating a miss as "no such tool" rejects calls the upstream would
+        have served.
+
+        A miss against an empty mapping is therefore inconclusive, and the upstream stays the
+        authority on its own tool list. A miss against a populated one still means the tool
+        belongs elsewhere, and a name the local tool registry already owns still belongs to the
+        legacy ``mcp_tools`` dispatch in ``execute_mcp_tool`` rather than to this server.
+        """
         owned: Final = self._owned_mapping_values(server)
         mapped_owners: Final = (
             self.tool_name_to_mcp_server_name_mapping.get(spelling)
             for spelling in iter_known_tool_name_spellings(tool_name, server)
         )
-        return any(owner is not None and normalize_server_name(owner) in owned for owner in mapped_owners)
+        if any(owner is not None and normalize_server_name(owner) in owned for owner in mapped_owners):
+            return True
+        return not self._has_mapped_tools(server) and not self._is_locally_registered_tool(tool_name)
+
+    @staticmethod
+    def _is_locally_registered_tool(tool_name: str) -> bool:
+        """Whether a bare ``mcp_tools``-style handler owns this name.
+
+        Such a tool is dispatched locally by ``execute_mcp_tool``, which only reaches that arm
+        when no server resolves, so resolving one here would route it upstream instead.
+        """
+        from litellm.proxy._experimental.mcp_server.tool_registry import (  # noqa: PLC0415
+            global_mcp_tool_registry,
+        )
+
+        return global_mcp_tool_registry.get_tool(tool_name) is not None
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """

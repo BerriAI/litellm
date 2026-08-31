@@ -4868,10 +4868,12 @@ class TestMCPServerManager:
         resolved = manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
         assert resolved is server
 
-    def test_resolve_mcp_server_for_tool_call_unknown_tool_with_empty_mapping(self):
-        """Server-name match alone must not let unknown tools through when the
-        mapping has no entries for that server (e.g. listing has not completed
-        or the server is OAuth2 and the user has not yet listed tools).
+    def test_resolve_mcp_server_for_tool_call_defers_to_upstream_with_empty_mapping(self):
+        """A mapping holding nothing for the server cannot say the tool is absent.
+
+        The mapping is filled by a tool listing, which for a server whose credential
+        comes from the caller only happens inside an authenticated request. Rejecting
+        here would refuse every call on a replica that has not served one.
         """
         manager = MCPServerManager()
         server = MCPServer(
@@ -4882,8 +4884,95 @@ class TestMCPServerManager:
         )
         manager.registry = {"srv-uuid-123": server}
 
-        with pytest.raises(ValueError, match="Tool create_zap not found"):
-            manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
+        assert manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap") is server
+
+    def test_resolve_mcp_server_for_tool_call_rejects_foreign_tool_when_mapping_is_warm(self):
+        """Once the server's tools ARE mapped, a name that is not among them is still refused.
+
+        This is the half of the guard worth keeping: the mapping is only inconclusive when
+        it is empty for the server, not when it disagrees.
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv-uuid-123",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"srv-uuid-123": server}
+        manager.tool_name_to_mcp_server_name_mapping["create_zap"] = "zapier"
+
+        with pytest.raises(ValueError, match="Tool delete_everything not found"):
+            manager._resolve_mcp_server_for_tool_call("zapier-alias", "delete_everything")
+
+    def test_resolve_mcp_server_for_tool_call_cold_server_beside_a_warm_one(self):
+        """Another server's tools being mapped says nothing about this one.
+
+        This is the multi-replica shape: the replica that served a listing knows that
+        server's tools, and a second server listed by nobody must not inherit its silence
+        as a rejection.
+        """
+        manager = MCPServerManager()
+        warm = MCPServer(server_id="jira", name="jira", transport=MCPTransport.http)
+        cold = MCPServer(
+            server_id="srv-uuid-123",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"jira": warm, "srv-uuid-123": cold}
+        manager.tool_name_to_mcp_server_name_mapping["search_issues"] = "jira"
+        manager.tool_name_to_mcp_server_name_mapping["jira-search_issues"] = "jira"
+
+        assert manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap") is cold
+
+    def test_get_mcp_server_from_tool_name_resolves_prefixed_name_on_cold_mapping(self):
+        """A registered server prefix routes on its own when nothing is mapped yet.
+
+        Without this the MCP JSON-RPC path fails too, not just REST: the prefixed lookup
+        is what ``execute_mcp_tool`` calls before any server_id is consulted.
+        """
+        manager = MCPServerManager()
+        server = MCPServer(server_id="jira", name="jira", transport=MCPTransport.http)
+        manager.registry = {"jira": server}
+
+        assert manager._get_mcp_server_from_tool_name("jira-search_issues") is server
+
+    def test_get_mcp_server_from_tool_name_leaves_locally_registered_tools_alone(self):
+        """A bare ``mcp_tools`` handler keeps its legacy local dispatch.
+
+        ``execute_mcp_tool`` only reaches that arm when no server resolves, so resolving one
+        on a cold mapping would silently route a local tool to the upstream instead.
+        """
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+
+        manager = MCPServerManager()
+        server = MCPServer(server_id="petstore", name="petstore", transport=MCPTransport.http)
+        manager.registry = {"petstore": server}
+        global_mcp_tool_registry.register_tool(
+            name="dump_pets",
+            description="bare tool from the mcp_tools config block",
+            input_schema={"type": "object", "properties": {}},
+            handler=lambda **kwargs: "ran locally",
+        )
+        try:
+            assert manager._get_mcp_server_from_tool_name("petstore-dump_pets") is None
+            # A name the local registry does not own still resolves on the same cold mapping.
+            assert manager._get_mcp_server_from_tool_name("petstore-list_pets") is server
+        finally:
+            global_mcp_tool_registry.tools.pop("dump_pets", None)
+
+    def test_get_mcp_server_from_tool_name_rejects_prefixed_name_when_mapping_is_warm(self):
+        """The prefixed path keeps the same guard: a populated mapping still decides."""
+        manager = MCPServerManager()
+        server = MCPServer(server_id="jira", name="jira", transport=MCPTransport.http)
+        manager.registry = {"jira": server}
+        manager.tool_name_to_mcp_server_name_mapping["search_issues"] = "jira"
+        manager.tool_name_to_mcp_server_name_mapping["jira-search_issues"] = "jira"
+
+        assert manager._get_mcp_server_from_tool_name("jira-delete_everything") is None
 
     def test_resolve_mcp_server_for_tool_call_fallback_to_unprefixed_lookup(self):
         """Fallback to unprefixed _get_mcp_server_from_tool_name when other paths fail."""
