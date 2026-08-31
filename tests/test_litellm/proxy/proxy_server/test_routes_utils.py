@@ -99,6 +99,7 @@ def test_token_counter_missing_input_returns_400(
 
 @pytest.fixture
 def patched_supported_params(monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(
         litellm,
         "get_llm_provider",
@@ -125,7 +126,7 @@ def test_supported_openai_params_happy_path(client, auth_as, patched_supported_p
 
 
 def test_supported_openai_params_resolves_router_alias(client, auth_as, monkeypatch):
-    """A router ``model_name`` alias unknown to the cost map (e.g. ``claude-opus-4-6-cached``) resolves via the router's underlying ``litellm_params.model`` instead of 400ing."""
+    """A router alias unknown to the cost map resolves via the deployment's ``litellm_params.model``."""
     router = MagicMock()
     router.get_model_list.return_value = [
         {"model_name": "claude-opus-4-6-cached", "litellm_params": {"model": "anthropic/claude-opus-4-6"}}
@@ -159,6 +160,7 @@ def test_supported_openai_params_invalid_model(client, auth_as, monkeypatch):
     def _raise(model):
         raise Exception("unknown")
 
+    monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "get_llm_provider", _raise)
     with auth_as():
         response = client.get("/utils/supported_openai_params", params={"model": "??"})
