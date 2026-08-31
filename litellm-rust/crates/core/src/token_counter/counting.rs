@@ -163,7 +163,9 @@ fn count_content_list(
             "image_url" | "tool_use" | "tool_result" | "thinking" | "tool_reference" => {
                 return Err(CoreError::Unsupported("image or anthropic content blocks"));
             }
-            _ => {}
+            _ => {
+                return Err(CoreError::Unsupported("unknown content type in message"));
+            }
         }
     }
 

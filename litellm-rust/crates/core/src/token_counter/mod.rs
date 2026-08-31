@@ -16,7 +16,7 @@ pub fn token_counter(request: &TokenCounterRequest<'_>) -> CoreResult<usize> {
         ));
     }
 
-    let tokenizer = encoding::resolve(request.model);
+    let tokenizer = encoding::resolve(request.model)?;
 
     if let Some(text) = request.text {
         if request.tools.is_some() || request.tool_choice.is_some() {

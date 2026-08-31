@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use tokenizers::Tokenizer;
 
 use super::encoding::count_text;
+use crate::CoreError;
 
 enum TokenizerImpl {
     Tiktoken(&'static tiktoken::CoreBpe),
@@ -27,9 +28,17 @@ impl ResolvedTokenizer {
 
 static ANTHROPIC_TOKENIZER: OnceLock<Option<Box<Tokenizer>>> = OnceLock::new();
 
-pub(crate) fn resolve(model: &str) -> ResolvedTokenizer {
-    if let Some(hf) = try_resolve_hf(model) {
-        return ResolvedTokenizer(TokenizerImpl::HuggingFace(hf));
+pub(crate) fn resolve(model: &str) -> crate::CoreResult<ResolvedTokenizer> {
+    let lower = model.to_lowercase();
+    let needs_anthropic = lower.contains("claude") && !lower.contains("claude-3");
+
+    if needs_anthropic {
+        return match load_anthropic_tokenizer() {
+            Some(tok) => Ok(ResolvedTokenizer(TokenizerImpl::HuggingFace(tok))),
+            None => Err(CoreError::Unsupported(
+                "Anthropic HF tokenizer not available for pre-Claude-3 model",
+            )),
+        };
     }
 
     let normalized = fix_model_name(model);
@@ -44,17 +53,7 @@ pub(crate) fn resolve(model: &str) -> ResolvedTokenizer {
         )
     };
 
-    ResolvedTokenizer(TokenizerImpl::Tiktoken(enc))
-}
-
-fn try_resolve_hf(model: &str) -> Option<Box<Tokenizer>> {
-    let lower = model.to_lowercase();
-
-    if lower.contains("claude") && !lower.contains("claude-3") {
-        return load_anthropic_tokenizer();
-    }
-
-    None
+    Ok(ResolvedTokenizer(TokenizerImpl::Tiktoken(enc)))
 }
 
 fn load_anthropic_tokenizer() -> Option<Box<Tokenizer>> {
