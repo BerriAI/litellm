@@ -19,6 +19,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # canonical non-throwing request header reader
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -36,17 +39,35 @@ else:
     Span = Any
 
 
-def _with_requester_ip_address(request_data: dict[str, object], requester_ip: str | None) -> dict[str, object]:
-    """Auth gate rejections are raised before `add_litellm_data_to_request` records the
-    caller IP, so their failure logs would otherwise carry no IP nor key/user identity."""
+def _with_auth_failure_metadata(
+    request_data: dict[str, object],
+    requester_ip: str | None,
+    spend_logs_metadata: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Add metadata normally populated after auth without mutating the request body."""
+    raw_spend_metadata: Final = request_data.get("metadata")
+    spend_metadata_base: Final[Mapping[str, object]] = (  # pyright: ignore[reportUnknownVariableType]  # request JSON mappings have string keys
+        raw_spend_metadata if isinstance(raw_spend_metadata, Mapping) else EMPTY_MAPPING
+    )
+    request_data_with_spend_metadata: Final = (
+        {
+            **request_data,
+            "metadata": {**spend_metadata_base, "spend_logs_metadata": spend_logs_metadata},
+        }
+        if spend_logs_metadata is not None
+        else request_data
+    )  # mutable-ok: logging hooks require plain dictionaries
     if not requester_ip:
-        return request_data
-    key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
-    metadata: Final = request_data.get(key)
+        return request_data_with_spend_metadata
+    key: Final = "litellm_metadata" if "litellm_metadata" in request_data_with_spend_metadata else "metadata"
+    metadata: Final = request_data_with_spend_metadata.get(key)
     base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
     if base.get("requester_ip_address"):
-        return request_data
-    return {**request_data, key: {**base, "requester_ip_address": requester_ip}}  # mutable-ok: logging needs dicts
+        return request_data_with_spend_metadata
+    return {
+        **request_data_with_spend_metadata,
+        key: {**base, "requester_ip_address": requester_ip},
+    }  # mutable-ok: logging needs dicts
 
 
 class UserAPIKeyAuthExceptionHandler:
@@ -156,8 +177,17 @@ class UserAPIKeyAuthExceptionHandler:
                 )
 
             # Allow callbacks to transform the error response
+            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+            spend_logs_metadata: Final = LiteLLMProxyRequestSetup.get_spend_logs_metadata_from_request_headers(
+                _safe_get_request_headers(request)
+            )
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=_with_requester_ip_address(request_data, requester_ip),
+                request_data=_with_auth_failure_metadata(
+                    request_data=request_data,
+                    requester_ip=requester_ip,
+                    spend_logs_metadata=spend_logs_metadata,
+                ),
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,
