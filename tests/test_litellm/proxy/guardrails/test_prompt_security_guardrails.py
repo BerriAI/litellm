@@ -637,3 +637,35 @@ async def test_check_tool_results_enabled(monkeypatch: pytest.MonkeyPatch):
 
     assert "indirect_prompt_injection" in str(excinfo.value.detail)
 
+
+def test_prompt_security_streaming_transform_mode_from_config(monkeypatch: pytest.MonkeyPatch):
+    """streaming_transform_mode in litellm_params must reach the guardrail instance,
+    otherwise the unified streaming hook stays in block_only and drops redactions."""
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "prompt_security_streaming",
+                "litellm_params": {
+                    "guardrail": "prompt_security",
+                    "mode": "post_call",
+                    "default_on": True,
+                    "streaming_transform_mode": "incremental_diff",
+                },
+            }
+        ],
+        config_file_path="",
+    )
+
+    registered = [c for c in litellm.callbacks if isinstance(c, PromptSecurityGuardrail)]
+    assert len(registered) == 1
+    assert registered[0].streaming_transform_mode == "incremental_diff"
+
+
+def test_prompt_security_streaming_transform_mode_defaults_block_only():
+    guardrail = PromptSecurityGuardrail(api_key="k", api_base="https://test.prompt.security")
+    assert guardrail.streaming_transform_mode == "block_only"

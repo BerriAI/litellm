@@ -79,6 +79,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         user: str | None = None,
         system_prompt: str | None = None,
         check_tool_results: bool | None = None,
+        streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -104,6 +105,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 "or pass them as parameters to the guardrail in the config file"
             )
             raise PromptSecurityGuardrailMissingSecrets(msg)
+
+        self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
+            "block_only" if streaming_transform_mode is None else streaming_transform_mode
+        )
 
         # Configuration for file sanitization
         self.max_poll_attempts = 30  # Maximum number of polling attempts
