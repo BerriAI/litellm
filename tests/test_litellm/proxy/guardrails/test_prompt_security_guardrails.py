@@ -11,7 +11,18 @@ from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security im
 )
 
 import litellm
+from litellm.llms.openai.chat.guardrail_translation.handler import (
+    OpenAIChatCompletionsHandler,
+)
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
+    unified_guardrail as unified_module,
+)
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+    UnifiedLLMGuardrails,
+)
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.utils import CallTypes, Delta, ModelResponseStream, StreamingChoices
 
 
 def test_prompt_security_guard_config(monkeypatch: pytest.MonkeyPatch):
@@ -669,3 +680,76 @@ def test_prompt_security_streaming_transform_mode_from_config(monkeypatch: pytes
 def test_prompt_security_streaming_transform_mode_defaults_block_only():
     guardrail = PromptSecurityGuardrail(api_key="k", api_base="https://test.prompt.security")
     assert guardrail.streaming_transform_mode == "block_only"
+
+
+def _make_stream_chunk(content, finish_reason=None):
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content, role="assistant"),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_prompt_security_incremental_diff_streams_redacted_deltas(monkeypatch: pytest.MonkeyPatch):
+    """With incremental_diff, a modify verdict from the Prompt Security API must reach
+    the client as redacted streaming deltas instead of the raw text."""
+    monkeypatch.setattr(
+        unified_module,
+        "endpoint_guardrail_translation_mappings",
+        {CallTypes.acompletion: OpenAIChatCompletionsHandler},
+    )
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="prompt_security_streaming",
+        event_hook="post_call",
+        default_on=True,
+        api_key="test-key",
+        api_base="https://test.prompt.security",
+        streaming_transform_mode="incremental_diff",
+    )
+
+    async def mock_post(*args, **kwargs):
+        text = kwargs.get("json", {}).get("response", "")
+        redacted = text.replace("123-45-6789", "[REDACTED]")
+        mock_response = Response(
+            json={
+                "result": {
+                    "prompt": None,
+                    "response": {
+                        "action": "modify" if redacted != text else "log",
+                        "violations": ["pii"] if redacted != text else [],
+                        "modified_text": redacted,
+                    },
+                }
+            },
+            status_code=200,
+            request=Request(method="POST", url="https://test.prompt.security/api/protect"),
+        )
+        mock_response.raise_for_status = lambda: None
+        return mock_response
+
+    async def _mock_stream():
+        for chunk in [
+            _make_stream_chunk("order number "),
+            _make_stream_chunk("123-45-6789 confirmed"),
+            _make_stream_chunk("", finish_reason="stop"),
+        ]:
+            yield chunk
+
+    with patch.object(guardrail.async_handler, "post", side_effect=mock_post):
+        out = []
+        async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+            response=_mock_stream(),
+            request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
+        ):
+            out.append(item)
+
+    streamed = "".join(item.choices[0].delta.content or "" for item in out if item.choices)
+    assert streamed == "order number [REDACTED] confirmed"
+    assert "123-45-6789" not in streamed
