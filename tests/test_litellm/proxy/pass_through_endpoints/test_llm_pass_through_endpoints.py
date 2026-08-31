@@ -4865,3 +4865,76 @@ class TestPassthroughRouterModelBudgetReservation:
         )
 
         self._assert_metadata_carries_attribution(captured, user_api_key_dict)
+
+
+class TestAzureRouterModelStreamingDispatch:
+    """
+    Regression: ``llm_router.allm_passthrough_route`` returns an awaited
+    ``AsyncPassthroughStreamingResponse`` for streaming calls, which is no
+    longer an async generator under ``inspect.isasyncgen``. The dispatch's
+    else branch therefore calls ``.aiter_bytes()`` / ``.status_code`` /
+    ``.headers`` on it. The router's ``set_response_headers`` also runs the
+    result through ``prepare_response_for_header_attachment``, which used to
+    wrap it in ``HiddenParamsAsyncIteratorWrapper`` (no ``aiter_bytes``), so
+    every streaming Azure router-model request 500'd with
+    ``AttributeError: aiter_bytes``; ``_hidden_params`` on the streaming
+    response keeps it unwrapped.
+    """
+
+    @pytest.mark.asyncio
+    async def test_azure_router_model_streaming_returns_streaming_response(self, monkeypatch):
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+
+        upstream_body = b"data: hello\n\n"
+
+        async def _upstream_response() -> httpx.Response:
+            upstream_request = httpx.Request(
+                "POST",
+                "https://my-azure.openai.azure.com/openai/deployments/gpt-5/chat/completions",
+            )
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=upstream_body,
+                request=upstream_request,
+            )
+
+        logging_obj = MagicMock()
+        logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
+
+        from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+
+        class StreamingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                streaming_response = await AsyncPassthroughStreamingResponse(
+                    response=_upstream_response(),
+                    litellm_logging_obj=logging_obj,
+                    provider_config=MagicMock(),
+                )
+                return prepare_response_for_header_attachment(streaming_response)
+
+        async def fake_get_request_body(_request):
+            return {"model": "gpt-5", "stream": True}
+
+        monkeypatch.setattr(proxy_server, "llm_router", StreamingRouter())
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+
+        result = await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert isinstance(result, StreamingResponse)
+        assert result.status_code == 200
+        body = b"".join([chunk async for chunk in result.body_iterator])
+        assert body == upstream_body

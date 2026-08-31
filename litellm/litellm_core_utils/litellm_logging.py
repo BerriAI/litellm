@@ -2141,7 +2141,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             logging_result: Final = self.normalize_logging_result(result=result)
 
-            if isinstance(result, Response) and isinstance(logging_result, ModelResponse):
+            if isinstance(result, Response) and isinstance(logging_result, (ModelResponse, EmbeddingResponse)):
                 result = logging_result
 
             if standard_logging_object is None and result is not None and self.stream is not True:

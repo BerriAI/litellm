@@ -719,6 +719,87 @@ async def test_allm_passthrough_route_429_streaming_raises():
     assert exc_info.value.response.status_code == 429
 
 
+def test_llm_passthrough_route_sync_streaming_error_maps_upstream_status():
+    """
+    Regression test: a sync streaming passthrough whose upstream answers an
+    error status must surface the mapped provider error, not
+    httpx.ResponseNotRead.
+
+    Before the fix, raise_for_status() raised on the still-unread streamed
+    response, and _handle_error then touched e.response.text, which raises
+    ResponseNotRead on a streamed-but-unread body, masking the real upstream
+    error entirely.
+    """
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    error_body = json.dumps(
+        {
+            "error": {
+                "code": "429",
+                "message": "Rate limit exceeded. Retry after 10 seconds.",
+            }
+        }
+    ).encode()
+
+    class _UnreadErrorStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield error_body
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            stream=_UnreadErrorStream(),
+            headers={"content-type": "application/json"},
+        )
+
+    sync_client = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_handler))
+    )
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://gigachat.devices.sberbank.ru/api/v1/chat/completions"),
+        "https://gigachat.devices.sberbank.ru/api/v1",
+    )
+    mock_provider_config.get_api_key.return_value = "fake-key"
+    mock_provider_config.validate_environment.return_value = {
+        "Authorization": "Bearer fake-key"
+    }
+    mock_provider_config.sign_request.return_value = (
+        {"Authorization": "Bearer fake-key"},
+        None,
+    )
+    mock_provider_config.is_streaming_request.return_value = True
+    mock_provider_config.get_error_class.side_effect = (
+        lambda error_message, status_code, headers: BaseLLMException(
+            status_code=status_code, message=error_message, headers=headers
+        )
+    )
+
+    mock_logging_obj = MagicMock()
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        llm_passthrough_route(
+            model="gigachat/GigaChat-2",
+            endpoint="chat/completions",
+            method="POST",
+            custom_llm_provider="gigachat",
+            api_base="https://gigachat.devices.sberbank.ru/api/v1",
+            api_key="fake-key",
+            json={
+                "model": "GigaChat-2",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+            client=sync_client,
+            litellm_logging_obj=mock_logging_obj,
+            provider_config=mock_provider_config,
+        )
+
+    assert exc_info.value.status_code == 429
+    assert "Rate limit exceeded" in str(exc_info.value)
+
+
 def test_llm_passthrough_route_propagates_allm_passthrough_route_to_logging_obj():
     """
     Regression guard for LIT-4192: `allm_passthrough_route` sets
