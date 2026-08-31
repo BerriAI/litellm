@@ -39290,6 +39290,15 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "together_ai/Qwen/Qwen3.8-Flash": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1000000,
+        "max_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 4.7e-07,
+        "source": "https://docs.together.ai/docs/serverless-models"
+    },
     "tts-1": {
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "openai",
