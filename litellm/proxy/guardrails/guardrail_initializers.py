@@ -11,6 +11,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         BedrockGuardrail,
     )
 
+    streaming_params: Final = BedrockGuardrailStreamingParams.from_extras(litellm_params.model_extra)
     _bedrock_callback: Final = BedrockGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
@@ -38,6 +39,9 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         aws_bedrock_runtime_endpoint=litellm_params.aws_bedrock_runtime_endpoint,
         experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
         only_scan_new_messages=litellm_params.only_scan_new_messages or False,
+        streaming_buffer_until_moderated=streaming_params.streaming_buffer_until_moderated,
+        streaming_sampling_rate=streaming_params.streaming_sampling_rate,
+        streaming_end_of_stream_only=streaming_params.streaming_end_of_stream_only,
     )
     litellm.logging_callback_manager.add_litellm_callback(_bedrock_callback)
     return _bedrock_callback
@@ -73,6 +77,9 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
         metadata=litellm_params.metadata,
         dev_info=litellm_params.dev_info,
         on_flagged=litellm_params.on_flagged,
+        skip_system_message_in_guardrail=litellm_params.skip_system_message_in_guardrail,
+        skip_tool_message_in_guardrail=litellm_params.skip_tool_message_in_guardrail,
+        advisory_system_message=litellm_params.advisory_system_message,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lakera_v2_callback)
     return _lakera_v2_callback
@@ -104,7 +111,12 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             apply_to_output=False,
         )
         params.update(overrides)
-        callback: Final = _OPTIONAL_PresidioPIIMasking(**params)
+        # Passed outside the heterogeneous params dict so the argument keeps
+        # its precise int | None type.
+        callback: Final = _OPTIONAL_PresidioPIIMasking(
+            presidio_analyze_chunk_size_bytes=litellm_params.presidio_analyze_chunk_size_bytes,
+            **params,
+        )
         litellm.logging_callback_manager.add_litellm_callback(callback)
         return callback
 
