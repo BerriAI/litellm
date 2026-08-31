@@ -92,6 +92,41 @@ async def test_malformed_config_raises_at_first_use(time_controller, monkeypatch
         )
 
 
+@pytest.mark.asyncio
+async def test_admission_ignores_a_forged_empty_litellm_metadata_key(time_controller, monkeypatch):
+    """
+    get_metadata_variable_name_from_kwargs picks "litellm_metadata" whenever
+    that key is merely present, regardless of its value. A caller adding an
+    empty "litellm_metadata" alongside the real, populated "metadata" made
+    admission read no tags at all, sailing past every configured limit.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+    poisoned = {"metadata": {"tags": ["end_user_id:u1"]}, "litellm_metadata": {}}
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**poisoned, "litellm_call_id": "call-1"},
+        call_type="completion",
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data={**poisoned, "litellm_call_id": "call-2"},
+            call_type="completion",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Global scope: applies to every key by default
 # ---------------------------------------------------------------------------
@@ -1199,6 +1234,49 @@ async def test_log_success_event_accounts_when_litellm_params_carries_a_null_lit
         "litellm_call_id": "call-1",
         "litellm_params": {
             "litellm_metadata": None,
+            "metadata": {"tags": ["end_user_id:u1"], "user_api_key": "hash"},
+        },
+        "standard_logging_object": {"total_tokens": 0, "response_cost": 12.0},
+    }
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data=_data(["end_user_id:u1"], call_id="call-2"),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_log_success_event_reads_tags_when_top_level_kwargs_carries_a_null_metadata_key(
+    time_controller, monkeypatch
+):
+    """
+    Some call paths populate a top-level "metadata" (or "litellm_metadata")
+    key on kwargs (Logging.model_call_details) set to None, alongside the
+    real, populated dict nested under kwargs["litellm_params"].
+    _get_tags_from_request_kwargs checks the top-level key first; passing it
+    raw kwargs made a present-but-None top-level key win, reading no tags at
+    all even though metadata_variable_name correctly resolved to "metadata".
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "dollar_limits": {
+                "limits": [{"name": "daily_spend", "tag_id": "end_user_id", "limit": 10.0, "period_seconds": 86400}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    kwargs = {
+        "litellm_call_id": "call-1",
+        "metadata": None,
+        "litellm_params": {
             "metadata": {"tags": ["end_user_id:u1"], "user_api_key": "hash"},
         },
         "standard_logging_object": {"total_tokens": 0, "response_cost": 12.0},

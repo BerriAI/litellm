@@ -80,7 +80,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
@@ -104,7 +103,7 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _PartitionKey,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _PartitionOperations,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _policy_fingerprint,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
-    _resolve_success_event_metadata_variable_name,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
+    _resolve_authoritative_metadata_variable_name,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching model_based_tag_rate_limits_hook's identical import
@@ -579,7 +578,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         # than re-charges both "requests" and "concurrency" checks below.
         stash: Final = _claim_stash_for_data(data)
 
-        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(data)
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(data)
         tags: Final = _order_tags_for_identity_resolution(
             _get_tags_from_request_kwargs(data, metadata_variable_name=metadata_variable_name),
             data,
@@ -756,13 +755,13 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         # Logging.update_environment_variables).
         litellm_params_raw: Final = kwargs.get("litellm_params")
         litellm_params_for_metadata: Final = litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
-        metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
 
         tags: Final = _order_tags_for_identity_resolution(
-            _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name),
-            kwargs,
+            _get_tags_from_request_kwargs(litellm_params_for_metadata, metadata_variable_name=metadata_variable_name),
+            litellm_params_for_metadata,
             metadata_variable_name,
         )
         if not tags:
