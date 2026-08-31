@@ -801,6 +801,58 @@ def test_responses_api_bridge_check_gpt_5_5_tools_plus_reasoning_routes_to_respo
     assert model_info.get("mode") == "responses"
 
 
+def test_responses_api_bridge_check_forwards_api_base_to_model_info_helper():
+    """Regression test for https://github.com/BerriAI/litellm/issues/37041 -- the bridge
+    check's model-info lookup must hit the request's api_base, not fall back to the
+    provider default (localhost:11434 for ollama)."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"mode": "chat"}
+        responses_api_bridge_check(
+            model="llama3",
+            custom_llm_provider="ollama",
+            api_base="http://my-host:30000",
+        )
+
+    assert mock_get_model_info.call_args.kwargs["api_base"] == "http://my-host:30000"
+
+
+@pytest.mark.parametrize("model", ["ollama/llama3", "ollama_chat/llama3"])
+def test_ollama_completion_explicit_api_base_overrides_global(model, monkeypatch):
+    """Regression test for https://github.com/BerriAI/litellm/issues/26170 -- the explicit
+    api_base kwarg must win over the litellm.api_base global, matching the openai provider."""
+    monkeypatch.setattr(litellm, "api_base", "https://api.deepseek.com")
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info, patch.object(
+        litellm_main.base_llm_http_handler, "completion"
+    ) as mock_completion:
+        mock_get_model_info.return_value = {"mode": "chat"}
+        mock_completion.return_value = litellm.ModelResponse()
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="http://my-host:30000",
+        )
+
+    assert mock_completion.call_args.kwargs["api_base"] == "http://my-host:30000"
+
+
+def test_ollama_embedding_explicit_api_base_overrides_global(monkeypatch):
+    """Regression test for https://github.com/BerriAI/litellm/issues/26170 (embedding path)."""
+    monkeypatch.setattr(litellm, "api_base", "https://api.deepseek.com")
+
+    with patch("litellm.main.ollama.ollama_embeddings") as mock_embeddings:
+        mock_embeddings.return_value = litellm.EmbeddingResponse()
+        litellm.embedding(
+            model="ollama/qwen3-embedding:0.6b",
+            input="hello",
+            api_base="http://my-host:30000",
+        )
+
+    assert mock_embeddings.call_args.kwargs["api_base"] == "http://my-host:30000"
+
+
 def test_responses_api_bridge_check_azure_gpt_5_4_tools_plus_reasoning_routes_to_responses():
     """Azure gpt-5.4 with both tools and reasoning_effort should route to Responses API."""
     from litellm.main import responses_api_bridge_check

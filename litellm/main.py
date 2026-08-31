@@ -1022,7 +1022,7 @@ def responses_api_bridge_check(
     try:
         model_info = cast(
             dict,
-            _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
+            _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base),
         )
         if model_info.get("mode") is None and model.startswith("responses/"):
             model = model.replace("responses/", "")
@@ -4281,7 +4281,7 @@ def _complete_ollama(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    api_base = litellm.api_base or api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
+    api_base = api_base or litellm.api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
     if api_key is not None and "Authorization" not in headers:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -4321,7 +4321,7 @@ def _complete_ollama_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    api_base = litellm.api_base or api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
+    api_base = api_base or litellm.api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
 
     api_key = api_key or litellm.ollama_key or os.environ.get("OLLAMA_API_KEY") or litellm.api_key
     if api_key is not None and "Authorization" not in headers:
@@ -6689,7 +6689,7 @@ def embedding(
                 api_key=api_key,
             )
         elif custom_llm_provider == "ollama":
-            api_base = litellm.api_base or api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
+            api_base = api_base or litellm.api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
 
             if isinstance(input, str):
                 input = [input]
