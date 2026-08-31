@@ -472,6 +472,58 @@ async def test_async_sse_wrapper_bills_full_stream_when_client_reads_all():
     assert not any(c.startswith(b"event: error\n") for c in iterator.logged_chunks)
 
 
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_dispatches_deferred_logging_when_client_disconnects_mid_tail():
+    """
+    Regression: when the pump finishes draining while the client is still
+    connected, ``_handle_streaming_logging`` defers billing for the proxy's
+    post-response hook (``ProxyLogging._fire_deferred_stream_logging``), which
+    only fires on a normally completed response. If the client then disconnects
+    before consuming the queued tail, the response generator tears down via
+    GeneratorExit and that hook never runs. The relay teardown must dispatch
+    the stored deferred billing itself, or the request logs no spend at all.
+    """
+    dispatched = []
+    deferred_fired = asyncio.Event()
+
+    def _deferred_stream_complete(logging_coroutine):
+        dispatched.append(logging_coroutine)
+
+        async def _consume():
+            logging_coroutine.close()
+            deferred_fired.set()
+
+        return _consume()
+
+    logging_obj = _make_logging_obj("test_deferred_dispatch_on_disconnect_mid_tail")
+    logging_obj._on_deferred_stream_complete = _deferred_stream_complete
+    iterator = BaseAnthropicMessagesStreamingIterator(litellm_logging_obj=logging_obj, request_body={})
+
+    async def _full_stream():
+        for event in (*_STREAM_PREFIX, *_STREAM_TAIL):
+            yield event
+
+    gen = iterator.async_sse_wrapper(_full_stream())
+    client_chunks = []
+    async for chunk in gen:
+        client_chunks.append(chunk)
+        if len(client_chunks) == len(_STREAM_PREFIX):
+            break
+
+    for _ in range(100):
+        if getattr(logging_obj, "_deferred_stream_complete_args", None) is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert getattr(logging_obj, "_deferred_stream_complete_args", None) is not None, "pump never deferred billing"
+
+    await gen.aclose()
+
+    assert len(dispatched) == 1, "relay teardown did not dispatch the deferred billing"
+    assert logging_obj._on_deferred_stream_complete is None
+    assert logging_obj._deferred_stream_complete_args is None
+    await asyncio.wait_for(deferred_fired.wait(), timeout=5)
+
+
 class _ProviderStreamError(Exception):
     """Stand-in for a provider-specific streaming failure carrying a status code."""
 
