@@ -76,6 +76,18 @@ def test_is_database_transport_error_non_connection_prisma_errors(prisma_error):
     assert PrismaDBExceptionHandler.is_database_transport_error(prisma_error) == False
 
 
+@pytest.mark.parametrize(
+    "transport_error",
+    [
+        httpx.ConnectError("connection refused"),
+        ClientNotConnectedError(),
+        HTTPClientClosedError(),
+    ],
+)
+def test_is_database_transport_error_connection_errors(transport_error):
+    assert PrismaDBExceptionHandler.is_database_transport_error(transport_error) is True
+
+
 def test_is_database_connection_generic_errors():
     """
     Test non-Prisma error cases for database connection checking
@@ -97,6 +109,8 @@ def test_is_database_connection_generic_errors():
         PrismaDBExceptionHandler.is_database_connection_error(db_proxy_exception)
         == True
     )
+    assert PrismaDBExceptionHandler.is_database_infrastructure_error(db_proxy_exception)
+    assert PrismaDBExceptionHandler.is_database_transport_error(db_proxy_exception)
 
     # Test with non-DB error
     regular_exception = Exception("Regular error")
