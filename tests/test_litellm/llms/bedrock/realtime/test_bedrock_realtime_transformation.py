@@ -1025,6 +1025,112 @@ class TestBedrockRealtimeUserEventsAndUsage:
         assert usage["output_tokens"] == 0
         assert usage["total_tokens"] == 0
 
+    @staticmethod
+    def _usage_event(total_input, total_output, in_speech, in_text, out_speech, out_text):
+        return {
+            "event": {
+                "usageEvent": {
+                    "totalInputTokens": total_input,
+                    "totalOutputTokens": total_output,
+                    "totalTokens": total_input + total_output,
+                    "details": {
+                        "total": {
+                            "input": {"speechTokens": in_speech, "textTokens": in_text},
+                            "output": {"speechTokens": out_speech, "textTokens": out_text},
+                        }
+                    },
+                }
+            }
+        }
+
+    _ASSISTANT_TURN = (
+        {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}},
+        {"event": {"textOutput": {"content": "Hi"}}},
+        {"event": {"contentEnd": {"stopReason": "END_TURN"}}},
+    )
+
+    def test_multi_turn_usage_reports_per_response_deltas_not_cumulative_totals(self):
+        events = self._run(
+            BedrockRealtimeConfig(),
+            [
+                self._usage_event(25, 40, in_speech=20, in_text=5, out_speech=30, out_text=10),
+                *self._ASSISTANT_TURN,
+                self._usage_event(40, 100, in_speech=30, in_text=10, out_speech=75, out_text=25),
+                *self._ASSISTANT_TURN,
+            ],
+        )
+        usages = [e["response"]["usage"] for e in events if e["type"] == "response.done"]
+        assert len(usages) == 2
+        assert (usages[0]["input_tokens"], usages[0]["output_tokens"], usages[0]["total_tokens"]) == (25, 40, 65)
+        assert (usages[1]["input_tokens"], usages[1]["output_tokens"], usages[1]["total_tokens"]) == (15, 60, 75)
+        assert usages[1]["input_token_details"] == {"audio_tokens": 10, "text_tokens": 5, "cached_tokens": 0}
+        assert usages[1]["output_token_details"] == {"audio_tokens": 45, "text_tokens": 15}
+        assert sum(u["total_tokens"] for u in usages) == 140
+
+    def test_usage_reported_after_last_response_done_flushes_as_logged_only_done(self):
+        config = BedrockRealtimeConfig()
+        self._run(
+            config,
+            [
+                self._usage_event(25, 40, in_speech=20, in_text=5, out_speech=30, out_text=10),
+                *self._ASSISTANT_TURN,
+            ],
+        )
+        assert config.leftover_usage_done_events() == ()
+
+        self._run(config, [self._usage_event(25, 46, in_speech=20, in_text=5, out_speech=30, out_text=16)])
+        leftover = config.leftover_usage_done_events()
+        assert len(leftover) == 1
+        assert leftover[0]["type"] == "response.done"
+        usage = leftover[0]["response"]["usage"]
+        assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (0, 6, 6)
+        assert usage["output_token_details"] == {"audio_tokens": 0, "text_tokens": 6}
+        assert config.leftover_usage_done_events() == ()
+
+    def test_final_transcript_fragments_emit_one_completed_with_full_transcript(self):
+        events = self._run(
+            BedrockRealtimeConfig(),
+            [
+                {
+                    "event": {
+                        "contentStart": {
+                            "role": "USER",
+                            "type": "TEXT",
+                            "additionalModelFields": json.dumps({"generationStage": "FINAL"}),
+                        }
+                    }
+                },
+                {"event": {"textOutput": {"content": "What is the "}}},
+                {"event": {"textOutput": {"content": "capital of France?"}}},
+                {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN"}}},
+            ],
+        )
+        deltas = [e for e in events if e["type"] == "conversation.item.input_audio_transcription.delta"]
+        completed = [e for e in events if e["type"] == "conversation.item.input_audio_transcription.completed"]
+        assert [d["delta"] for d in deltas] == ["What is the ", "capital of France?"]
+        assert len(completed) == 1
+        assert completed[0]["transcript"] == "What is the capital of France?"
+        assert {e["item_id"] for e in deltas + completed} == {completed[0]["item_id"]}
+
+    def test_speculative_transcript_block_end_emits_no_completed(self):
+        events = self._run(
+            BedrockRealtimeConfig(),
+            [
+                {
+                    "event": {
+                        "contentStart": {
+                            "role": "USER",
+                            "type": "TEXT",
+                            "additionalModelFields": json.dumps({"generationStage": "SPECULATIVE"}),
+                        }
+                    }
+                },
+                {"event": {"textOutput": {"content": "rea"}}},
+                {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN"}}},
+            ],
+        )
+        assert [e["type"] for e in events] == ["conversation.item.input_audio_transcription.delta"]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
