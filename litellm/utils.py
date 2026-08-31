@@ -4859,11 +4859,7 @@ def _get_deployment_order(deployment: dict | Any) -> int | None:
 
 def _get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
     if target_order is not None:
-        filtered: Final = [d for d in healthy_deployments if _get_deployment_order(d) == target_order]
-        if filtered:
-            return filtered
-        # target_order doesn't match any deployment (e.g., external fallback model) — return all
-        return healthy_deployments
+        return [d for d in healthy_deployments if _get_deployment_order(d) == target_order]
 
     # Default: pick min order group
     _valid_orders: Final[list[int]] = [

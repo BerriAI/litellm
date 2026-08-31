@@ -414,7 +414,9 @@ async def run_async_fallback(
             verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
             if isinstance(mg, str):
                 kwargs["model"] = mg
+                kwargs.pop("_target_order", None)
             elif isinstance(mg, dict):
+                kwargs.pop("_target_order", None)
                 kwargs.update(mg)
             fallback_depth = fallback_depth + 1
             _hop_metadata = dict(kwargs.get(metadata_variable_name) or {})

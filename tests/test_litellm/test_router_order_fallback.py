@@ -6,12 +6,15 @@ should be tried first, and higher order deployments should be used as fallbacks
 when lower order deployments fail.
 """
 
-from typing import Optional
+from typing import Final, Optional
 
 import pytest
 
+import litellm
 from litellm import Router
-from litellm.utils import _get_order_filtered_deployments
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+from litellm.utils import _get_deployment_order, _get_order_filtered_deployments
 
 # ---------------------------------------------------------------------------
 # Unit tests for _get_order_filtered_deployments
@@ -49,13 +52,22 @@ class TestGetOrderFilteredDeployments:
         assert len(result) == 1
         assert result[0]["model_info"]["id"] == "b"
 
-    def test_target_order_no_match_returns_all(self):
+    def test_target_order_no_match_returns_empty(self):
         deps = [
             self._make_deployment(1, "a"),
             self._make_deployment(2, "b"),
         ]
         result = _get_order_filtered_deployments(deps, target_order=99)
-        assert len(result) == 2
+        assert result == []
+
+    def test_target_order_no_match_does_not_reselect_lower_order(self):
+        deps = [
+            self._make_deployment(1, "a"),
+            self._make_deployment(2, "b"),
+        ]
+        remaining_after_pre_call = [deps[0]]
+        result = _get_order_filtered_deployments(remaining_after_pre_call, target_order=2)
+        assert result == []
 
     def test_no_order_set_returns_all(self):
         deps = [
@@ -404,6 +416,140 @@ async def test_router_order_fallback_with_hidden_model_group_alias():
     )
 
     assert response._hidden_params["model_id"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_router_order_fallback_does_not_reselect_order_1_when_order_2_is_filtered_out():
+    class _DropOrder2(CustomLogger):
+        async def async_filter_deployments(
+            self, model, healthy_deployments, messages, request_kwargs=None, parent_otel_span=None
+        ):
+            return [d for d in healthy_deployments if _get_deployment_order(d) != 2]
+
+    drop_order_2: Final = _DropOrder2()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key",
+                    "mock_response": "litellm.RateLimitError",
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key",
+                    "mock_response": "success from order 2",
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+    )
+    litellm.callbacks.append(drop_order_2)
+    try:
+        with pytest.raises(Exception) as exc_info:
+            await router.acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        assert "success from order 2" not in str(exc_info.value)
+        assert getattr(exc_info.value, "_hidden_params", {}).get("model_id") != "1"
+    finally:
+        litellm.callbacks.remove(drop_order_2)
+
+
+@pytest.mark.asyncio
+async def test_router_order_fallback_ignores_prompt_cache_pin_on_target_order():
+    messages = [{"role": "user", "content": "word " * 5000}]
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("azure peak load"),
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "good",
+                    "mock_response": "success from order 2",
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    await PromptCachingCache(cache=router.cache).async_add_model_id(
+        model_id="1",
+        messages=messages,
+        tools=None,
+    )
+    response = await router.acompletion(model="test-model", messages=messages)
+    assert response._hidden_params["model_id"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_router_order_fallback_retries_keep_target_order():
+    seen_target_orders: Final = []
+
+    class _RecordTargetOrder(CustomLogger):
+        async def async_filter_deployments(
+            self, model, healthy_deployments, messages, request_kwargs=None, parent_otel_span=None
+        ):
+            seen_target_orders.append((request_kwargs or {}).get("_target_order"))
+            return healthy_deployments
+
+    recorder: Final = _RecordTargetOrder()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("fail order 1"),
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("fail order 2"),
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=1,
+    )
+    litellm.callbacks.append(recorder)
+    try:
+        with pytest.raises(Exception, match="fail order 2"):
+            await router.acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+    finally:
+        litellm.callbacks.remove(recorder)
+    assert seen_target_orders.count(2) >= 2
 
 
 def test_check_non_standard_fallback_format():

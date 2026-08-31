@@ -2174,6 +2174,7 @@ class Router:
                 "client": model_client,
                 **kwargs,
             }
+            input_kwargs.pop("_target_order", None)
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
@@ -3197,6 +3198,7 @@ class Router:
             }
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
+            input_kwargs.pop("_target_order", None)
 
             _response: Final = litellm.acompletion(**input_kwargs)
 
@@ -11928,7 +11930,7 @@ class Router:
         )
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
-        _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
+        _target_order: Final = (request_kwargs or {}).get("_target_order")
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
             cast(list[dict], healthy_deployments), target_order=_target_order
         )
@@ -12693,7 +12695,7 @@ class Router:
             )
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
-        _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
+        _target_order: Final = (request_kwargs or {}).get("_target_order")
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
             healthy_deployments, target_order=_target_order
         )
