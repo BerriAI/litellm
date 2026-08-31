@@ -1,4 +1,6 @@
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -101,6 +103,64 @@ async def test_redis_client_init_with_socket_timeout(monkeypatch, redis_no_ping,
     client = redis_cache.init_async_client()
     assert client is not None
     assert client.connection_pool.connection_kwargs["socket_timeout"] == 1.0
+
+
+def test_init_async_client_keeps_pool_local_during_concurrent_initialization():
+    pool_a = MagicMock()
+    pool_b = MagicMock()
+    first_pool_assigned = threading.Event()
+    second_pool_assigned = threading.Event()
+
+    class CoordinatedRedisCache(RedisCache):
+        @property
+        def async_redis_conn_pool(self):
+            return self._async_redis_conn_pool
+
+        @async_redis_conn_pool.setter
+        def async_redis_conn_pool(self, value):
+            self._async_redis_conn_pool = value
+            if value is pool_a:
+                first_pool_assigned.set()
+                if not second_pool_assigned.wait(timeout=5):
+                    raise TimeoutError("second pool was not assigned")
+            elif value is pool_b:
+                second_pool_assigned.set()
+
+    redis_cache = CoordinatedRedisCache.__new__(CoordinatedRedisCache)
+    redis_cache.redis_kwargs = {"host": "cache.example"}
+    redis_cache.redis_async_client = None
+    redis_cache._async_redis_conn_pool = None
+
+    def build_client(connection_pool, **kwargs):
+        client = MagicMock()
+        client.connection_pool = connection_pool
+        return client
+
+    def initialize_client():
+        async def initialize():
+            return redis_cache.init_async_client()
+
+        return asyncio.run(initialize())
+
+    with (
+        patch(
+            "litellm._redis.get_redis_connection_pool",
+            side_effect=[pool_a, pool_b],
+        ),
+        patch(
+            "litellm._redis.get_redis_async_client",
+            side_effect=build_client,
+        ),
+        ThreadPoolExecutor(max_workers=2) as executor,
+    ):
+        future_a = executor.submit(initialize_client)
+        assert first_pool_assigned.wait(timeout=5)
+        future_b = executor.submit(initialize_client)
+        client_b = future_b.result(timeout=5)
+        client_a = future_a.result(timeout=5)
+
+    assert client_a.connection_pool is pool_a
+    assert client_b.connection_pool is pool_b
 
 
 @pytest.mark.asyncio

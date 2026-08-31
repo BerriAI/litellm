@@ -422,8 +422,9 @@ class RedisCache(BaseCache):
             redis_async_client = cast(async_redis_client | async_redis_cluster_client, cached_client)
         else:
             # Create new connection pool and client for current event loop
-            self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
-            redis_async_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
+            async_redis_conn_pool: Final = get_redis_connection_pool(**self.redis_kwargs)
+            self.async_redis_conn_pool = async_redis_conn_pool
+            redis_async_client = get_redis_async_client(connection_pool=async_redis_conn_pool, **self.redis_kwargs)
             in_memory_llm_clients_cache.set_cache(key=cache_key, value=redis_async_client)
 
         self.redis_async_client = redis_async_client
