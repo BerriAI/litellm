@@ -65,8 +65,10 @@ class TestChunkParserUsage:
         assert parsed["is_finished"] is False
         assert parsed["usage"] is None
 
-    def test_cache_hit_usage_not_inflated(self):
-        """precached_prompt_tokens is a subset of prompt_tokens; totals must not be inflated on cache hits."""
+    def test_cache_hit_usage_folds_cached_tokens_back_in(self):
+        """GigaChat reports prompt_tokens and total_tokens after subtracting cached tokens
+        (docs example: prompt_tokens=1, precached_prompt_tokens=37, total_tokens=5), so the
+        OpenAI-convention usage must add them back and surface them as cached_tokens."""
         parsed = _parse(
             {
                 "choices": [{"delta": {"content": ""}, "index": 0, "finish_reason": "stop"}],
@@ -80,6 +82,6 @@ class TestChunkParserUsage:
         )
 
         assert parsed["usage"] is not None
-        assert parsed["usage"]["prompt_tokens"] == 25
-        assert parsed["usage"]["total_tokens"] == 32
+        assert parsed["usage"]["prompt_tokens"] == 45
+        assert parsed["usage"]["total_tokens"] == 52
         assert parsed["usage"]["prompt_tokens_details"]["cached_tokens"] == 20

@@ -26,7 +26,9 @@ class TestConvertUsage:
         )
 
     def test_usage_with_precached_prompt_tokens(self):
-        """precached_prompt_tokens is a subset of prompt_tokens (OpenAI cached_tokens semantics), never additive."""
+        """GigaChat's prompt_tokens and total_tokens exclude cached tokens (docs example:
+        prompt_tokens=1, precached_prompt_tokens=37, total_tokens=5), so OpenAI-convention
+        usage adds precached back in and surfaces it as cached_tokens."""
         result = convert_usage(
             {
                 "prompt_tokens": 10,
@@ -37,9 +39,9 @@ class TestConvertUsage:
         )
 
         assert result == Usage(
-            prompt_tokens=10,
+            prompt_tokens=13,
             completion_tokens=5,
-            total_tokens=15,
+            total_tokens=18,
             prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=3),
         )
 
