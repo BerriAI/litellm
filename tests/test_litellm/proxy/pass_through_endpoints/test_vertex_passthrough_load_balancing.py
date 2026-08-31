@@ -177,6 +177,126 @@ def test_get_available_deployment_for_pass_through_no_deployments():
     assert "use_in_pass_through=True" in str(exc_info.value)
 
 
+def test_get_available_deployment_for_pass_through_does_not_use_default_fallback():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/20727
+
+    Pass-through must hit the exact provider-native model requested. When the
+    URL-derived model id doesn't match any configured deployment's model_name
+    (e.g. because the deployment is aliased -- a common pattern for preview
+    models, whose real Vertex ids are unstable), get_available_deployment_for_pass_through
+    used to silently fall through to `default_fallbacks` and route to an
+    unrelated model instead of raising, exactly like the router does for
+    normal completions. That's correct for normal completions; it's wrong for
+    pass-through, where a caller expects either the exact requested model or a
+    clear error -- never a substitution they didn't ask for.
+    """
+    import litellm
+    from litellm.router import Router
+
+    model_list = [
+        {
+            # Aliased deployment, mirroring the issue's own config: model_name
+            # ("gemini-3.0-flash") differs from the real Vertex model id
+            # embedded in a pass-through URL ("gemini-3-flash-preview").
+            "model_name": "gemini-3.0-flash",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-3-flash-preview",
+                "vertex_project": "project-1",
+                "vertex_location": "us-central1",
+                "use_in_pass_through": True,
+            },
+        },
+        {
+            # The configured default_fallbacks target -- also pass-through
+            # enabled, so a silent fallback substitution would otherwise
+            # succeed instead of raising, masking the bug.
+            "model_name": "gemini-2.5-flash",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+                "vertex_project": "project-1",
+                "vertex_location": "us-central1",
+                "use_in_pass_through": True,
+            },
+        },
+    ]
+
+    router = Router(model_list=model_list, default_fallbacks=["gemini-2.5-flash"])
+
+    # The pass-through URL carries the real Vertex model id, not the model_name alias.
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        router.get_available_deployment_for_pass_through(model="gemini-3-flash-preview")
+
+    # Must not silently return the gemini-2.5-flash fallback deployment.
+    assert "gemini-2.5-flash" not in str(exc_info.value) or "no deployment" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_async_get_available_deployment_for_pass_through_does_not_use_default_fallback():
+    """
+    Async counterpart of test_get_available_deployment_for_pass_through_does_not_use_default_fallback.
+    Covers async_get_available_deployment_for_pass_through -> async_get_healthy_deployments,
+    the separate code path the async proxy routes actually use.
+    """
+    import litellm
+    from litellm.router import Router
+
+    model_list = [
+        {
+            "model_name": "gemini-3.0-flash",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-3-flash-preview",
+                "vertex_project": "project-1",
+                "vertex_location": "us-central1",
+                "use_in_pass_through": True,
+            },
+        },
+        {
+            "model_name": "gemini-2.5-flash",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+                "vertex_project": "project-1",
+                "vertex_location": "us-central1",
+                "use_in_pass_through": True,
+            },
+        },
+    ]
+
+    router = Router(model_list=model_list, default_fallbacks=["gemini-2.5-flash"])
+
+    with pytest.raises(litellm.BadRequestError):
+        await router.async_get_available_deployment_for_pass_through(
+            model="gemini-3-flash-preview",
+            request_kwargs={},
+        )
+
+
+def test_get_available_deployment_still_uses_default_fallback_for_normal_completions():
+    """
+    Regression guard: normal (non-pass-through) deployment resolution must keep
+    silently substituting default_fallbacks -- that behavior is correct and
+    intentional for regular completions. Only pass-through opts out of it.
+    """
+    from litellm.router import Router
+
+    model_list = [
+        {
+            "model_name": "gemini-2.5-flash",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+            },
+        },
+    ]
+
+    router = Router(model_list=model_list, default_fallbacks=["gemini-2.5-flash"])
+
+    deployment = router.get_available_deployment(model="some-unconfigured-model")
+
+    assert deployment is not None
+    deployments = deployment if isinstance(deployment, list) else [deployment]
+    assert any(d["litellm_params"]["model"] == "vertex_ai/gemini-2.5-flash" for d in deployments)
+
+
 def test_get_available_deployment_for_pass_through_load_balancing():
     """
     Test load balancing for pass-through deployments
