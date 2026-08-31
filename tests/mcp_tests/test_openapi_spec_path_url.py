@@ -119,3 +119,11 @@ def test_load_openapi_spec_supports_local_file_path(tmp_path, monkeypatch: pytes
 
     spec = gen.load_openapi_spec(str(p))
     assert spec == expected
+
+
+def test_load_openapi_spec_rejects_non_object_document(tmp_path) -> None:
+    p = tmp_path / "openapi.yaml"
+    p.write_text("- not an OpenAPI object\n", encoding="utf-8")
+
+    with pytest.raises(TypeError, match="OpenAPI spec must be a JSON or YAML object"):
+        gen.load_openapi_spec(str(p))
