@@ -9576,9 +9576,14 @@ class Router:
             # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", "model": "gpt-4o", ...}
         """
         # Try to get deployment by model_id first
-        deployment = self.get_deployment(model_id=model_id)
-        if deployment is not None and team_id is not None and not self._deployment_usable_by_team(deployment, team_id):
-            deployment = None
+        deployment_candidate: Final = self.get_deployment(model_id=model_id)
+        deployment = (
+            deployment_candidate
+            if deployment_candidate is None
+            or team_id is None
+            or self._deployment_usable_by_team(deployment_candidate, team_id)
+            else None
+        )
 
         # If not found, try by model_group_name
         if deployment is None:
