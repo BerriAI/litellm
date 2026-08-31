@@ -193,8 +193,15 @@ locals {
   # ECS Fargate has no ConfigMap analogue, so the YAML is uploaded to S3
   # (see aws_s3_object.proxy_config in s3.tf) and the container entrypoint
   # downloads it to /tmp/litellm-config.yaml via boto3 before exec'ing
-  # uvicorn. The S3 object's etag is embedded in the task definition so a
+  # uvicorn. A hash of the config is embedded in the task definition so a
   # config edit forces a new task-def revision and a rolling redeploy.
+  # It hashes var.proxy_config rather than reading the uploaded object's etag
+  # because the etag is only known after apply, which made every config edit
+  # need two applies: the first uploaded the object, the second finally saw
+  # the new etag and rolled the services. The object's content is exactly this
+  # yamlencode (see aws_s3_object.proxy_config in s3.tf), so the hash changes
+  # for the same edits the etag would have, one apply earlier. The S3 key
+  # reference below still orders the upload before the task definition.
   proxy_config_enabled = length(keys(var.proxy_config)) > 0
   proxy_config_path    = "/tmp/litellm-config.yaml"
 
@@ -202,7 +209,7 @@ locals {
     { name = "CONFIG_FILE_PATH", value = local.proxy_config_path },
     { name = "LITELLM_PROXY_CONFIG_S3_BUCKET", value = aws_s3_bucket.this.bucket },
     { name = "LITELLM_PROXY_CONFIG_S3_KEY", value = aws_s3_object.proxy_config[0].key },
-    { name = "LITELLM_PROXY_CONFIG_S3_ETAG", value = aws_s3_object.proxy_config[0].etag },
+    { name = "LITELLM_PROXY_CONFIG_SHA256", value = sha256(yamlencode(var.proxy_config)) },
   ] : []
 
   proxy_config_fetch_cmd = "python -c \"import os, boto3; boto3.client('s3', region_name=os.environ['AWS_REGION']).download_file(os.environ['LITELLM_PROXY_CONFIG_S3_BUCKET'], os.environ['LITELLM_PROXY_CONFIG_S3_KEY'], os.environ['CONFIG_FILE_PATH'])\""
