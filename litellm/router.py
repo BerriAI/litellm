@@ -11621,11 +11621,19 @@ class Router:
         input: str | list | None = None,
         specific_deployment: bool | None = False,
         request_kwargs: dict | None = None,
+        allow_default_fallback: bool = True,
     ) -> tuple[str, list | dict]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
 
         If 'healthy_deployments' returned is None, this means the user chose a specific deployment
+
+        Args:
+            allow_default_fallback: Whether to silently substitute `default_fallbacks` when no
+                deployment matches `model`. Pass-through callers set this False: pass-through must
+                hit the exact provider-native model requested, so a caller expecting an error to
+                surface (e.g. a wrong/unconfigured model name) instead silently gets routed to an
+                unrelated model. See issue #20727.
 
         Returns
         - str, the litellm model name
@@ -11710,7 +11718,11 @@ class Router:
             # Do not fall back to another model when access-group filtering removed every
             # candidate for the requested name: re-filtering the fallback model can be a
             # no-op when it has no access_groups, incorrectly serving a different model.
-            if self._has_default_fallbacks() and not _access_group_filter_emptied_candidates:
+            if (
+                self._has_default_fallbacks()
+                and not _access_group_filter_emptied_candidates
+                and allow_default_fallback
+            ):
                 fallback_model: Final = self._get_first_default_fallback()
                 if fallback_model:
                     verbose_router_logger.info(
@@ -11815,6 +11827,7 @@ class Router:
         input: str | list | None = None,
         specific_deployment: bool | None = False,
         parent_otel_span: Span | None = None,
+        allow_default_fallback: bool = True,
     ) -> list[dict] | dict:
         """
         Get the healthy deployments for a model.
@@ -11831,6 +11844,7 @@ class Router:
             input=input,
             specific_deployment=specific_deployment,
             request_kwargs=request_kwargs,
+            allow_default_fallback=allow_default_fallback,
         )
 
         # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN THE TEAM
@@ -12146,6 +12160,9 @@ class Router:
                     request_kwargs.update(accepted_tier_params)
 
             # 2. Get healthy deployments
+            # allow_default_fallback=False: pass-through must hit the exact provider-native
+            # model requested, not get silently redirected to an unrelated default fallback
+            # model when the requested model isn't found (see issue #20727).
             healthy_deployments: Final = await self.async_get_healthy_deployments(
                 model=model,
                 request_kwargs=request_kwargs,
@@ -12153,6 +12170,7 @@ class Router:
                 input=input,
                 specific_deployment=specific_deployment,
                 parent_otel_span=parent_otel_span,
+                allow_default_fallback=False,
             )
 
             # 3. If specific deployment returned, verify if it supports pass-through
@@ -12788,11 +12806,15 @@ class Router:
             RouterRateLimitError: If no pass-through deployments are available
         """
         # 1. Perform common checks to get healthy deployments list
+        # allow_default_fallback=False: pass-through must hit the exact provider-native
+        # model requested, not get silently redirected to an unrelated default fallback
+        # model when the requested model isn't found (see issue #20727).
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            allow_default_fallback=False,
         )
 
         # 2. If the returned is a specific deployment (Dict), verify and return directly
