@@ -4425,6 +4425,265 @@ class _DummyPlugin:
         return context
 
 
+class TestClassificationMode:
+    """Test classification_mode='user_turn': classify only requests whose newest turn is a new
+    human ask; tool-loop continuation turns replay the session's held routing decision."""
+
+    REASONING_ASK = {
+        "role": "user",
+        "content": "Let's think step by step and reason through this problem carefully.",
+    }
+    SIMPLE_ASK = {"role": "user", "content": "Hello!"}
+    ASSISTANT_ANSWER = {"role": "assistant", "content": "the answer"}
+    TOOL_CALL_1 = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+    }
+    TOOL_RESULT_1 = {"role": "tool", "tool_call_id": "call_1", "content": "file contents"}
+    TOOL_CALL_2 = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_2", "type": "function", "function": {"name": "run_tests", "arguments": "{}"}}],
+    }
+    TOOL_RESULT_2 = {"role": "tool", "tool_call_id": "call_2", "content": "3 passed"}
+
+    @pytest.fixture
+    def user_turn_config(self, basic_config) -> dict:
+        return {**basic_config, "classification_mode": "user_turn"}
+
+    @staticmethod
+    def _request_kwargs(session_id: str) -> dict:
+        return {"metadata": {"session_id": session_id}}
+
+    def _router(self, mock_router_instance, config: dict) -> ComplexityRouter:
+        mock_router_instance.cache = DualCache()
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+
+    def _tool_loop_turns(self) -> list[list[dict]]:
+        return [
+            [self.REASONING_ASK],
+            [self.REASONING_ASK, self.TOOL_CALL_1, self.TOOL_RESULT_1],
+            [self.REASONING_ASK, self.TOOL_CALL_1, self.TOOL_RESULT_1, self.TOOL_CALL_2, self.TOOL_RESULT_2],
+        ]
+
+    def test_default_mode_is_every_request(self, complexity_router):
+        assert complexity_router.config.classification_mode == "every_request"
+
+    def test_invalid_classification_mode_rejected(self, mock_router_instance, basic_config):
+        with pytest.raises(ValidationError):
+            ComplexityRouter(
+                model_name="test-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={**basic_config, "classification_mode": "sometimes"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_user_turn_mode_classifies_tool_loop_once(self, mock_router_instance, user_turn_config):
+        """The mutation check: a 3-request tool loop drives exactly one classification, and both
+        continuation turns hold the classified model under the user_turn_continuation cause."""
+        router = self._router(mock_router_instance, user_turn_config)
+        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
+            responses = [
+                await router.async_pre_routing_hook(
+                    model="test-model", request_kwargs=self._request_kwargs("loop-1"), messages=turn
+                )
+                for turn in self._tool_loop_turns()
+            ]
+        assert spy.call_count == 1
+        assert [r.model for r in responses] == ["o1-preview", "o1-preview", "o1-preview"]
+        assert [r.routing_decision["cause"] for r in responses[1:]] == [
+            "user_turn_continuation",
+            "user_turn_continuation",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_every_request_default_classifies_every_tool_loop_turn(self, mock_router_instance, basic_config):
+        """Pins today's default: every request classifies, including tool-loop continuations."""
+        router = self._router(mock_router_instance, basic_config)
+        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
+            responses = [
+                await router.async_pre_routing_hook(
+                    model="test-model", request_kwargs=self._request_kwargs("loop-2"), messages=turn
+                )
+                for turn in self._tool_loop_turns()
+            ]
+        assert spy.call_count == 3
+        assert [r.model for r in responses] == ["o1-preview", "o1-preview", "o1-preview"]
+        assert all(r.routing_decision["cause"] != "user_turn_continuation" for r in responses)
+
+    @pytest.mark.asyncio
+    async def test_continuation_without_session_id_still_classifies(self, mock_router_instance, user_turn_config):
+        """No resolvable session id means no held decision to replay, so every request classifies."""
+        router = self._router(mock_router_instance, user_turn_config)
+        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
+            responses = [
+                await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=turn)
+                for turn in self._tool_loop_turns()
+            ]
+        assert spy.call_count == 3
+        assert [r.model for r in responses] == ["o1-preview", "o1-preview", "o1-preview"]
+        assert all(r.routing_decision["cause"] != "user_turn_continuation" for r in responses)
+
+    @pytest.mark.asyncio
+    async def test_plugins_suppress_user_turn_gate(self, mock_router_instance, basic_config):
+        """A replayed decision would bypass the plugin pipeline, so plugins force every request
+        through _classify_and_route, exactly as they do for session_affinity."""
+        router = self._router(
+            mock_router_instance,
+            {**basic_config, "classification_mode": "user_turn", "plugins": [_DummyPlugin()]},
+        )
+        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
+            responses = [
+                await router.async_pre_routing_hook(
+                    model="test-model", request_kwargs=self._request_kwargs("loop-3"), messages=turn
+                )
+                for turn in self._tool_loop_turns()
+            ]
+        assert spy.call_count == 3
+        assert [r.model for r in responses] == ["o1-preview", "o1-preview", "o1-preview"]
+        assert all(r.routing_decision["cause"] != "user_turn_continuation" for r in responses)
+
+    @pytest.mark.asyncio
+    async def test_new_human_ask_reclassifies_and_repins(self, mock_router_instance, user_turn_config):
+        """Unlike session_affinity, a new human ask never short-circuits on the pin: the session
+        re-classifies, moves tier, and the moved decision becomes the next held decision."""
+        router = self._router(mock_router_instance, user_turn_config)
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("s-repin"), messages=[self.REASONING_ASK]
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("s-repin"),
+            messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.SIMPLE_ASK],
+        )
+        third = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("s-repin"),
+            messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.SIMPLE_ASK, self.TOOL_CALL_1, self.TOOL_RESULT_1],
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
+        assert third.model == "gpt-4o-mini"
+        assert third.routing_decision["cause"] == "user_turn_continuation"
+
+    @pytest.mark.asyncio
+    async def test_new_ask_with_trailing_system_reminder_reclassifies(self, mock_router_instance, user_turn_config):
+        """Claude Code appends a system-role reminder after the human turn; that trailing plumbing
+        must not turn a new ask into a continuation, and a continuation turn carrying the same
+        trailing reminder stays a continuation."""
+        router = self._router(mock_router_instance, user_turn_config)
+        reminder = {"role": "system", "content": "<total_tokens>100 tokens left</total_tokens>"}
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("s-reminder"), messages=[self.REASONING_ASK]
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("s-reminder"),
+            messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.SIMPLE_ASK, reminder],
+        )
+        third = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("s-reminder"),
+            messages=[
+                self.REASONING_ASK,
+                self.ASSISTANT_ANSWER,
+                self.SIMPLE_ASK,
+                reminder,
+                self.TOOL_CALL_1,
+                self.TOOL_RESULT_1,
+                reminder,
+            ],
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
+        assert second.routing_decision["cause"] != "user_turn_continuation"
+        assert third.model == "gpt-4o-mini"
+        assert third.routing_decision["cause"] == "user_turn_continuation"
+
+    @pytest.mark.asyncio
+    async def test_escalation_keyword_turn_is_a_new_ask(self, mock_router_instance, user_turn_config):
+        """An escalation keyword arrives as human text, so the turn classifies and escalates
+        instead of replaying the held decision."""
+        router = self._router(mock_router_instance, user_turn_config)
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("s-esc"), messages=[self.SIMPLE_ASK]
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("s-esc"),
+            messages=[self.SIMPLE_ASK, self.ASSISTANT_ANSWER, {"role": "user", "content": "LITELLM ESCALATE"}],
+        )
+        assert first.model == "gpt-4o-mini"
+        assert second.model == "gpt-4o"
+        assert second.routing_decision["escalated"] is True
+
+    @pytest.mark.asyncio
+    async def test_messages_surface_tool_result_shapes(self, mock_router_instance, user_turn_config):
+        """Messages-surface shapes: a tool_result-only user turn is a continuation, while an ask
+        riding alongside a tool_result in the same turn is a new ask."""
+        router = self._router(mock_router_instance, user_turn_config)
+        tool_use = {"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "t", "input": {}}]}
+        tool_result = {"type": "tool_result", "tool_use_id": "x", "content": "ok"}
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("s-msgs"), messages=[self.REASONING_ASK]
+        )
+        pure = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("s-msgs"),
+            messages=[self.REASONING_ASK, tool_use, {"role": "user", "content": [tool_result]}],
+        )
+        hybrid = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("s-msgs"),
+            messages=[
+                self.REASONING_ASK,
+                tool_use,
+                {"role": "user", "content": [tool_result, {"type": "text", "text": "Hello!"}]},
+            ],
+        )
+        assert first.model == "o1-preview"
+        assert pure.model == "o1-preview"
+        assert pure.routing_decision["cause"] == "user_turn_continuation"
+        assert hybrid.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_session_affinity_wins_when_both_knobs_are_on(self, mock_router_instance, user_turn_config):
+        """With session_affinity also on, the pin short-circuits new asks too and keeps its own
+        cause, so the session stays on turn 1's model."""
+        router = self._router(mock_router_instance, {**user_turn_config, "session_affinity": True})
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("s-both"), messages=[self.REASONING_ASK]
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("s-both"),
+            messages=[self.REASONING_ASK, self.ASSISTANT_ANSWER, self.SIMPLE_ASK],
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "o1-preview"
+        assert second.routing_decision["cause"] == "session_affinity_pin"
+
+    def test_user_turn_mode_enables_tier_and_deployment_pins(self, mock_router_instance, basic_config):
+        """user_turn implies the tier pin machinery (the pin write is what gives a continuation
+        a held decision) and the tier pin implies the deployment pin; plugins suppress both."""
+        default = self._router(mock_router_instance, basic_config)
+        enabled = self._router(mock_router_instance, {**basic_config, "classification_mode": "user_turn"})
+        suppressed = self._router(
+            mock_router_instance,
+            {**basic_config, "classification_mode": "user_turn", "plugins": [_DummyPlugin()]},
+        )
+        assert default._uses_tier_pin is False
+        assert enabled._uses_tier_pin is True
+        assert enabled._uses_deployment_pin is True
+        assert suppressed._uses_tier_pin is False
+        assert suppressed._uses_deployment_pin is False
+
+
 class TestRoutingPlugins:
     """Test the `complexity_router_config.plugins` field: narrows the classified
     tier's candidate pool before a model is picked. Discussion:
