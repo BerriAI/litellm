@@ -156,6 +156,31 @@ def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
     return headers.get(key, default)
 
 
+def _is_image_part(item: object) -> bool:
+    """Whether a structured-message content part carries an image rather than text."""
+
+    if not isinstance(item, Mapping):
+        return False
+
+    part: Final[Mapping[object, object]] = item
+    return part.get("type") == "image_url"
+
+
+def _scannable_text(content: object) -> str:
+    """Flatten a structured message's content into the single string the v1 detection endpoint takes.
+
+    Image parts are dropped: the endpoint accepts one string, so an image would only reach it as
+    its stringified source (a base64 blob or a URL), which is not text the scanner can evaluate.
+    """
+
+    if not isinstance(content, list):
+        return str(content or "")
+
+    parts: Final[Sequence[object]] = content
+    text_parts: Final = [item for item in parts if not _is_image_part(item)]  # mutable-ok: sent as a list repr
+    return str(text_parts or "")
+
+
 def is_saas(host: str) -> bool:
     """Checks whether the connection is to the SaaS platform"""
 
@@ -263,18 +288,6 @@ class HiddenlayerGuardrail(CustomGuardrail):
 
         if scan_params := inputs.get("structured_messages"):
             last_msg: Final = scan_params[-1]
-            content = last_msg.get("content")
-            scan_contents = []
-
-            # Remove images from multimodal content before sending to HiddenLayer v1
-            if content and isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and not item.get("type") == "image_url":
-                        scan_contents.append(item)
-                effective_content: Final = str(scan_contents) if scan_contents else ""
-            else:
-                effective_content: Final = str(content or "")
-
             result: _HiddenlayerResponse = await self._call_hiddenlayer(
                 project_id,
                 hl_request_metadata,
@@ -282,7 +295,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                     "messages": [
                         {
                             "role": last_msg.get("role", "user"),
-                            "content": effective_content
+                            "content": _scannable_text(last_msg.get("content")),
                         }
                     ]
                 },
