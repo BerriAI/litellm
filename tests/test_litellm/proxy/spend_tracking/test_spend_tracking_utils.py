@@ -924,6 +924,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
         start_time,
         end_time,
         org_id,
+        spend_counter_update_complete: asyncio.Event | None = None,
     ):
         """Mock update_database and capture the payload it creates"""
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
