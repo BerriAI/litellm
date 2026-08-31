@@ -1491,7 +1491,7 @@ class MockCanaryMaskingGuardrail(CustomGuardrail):
 
 
 class TestAnthropicMessagesImageSources:
-    """An Anthropic image block has three source shapes (types/llms/anthropic.py:259).
+    """An Anthropic image block has three source shapes (`AnthropicMessagesImageParam.source`).
 
     Only the base64 one carries "data", so reading that key alone drops url images
     entirely -- for every guardrail consuming GenericGuardrailAPIInputs["images"],
