@@ -722,16 +722,16 @@ def _auth_override():
 
 @pytest.mark.asyncio
 async def test_streaming_responses_guardrail_block_returns_sse_events():
-    import litellm.proxy.proxy_server as ps
-
     from litellm.integrations.custom_guardrail import ModifyResponseException
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
+    import litellm.proxy.proxy_server as ps
+
     guardrail_exception = ModifyResponseException(
         message="blocked by test",
         model="gpt-4o",
-        request_data={"model": "gpt-4o", "stream": True},
+        request_data={"model": "gpt-4o", "stream": True, "litellm_logging_obj": MagicMock()},
     )
     app.dependency_overrides[user_api_key_auth] = _auth_override
     try:
@@ -739,8 +739,6 @@ async def test_streaming_responses_guardrail_block_returns_sse_events():
             patch.object(ps, "general_settings", {}),
             patch.object(ps, "llm_router", MagicMock()),
             patch.object(ps, "proxy_config", MagicMock()),
-            patch.object(ps, "proxy_logging_obj", AsyncMock()),
-            patch.object(ps, "select_data_generator", MagicMock()),
             patch.object(ps, "user_api_base", None),
             patch.object(ps, "user_max_tokens", None),
             patch.object(ps, "user_model", None),
@@ -768,18 +766,23 @@ async def test_streaming_responses_guardrail_block_returns_sse_events():
     frames = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
     assert frames[-1] == "[DONE]"
     events = [json.loads(frame) for frame in frames[:-1]]
-    assert [event["type"] for event in events] == [
+    event_types = [event["type"] for event in events]
+    assert event_types[:4] == [
         "response.created",
         "response.in_progress",
         "response.output_item.added",
-        "response.output_text.delta",
+        "response.content_part.added",
+    ]
+    assert event_types[-4:] == [
         "response.output_text.done",
+        "response.content_part.done",
         "response.output_item.done",
         "response.completed",
     ]
+    assert event_types[4:-4] == ["response.output_text.delta"] * len(event_types[4:-4])
     assert events[0]["response"]["status"] == "in_progress"
     assert events[0]["response"]["output"] == []
-    assert events[3]["delta"] == "blocked by test"
+    assert "".join(event["delta"] for event in events if event["type"] == "response.output_text.delta") == "blocked by test"
     assert events[-1]["response"]["status"] == "completed"
     assert events[-1]["response"]["output"][0]["content"][0]["text"] == "blocked by test"
 

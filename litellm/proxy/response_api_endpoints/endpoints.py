@@ -27,6 +27,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
 )
+from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
@@ -45,40 +46,6 @@ _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     }
 )
 _EMPTY_TOOL_PAYLOAD: Final[Mapping[str, Any]] = MappingProxyType({})
-
-
-async def _blocked_responses_api_stream(response: ResponsesAPIResponse) -> AsyncIterator[str]:
-    response_data: Final = response.model_dump(mode="json", exclude_none=True)
-    output: Final = response_data["output"][0]
-    content: Final = output["content"][0]
-    output_item_id: Final = output["id"]
-    text: Final = content["text"]
-    created_response: Final = {**response_data, "output": [], "status": "in_progress"}
-    added_item: Final = {**output, "status": "in_progress"}
-    events: Final = (
-        {"type": "response.created", "response": created_response},
-        {"type": "response.in_progress", "response": created_response},
-        {"type": "response.output_item.added", "output_index": 0, "item": added_item},
-        {
-            "type": "response.output_text.delta",
-            "item_id": output_item_id,
-            "output_index": 0,
-            "content_index": 0,
-            "delta": text,
-        },
-        {
-            "type": "response.output_text.done",
-            "item_id": output_item_id,
-            "output_index": 0,
-            "content_index": 0,
-            "text": text,
-        },
-        {"type": "response.output_item.done", "output_index": 0, "item": output},
-        {"type": "response.completed", "response": response_data},
-    )
-    for event in events:
-        yield f"data: {json.dumps(event)}\n\n"
-    yield "data: [DONE]\n\n"
 
 
 def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
@@ -439,6 +406,7 @@ async def responses_api(
     except ModifyResponseException as e:
         # Guardrail passthrough: return violation message in Responses API format (200)
         _data: Final = e.request_data
+        _logging_obj: Final = _data.get("litellm_logging_obj")
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -469,7 +437,19 @@ async def responses_api(
             usage=_blocked_responses_api_usage(e.original_response),
         )
         if data.get("stream") is True:
-            return StreamingResponse(_blocked_responses_api_stream(response_obj), media_type="text/event-stream")
+            streaming_response: Final = CachedResponsesAPIStreamingIterator(
+                response=response_obj,
+                logging_obj=_logging_obj,
+                request_data=_data,
+                call_type="aresponses",
+            )
+            selected_data_generator: Final = select_data_generator(
+                response=streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+                request=request,
+            )
+            return StreamingResponse(selected_data_generator, media_type="text/event-stream")
         return response_obj
     except Exception as e:
         raise await processor._handle_llm_api_exception(
