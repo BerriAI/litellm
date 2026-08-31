@@ -4893,6 +4893,33 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     assert litellm.error_logs == {}
 
 
+@pytest.mark.parametrize(
+    "meta,expected",
+    [
+        (None, None),
+        ({}, None),
+        ({"billed_units": {"total_tokens": 42}, "tokens": {"input_tokens": 42}}, (42, 42)),
+        ({"tokens": {"input_tokens": 38}}, (38, 38)),
+        ({"billed_units": {"total_tokens": 38}}, (38, 38)),
+    ],
+)
+def test_get_rerank_usage_from_meta(meta, expected):
+    """Direct unit test of the helper both get_usage_from_response_obj and
+    get_usage_as_dict delegate to for the rerank `meta` shape."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    result = StandardLoggingPayloadSetup._get_rerank_usage_from_meta(meta)
+
+    if expected is None:
+        assert result is None
+    else:
+        prompt_tokens, total_tokens = expected
+        assert result is not None
+        assert result.prompt_tokens == prompt_tokens
+        assert result.completion_tokens == 0
+        assert result.total_tokens == total_tokens
+
+
 def test_get_usage_from_response_obj_rerank_meta():
     """
     RerankResponse has no top-level `usage` field - token usage lives under
