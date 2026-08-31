@@ -1,6 +1,7 @@
 import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
 import {
   E2E_INTERNAL_USER_KEY_ALIAS,
+  E2E_TEAM_ADMIN_USER_ID,
   E2E_TEAM_CRUD_ALIAS,
   E2E_TEAM_CRUD_ID,
   TEAM_ADMIN_STORAGE_PATH,
@@ -8,6 +9,8 @@ import {
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+import { CHAT_MODEL_A, masterKey } from "../../helpers/traffic";
+import { keySourceSelect, modelSelect, onlyVisible, openPlayground } from "../../helpers/playground";
 
 /**
  * Every identifier a roster is addressable by. Which of user_id / user_email is populated depends on
@@ -126,6 +129,91 @@ test.describe("Team Admin", () => {
         timeout: 15_000,
       })
       .not.toContain("e2e-removable-member");
+  });
+
+  test("Team admin sees all team models in the Playground model dropdown", async ({ page, request }) => {
+    const suffix = Date.now();
+    const teamModelName = `e2e-team-dropdown-model-${suffix}`;
+    const auth = { Authorization: `Bearer ${masterKey()}` };
+
+    const teamRes = await request.post("/team/new", {
+      headers: auth,
+      data: {
+        team_alias: `e2e-playground-team-${suffix}`,
+        models: [CHAT_MODEL_A],
+        members_with_roles: [{ role: "admin", user_id: E2E_TEAM_ADMIN_USER_ID }],
+      },
+    });
+    expect(teamRes.ok(), `team create failed (${teamRes.status()}): ${await teamRes.text()}`).toBe(true);
+    const teamId = (await teamRes.json()).team_id as string;
+
+    let modelId = "";
+    let teamKey = "";
+    try {
+      const modelRes = await request.post("/model/new", {
+        headers: auth,
+        data: {
+          model_name: teamModelName,
+          litellm_params: {
+            model: "openai/fake-gpt-4",
+            api_base: `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`,
+            api_key: "fake-key",
+          },
+          model_info: { team_id: teamId },
+        },
+      });
+      expect(modelRes.ok(), `model create failed (${modelRes.status()}): ${await modelRes.text()}`).toBe(true);
+      modelId = (await modelRes.json()).model_info?.id as string;
+
+      const keyRes = await request.post("/key/generate", { headers: auth, data: { team_id: teamId } });
+      expect(keyRes.ok(), `key generate failed (${keyRes.status()}): ${await keyRes.text()}`).toBe(true);
+      teamKey = (await keyRes.json()).key as string;
+
+      await expect
+        .poll(
+          async () => {
+            const res = await request.get("/model_group/info", {
+              headers: { Authorization: `Bearer ${teamKey}` },
+            });
+            if (!res.ok()) return false;
+            const body: { data?: { model_group?: string }[] } = await res.json();
+            return (body.data ?? []).some((group) => group.model_group === teamModelName);
+          },
+          {
+            message: `model group ${teamModelName} never became visible to the team key`,
+            timeout: 30_000,
+          },
+        )
+        .toBe(true);
+
+      await openPlayground(page);
+      await keySourceSelect(page).click();
+      await onlyVisible(page.getByRole("option", { name: "Virtual Key" })).click({ timeout: 15_000 });
+
+      const keyInput = onlyVisible(page.getByPlaceholder("Enter custom Virtual Key"));
+      await expect(keyInput).toBeVisible({ timeout: 10_000 });
+      await keyInput.fill(teamKey);
+
+      const select = modelSelect(page);
+      await select.click();
+      await select.fill(teamModelName);
+      await expect(onlyVisible(page.getByRole("option", { name: teamModelName }))).toBeVisible({
+        timeout: 15_000,
+      });
+
+      await select.fill(CHAT_MODEL_A);
+      await expect(onlyVisible(page.getByRole("option", { name: CHAT_MODEL_A }))).toBeVisible({
+        timeout: 15_000,
+      });
+    } finally {
+      if (teamKey) {
+        await request.post("/key/delete", { headers: auth, data: { keys: [teamKey] } });
+      }
+      if (modelId) {
+        await request.post("/model/delete", { headers: auth, data: { id: modelId } });
+      }
+      await request.post("/team/delete", { headers: auth, data: { team_ids: [teamId] } });
+    }
   });
 
   test("Team admin can create a team key with All Team Models", async ({ page }) => {
