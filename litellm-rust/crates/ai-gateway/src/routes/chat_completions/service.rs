@@ -84,14 +84,13 @@ impl Stream for SpendTrackingStream {
                 self.tracker.accumulate(&chunk);
 
                 // Track tool calls and function calls
-                if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
-                    if let Some(first_choice) = choices.first() {
-                        if let Some(delta) = first_choice.get("delta") {
-                            self.tool_call_tracker.accumulate_tool_call_delta(delta);
-                            self.tool_call_tracker.accumulate_function_call_delta(delta);
-                            self.thinking_tracker.process_chunk(&chunk);
-                        }
-                    }
+                if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array())
+                    && let Some(first_choice) = choices.first()
+                    && let Some(delta) = first_choice.get("delta")
+                {
+                    self.tool_call_tracker.accumulate_tool_call_delta(delta);
+                    self.tool_call_tracker.accumulate_function_call_delta(delta);
+                    self.thinking_tracker.process_chunk(&chunk);
                 }
 
                 // Track finish reason
@@ -154,7 +153,10 @@ impl Stream for SpendTrackingStream {
 
                         let cost = match cost_calculator::calculate_cost(&cost_request) {
                             Ok(response) => response.total_cost_usd(),
-                            Err(_) => 0.0,
+                            Err(ref e) => {
+                                tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+                                0.0
+                            }
                         };
 
                         // Record spend via worker (batched, async)
@@ -360,12 +362,25 @@ pub async fn run(
     // Input validation
     validate_chat_completions_body(&body)?;
 
-    // Check rate limits (RPM, max_parallel_requests)
+    // Check rate limits (RPM, TPM, max_parallel_requests)
     if let Some(ref redis) = state.redis {
+        let estimated_tokens = body
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .map(|msgs| {
+                let chars: usize = msgs
+                    .iter()
+                    .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
+                    .map(|s| s.len())
+                    .sum();
+                (chars / 4) as u64
+            })
+            .unwrap_or(0);
         match crate::auth::rate_limit::check_request_limits(
             redis,
             key_object,
             hashed_token.as_hex_str(),
+            estimated_tokens,
         )
         .await
         {
@@ -482,10 +497,10 @@ pub async fn run(
             let mut hasher = sha2::Sha256::new();
             hasher.update(provider_model.as_bytes());
             hasher.update(b":");
-            if let Some(messages) = body.get("messages") {
-                if let Ok(bytes) = serde_json::to_vec(messages) {
-                    hasher.update(bytes);
-                }
+            if let Some(messages) = body.get("messages")
+                && let Ok(bytes) = serde_json::to_vec(messages)
+            {
+                hasher.update(bytes);
             }
             let hash = hasher.finalize();
             let mut hex_str = String::with_capacity(64 + 11);
@@ -620,7 +635,9 @@ pub async fn run(
                     Ok(ChatCompletionsResult::Streaming(Box::pin(tracking_stream)))
                 }
                 Err(err) => {
-                    if let Some(provider) = custom_llm_provider {
+                    if let Some(provider) = custom_llm_provider
+                        && err.is_upstream_failure()
+                    {
                         let breaker = state.circuit_breakers.get_or_create(provider);
                         breaker.record_failure().await;
                     }
@@ -688,7 +705,7 @@ pub async fn run(
                                 redis,
                                 key_object,
                                 hashed_token.as_hex_str(),
-                                response.usage.prompt_tokens,
+                                0,
                                 response.usage.completion_tokens,
                             )
                             .await;
@@ -712,12 +729,12 @@ pub async fn run(
                             .metrics
                             .tokens_total
                             .with_label_values(&[provider_model, "prompt"])
-                            .inc_by(response.usage.prompt_tokens as u64);
+                            .inc_by(response.usage.prompt_tokens);
                         state
                             .metrics
                             .tokens_total
                             .with_label_values(&[provider_model, "completion"])
-                            .inc_by(response.usage.completion_tokens as u64);
+                            .inc_by(response.usage.completion_tokens);
 
                         tracing::info!(
                             request_id = request_id,
@@ -790,7 +807,10 @@ pub async fn run(
             }
 
             // This deployment failed after all retries
-            if let Some(provider) = custom_llm_provider {
+            if let Some(provider) = custom_llm_provider
+                && let Some(ref err) = deployment_error
+                && err.is_upstream_failure()
+            {
                 let breaker = state.circuit_breakers.get_or_create(provider);
                 breaker.record_failure().await;
             }
@@ -924,7 +944,10 @@ async fn record_spend(
 
     let cost = match cost_calculator::calculate_cost(&cost_request) {
         Ok(response) => response.total_cost_usd(),
-        Err(_) => 0.0,
+        Err(ref e) => {
+            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+            0.0
+        }
     };
 
     // Record spend via worker (batched, async)
@@ -1004,36 +1027,36 @@ fn validate_chat_completions_body(body: &Value) -> CoreResult<()> {
         }
     }
 
-    if let Some(temp) = body.get("temperature").and_then(Value::as_f64) {
-        if !(0.0..=2.0).contains(&temp) {
-            return Err(CoreError::InvalidRequest(format!(
-                "'temperature' must be between 0 and 2, got {temp}"
-            )));
-        }
+    if let Some(temp) = body.get("temperature").and_then(Value::as_f64)
+        && !(0.0..=2.0).contains(&temp)
+    {
+        return Err(CoreError::InvalidRequest(format!(
+            "'temperature' must be between 0 and 2, got {temp}"
+        )));
     }
 
-    if let Some(top_p) = body.get("top_p").and_then(Value::as_f64) {
-        if !(0.0..=1.0).contains(&top_p) {
-            return Err(CoreError::InvalidRequest(format!(
-                "'top_p' must be between 0 and 1, got {top_p}"
-            )));
-        }
+    if let Some(top_p) = body.get("top_p").and_then(Value::as_f64)
+        && !(0.0..=1.0).contains(&top_p)
+    {
+        return Err(CoreError::InvalidRequest(format!(
+            "'top_p' must be between 0 and 1, got {top_p}"
+        )));
     }
 
-    if let Some(max_tokens) = body.get("max_tokens").and_then(Value::as_i64) {
-        if max_tokens <= 0 {
-            return Err(CoreError::InvalidRequest(format!(
-                "'max_tokens' must be positive, got {max_tokens}"
-            )));
-        }
+    if let Some(max_tokens) = body.get("max_tokens").and_then(Value::as_i64)
+        && max_tokens <= 0
+    {
+        return Err(CoreError::InvalidRequest(format!(
+            "'max_tokens' must be positive, got {max_tokens}"
+        )));
     }
 
-    if let Some(stream) = body.get("stream") {
-        if !stream.is_boolean() {
-            return Err(CoreError::InvalidRequest(
-                "'stream' must be a boolean".to_string(),
-            ));
-        }
+    if let Some(stream) = body.get("stream")
+        && !stream.is_boolean()
+    {
+        return Err(CoreError::InvalidRequest(
+            "'stream' must be a boolean".to_string(),
+        ));
     }
 
     Ok(())

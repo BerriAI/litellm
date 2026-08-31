@@ -309,7 +309,7 @@ mod tests {
         );
 
         let _ = cache.get(&embedding); // Hit
-        let _ = cache.get(&vec![0.0, 1.0, 0.0]); // Miss
+        let _ = cache.get(&[0.0, 1.0, 0.0]); // Miss
 
         let stats = cache.get_stats();
         assert_eq!(stats.hits, 1);

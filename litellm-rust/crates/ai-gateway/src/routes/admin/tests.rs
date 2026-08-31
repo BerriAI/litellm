@@ -1,10 +1,10 @@
 //! Tests for admin endpoints.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use serde_json::json;
     use tower::ServiceExt;
 
     use crate::routes::app;

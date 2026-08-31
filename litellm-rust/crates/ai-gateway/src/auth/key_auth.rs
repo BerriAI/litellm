@@ -67,38 +67,47 @@ impl From<AuthRejection> for (StatusCode, String) {
 }
 
 /// Extract the raw API key from request headers. Zero-alloc: borrows from Parts.
-fn extract_raw_key<'a>(parts: &'a Parts) -> Option<&'a str> {
+fn extract_raw_key(parts: &Parts) -> Option<&str> {
     // Check Authorization header first (standard HTTP auth)
-    if let Some(auth) = parts.headers.get(AUTHORIZATION) {
-        if let Ok(value) = auth.to_str() {
-            let trimmed = value.trim();
-            for prefix in &["Bearer ", "bearer ", "Basic "] {
-                if let Some(token) = trimmed.strip_prefix(prefix) {
-                    let token = token.trim();
-                    if !token.is_empty() {
-                        return Some(token);
-                    }
+    if let Some(auth) = parts.headers.get(AUTHORIZATION)
+        && let Ok(value) = auth.to_str()
+    {
+        let trimmed = value.trim();
+        for prefix in &["Bearer ", "bearer ", "Basic "] {
+            if let Some(token) = trimmed.strip_prefix(prefix) {
+                let token = token.trim();
+                if !token.is_empty() {
+                    return Some(token);
                 }
             }
+        }
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+
+    // Then check custom key headers
+    for &header_name in KEY_HEADERS {
+        if let Some(value) = parts.headers.get(header_name)
+            && let Ok(s) = value.to_str()
+        {
+            let trimmed = s.trim();
             if !trimmed.is_empty() {
                 return Some(trimmed);
             }
         }
     }
 
-    // Then check custom key headers
-    for &header_name in KEY_HEADERS {
-        if let Some(value) = parts.headers.get(header_name) {
-            if let Ok(s) = value.to_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed);
-                }
-            }
-        }
-    }
-
     None
+}
+
+/// Mask a sensitive value for logging: show first 4 and last 4 chars.
+fn mask_key(key: &str) -> String {
+    if key.len() <= 12 {
+        "****".to_string()
+    } else {
+        format!("{}...{}", &key[..4], &key[key.len() - 4..])
+    }
 }
 
 /// Constant-time master key comparison.
@@ -237,9 +246,9 @@ impl FromRequestParts<AppState> for RequireValidKey {
         })?;
 
         tracing::info!(
-            "Auth: Extracted raw_key='{}', master_key={:?}",
-            raw_key,
-            state.master_key.as_deref()
+            "Auth: Extracted key={}, master_key_present={}",
+            mask_key(raw_key),
+            state.master_key.is_some()
         );
 
         // 2. Check master key (constant-time)

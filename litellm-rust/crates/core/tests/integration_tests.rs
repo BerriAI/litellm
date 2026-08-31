@@ -45,7 +45,7 @@ fn full_pipeline_token_count_then_cost() {
     cost_calculator::init_pricing_db(pricing_db);
 
     let model = "gpt-4o";
-    let messages = vec![
+    let messages = [
         json!({"role": "system", "content": "You are helpful."}),
         json!({"role": "user", "content": "Hello!"}),
     ];
@@ -69,7 +69,7 @@ fn full_pipeline_token_count_then_cost() {
     assert!(token_count > 0);
 
     let cost = cost_calculator::calculate_cost(&cost_calculator::types::CostRequest {
-        model: model,
+        model,
         usage: cost_calculator::types::Usage {
             prompt_tokens: token_count as u64,
             completion_tokens: 10,

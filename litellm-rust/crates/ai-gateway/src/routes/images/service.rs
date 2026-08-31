@@ -4,8 +4,7 @@ use std::time::{Duration, Instant};
 use litellm_core::auth::{HashedToken, KeyObject};
 use litellm_core::cost_calculator::{self, CostRequest};
 use litellm_core::images::types::{
-    ImagesData, ImagesEditRequest, ImagesEditResponse, ImagesGenerationRequest,
-    ImagesGenerationResponse,
+    ImagesEditRequest, ImagesEditResponse, ImagesGenerationRequest, ImagesGenerationResponse,
 };
 use litellm_core::images::{images_edit, images_generation};
 use litellm_core::persistence::CacheStore;
@@ -115,6 +114,7 @@ pub async fn run_generation(
             redis,
             key_object,
             hashed_token.as_hex_str(),
+            0,
         )
         .await
         {
@@ -308,7 +308,11 @@ pub async fn run_generation(
         }
 
         // This deployment failed after all retries
-        if let Some(provider) = custom_llm_provider {
+        if deployment_error
+            .as_ref()
+            .is_some_and(|e| e.is_upstream_failure())
+            && let Some(provider) = custom_llm_provider
+        {
             let breaker = state.circuit_breakers.get_or_create(provider);
             breaker.record_failure().await;
         }
@@ -452,6 +456,7 @@ pub async fn run_edit(
             redis,
             key_object,
             hashed_token.as_hex_str(),
+            0,
         )
         .await
         {
@@ -649,7 +654,11 @@ pub async fn run_edit(
         }
 
         // This deployment failed after all retries
-        if let Some(provider) = custom_llm_provider {
+        if deployment_error
+            .as_ref()
+            .is_some_and(|e| e.is_upstream_failure())
+            && let Some(provider) = custom_llm_provider
+        {
             let breaker = state.circuit_breakers.get_or_create(provider);
             breaker.record_failure().await;
         }
@@ -731,7 +740,10 @@ async fn record_spend(
 
     let cost = match cost_calculator::calculate_cost(&cost_request) {
         Ok(response) => response.total_cost_usd() * images_count as f64,
-        Err(_) => 0.0,
+        Err(ref e) => {
+            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+            0.0
+        }
     };
 
     // Record spend via worker (batched, async)
@@ -817,7 +829,10 @@ async fn record_edit_spend(
 
     let cost = match cost_calculator::calculate_cost(&cost_request) {
         Ok(response) => response.total_cost_usd() * images_count as f64,
-        Err(_) => 0.0,
+        Err(ref e) => {
+            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+            0.0
+        }
     };
 
     // Record spend via worker (batched, async)

@@ -52,61 +52,60 @@ pub fn validate_json_body(
     let validator = InputValidator::new(config.clone());
 
     // Validate model name
-    if let Some(model) = body.get("model") {
-        if let Some(model_str) = model.as_str() {
-            if model_str.len() > config.max_model_name_length {
-                return Err(vec![ValidationError {
-                    field: "model".to_string(),
-                    message: format!(
-                        "Model name length {} exceeds maximum {}",
-                        model_str.len(),
-                        config.max_model_name_length
-                    ),
-                    code: crate::validation::ValidationErrorCode::ModelNameTooLong,
-                }]);
-            }
+    if let Some(model) = body.get("model")
+        && let Some(model_str) = model.as_str()
+    {
+        if model_str.len() > config.max_model_name_length {
+            return Err(vec![ValidationError {
+                field: "model".to_string(),
+                message: format!(
+                    "Model name length {} exceeds maximum {}",
+                    model_str.len(),
+                    config.max_model_name_length
+                ),
+                code: crate::validation::ValidationErrorCode::ModelNameTooLong,
+            }]);
+        }
 
-            if !validator.is_valid_model_name(model_str) {
-                return Err(vec![ValidationError {
-                    field: "model".to_string(),
-                    message: format!("Invalid model name format: {}", model_str),
-                    code: crate::validation::ValidationErrorCode::InvalidModelName,
-                }]);
-            }
+        if !validator.is_valid_model_name(model_str) {
+            return Err(vec![ValidationError {
+                field: "model".to_string(),
+                message: format!("Invalid model name format: {}", model_str),
+                code: crate::validation::ValidationErrorCode::InvalidModelName,
+            }]);
         }
     }
 
     // Validate messages
-    if let Some(messages) = body.get("messages") {
-        if let Some(messages_arr) = messages.as_array() {
-            if messages_arr.len() > config.max_messages {
-                return Err(vec![ValidationError {
-                    field: "messages".to_string(),
-                    message: format!(
-                        "Number of messages {} exceeds maximum {}",
-                        messages_arr.len(),
-                        config.max_messages
-                    ),
-                    code: crate::validation::ValidationErrorCode::TooManyMessages,
-                }]);
-            }
+    if let Some(messages) = body.get("messages")
+        && let Some(messages_arr) = messages.as_array()
+    {
+        if messages_arr.len() > config.max_messages {
+            return Err(vec![ValidationError {
+                field: "messages".to_string(),
+                message: format!(
+                    "Number of messages {} exceeds maximum {}",
+                    messages_arr.len(),
+                    config.max_messages
+                ),
+                code: crate::validation::ValidationErrorCode::TooManyMessages,
+            }]);
+        }
 
-            for (i, msg) in messages_arr.iter().enumerate() {
-                if let Some(content) = msg.get("content") {
-                    if let Some(content_str) = content.as_str() {
-                        if content_str.len() > config.max_message_length {
-                            return Err(vec![ValidationError {
-                                field: format!("messages[{}].content", i),
-                                message: format!(
-                                    "Message content length {} exceeds maximum {}",
-                                    content_str.len(),
-                                    config.max_message_length
-                                ),
-                                code: crate::validation::ValidationErrorCode::MessageTooLong,
-                            }]);
-                        }
-                    }
-                }
+        for (i, msg) in messages_arr.iter().enumerate() {
+            if let Some(content) = msg.get("content")
+                && let Some(content_str) = content.as_str()
+                && content_str.len() > config.max_message_length
+            {
+                return Err(vec![ValidationError {
+                    field: format!("messages[{}].content", i),
+                    message: format!(
+                        "Message content length {} exceeds maximum {}",
+                        content_str.len(),
+                        config.max_message_length
+                    ),
+                    code: crate::validation::ValidationErrorCode::MessageTooLong,
+                }]);
             }
         }
     }

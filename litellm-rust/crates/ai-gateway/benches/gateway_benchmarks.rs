@@ -54,7 +54,8 @@ fn benchmark_semantic_cache(c: &mut Criterion) {
     // Benchmark cache cleanup
     c.bench_function("semantic_cache_cleanup", |b| {
         b.iter(|| {
-            black_box(cache.cleanup_expired());
+            cache.cleanup_expired();
+            black_box(());
         });
     });
 }
@@ -78,7 +79,7 @@ fn benchmark_request_parsing(c: &mut Criterion) {
         }"#;
 
         b.iter(|| {
-            black_box(serde_json::from_str::<serde_json::Value>(black_box(
+            let _ = black_box(serde_json::from_str::<serde_json::Value>(black_box(
                 request_str,
             )));
         });

@@ -274,7 +274,6 @@ pub fn categorize_error(err: &litellm_core::CoreError) -> ErrorCategory {
         | litellm_core::CoreError::InvalidResponse(_)
         | litellm_core::CoreError::Routing(_)
         | litellm_core::CoreError::Unsupported(_) => ErrorCategory::Provider,
-        _ => ErrorCategory::Unknown,
     }
 }
 
@@ -292,7 +291,7 @@ where
     E: std::fmt::Debug,
 {
     let mut attempt = 0;
-    let mut last_category = ErrorCategory::Unknown;
+    let mut last_category: ErrorCategory;
 
     loop {
         match f().await {
@@ -488,7 +487,7 @@ mod tests {
                     }
                 }
             },
-            |e| categorize_error(e),
+            categorize_error,
         )
         .await;
 
@@ -520,7 +519,7 @@ mod tests {
                     ))
                 }
             },
-            |e| categorize_error(e),
+            categorize_error,
         )
         .await;
 
@@ -552,7 +551,7 @@ mod tests {
                     ))
                 }
             },
-            |e| categorize_error(e),
+            categorize_error,
         )
         .await;
 

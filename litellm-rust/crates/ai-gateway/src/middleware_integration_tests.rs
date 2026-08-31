@@ -15,7 +15,6 @@ mod tests {
         middleware::from_fn,
         routing::post,
     };
-    use std::sync::Arc;
     use tower::ServiceExt;
 
     async fn test_handler() -> &'static str {

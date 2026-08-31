@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{GeneralSettings, LiteLLMSettings, RouterSettings, load_config_from_yaml};
+    use crate::config::load_config_from_yaml;
     use std::io::Write;
     use tempfile::NamedTempFile;
 

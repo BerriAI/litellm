@@ -2,8 +2,6 @@
 //!
 //! Sends POST requests to configured URLs with request/response data.
 
-use std::sync::Arc;
-
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -168,7 +166,7 @@ struct WebhookPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::custom_logger::{CallType, CallbackValue};
+    use crate::integrations::custom_logger::CallbackValue;
     use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
     use serde_json::json;
 

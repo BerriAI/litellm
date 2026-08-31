@@ -142,6 +142,7 @@ impl RouterSettings {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 struct ModelListEntry {
     model_name: String,

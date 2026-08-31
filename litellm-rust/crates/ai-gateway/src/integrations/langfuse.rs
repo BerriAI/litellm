@@ -2,11 +2,8 @@
 //!
 //! Sends traces, spans, and metrics to Langfuse API for observability.
 
-use std::sync::Arc;
-
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use super::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
@@ -184,7 +181,7 @@ struct LangfuseTraceBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::custom_logger::{CallType, CallbackValue};
+    use crate::integrations::custom_logger::CallbackValue;
     use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
     use serde_json::json;
 

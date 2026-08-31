@@ -20,18 +20,18 @@ pub fn spawn_config_watcher(
     let path = config_path.clone();
     let mut watcher = RecommendedWatcher::new(
         move |result: Result<Event, notify::Error>| {
-            if let Ok(event) = result {
-                if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                    tracing::info!(path = ?path, "config file changed, reloading");
-                    match crate::config::load_router_from_yaml(path.to_str().unwrap_or("")) {
-                        Ok(new_router) => {
-                            let router = Arc::new(new_router);
-                            let _ = router_tx.send(router);
-                            tracing::info!("config reload complete");
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "config reload failed, keeping previous config");
-                        }
+            if let Ok(event) = result
+                && matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_))
+            {
+                tracing::info!(path = ?path, "config file changed, reloading");
+                match crate::config::load_router_from_yaml(path.to_str().unwrap_or("")) {
+                    Ok(new_router) => {
+                        let router = Arc::new(new_router);
+                        let _ = router_tx.send(router);
+                        tracing::info!("config reload complete");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "config reload failed, keeping previous config");
                     }
                 }
             }

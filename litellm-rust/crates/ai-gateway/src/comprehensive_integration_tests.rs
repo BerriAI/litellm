@@ -5,12 +5,10 @@
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
     use litellm_core::router::{
-        Deployment, HealthConfig, HealthMonitor, HealthStatus, LatencyTracker, LiteLLMParams,
-        LoadTracker, Router, RoutingStrategy,
+        Deployment, HealthConfig, HealthMonitor, HealthStatus, LiteLLMParams, Router,
+        RoutingStrategy,
     };
-    use serde_json::json;
     use std::sync::Arc;
     use std::time::Duration;
 

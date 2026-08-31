@@ -3,6 +3,7 @@
 //! Tests the full request pipeline including middleware integration.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod e2e_tests {
     use crate::metrics::GatewayMetrics;
 

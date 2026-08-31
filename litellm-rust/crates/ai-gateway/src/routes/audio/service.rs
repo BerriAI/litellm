@@ -1,7 +1,7 @@
 //! Audio service logic with full middleware.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use base64::Engine;
 use litellm_core::audio::types::{SpeechRequest, TranscriptionRequest};
@@ -25,7 +25,7 @@ pub(crate) enum AudioResponseEnum {
 pub async fn run_speech(
     state: &AppState,
     body: Value,
-    extra_headers: Option<Map<String, Value>>,
+    _extra_headers: Option<Map<String, Value>>,
     key_object: &Arc<KeyObject>,
     hashed_token: &HashedToken,
 ) -> CoreResult<AudioResponseEnum> {
@@ -120,6 +120,7 @@ pub async fn run_speech(
             redis,
             key_object,
             hashed_token.as_hex_str(),
+            0,
         )
         .await
         {
@@ -277,7 +278,11 @@ pub async fn run_speech(
         }
 
         // This deployment failed after all retries
-        if let Some(provider) = custom_llm_provider {
+        if deployment_error
+            .as_ref()
+            .is_some_and(|e| e.is_upstream_failure())
+            && let Some(provider) = custom_llm_provider
+        {
             let breaker = state.circuit_breakers.get_or_create(provider);
             breaker.record_failure().await;
         }
@@ -315,7 +320,7 @@ pub async fn run_speech(
 pub async fn run_transcription(
     state: &AppState,
     body: Value,
-    extra_headers: Option<Map<String, Value>>,
+    _extra_headers: Option<Map<String, Value>>,
     key_object: &Arc<KeyObject>,
     hashed_token: &HashedToken,
 ) -> CoreResult<AudioResponseEnum> {
@@ -404,6 +409,7 @@ pub async fn run_transcription(
             redis,
             key_object,
             hashed_token.as_hex_str(),
+            0,
         )
         .await
         {
@@ -573,7 +579,11 @@ pub async fn run_transcription(
         }
 
         // This deployment failed after all retries
-        if let Some(provider) = custom_llm_provider {
+        if deployment_error
+            .as_ref()
+            .is_some_and(|e| e.is_upstream_failure())
+            && let Some(provider) = custom_llm_provider
+        {
             let breaker = state.circuit_breakers.get_or_create(provider);
             breaker.record_failure().await;
         }
@@ -653,7 +663,10 @@ async fn record_speech_spend(
 
     let cost = match cost_calculator::calculate_cost(&cost_request) {
         Ok(response) => response.total_cost_usd(),
-        Err(_) => 0.0,
+        Err(ref e) => {
+            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+            0.0
+        }
     };
 
     // Record spend via worker (batched, async)
@@ -737,7 +750,10 @@ async fn record_transcription_spend(
 
     let cost = match cost_calculator::calculate_cost(&cost_request) {
         Ok(response) => response.total_cost_usd(),
-        Err(_) => 0.0,
+        Err(ref e) => {
+            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+            0.0
+        }
     };
 
     // Record spend via worker (batched, async)

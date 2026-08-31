@@ -54,6 +54,7 @@ pub async fn check_request_limits(
     redis: &RedisStore,
     key_object: &KeyObject,
     hashed_token: &str,
+    estimated_tokens: u64,
 ) -> RateLimitResult {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -75,6 +76,25 @@ pub async fn check_request_limits(
             Ok(current) if current > rpm_limit as f64 => {
                 return RateLimitResult::RpmExceeded {
                     limit: rpm_limit,
+                    current,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(tpm_limit) = key_object.tpm_limit
+        && estimated_tokens > 0
+    {
+        let mut suffix_buf = [0u8; 32];
+        suffix_buf[..4].copy_from_slice(b"tpm:");
+        suffix_buf[4..4 + window_str.len()].copy_from_slice(window_str.as_bytes());
+        let suffix = unsafe { std::str::from_utf8_unchecked(&suffix_buf[..4 + window_str.len()]) };
+        let key = rate_limit_key(&mut key_buf, hashed_token, suffix);
+        match redis.incr_with_ttl(key, estimated_tokens as f64, 120).await {
+            Ok(current) if current > tpm_limit as f64 => {
+                return RateLimitResult::TpmExceeded {
+                    limit: tpm_limit,
                     current,
                 };
             }

@@ -106,12 +106,12 @@ pub async fn cors_middleware(
             .body(Body::empty())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        if let Some(origin) = &origin {
-            if state.is_origin_allowed(origin) {
-                response
-                    .headers_mut()
-                    .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
-            }
+        if let Some(origin) = &origin
+            && state.is_origin_allowed(origin)
+        {
+            response
+                .headers_mut()
+                .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
         }
 
         let allowed_methods: Vec<String> = state
@@ -150,12 +150,12 @@ pub async fn cors_middleware(
     let mut response = next.run(request).await;
 
     // Add CORS headers to the response
-    if let Some(origin) = &origin {
-        if state.is_origin_allowed(origin) {
-            response
-                .headers_mut()
-                .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
-        }
+    if let Some(origin) = &origin
+        && state.is_origin_allowed(origin)
+    {
+        response
+            .headers_mut()
+            .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().unwrap());
     }
 
     if state.config.allow_credentials {

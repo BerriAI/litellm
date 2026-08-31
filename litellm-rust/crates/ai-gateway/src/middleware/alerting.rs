@@ -12,7 +12,7 @@ use axum::{
     response::Response,
 };
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 /// Alerting middleware state.
@@ -70,7 +70,7 @@ impl AlertingState {
     }
 
     /// Check thresholds and send alerts if needed.
-    pub async fn check_thresholds(&self, error_rate_threshold: f64, latency_threshold_ms: u64) {
+    pub async fn check_thresholds(&self, error_rate_threshold: f64, _latency_threshold_ms: u64) {
         let error_rate = self.get_error_rate().await;
 
         if error_rate > error_rate_threshold {
@@ -103,7 +103,7 @@ pub async fn alerting_middleware(
     // Process the request
     let response = next.run(request).await;
 
-    let latency = start.elapsed();
+    let _latency = start.elapsed();
 
     // Check if it was an error
     if response.status().is_server_error() {

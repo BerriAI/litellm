@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 mod gil;
 mod marshal;
 
-use marshal::{from_py, to_py};
+use marshal::{from_json_str, from_py, to_json_string, to_py};
 
 pyo3::create_exception!(
     _native,
@@ -86,7 +86,8 @@ fn chat_completions_error_to_pyerr(err: CoreError) -> PyErr {
         | CoreError::Routing(_)
         // Nothing reached the provider, so serving it on Python cannot double
         // bill and is the only way the caller gets an answer at all.
-        | CoreError::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
+        | CoreError::Connect(_)
+        | CoreError::Timeout(_) => RustBridgeDeclined::new_err(err.to_string()),
         CoreError::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
@@ -622,7 +623,7 @@ fn token_counter(
 ) -> PyResult<usize> {
     let messages_vec: Option<Vec<Map<String, Value>>> = match messages {
         Some(msgs) => {
-            let value = py_to_json(py, msgs.bind(py))?;
+            let value = from_py::<Value>(msgs.bind(py))?;
             match value {
                 Value::Array(arr) => {
                     let mut vec = Vec::with_capacity(arr.len());
@@ -642,7 +643,7 @@ fn token_counter(
 
     let tools_vec: Option<Vec<Map<String, Value>>> = match tools {
         Some(t) => {
-            let value = py_to_json(py, t.bind(py))?;
+            let value = from_py::<Value>(t.bind(py))?;
             match value {
                 Value::Array(arr) => {
                     let mut vec = Vec::with_capacity(arr.len());
@@ -661,7 +662,7 @@ fn token_counter(
     };
 
     let tool_choice_value: Option<Value> = match tool_choice {
-        Some(tc) => Some(py_to_json(py, tc.bind(py))?),
+        Some(tc) => Some(from_py::<Value>(tc.bind(py))?),
         None => None,
     };
 
@@ -756,7 +757,7 @@ fn hash_token(py: Python<'_>, token: String) -> String {
 #[pyfunction]
 #[pyo3(signature = (route, request_json))]
 fn process_request(py: Python<'_>, route: String, request_json: String) -> PyResult<String> {
-    let request_value: Value = serde_json::from_str(&request_json)
+    let request_value: Value = from_json_str(&request_json)
         .map_err(|err| PyValueError::new_err(format!("invalid request JSON: {err}")))?;
 
     let result = gil::release_gil(py, || {
@@ -794,7 +795,7 @@ fn process_request(py: Python<'_>, route: String, request_json: String) -> PyRes
                     };
 
                     let response = run_chat_completions(request).await?;
-                    serde_json::to_string(&response).map_err(|err| {
+                    to_json_string(&response).map_err(|err| {
                         CoreError::InvalidResponse(format!("failed to serialize response: {err}"))
                     })
                 }

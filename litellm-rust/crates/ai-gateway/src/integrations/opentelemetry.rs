@@ -29,6 +29,7 @@ impl Default for OpenTelemetryConfig {
 }
 
 /// OpenTelemetry callback for distributed tracing.
+#[allow(dead_code)]
 pub struct OpenTelemetryCallback {
     config: OpenTelemetryConfig,
     /// Trace storage for testing and inspection.

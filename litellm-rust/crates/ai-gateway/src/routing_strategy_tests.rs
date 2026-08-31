@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use litellm_core::router::{
-        CostTracker, Deployment, HealthConfig, HealthMonitor, HealthStatus, LatencyTracker,
-        LiteLLMParams, LoadTracker, Router, RoutingStrategy, WeightTracker,
+        CostTracker, Deployment, HealthStatus, LiteLLMParams, Router, RoutingStrategy,
+        WeightTracker,
     };
     use std::time::Duration;
 

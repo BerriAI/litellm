@@ -150,10 +150,10 @@ impl AlertManager {
         let mut last_alert = self.last_alert.lock();
         let now = Instant::now();
 
-        if let Some(last) = last_alert.get(alert_type) {
-            if now.duration_since(*last) < self.config.cooldown_duration {
-                return false;
-            }
+        if let Some(last) = last_alert.get(alert_type)
+            && now.duration_since(*last) < self.config.cooldown_duration
+        {
+            return false;
         }
 
         last_alert.insert(alert_type.clone(), now);

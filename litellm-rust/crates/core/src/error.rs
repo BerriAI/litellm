@@ -41,6 +41,16 @@ pub enum CoreError {
     Timeout(String),
 }
 
+impl CoreError {
+    pub fn is_upstream_failure(&self) -> bool {
+        match self {
+            CoreError::Http { status, .. } => *status >= 500,
+            CoreError::Network(_) | CoreError::Connect(_) | CoreError::Timeout(_) => true,
+            _ => false,
+        }
+    }
+}
+
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",

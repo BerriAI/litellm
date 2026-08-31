@@ -92,7 +92,7 @@ async fn main() {
         )
     };
 
-    eprintln!("master_key loaded: {:?}", master_key.as_deref());
+    eprintln!("master_key configured: {}", master_key.is_some());
     if master_key.is_none() {
         eprintln!(
             "warning: LITELLM_MASTER_KEY is not set; /v1/realtime will reject all requests (fail closed)"
@@ -138,7 +138,7 @@ async fn main() {
     let redis = match std::env::var("REDIS_URL") {
         Ok(url) => match RedisStore::connect(&url).await {
             Ok(store) => {
-                eprintln!("Redis connected: {url}");
+                eprintln!("Redis connected");
                 Some(Arc::new(store))
             }
             Err(err) => {

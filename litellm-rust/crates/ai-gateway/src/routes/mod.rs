@@ -76,9 +76,10 @@ pub fn app(state: AppState) -> Router {
         ))
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
         .layer(ConcurrencyLimitLayer::new(max_concurrent))
-        .layer(TimeoutLayer::new(std::time::Duration::from_secs(
-            request_timeout,
-        )))
+        .layer({
+            #[allow(deprecated)]
+            TimeoutLayer::new(std::time::Duration::from_secs(request_timeout))
+        })
         .with_state(state)
 }
 

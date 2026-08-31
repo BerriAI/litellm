@@ -100,6 +100,7 @@ pub async fn run(
             redis,
             key_object,
             hashed_token.as_hex_str(),
+            0,
         )
         .await
         {
@@ -186,7 +187,7 @@ pub async fn run(
             .run_pre_call(&guardrail_context, guardrail_request)
             .await
         {
-            Ok((modified_request, _report)) => {
+            Ok((_modified_request, _report)) => {
                 // Guardrails may have modified the request
                 // For embeddings, we just continue with the modified body
             }
@@ -345,7 +346,11 @@ pub async fn run(
         }
 
         // This deployment failed after all retries
-        if let Some(provider) = custom_llm_provider {
+        if deployment_error
+            .as_ref()
+            .is_some_and(|e| e.is_upstream_failure())
+            && let Some(provider) = custom_llm_provider
+        {
             let breaker = state.circuit_breakers.get_or_create(provider);
             breaker.record_failure().await;
         }
@@ -432,7 +437,10 @@ async fn record_spend(
 
     let cost = match cost_calculator::calculate_cost(&cost_request) {
         Ok(response) => response.total_cost_usd(),
-        Err(_) => 0.0,
+        Err(ref e) => {
+            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+            0.0
+        }
     };
 
     // Record spend via worker (batched, async)

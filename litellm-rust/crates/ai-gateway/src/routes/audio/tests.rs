@@ -1,6 +1,7 @@
 //! Tests for audio routes.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};

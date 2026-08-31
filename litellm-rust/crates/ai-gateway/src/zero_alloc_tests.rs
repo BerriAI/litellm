@@ -7,8 +7,8 @@
 #[cfg(test)]
 mod tests {
     use litellm_core::router::{
-        CostTracker, Deployment, HealthConfig, HealthMonitor, HealthStatus, LatencyTracker,
-        LiteLLMParams, LoadTracker, Router, RoutingStrategy, WeightTracker,
+        CostTracker, Deployment, HealthConfig, HealthMonitor, LatencyTracker, LiteLLMParams,
+        LoadTracker, Router, RoutingStrategy, WeightTracker,
     };
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -272,7 +272,7 @@ mod tests {
         let pl_duration = benchmark("parking_lot::RwLock::read", 100000, || {
             let lock = &parking_lot_lock;
             async move {
-                let _ = lock.read();
+                let _guard = lock.read();
             }
         })
         .await;
@@ -297,7 +297,7 @@ mod tests {
         use smallvec::SmallVec;
 
         // Benchmark SmallVec with small capacity (stack-allocated)
-        let mut smallvec: SmallVec<[f64; 16]> = SmallVec::new();
+        let smallvec: SmallVec<[f64; 16]> = SmallVec::new();
         let sv_duration = benchmark("SmallVec<[f64; 16]>::push", 100000, || {
             let mut sv = smallvec.clone();
             async move {

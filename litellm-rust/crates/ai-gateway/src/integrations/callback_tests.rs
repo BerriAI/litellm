@@ -2,7 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::integrations::custom_logger::CallType;
     use crate::integrations::custom_logger::{
         CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, ModelCallDetails,
     };

@@ -4,7 +4,6 @@
 //! inputs to prevent injection attacks.
 
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Validation configuration.
 #[derive(Debug, Clone)]
@@ -96,10 +95,10 @@ impl InputValidator {
     /// Check if a model name is valid.
     pub fn is_valid_model_name(&self, model_name: &str) -> bool {
         for pattern in &self.config.allowed_model_patterns {
-            if let Ok(regex) = regex::Regex::new(pattern) {
-                if regex.is_match(model_name) {
-                    return true;
-                }
+            if let Ok(regex) = regex::Regex::new(pattern)
+                && regex.is_match(model_name)
+            {
+                return true;
             }
         }
         false
@@ -175,20 +174,19 @@ impl InputValidator {
                     });
                 } else {
                     for (i, msg) in messages_arr.iter().enumerate() {
-                        if let Some(content) = msg.get("content") {
-                            if let Some(content_str) = content.as_str() {
-                                if content_str.len() > self.config.max_message_length {
-                                    errors.push(ValidationError {
-                                        field: format!("messages[{}].content", i),
-                                        message: format!(
-                                            "Message content length {} exceeds maximum {}",
-                                            content_str.len(),
-                                            self.config.max_message_length
-                                        ),
-                                        code: ValidationErrorCode::MessageTooLong,
-                                    });
-                                }
-                            }
+                        if let Some(content) = msg.get("content")
+                            && let Some(content_str) = content.as_str()
+                            && content_str.len() > self.config.max_message_length
+                        {
+                            errors.push(ValidationError {
+                                field: format!("messages[{}].content", i),
+                                message: format!(
+                                    "Message content length {} exceeds maximum {}",
+                                    content_str.len(),
+                                    self.config.max_message_length
+                                ),
+                                code: ValidationErrorCode::MessageTooLong,
+                            });
                         }
                     }
                 }
@@ -221,7 +219,7 @@ impl InputValidator {
     pub fn sanitize_json(value: &Value) -> Value {
         match value {
             Value::String(s) => Value::String(Self::sanitize_string(s)),
-            Value::Array(arr) => Value::Array(arr.iter().map(|v| Self::sanitize_json(v)).collect()),
+            Value::Array(arr) => Value::Array(arr.iter().map(Self::sanitize_json).collect()),
             Value::Object(obj) => {
                 let mut map = serde_json::Map::new();
                 for (k, v) in obj {

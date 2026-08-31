@@ -5,7 +5,7 @@
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::{StatusCode, header},
+    http::StatusCode,
     middleware::Next,
     response::Response,
 };
@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// CSRF protection state.
+#[allow(dead_code)]
 pub struct CsrfState {
     /// Active CSRF tokens mapped to session IDs.
     tokens: Arc<Mutex<HashMap<String, String>>>,

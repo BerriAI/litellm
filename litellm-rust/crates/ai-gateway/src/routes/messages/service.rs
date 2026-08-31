@@ -96,12 +96,14 @@ pub async fn run(
         }
     }
 
-    // Check rate limits (RPM, max_parallel_requests)
+    // Check rate limits (RPM, TPM, max_parallel_requests)
     if let Some(ref redis) = state.redis {
+        let estimated_tokens = estimate_prompt_tokens(&body);
         match crate::auth::rate_limit::check_request_limits(
             redis,
             key_object,
             hashed_token.as_hex_str(),
+            estimated_tokens,
         )
         .await
         {
@@ -210,14 +212,21 @@ pub async fn run(
                         breaker.record_success().await;
                     }
 
-                    // Note: Anthropic streaming spend tracking would need to parse message_start event
-                    // For now, we'll handle non-streaming spend tracking fully
-                    // Streaming spend tracking for messages can be added similarly to chat_completions
+                    record_streaming_spend_estimate(
+                        state,
+                        provider_model,
+                        &body,
+                        key_object,
+                        hashed_token,
+                    )
+                    .await;
 
                     return Ok(MessagesResponse::Stream(stream_response));
                 }
                 Err(err) => {
-                    if let Some(provider) = custom_llm_provider {
+                    if let Some(provider) = custom_llm_provider
+                        && err.is_upstream_failure()
+                    {
                         let breaker = state.circuit_breakers.get_or_create(provider);
                         breaker.record_failure().await;
                     }
@@ -273,7 +282,7 @@ pub async fn run(
                                 redis,
                                 key_object,
                                 hashed_token.as_hex_str(),
-                                input_tokens,
+                                0,
                                 output_tokens,
                             )
                             .await;
@@ -346,7 +355,10 @@ pub async fn run(
             }
 
             // This deployment failed after all retries
-            if let Some(provider) = custom_llm_provider {
+            if let Some(provider) = custom_llm_provider
+                && let Some(ref err) = deployment_error
+                && err.is_upstream_failure()
+            {
                 let breaker = state.circuit_breakers.get_or_create(provider);
                 breaker.record_failure().await;
             }
@@ -380,6 +392,74 @@ pub async fn run(
     );
 
     Err(err)
+}
+
+/// Rough prompt token estimate from request body. Uses ~4 chars/token heuristic
+/// so TPM limits can be enforced pre-request before actual usage is known.
+fn estimate_prompt_tokens(body: &Value) -> u64 {
+    body.get("messages")
+        .and_then(Value::as_array)
+        .map(|messages| {
+            let char_count: usize = messages
+                .iter()
+                .filter_map(|msg| msg.get("content").and_then(Value::as_str))
+                .map(|content| content.len())
+                .sum();
+            (char_count / 4) as u64
+        })
+        .unwrap_or(0)
+}
+
+/// Estimate spend for streaming requests where actual token counts aren't available.
+/// Uses prompt token estimate + max_tokens (or default 4096) for output.
+async fn record_streaming_spend_estimate(
+    state: &AppState,
+    model: &str,
+    body: &Value,
+    _key_object: &Arc<KeyObject>,
+    hashed_token: &HashedToken,
+) {
+    let prompt_tokens = estimate_prompt_tokens(body);
+    let output_tokens = body
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(4096);
+
+    let cost_request = CostRequest {
+        model,
+        usage: cost_calculator::types::Usage {
+            prompt_tokens,
+            completion_tokens: output_tokens,
+            total_tokens: prompt_tokens + output_tokens,
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+        },
+        custom_llm_provider: None,
+        service_tier: None,
+    };
+
+    let cost = match cost_calculator::calculate_cost(&cost_request) {
+        Ok(response) => response.total_cost_usd(),
+        Err(ref e) => {
+            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+            return;
+        }
+    };
+
+    let hex = hashed_token.as_hex_str();
+    if let Some(ref worker) = state.spend_worker {
+        worker.record_update(SpendUpdateItem {
+            entity_type: EntityType::Key,
+            entity_id: hex.to_string(),
+            cost,
+        });
+    }
+
+    if let Some(ref redis) = state.redis {
+        let mut key_buf = [0u8; 256];
+        let key = spend_key(&mut key_buf, "key", hex);
+        let _ = redis.incr_by_float(key, cost).await;
+    }
 }
 
 /// Build a spend-tracking Redis key on the stack (no heap allocation).
@@ -448,7 +528,10 @@ async fn record_spend(
 
     let cost = match cost_calculator::calculate_cost(&cost_request) {
         Ok(response) => response.total_cost_usd(),
-        Err(_) => 0.0,
+        Err(ref e) => {
+            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+            0.0
+        }
     };
 
     // Record spend via worker (batched, async)

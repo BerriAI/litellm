@@ -59,9 +59,7 @@ impl SlidingWindowRateLimiter {
         let window_start = now - self.config.window_size;
 
         let mut requests = self.requests.lock();
-        let timestamps = requests
-            .entry(key.to_string())
-            .or_insert_with(VecDeque::new);
+        let timestamps = requests.entry(key.to_string()).or_default();
 
         // Remove timestamps outside the window
         while let Some(front) = timestamps.front() {
@@ -134,18 +132,14 @@ impl SlidingWindowRateLimiter {
         let window_start = now - self.config.window_size;
 
         let requests = self.requests.lock();
-        if let Some(timestamps) = requests.get(key) {
-            if timestamps.len() as u64 >= self.config.max_requests {
-                // Find the oldest timestamp in the window
-                if let Some(oldest) = timestamps
-                    .iter()
-                    .filter(|ts| ts.timestamp >= window_start)
-                    .next()
-                {
-                    let retry_at = oldest.timestamp + self.config.window_size;
-                    if retry_at > now {
-                        return Some(retry_at - now);
-                    }
+        if let Some(timestamps) = requests.get(key)
+            && timestamps.len() as u64 >= self.config.max_requests
+        {
+            // Find the oldest timestamp in the window
+            if let Some(oldest) = timestamps.iter().find(|ts| ts.timestamp >= window_start) {
+                let retry_at = oldest.timestamp + self.config.window_size;
+                if retry_at > now {
+                    return Some(retry_at - now);
                 }
             }
         }

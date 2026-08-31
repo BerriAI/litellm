@@ -34,30 +34,24 @@ impl RoleStripper {
         if let Some(choices) = modified_chunk
             .get_mut("choices")
             .and_then(|c| c.as_array_mut())
+            && let Some(first_choice) = choices.first_mut()
+            && let Some(delta) = first_choice.get_mut("delta")
         {
-            if let Some(first_choice) = choices.first_mut() {
-                if let Some(delta) = first_choice.get_mut("delta") {
-                    if self.sent_first_chunk {
-                        // Strip role from subsequent chunks
-                        if let Some(delta_obj) = delta.as_object_mut() {
-                            delta_obj.remove("role");
-                        }
-                    } else {
-                        // First chunk - keep role but mark as sent
-                        // Handle Mistral's None role by setting it to "assistant"
-                        if let Some(delta_obj) = delta.as_object_mut() {
-                            if let Some(role) = delta_obj.get("role") {
-                                if role.is_null() {
-                                    delta_obj.insert(
-                                        "role".to_string(),
-                                        Value::String("assistant".to_string()),
-                                    );
-                                }
-                            }
-                        }
-                        self.sent_first_chunk = true;
-                    }
+            if self.sent_first_chunk {
+                // Strip role from subsequent chunks
+                if let Some(delta_obj) = delta.as_object_mut() {
+                    delta_obj.remove("role");
                 }
+            } else {
+                // First chunk - keep role but mark as sent
+                // Handle Mistral's None role by setting it to "assistant"
+                if let Some(delta_obj) = delta.as_object_mut()
+                    && let Some(role) = delta_obj.get("role")
+                    && role.is_null()
+                {
+                    delta_obj.insert("role".to_string(), Value::String("assistant".to_string()));
+                }
+                self.sent_first_chunk = true;
             }
         }
 
@@ -229,36 +223,38 @@ impl ComprehensiveTimeoutTracker {
         let time_since_last_chunk = self.last_chunk_time.elapsed();
 
         // Check total timeout
-        if let Some(total_timeout) = self.config.total_timeout {
-            if elapsed > total_timeout {
-                return Some(format!(
-                    "Total request timeout exceeded: {}s elapsed, limit is {}s",
-                    elapsed.as_secs(),
-                    total_timeout.as_secs()
-                ));
-            }
+        if let Some(total_timeout) = self.config.total_timeout
+            && elapsed > total_timeout
+        {
+            return Some(format!(
+                "Total request timeout exceeded: {}s elapsed, limit is {}s",
+                elapsed.as_secs(),
+                total_timeout.as_secs()
+            ));
         }
 
         // Check chunk timeout (idle timeout between chunks)
-        if let Some(chunk_timeout) = self.config.chunk_timeout {
-            if self.connection_established && time_since_last_chunk > chunk_timeout {
-                return Some(format!(
-                    "Chunk timeout exceeded: {}s since last chunk, limit is {}s",
-                    time_since_last_chunk.as_secs(),
-                    chunk_timeout.as_secs()
-                ));
-            }
+        if let Some(chunk_timeout) = self.config.chunk_timeout
+            && self.connection_established
+            && time_since_last_chunk > chunk_timeout
+        {
+            return Some(format!(
+                "Chunk timeout exceeded: {}s since last chunk, limit is {}s",
+                time_since_last_chunk.as_secs(),
+                chunk_timeout.as_secs()
+            ));
         }
 
         // Check read timeout (similar to chunk timeout but for initial read)
-        if let Some(read_timeout) = self.config.read_timeout {
-            if self.connection_established && time_since_last_chunk > read_timeout {
-                return Some(format!(
-                    "Read timeout exceeded: {}s since last activity, limit is {}s",
-                    time_since_last_chunk.as_secs(),
-                    read_timeout.as_secs()
-                ));
-            }
+        if let Some(read_timeout) = self.config.read_timeout
+            && self.connection_established
+            && time_since_last_chunk > read_timeout
+        {
+            return Some(format!(
+                "Read timeout exceeded: {}s since last activity, limit is {}s",
+                time_since_last_chunk.as_secs(),
+                read_timeout.as_secs()
+            ));
         }
 
         None
@@ -351,25 +347,22 @@ impl ModelRepetitionDetector {
         let mut content = String::new();
 
         // Extract delta content from choices
-        if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
-            if let Some(first_choice) = choices.first() {
-                if let Some(delta) = first_choice.get("delta") {
-                    // Extract text content
-                    if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
-                        content.push_str(text);
-                    }
+        if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array())
+            && let Some(first_choice) = choices.first()
+            && let Some(delta) = first_choice.get("delta")
+        {
+            // Extract text content
+            if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
+                content.push_str(text);
+            }
 
-                    // Extract tool calls
-                    if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
-                        for tool_call in tool_calls {
-                            if let Some(function) = tool_call.get("function") {
-                                if let Some(args) =
-                                    function.get("arguments").and_then(|a| a.as_str())
-                                {
-                                    content.push_str(args);
-                                }
-                            }
-                        }
+            // Extract tool calls
+            if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                for tool_call in tool_calls {
+                    if let Some(function) = tool_call.get("function")
+                        && let Some(args) = function.get("arguments").and_then(|a| a.as_str())
+                    {
+                        content.push_str(args);
                     }
                 }
             }
@@ -480,10 +473,10 @@ impl ProviderFeatureHandler {
 
     /// Check if JSON mode is enabled (OpenAI)
     pub fn is_json_mode(&self) -> bool {
-        if let Some(ref response_format) = self.openai_response_format {
-            if let Some(format_type) = response_format.get("type").and_then(Value::as_str) {
-                return format_type == "json_object" || format_type == "json_schema";
-            }
+        if let Some(ref response_format) = self.openai_response_format
+            && let Some(format_type) = response_format.get("type").and_then(Value::as_str)
+        {
+            return format_type == "json_object" || format_type == "json_schema";
         }
         false
     }
@@ -588,12 +581,12 @@ impl ToolCallAccumulator {
                     }
 
                     // Accumulate arguments (handle None for Azure/Mistral)
-                    if let Some(args) = function.get("arguments") {
-                        if let Some(args_str) = args.as_str() {
-                            state.arguments.push_str(args_str);
-                        }
-                        // If arguments is null, we just skip it (Azure/Mistral behavior)
+                    if let Some(args) = function.get("arguments")
+                        && let Some(args_str) = args.as_str()
+                    {
+                        state.arguments.push_str(args_str);
                     }
+                    // If arguments is null, we just skip it (Azure/Mistral behavior)
                 }
             }
         }
@@ -620,10 +613,10 @@ impl ToolCallAccumulator {
             }
 
             // Accumulate arguments (handle None for Azure/Mistral)
-            if let Some(args) = function_call.get("arguments") {
-                if let Some(args_str) = args.as_str() {
-                    state.arguments.push_str(args_str);
-                }
+            if let Some(args) = function_call.get("arguments")
+                && let Some(args_str) = args.as_str()
+            {
+                state.arguments.push_str(args_str);
             }
         }
     }
@@ -692,38 +685,36 @@ impl FinishReasonTracker {
     /// Returns the finish reason if it should be emitted with this chunk.
     pub fn process_chunk(&mut self, chunk: &Value) -> Option<String> {
         // Extract finish_reason from choices
-        if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
-            if let Some(first_choice) = choices.first() {
-                // Check for finish_reason in the choice
-                if let Some(finish_reason) =
-                    first_choice.get("finish_reason").and_then(Value::as_str)
-                {
-                    self.intermittent_finish_reason = Some(finish_reason.to_string());
+        if let Some(choices) = chunk.get("choices").and_then(Value::as_array)
+            && let Some(first_choice) = choices.first()
+        {
+            // Check for finish_reason in the choice
+            if let Some(finish_reason) = first_choice.get("finish_reason").and_then(Value::as_str) {
+                self.intermittent_finish_reason = Some(finish_reason.to_string());
 
-                    // Check if delta is empty (trailing chunk)
-                    let delta = first_choice.get("delta");
-                    let is_empty_delta = delta
-                        .map(|d| {
-                            let has_content = d
-                                .get("content")
-                                .and_then(Value::as_str)
-                                .map(|s| !s.is_empty())
-                                .unwrap_or(false);
-                            let has_tool_calls = d
-                                .get("tool_calls")
-                                .and_then(Value::as_array)
-                                .map(|a| !a.is_empty())
-                                .unwrap_or(false);
-                            let has_function_call = d.get("function_call").is_some();
-                            !has_content && !has_tool_calls && !has_function_call
-                        })
-                        .unwrap_or(true);
+                // Check if delta is empty (trailing chunk)
+                let delta = first_choice.get("delta");
+                let is_empty_delta = delta
+                    .map(|d| {
+                        let has_content = d
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false);
+                        let has_tool_calls = d
+                            .get("tool_calls")
+                            .and_then(Value::as_array)
+                            .map(|a| !a.is_empty())
+                            .unwrap_or(false);
+                        let has_function_call = d.get("function_call").is_some();
+                        !has_content && !has_tool_calls && !has_function_call
+                    })
+                    .unwrap_or(true);
 
-                    if is_empty_delta && !self.has_emitted_finish_reason {
-                        self.received_finish_reason = Some(finish_reason.to_string());
-                        self.has_emitted_finish_reason = true;
-                        return self.received_finish_reason.clone();
-                    }
+                if is_empty_delta && !self.has_emitted_finish_reason {
+                    self.received_finish_reason = Some(finish_reason.to_string());
+                    self.has_emitted_finish_reason = true;
+                    return self.received_finish_reason.clone();
                 }
             }
         }
@@ -762,37 +753,36 @@ impl ThinkingBlockTracker {
 
     /// Process a chunk and extract thinking/reasoning content.
     pub fn process_chunk(&mut self, chunk: &Value) {
-        if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
-            if let Some(first_choice) = choices.first() {
-                if let Some(delta) = first_choice.get("delta") {
-                    // Check for thinking_blocks
-                    if let Some(thinking_blocks) =
-                        delta.get("thinking_blocks").and_then(Value::as_array)
-                    {
-                        for block in thinking_blocks {
-                            if let Some(thinking) = block.get("thinking").and_then(Value::as_str) {
-                                self.thinking_content.push_str(thinking);
-                                if !self.sent_first_thinking_block {
-                                    self.sent_first_thinking_block = true;
-                                }
+        if let Some(choices) = chunk.get("choices").and_then(Value::as_array)
+            && let Some(first_choice) = choices.first()
+        {
+            if let Some(delta) = first_choice.get("delta") {
+                // Check for thinking_blocks
+                if let Some(thinking_blocks) =
+                    delta.get("thinking_blocks").and_then(Value::as_array)
+                {
+                    for block in thinking_blocks {
+                        if let Some(thinking) = block.get("thinking").and_then(Value::as_str) {
+                            self.thinking_content.push_str(thinking);
+                            if !self.sent_first_thinking_block {
+                                self.sent_first_thinking_block = true;
                             }
                         }
                     }
+                }
 
-                    // Check for reasoning_content
-                    if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str)
-                    {
-                        self.thinking_content.push_str(reasoning);
-                        if !self.sent_first_thinking_block {
-                            self.sent_first_thinking_block = true;
-                        }
+                // Check for reasoning_content
+                if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str) {
+                    self.thinking_content.push_str(reasoning);
+                    if !self.sent_first_thinking_block {
+                        self.sent_first_thinking_block = true;
                     }
                 }
+            }
 
-                // Check if this is the last chunk (has finish_reason)
-                if first_choice.get("finish_reason").is_some() {
-                    self.sent_last_thinking_block = true;
-                }
+            // Check if this is the last chunk (has finish_reason)
+            if first_choice.get("finish_reason").is_some() {
+                self.sent_last_thinking_block = true;
             }
         }
     }
@@ -890,19 +880,18 @@ impl StreamingCostTracker {
 
             // Handle provider-reported cost (Perplexity format)
             // Perplexity sends cost in usage.cost as a number or breakdown object
-            if let Some(cost) = usage.get("cost") {
-                if let Some(cost_value) = Self::extract_cost_value(cost) {
-                    self.provider_reported_cost_usd = Some(cost_value);
-                }
+            if let Some(cost) = usage.get("cost")
+                && let Some(cost_value) = Self::extract_cost_value(cost)
+            {
+                self.provider_reported_cost_usd = Some(cost_value);
             }
 
             // Also check for cost in completion_tokens_details (some providers)
-            if let Some(completion_details) = usage.get("completion_tokens_details") {
-                if let Some(cost) = completion_details.get("cost") {
-                    if let Some(cost_value) = Self::extract_cost_value(cost) {
-                        self.provider_reported_cost_usd = Some(cost_value);
-                    }
-                }
+            if let Some(completion_details) = usage.get("completion_tokens_details")
+                && let Some(cost) = completion_details.get("cost")
+                && let Some(cost_value) = Self::extract_cost_value(cost)
+            {
+                self.provider_reported_cost_usd = Some(cost_value);
             }
         }
     }
@@ -1010,15 +999,13 @@ pub fn extract_provider_specific_fields(chunk: &Value) -> Option<Map<String, Val
     }
 
     // Also check in choices[0]
-    if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
-        if let Some(first_choice) = choices.first() {
-            if let Some(fields) = first_choice
-                .get("provider_specific_fields")
-                .and_then(Value::as_object)
-            {
-                return Some(fields.clone());
-            }
-        }
+    if let Some(choices) = chunk.get("choices").and_then(Value::as_array)
+        && let Some(first_choice) = choices.first()
+        && let Some(fields) = first_choice
+            .get("provider_specific_fields")
+            .and_then(Value::as_object)
+    {
+        return Some(fields.clone());
     }
 
     None

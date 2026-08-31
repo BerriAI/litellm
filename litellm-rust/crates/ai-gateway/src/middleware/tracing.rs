@@ -25,6 +25,7 @@ impl Default for TracingConfig {
 }
 
 /// Tracing middleware state.
+#[allow(dead_code)]
 pub struct TracingState {
     config: TracingConfig,
 }
