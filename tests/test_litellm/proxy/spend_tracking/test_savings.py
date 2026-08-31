@@ -3,6 +3,7 @@
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.cache_pricing import fallback_missing_cache_rates_to_input
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.proxy.spend_tracking.savings import (
     _baseline_usage,
@@ -36,6 +37,47 @@ def _cached_usage_object() -> dict:
         "cache_creation_input_tokens": 12304,
         "cache_read_input_tokens": 500,
     }
+
+
+def test_autorouter_savings_prices_missing_baseline_cache_rates_as_input():
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=1,
+        total_tokens=101,
+        prompt_tokens_details={"cached_tokens": 80, "cache_creation_tokens": 10, "text_tokens": 10},
+    )
+    baseline_info = {
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.0001,
+    }
+    selected_info = {
+        "input_cost_per_token": 0.0001,
+        "output_cost_per_token": 0.00001,
+        "cache_read_input_token_cost": 0.00001,
+        "cache_creation_input_token_cost": 0.00001,
+    }
+    baseline_prompt, baseline_completion = generic_cost_per_token(
+        model="missing-baseline-cache-rates",
+        usage=fallback_missing_cache_rates_to_input(usage, baseline_info),
+        custom_llm_provider="openai",
+        model_info=baseline_info,
+    )
+    selected_prompt, selected_completion = generic_cost_per_token(
+        model="explicit-selected-cache-rates",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=selected_info,
+    )
+
+    assert compute_autorouter_savings(
+        baseline_model="openai/missing-baseline-cache-rates",
+        selected_model="explicit-selected-cache-rates",
+        selected_provider="openai",
+        usage=usage,
+        conversation_continuing=False,
+        selected_info=selected_info,
+        baseline_info=baseline_info,
+    ) == pytest.approx(baseline_prompt + baseline_completion - selected_prompt - selected_completion)
 
 
 def _cost_on(model: str, usage_object: dict) -> float:

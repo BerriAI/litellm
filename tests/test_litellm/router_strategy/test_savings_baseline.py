@@ -1,5 +1,6 @@
 import pytest
 
+from litellm.litellm_core_utils.cache_pricing import fallback_missing_cache_rates_to_input
 from litellm.router import Router
 from litellm.router_strategy.savings_baseline import (
     Baseline,
@@ -8,6 +9,20 @@ from litellm.router_strategy.savings_baseline import (
     canonical_model,
     resolve_baseline,
 )
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+
+def _cached_reference_usage() -> Usage:
+    return Usage(
+        prompt_tokens=100,
+        completion_tokens=1,
+        total_tokens=101,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=80,
+            cache_creation_tokens=10,
+            text_tokens=10,
+        ),
+    )
 
 
 @pytest.fixture
@@ -125,6 +140,63 @@ class TestMostExpensive:
             resolve_baseline(router, ["missing-cache-rates", "priced-cache-rates"]).model
             == "openai/missing-cache-rates"
         )
+
+    def test_equal_reference_costs_choose_a_deterministic_candidate(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "tie-a",
+                    "litellm_params": {
+                        "model": "openai/tie-a",
+                        "input_cost_per_token": 0.0001,
+                        "output_cost_per_token": 0.0001,
+                        "cache_read_input_token_cost": 0.0001,
+                        "cache_creation_input_token_cost": 0.0001,
+                    },
+                },
+                {
+                    "model_name": "tie-b",
+                    "litellm_params": {
+                        "model": "openai/tie-b",
+                        "input_cost_per_token": 0.0001,
+                        "output_cost_per_token": 0.0001,
+                        "cache_read_input_token_cost": 0.0001,
+                        "cache_creation_input_token_cost": 0.0001,
+                    },
+                },
+            ]
+        )
+
+        assert resolve_baseline(router, ["tie-a", "tie-b"]).model == "openai/tie-b"
+
+
+class TestCacheRateFallback:
+    @pytest.mark.parametrize(
+        "model_info, expected",
+        [
+            ({}, (0, 0, 100)),
+            (
+                {
+                    "cache_read_input_token_cost": 0.0,
+                    "cache_creation_input_token_cost": 0.0,
+                },
+                (80, 10, 10),
+            ),
+            (
+                {
+                    "cache_read_input_token_cost": 0.00001,
+                    "cache_creation_input_token_cost": 0.00002,
+                },
+                (80, 10, 10),
+            ),
+            ({"cache_read_input_token_cost": 0.00001}, (80, 0, 20)),
+            ({"cache_creation_input_token_cost": 0.00002}, (0, 10, 90)),
+        ],
+    )
+    def test_preserves_only_cache_buckets_with_explicit_rates(self, model_info, expected):
+        details = fallback_missing_cache_rates_to_input(_cached_reference_usage(), model_info).prompt_tokens_details
+
+        assert (details.cached_tokens, details.cache_creation_tokens, details.text_tokens) == expected
 
 
 class TestResolveBaseline:
