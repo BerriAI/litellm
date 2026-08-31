@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 mod gil;
 mod marshal;
 
-use marshal::{from_py, to_py};
+use marshal::{from_py, py_to_json, to_py};
 
 pyo3::create_exception!(
     _native,
@@ -608,6 +608,79 @@ fn achat_completions(
 }
 
 #[pyfunction]
+#[pyo3(signature = (model, text=None, messages=None, tools=None, tool_choice=None, count_response_tokens=false, default_token_count=None))]
+#[allow(clippy::too_many_arguments)]
+fn token_counter(
+    py: Python<'_>,
+    model: String,
+    text: Option<String>,
+    messages: Option<Py<PyAny>>,
+    tools: Option<Py<PyAny>>,
+    tool_choice: Option<Py<PyAny>>,
+    count_response_tokens: bool,
+    default_token_count: Option<usize>,
+) -> PyResult<usize> {
+    let messages_vec: Option<Vec<Map<String, Value>>> = match messages {
+        Some(msgs) => {
+            let value = py_to_json(py, msgs.bind(py))?;
+            match value {
+                Value::Array(arr) => {
+                    let mut vec = Vec::with_capacity(arr.len());
+                    for item in arr {
+                        match item {
+                            Value::Object(map) => vec.push(map),
+                            _ => return Err(PyValueError::new_err("each message must be a dict")),
+                        }
+                    }
+                    Some(vec)
+                }
+                _ => return Err(PyValueError::new_err("messages must be a list")),
+            }
+        }
+        None => None,
+    };
+
+    let tools_vec: Option<Vec<Map<String, Value>>> = match tools {
+        Some(t) => {
+            let value = py_to_json(py, t.bind(py))?;
+            match value {
+                Value::Array(arr) => {
+                    let mut vec = Vec::with_capacity(arr.len());
+                    for item in arr {
+                        match item {
+                            Value::Object(map) => vec.push(map),
+                            _ => return Err(PyValueError::new_err("each tool must be a dict")),
+                        }
+                    }
+                    Some(vec)
+                }
+                _ => return Err(PyValueError::new_err("tools must be a list")),
+            }
+        }
+        None => None,
+    };
+
+    let tool_choice_value: Option<Value> = match tool_choice {
+        Some(tc) => Some(py_to_json(py, tc.bind(py))?),
+        None => None,
+    };
+
+    let request = litellm_core::token_counter::types::TokenCounterRequest {
+        model: &model,
+        text: text.as_deref(),
+        messages: messages_vec.as_deref(),
+        tools: tools_vec.as_deref(),
+        tool_choice: tool_choice_value.as_ref(),
+        count_response_tokens,
+        default_token_count,
+    };
+
+    let result = gil::release_gil(py, || litellm_core::token_counter::token_counter(&request));
+
+    result.map_err(core_error_to_pyerr)
+}
+
+#[pyfunction]
 fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let stats = PyDict::new(py);
     stats.set_item("releases", gil::release_count())?;
@@ -628,6 +701,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(chat_completions_decline, module)?)?;
     module.add_function(wrap_pyfunction!(chat_completions, module)?)?;
     module.add_function(wrap_pyfunction!(achat_completions, module)?)?;
+    module.add_function(wrap_pyfunction!(token_counter, module)?)?;
     module.add_class::<ResponsesWebSocketConnection>()?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
     Ok(())
