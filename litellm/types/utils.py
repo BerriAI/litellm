@@ -3847,6 +3847,7 @@ class LlmProviders(str, Enum):
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     SCX_AI = "scx-ai"
+    UPSTAGE = "upstage"
     DARKBLOOM = "darkbloom"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"

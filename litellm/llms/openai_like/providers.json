@@ -200,5 +200,10 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "upstage": {
+    "base_url": "https://api.upstage.ai/v1",
+    "api_key_env": "UPSTAGE_API_KEY",
+    "api_base_env": "UPSTAGE_API_BASE"
   }
 }
