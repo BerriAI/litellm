@@ -23,6 +23,7 @@ from litellm.constants import (
     REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
     REDIS_UPDATE_BUFFER_KEY,
+    REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -42,6 +43,10 @@ from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    WindowSpendTransaction,
+    WindowSpendUpdateQueue,
+)
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.caching import (
     RedisPipelineLpopOperation,
@@ -65,6 +70,7 @@ _SpendTransactionField: TypeAlias = Literal[
     "org_list_transactions",
     "tag_list_transactions",
     "agent_list_transactions",
+    "model_access_group_list_transactions",
 ]
 
 _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
@@ -76,6 +82,7 @@ _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
     "org_list_transactions",
     "tag_list_transactions",
     "agent_list_transactions",
+    "model_access_group_list_transactions",
 )
 
 _ValueT = TypeVar("_ValueT")
@@ -180,6 +187,7 @@ class RedisUpdateBuffer:
         daily_org_spend_update_queue: DailySpendUpdateQueue,
         daily_end_user_spend_update_queue: DailySpendUpdateQueue,
         daily_agent_spend_update_queue: DailySpendUpdateQueue,
+        window_spend_update_queue: WindowSpendUpdateQueue | None = None,
     ):
         """
         Stores the in-memory spend updates to Redis
@@ -248,6 +256,11 @@ class RedisUpdateBuffer:
         daily_agent_spend_update_transactions: Final = (
             await daily_agent_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
+        window_spend_update_transactions: Final = (
+            await window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+            if window_spend_update_queue is not None
+            else ()
+        )
 
         verbose_proxy_logger.debug("ALL DB SPEND UPDATE TRANSACTIONS: %s", db_spend_update_transactions)
         verbose_proxy_logger.debug("ALL DAILY SPEND UPDATE TRANSACTIONS: %s", daily_spend_update_transactions)
@@ -283,6 +296,11 @@ class RedisUpdateBuffer:
                 daily_agent_spend_update_transactions,
                 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
                 ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE,
+            ),
+            (
+                window_spend_update_transactions,
+                REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
+                ServiceTypes.REDIS_WINDOW_SPEND_UPDATE_QUEUE,
             ),
         ]
 
@@ -324,12 +342,14 @@ class RedisUpdateBuffer:
                 daily_org_spend_update_transactions=daily_org_spend_update_transactions,
                 daily_end_user_spend_update_transactions=daily_end_user_spend_update_transactions,
                 daily_agent_spend_update_transactions=daily_agent_spend_update_transactions,
+                window_spend_update_transactions=window_spend_update_transactions,
                 spend_update_queue=spend_update_queue,
                 daily_spend_update_queue=daily_spend_update_queue,
                 daily_team_spend_update_queue=daily_team_spend_update_queue,
                 daily_org_spend_update_queue=daily_org_spend_update_queue,
                 daily_end_user_spend_update_queue=daily_end_user_spend_update_queue,
                 daily_agent_spend_update_queue=daily_agent_spend_update_queue,
+                window_spend_update_queue=window_spend_update_queue,
             )
             return
 
@@ -349,12 +369,14 @@ class RedisUpdateBuffer:
         daily_org_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
         daily_end_user_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
         daily_agent_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None,
+        window_spend_update_transactions: tuple[WindowSpendTransaction, ...] | None,
         spend_update_queue: SpendUpdateQueue,
         daily_spend_update_queue: DailySpendUpdateQueue,
         daily_team_spend_update_queue: DailySpendUpdateQueue,
         daily_org_spend_update_queue: DailySpendUpdateQueue,
         daily_end_user_spend_update_queue: DailySpendUpdateQueue,
         daily_agent_spend_update_queue: DailySpendUpdateQueue,
+        window_spend_update_queue: WindowSpendUpdateQueue | None,
     ) -> None:
         """
         Put drained-but-unpushed transactions back into in-memory queues.
@@ -397,6 +419,10 @@ class RedisUpdateBuffer:
                     Litellm_EntityType.AGENT,
                     db_spend_update_transactions.get("agent_list_transactions"),
                 ),
+                (
+                    Litellm_EntityType.MODEL_ACCESS_GROUP,
+                    db_spend_update_transactions.get("model_access_group_list_transactions"),
+                ),
             ]
             for entity_type, entities in entity_entries:
                 if not entities:
@@ -424,6 +450,9 @@ class RedisUpdateBuffer:
             if daily_txns:
                 await daily_queue.update_queue.put(daily_txns)
 
+        if window_spend_update_transactions and window_spend_update_queue is not None:
+            await window_spend_update_queue.update_queue.put(window_spend_update_transactions)
+
     async def restore_transactions_to_redis(
         self,
         db_spend_update_transactions: DBSpendUpdateTransactions | None = None,
@@ -433,6 +462,7 @@ class RedisUpdateBuffer:
         daily_end_user_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
         daily_agent_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
         daily_tag_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        window_spend_update_transactions: Sequence[WindowSpendTransaction] | None = None,
     ) -> None:
         """
         Re-push transactions that were popped from Redis but not committed to the DB.
@@ -454,6 +484,7 @@ class RedisUpdateBuffer:
             (daily_end_user_spend_update_transactions, REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY),
             (daily_agent_spend_update_transactions, REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY),
             (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY),
+            (window_spend_update_transactions, REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY),
         )
 
         rpush_list: Final = tuple(
@@ -571,20 +602,22 @@ class RedisUpdateBuffer:
         dict[str, DailyOrganizationSpendTransaction] | None,
         dict[str, DailyEndUserSpendTransaction] | None,
         dict[str, DailyAgentSpendTransaction] | None,
+        tuple[WindowSpendTransaction, ...] | None,
     ]:
         """
-        Drains the main 6 Redis buffer queues in a single pipeline round-trip.
+        Drains the main 7 Redis buffer queues in a single pipeline round-trip.
 
-        Returns a 6-tuple of parsed results in this order:
+        Returns a 7-tuple of parsed results in this order:
             0: DBSpendUpdateTransactions
             1: daily user spend
             2: daily team spend
             3: daily org spend
             4: daily end-user spend
             5: daily agent spend
+            6: budget window spend
         """
         if self.redis_cache is None:
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
 
         lpop_list: Final[list[RedisPipelineLpopOperation]] = [
             RedisPipelineLpopOperation(key=REDIS_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
@@ -608,12 +641,16 @@ class RedisUpdateBuffer:
                 key=REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
                 count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
             ),
+            RedisPipelineLpopOperation(
+                key=REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
+                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+            ),
         ]
 
         raw_results: Final = await self.redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
 
         # Pad with None if pipeline returned fewer results than expected
-        while len(raw_results) < 6:
+        while len(raw_results) < 7:
             raw_results.append(None)
 
         # Slot 0: DBSpendUpdateTransactions
@@ -634,6 +671,14 @@ class RedisUpdateBuffer:
                 aggregated = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(list_of_daily)
                 daily_results.append(aggregated)
 
+        window_spend: Final = (
+            WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
+                tuple(json.loads(transaction) for transaction in raw_results[6])
+            )
+            if raw_results[6] is not None
+            else None
+        )
+
         return (
             db_spend,
             cast(dict[str, DailyUserSpendTransaction] | None, daily_results[0]),
@@ -641,6 +686,7 @@ class RedisUpdateBuffer:
             cast(dict[str, DailyOrganizationSpendTransaction] | None, daily_results[2]),
             cast(dict[str, DailyEndUserSpendTransaction] | None, daily_results[3]),
             cast(dict[str, DailyAgentSpendTransaction] | None, daily_results[4]),
+            window_spend,
         )
 
     async def store_in_memory_daily_tag_spend_updates_in_redis(
@@ -826,6 +872,9 @@ class RedisUpdateBuffer:
             org_list_transactions=_merged_entity_transactions(list_of_transactions, "org_list_transactions"),
             tag_list_transactions=_merged_entity_transactions(list_of_transactions, "tag_list_transactions"),
             agent_list_transactions=_merged_entity_transactions(list_of_transactions, "agent_list_transactions"),
+            model_access_group_list_transactions=_merged_entity_transactions(
+                list_of_transactions, "model_access_group_list_transactions"
+            ),
         )
 
     async def _emit_new_item_added_to_redis_buffer_event(
