@@ -139,7 +139,7 @@ def main() -> int:
     )
     report_path: Final = os.environ.get("RELEASE_WHEEL_REPORT")
     if report_path is not None:
-        Path(report_path).write_text(size_report)
+        Path(report_path).write_text(verified_report)
     if summary_path is not None:
         Path(summary_path).write_text(verified_report)
 
