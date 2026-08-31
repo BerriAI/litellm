@@ -246,9 +246,6 @@ def test_openai_client_e2e_flow(enable_preview_features):
 @pytest.mark.parametrize("enable_preview_features", [True, False])
 def test_parallel_tool_calls_with_signatures(enable_preview_features):
     """Test that parallel tool calls preserve signatures correctly"""
-    # Real Gemini signatures are standard-alphabet base64; using a valid
-    # placeholder keeps the parallel-tool-call path lit up under the
-    # base64-validated extraction added for issue #37849.
     signature1 = base64.b64encode(b"signature_for_first_call").decode("ascii")
     # Only first call has signature (Gemini behavior for parallel calls)
 
@@ -294,18 +291,11 @@ REAL_SIGNATURE = (
 )
 
 
-# Signature values a client-side id sanitizer produces after stripping the raw
-# base64 down to id-shaped characters. Standard-alphabet base64 has no ``_`` or
-# trailing hex fragment, so Vertex rejects these with either "Base64 decoding
-# failed" or "Invalid thought signature". See issue #37849.
 @pytest.mark.parametrize(
     "mangled_signature",
     [
-        # from the issue reproducer, /v1/responses turn 2
         "AY89a1/_57b05e78dc",
-        # from the issue reproducer, /v1/chat/completions turn 2
         "AY89a1/_ee781c9832",
-        # short SHA-suffix-only sanitization
         "AY89a1_S3YvIpUCcBTFSgDfesRLDnA_775ff49bcd",
     ],
 )
@@ -315,8 +305,6 @@ def test_is_valid_thought_signature_rejects_client_normalized_values(mangled_sig
 
 
 def test_is_valid_thought_signature_tolerates_missing_padding():
-    # Gemini omits ``=`` on the wire; the strict decoder must still accept the
-    # value once we re-pad it.
     encoded = base64.b64encode(b"hello").decode("ascii").rstrip("=")
     assert "=" not in encoded
     assert _is_valid_thought_signature(encoded) is True

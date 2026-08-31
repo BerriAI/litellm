@@ -1212,12 +1212,7 @@ def _get_thought_signature_from_tool(tool: dict) -> str | None:
                 signature = function.provider_specific_fields.get("thought_signature")
                 if signature:
                     return signature
-    # Check if thought signature is embedded in tool call ID.
-    # Any client that normalizes the id shortens/hashes it, so the segment
-    # after ``__thought__`` may no longer base64-decode. Reject those here so
-    # the caller can decide between "no signature" and the dummy fallback,
-    # instead of forwarding a corrupted value that would 400 on Vertex. See
-    # issue #37849.
+    # Check if thought signature is embedded in tool call ID
     tool_call_id: Final = tool.get("id")
     if tool_call_id and THOUGHT_SIGNATURE_SEPARATOR in tool_call_id:
         parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
