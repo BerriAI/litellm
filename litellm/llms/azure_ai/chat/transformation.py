@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.common_utils import is_foundry_model_inference_base
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIConfig
@@ -208,11 +209,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         return stripped_messages
 
     def _is_foundry_model_inference_base(self, api_base: str) -> bool:
-        parsed: Final = urlparse(api_base)
-        host: Final = parsed.hostname
-        if host is None or not host.endswith(".services.ai.azure.com"):
-            return False
-        return "/openai/deployments" not in parsed.path
+        return is_foundry_model_inference_base(api_base)
 
     def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
         if api_base is None or self._is_foundry_model_inference_base(api_base):

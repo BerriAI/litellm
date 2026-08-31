@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from typing import Final, Literal
+from urllib.parse import urlparse
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -8,6 +9,14 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
+
+
+def is_foundry_model_inference_base(api_base: str) -> bool:
+    parsed: Final = urlparse(api_base)
+    host: Final = parsed.hostname
+    if host is None or not host.endswith(".services.ai.azure.com"):
+        return False
+    return "/openai/deployments" not in parsed.path
 
 
 def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None) -> str | None:
