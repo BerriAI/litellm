@@ -60,6 +60,28 @@ def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
         ) from e
 
 
+BEDROCK_BATCH_TIMEOUT_MIN_HOURS: Final = 24
+BEDROCK_BATCH_TIMEOUT_MAX_HOURS: Final = 168
+
+_BEDROCK_BATCH_TIMEOUT_HOURS_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(int)
+
+
+def _validate_bedrock_batch_timeout_hours(raw_value: object) -> int:
+    try:
+        hours = _BEDROCK_BATCH_TIMEOUT_HOURS_ADAPTER.validate_python(raw_value, strict=True)
+    except ValidationError as e:
+        raise ValueError(
+            f"Invalid 'bedrock_batch_timeout_hours' value {raw_value!r}. Expected an int between "
+            f"{BEDROCK_BATCH_TIMEOUT_MIN_HOURS} and {BEDROCK_BATCH_TIMEOUT_MAX_HOURS}."
+        ) from e
+    if not (BEDROCK_BATCH_TIMEOUT_MIN_HOURS <= hours <= BEDROCK_BATCH_TIMEOUT_MAX_HOURS):
+        raise ValueError(
+            f"'bedrock_batch_timeout_hours' must be between {BEDROCK_BATCH_TIMEOUT_MIN_HOURS} and "
+            f"{BEDROCK_BATCH_TIMEOUT_MAX_HOURS} (Bedrock's supported range), got {hours}."
+        )
+    return hours
+
+
 class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     """
     Config for Bedrock Batches - handles batch job creation and management for Bedrock
@@ -234,12 +256,19 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             bedrock_request["tags"] = _validate_bedrock_tags(bedrock_tags)
 
         # Add optional parameters if provided
+        config_batch_timeout_hours: Final = litellm_params.get("bedrock_batch_timeout_hours")
+        batch_timeout_hours: Final = (
+            config_batch_timeout_hours
+            if config_batch_timeout_hours is not None
+            else optional_params.get("bedrock_batch_timeout_hours")
+        )
         completion_window: Final = create_batch_data.get("completion_window")
-        if completion_window:
+        if batch_timeout_hours is not None:
+            bedrock_request["timeoutDurationInHours"] = _validate_bedrock_batch_timeout_hours(batch_timeout_hours)
+        elif completion_window == "24h":
             # Map OpenAI completion window to Bedrock timeout
             # OpenAI uses "24h", Bedrock expects timeout in hours
-            if completion_window == "24h":
-                bedrock_request["timeoutDurationInHours"] = 24
+            bedrock_request["timeoutDurationInHours"] = 24
 
         # For Bedrock, we need to return a pre-signed request with AWS auth headers
         # Use common utility for AWS signing

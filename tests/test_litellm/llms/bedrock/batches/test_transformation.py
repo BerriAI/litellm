@@ -255,6 +255,128 @@ def test_create_request_no_timeout_for_non_24h_window(config):
     assert "timeoutDurationInHours" not in mock_sign.call_args.kwargs["data"]
 
 
+def test_create_request_bedrock_batch_timeout_hours_from_litellm_params(config):  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "bedrock_batch_timeout_hours": 72,
+            },
+        )
+    assert mock_sign.call_args.kwargs["data"]["timeoutDurationInHours"] == 72
+
+
+def test_create_request_bedrock_batch_timeout_hours_from_optional_params(config):  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={"bedrock_batch_timeout_hours": 100},
+            litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r"},
+        )
+    assert mock_sign.call_args.kwargs["data"]["timeoutDurationInHours"] == 100
+
+
+def test_create_request_bedrock_batch_timeout_hours_litellm_params_takes_precedence_over_optional_params(  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+    config,
+):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={"bedrock_batch_timeout_hours": 48},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "bedrock_batch_timeout_hours": 168,
+            },
+        )
+    assert mock_sign.call_args.kwargs["data"]["timeoutDurationInHours"] == 168
+
+
+def test_create_request_bedrock_batch_timeout_hours_overrides_completion_window(config):  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={
+                "input_file_id": "s3://b/in.jsonl",
+                "completion_window": "24h",
+            },
+            optional_params={},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "bedrock_batch_timeout_hours": 96,
+            },
+        )
+    assert mock_sign.call_args.kwargs["data"]["timeoutDurationInHours"] == 96
+
+
+def test_create_request_bedrock_batch_timeout_hours_absent_falls_back_to_completion_window(  # test-quality-ok: asserts the built request payload, only observable via the mocked signer's call args
+    config,
+):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={
+                "input_file_id": "s3://b/in.jsonl",
+                "completion_window": "24h",
+            },
+            optional_params={},
+            litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r"},
+        )
+    assert mock_sign.call_args.kwargs["data"]["timeoutDurationInHours"] == 24
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [23, 169, "48", 24.5, True, [24]],
+)
+def test_create_request_rejects_invalid_bedrock_batch_timeout_hours(config, bad_value):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        with pytest.raises(ValueError, match="bedrock_batch_timeout_hours"):
+            config.transform_create_batch_request(
+                model="m",
+                create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+                optional_params={},
+                litellm_params={
+                    "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                    "bedrock_batch_timeout_hours": bad_value,
+                },
+            )
+
+
 def test_create_request_forwards_bedrock_tags_from_litellm_params(config):
     tags = [
         {"key": "application", "value": "genai-proxy"},
