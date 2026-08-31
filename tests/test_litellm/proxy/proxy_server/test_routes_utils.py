@@ -147,6 +147,27 @@ def test_supported_openai_params_resolves_router_alias(client, auth_as, monkeypa
     assert "max_tokens" in response.json()["supported_openai_params"]
 
 
+def test_supported_openai_params_declared_prefix_alias_resolves_through_router(client, auth_as, monkeypatch):
+    """Regression: an alias whose name starts with an authenticating provider's prefix skipped
+    router resolution and answered with that provider's params instead of the deployment's."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "github_copilot/gpt-4o",
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "sk-test"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with auth_as():
+        response = client.get("/utils/supported_openai_params", params={"model": "github_copilot/gpt-4o"})
+
+    assert response.status_code == 200
+    expected = litellm.get_supported_openai_params(model="claude-opus-4-6", custom_llm_provider="anthropic")
+    assert response.json() == {"supported_openai_params": expected}
+
+
 def test_supported_openai_params_never_runs_oauth_for_authenticating_providers(client, auth_as, monkeypatch, tmp_path):
     """Regression: github_copilot/chatgpt names answer from their declaration; resolving them
     through ``get_llm_provider`` would run the provider's OAuth device flow and block the event loop."""
