@@ -459,11 +459,7 @@ class BaseAnthropicMessagesStreamingIterator:
                         else:
                             new_lines.append(line)
                     if modified:
-                        trailing = (
-                            b"\n\n"
-                            if chunk.endswith(b"\n\n")
-                            else (b"\n" if chunk.endswith(b"\n") else b"")
-                        )
+                        trailing = b"\n\n" if chunk.endswith(b"\n\n") else (b"\n" if chunk.endswith(b"\n") else b"")
                         return "\n".join(new_lines).encode("utf-8") + trailing
                 except Exception:
                     pass

@@ -102,11 +102,7 @@ class PassThroughStreamingHandler:
             )
         )
         is_anthropic_route: Final[bool] = bool(
-            model_name
-            and (
-                endpoint_type == EndpointType.ANTHROPIC
-                or "/v1/messages" in url_route
-            )
+            model_name and (endpoint_type == EndpointType.ANTHROPIC or "/v1/messages" in url_route)
         )
         saw_message_start = False
         try:
@@ -117,9 +113,7 @@ class PassThroughStreamingHandler:
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
                     if is_anthropic_route and not saw_message_start and b"message_start" in chunk:
                         assert model_name is not None
-                        chunk = PassThroughStreamingHandler._rewrite_anthropic_message_start_chunk(
-                            chunk, model_name
-                        )
+                        chunk = PassThroughStreamingHandler._rewrite_anthropic_message_start_chunk(chunk, model_name)
                         saw_message_start = True
                     yield chunk
             else:
@@ -406,11 +400,7 @@ class PassThroughStreamingHandler:
                 else:
                     new_lines.append(line)
             if modified:
-                trailing = (
-                    b"\n\n"
-                    if chunk.endswith(b"\n\n")
-                    else (b"\n" if chunk.endswith(b"\n") else b"")
-                )
+                trailing = b"\n\n" if chunk.endswith(b"\n\n") else (b"\n" if chunk.endswith(b"\n") else b"")
                 return "\n".join(new_lines).encode("utf-8") + trailing
         except Exception:
             pass
