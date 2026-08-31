@@ -55,7 +55,13 @@ class TestMergeClaudeSettings:
         }
         merged = merge_claude_settings(settings, "http://localhost:4000/", "new-helper")
         assert merged["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
+        assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert merged["apiKeyHelper"] == "new-helper"
+
+    def test_forces_tool_search_on(self):
+        settings = {"env": {"ENABLE_TOOL_SEARCH": "false"}}
+        merged = merge_claude_settings(settings, "http://localhost:4000", "helper")
+        assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
 
     def test_drops_stray_api_key(self):
         settings = {"env": {"ANTHROPIC_API_KEY": "leaked-key"}}
@@ -64,7 +70,10 @@ class TestMergeClaudeSettings:
 
     def test_works_from_empty_settings(self):
         merged = merge_claude_settings({}, "http://localhost:4000", "helper")
-        assert merged["env"] == {"ANTHROPIC_BASE_URL": "http://localhost:4000"}
+        assert merged["env"] == {
+            "ANTHROPIC_BASE_URL": "http://localhost:4000",
+            "ENABLE_TOOL_SEARCH": "true",
+        }
         assert merged["apiKeyHelper"] == "helper"
 
     def test_does_not_mutate_input(self):
@@ -486,6 +495,7 @@ class TestUpCommand:
         assert captured["backup_existed"] is True
         assert captured["settings"]["theme"] == "dark"
         assert captured["settings"]["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
+        assert captured["settings"]["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert captured["settings"]["apiKeyHelper"] == "/usr/local/bin/lite auth print-token"
         assert json.loads(settings_path.read_text()) == original
         assert not backup_path.exists()
