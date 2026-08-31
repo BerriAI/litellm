@@ -1279,6 +1279,10 @@ def _resolve_vertex_model_from_router(
     if not llm_router:
         return encoded_endpoint, endpoint, vertex_project, vertex_location
 
+    import openai
+
+    from litellm.types.router import RouterRateLimitError
+
     try:
         deployment: Final = llm_router.get_available_deployment_for_pass_through(model=model_id)
         if not deployment:
@@ -1325,7 +1329,20 @@ def _resolve_vertex_model_from_router(
                 encoded_endpoint = encoded_endpoint.replace(model_id, actual_model)
                 endpoint = endpoint.replace(model_id, actual_model)
 
+    except (openai.APIError, RouterRateLimitError):
+        # The router made an explicit decision to reject this model for
+        # pass-through (not configured, not authorized, or no healthy
+        # deployment available). Propagate it. Swallowing it here and
+        # falling through to the return below would forward the caller's
+        # raw, unvalidated model/project/location using the proxy's
+        # default Vertex credentials -- bypassing the pass-through
+        # allowlist entirely. See issue #20727.
+        raise
     except Exception as e:
+        # Genuinely unexpected errors in this resolution helper itself
+        # (e.g. malformed litellm_params) stay best-effort, matching this
+        # function's original intent -- only the router's own deliberate
+        # rejections above are treated as fatal.
         verbose_proxy_logger.debug("Error resolving vertex model from router for model %s: %s", model_id, e)
 
     return encoded_endpoint, endpoint, vertex_project, vertex_location
