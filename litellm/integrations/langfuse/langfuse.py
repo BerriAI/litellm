@@ -288,7 +288,14 @@ class LangFuseLogger:
                     verbose_logger.warning("Overwriting Langfuse `%s` from request header", trace_param_key)
                 else:
                     verbose_logger.debug("Found Langfuse `%s` in request header", trace_param_key)
-                metadata[trace_param_key] = proxy_headers.get(metadata_param_key)
+                header_value = proxy_headers.get(metadata_param_key)
+                if trace_param_key == "tags" and isinstance(header_value, str):
+                    # Langfuse tags are a list. Parse the comma-separated header string
+                    # here, so the shared litellm_params metadata never holds a raw
+                    # string: the router's tag handling reuses that dict across retry
+                    # attempts and crashes on a string during retry/fallback (#38927).
+                    header_value = [tag.strip() for tag in header_value.split(",") if tag.strip()]
+                metadata[trace_param_key] = header_value
 
         return metadata
 
