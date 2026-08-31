@@ -1,6 +1,8 @@
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Final, Literal, get_type_hints
 
 import httpx
@@ -267,6 +269,34 @@ def supports_response_json_schema(model: str) -> bool:
     gemini_2_plus_pattern: Final = re.compile(r"gemini-(?:[2-9]|[1-9]\d+)(?:\.|\-)")
 
     return bool(gemini_2_plus_pattern.search(model_lower))
+
+
+VERTEX_AI_USE_RESPONSE_JSON_SCHEMA_PARAM: Final = "vertex_ai_use_response_json_schema"
+VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM: Final = "litellm_param_vertex_ai_verbatim_response_schema"
+
+
+def should_use_response_json_schema(model: str, request_override: bool | None = None) -> bool:
+    """
+    Resolve which structured output channel a json_schema response_format goes to.
+
+    True sends the client schema verbatim as ``responseJsonSchema``, False sends the
+    natively converted ``responseSchema`` (nullable unions flattened, constraints
+    hoisted, ``propertyOrdering`` added). Precedence: per request
+    ``vertex_ai_use_response_json_schema``, then
+    ``litellm.vertex_ai_use_response_json_schema``, then the model heuristic. An
+    override picks between the channels the model has, it never adds one
+    """
+    override: Final = request_override if request_override is not None else litellm.vertex_ai_use_response_json_schema
+    if override is None:
+        return supports_response_json_schema(model)
+    if override and not supports_response_json_schema(model):
+        verbose_logger.warning(
+            "vertex_ai_use_response_json_schema=True ignored for model=%s: it is not known to accept "
+            "responseJsonSchema, so the schema stays on responseSchema",
+            model,
+        )
+        return False
+    return override
 
 
 from typing import Literal
@@ -649,6 +679,66 @@ def _build_json_schema(parameters: dict) -> dict:
     # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
 
     return parameters
+
+
+def _response_json_schema_override(
+    optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> bool | None:
+    candidates: Final = (
+        optional_params.get(VERTEX_AI_USE_RESPONSE_JSON_SCHEMA_PARAM),
+        litellm_params.get(VERTEX_AI_USE_RESPONSE_JSON_SCHEMA_PARAM),
+    )
+    return next((candidate for candidate in candidates if isinstance(candidate, bool)), None)
+
+
+def _swap_response_schema_key(
+    optional_params: Mapping[str, object], dropped_key: str, added_key: str, schema: Mapping[str, object]
+) -> Mapping[str, object]:
+    surviving: Final = MappingProxyType({k: v for k, v in optional_params.items() if k != dropped_key})
+    return MappingProxyType({**surviving, added_key: schema})
+
+
+def resolve_response_schema_channel(
+    optional_params: Mapping[str, object], litellm_params: Mapping[str, object], model: str
+) -> Mapping[str, object]:
+    """
+    Move an already mapped response schema onto the channel this request asks for.
+
+    ``vertex_ai_use_response_json_schema`` on the request or on the deployment's
+    ``litellm_params`` beats ``litellm.vertex_ai_use_response_json_schema`` and the model
+    heuristic, and only the request build sees both, so the mapped channel is settled here
+    """
+    override: Final = _response_json_schema_override(optional_params, litellm_params)
+    if override is None:
+        return optional_params
+
+    if should_use_response_json_schema(model, override):
+        if "response_json_schema" in optional_params:
+            return optional_params
+        verbatim_schema: Final = optional_params.get(VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM) or litellm_params.get(
+            VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM
+        )
+        if isinstance(verbatim_schema, dict):
+            return _swap_response_schema_key(
+                optional_params, "response_schema", "response_json_schema", verbatim_schema
+            )
+        if "response_schema" in optional_params:
+            verbose_logger.warning(
+                "vertex_ai_use_response_json_schema=True is ignored for model=%s, whose schema was already "
+                "converted for responseSchema. Set litellm.vertex_ai_use_response_json_schema instead",
+                model,
+            )
+        return optional_params
+
+    json_schema: Final = optional_params.get("response_json_schema")
+    if not isinstance(json_schema, dict):
+        return optional_params
+    return _swap_response_schema_key(
+        optional_params,
+        "response_json_schema",
+        "response_schema",
+        _build_vertex_schema(parameters=deepcopy(json_schema), add_property_ordering=True),
+    )
 
 
 def _filter_anyof_fields(schema_dict: dict[str, Any]) -> dict[str, Any]:

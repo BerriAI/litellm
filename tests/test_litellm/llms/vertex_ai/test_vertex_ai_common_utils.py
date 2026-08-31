@@ -1,3 +1,4 @@
+from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
@@ -5,13 +6,17 @@ import pytest
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
+import litellm
 from litellm.llms.vertex_ai.common_utils import (
+    VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM,
     _get_vertex_url,
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
     pop_vertex_request_labels,
+    resolve_response_schema_channel,
     set_schema_property_ordering,
+    should_use_response_json_schema,
     supports_response_json_schema,
     validate_vertex_location,
     vertex_request_labels_from_litellm_params,
@@ -176,6 +181,103 @@ def test_supports_response_json_schema(model: str, expected: bool):
     """Test supports_response_json_schema correctly detects Gemini 2.0+ model names"""
 
     assert supports_response_json_schema(model) == expected
+
+
+CLIENT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "total": {"type": "number"},
+        "barcode": {"anyOf": [{"type": "string", "maxLength": 10}, {"type": "null"}]},
+    },
+    "required": ["total", "barcode"],
+}
+
+
+@pytest.mark.parametrize(
+    "global_setting, request_override, model, expected",
+    [
+        (None, None, "gemini-2.5-flash", True),
+        (None, None, "gemini-1.5-pro", False),
+        (False, None, "gemini-2.5-flash", False),
+        (True, None, "gemini-flash-latest", False),
+        (True, None, "gemini-1.5-pro", False),
+        (None, True, "gemini-1.5-pro", False),
+        (False, True, "gemini-2.5-flash", True),
+        (True, False, "gemini-2.5-flash", False),
+    ],
+)
+def test_should_use_response_json_schema_precedence(
+    monkeypatch, global_setting, request_override, model, expected
+):
+    """
+    Per request override beats litellm.vertex_ai_use_response_json_schema, which beats the model
+    heuristic, and neither can select responseJsonSchema for a model not known to accept it
+    """
+    monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", global_setting)
+
+    assert should_use_response_json_schema(model, request_override) is expected
+
+
+def test_resolve_response_schema_channel_opt_out_converts_to_native_schema():
+    """Opting out per request moves the verbatim JSON Schema onto the native responseSchema channel"""
+    resolved = resolve_response_schema_channel(
+        optional_params={
+            "response_mime_type": "application/json",
+            "response_json_schema": deepcopy(CLIENT_SCHEMA),
+            "vertex_ai_use_response_json_schema": False,
+        },
+        litellm_params={},
+        model="gemini-2.5-flash",
+    )
+
+    assert "response_json_schema" not in resolved
+    assert resolved["response_mime_type"] == "application/json"
+    assert resolved["response_schema"]["propertyOrdering"] == ["total", "barcode"]
+    assert resolved["response_schema"]["properties"]["barcode"]["anyOf"] == [
+        {"type": "string", "maxLength": 10, "nullable": True}
+    ]
+
+
+def test_resolve_response_schema_channel_reads_deployment_litellm_params():
+    """A deployment's litellm_params can opt out for every request routed to it"""
+    resolved = resolve_response_schema_channel(
+        optional_params={"response_json_schema": deepcopy(CLIENT_SCHEMA)},
+        litellm_params={"vertex_ai_use_response_json_schema": False},
+        model="gemini-2.5-flash",
+    )
+
+    assert "response_json_schema" not in resolved
+    assert resolved["response_schema"]["propertyOrdering"] == ["total", "barcode"]
+
+
+def test_resolve_response_schema_channel_opt_in_restores_verbatim_schema(monkeypatch):
+    """With the global opted out, a per request opt in sends the client schema verbatim again"""
+    monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", False)
+
+    resolved = resolve_response_schema_channel(
+        optional_params={
+            "response_schema": {"type": "object", "propertyOrdering": ["total", "barcode"]},
+            VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM: deepcopy(CLIENT_SCHEMA),
+            "vertex_ai_use_response_json_schema": True,
+        },
+        litellm_params={},
+        model="gemini-2.5-flash",
+    )
+
+    assert resolved["response_json_schema"] == CLIENT_SCHEMA
+    assert "response_schema" not in resolved
+
+
+def test_resolve_response_schema_channel_without_override_keeps_channel():
+    """No override leaves the mapped channel untouched"""
+    optional_params = {"response_json_schema": deepcopy(CLIENT_SCHEMA)}
+
+    resolved = resolve_response_schema_channel(
+        optional_params=optional_params, litellm_params={}, model="gemini-2.5-flash"
+    )
+
+    assert resolved is optional_params
 
 
 def test_set_schema_property_ordering_with_excessive_nesting():
