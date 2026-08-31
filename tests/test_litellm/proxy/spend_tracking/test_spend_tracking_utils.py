@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 from datetime import timezone
+from collections.abc import Mapping
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3958,7 +3959,7 @@ def test_passthrough_caching_carries_no_injection_marker():
     assert metadata["litellm_gateway_injected_cache"] is None
 
 
-def _routed_call_kwargs(model_info: dict) -> dict:
+def _routed_call_kwargs(model_info: Mapping[str, object]) -> dict[str, object]:
     return {
         "model": "claude-haiku-4-5",
         "custom_llm_provider": "azure_ai",
