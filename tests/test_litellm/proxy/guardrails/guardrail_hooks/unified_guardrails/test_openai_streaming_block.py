@@ -10,7 +10,7 @@ an HTTP 500 error frame and truncates the stream.
 """
 
 import json
-from typing import Any, AsyncGenerator, List, Literal, Optional
+from typing import Any, AsyncGenerator, Dict, Literal, Optional, Tuple, Union
 
 import pytest
 
@@ -30,6 +30,9 @@ from litellm.types.utils import (
 )
 
 BLOCK_MESSAGE = "This response was replaced by policy."
+
+JsonPayload = Dict[str, object]
+StreamChunk = Union[ModelResponseStream, JsonPayload, bytes]
 
 
 class _BlockingGuardrail(CustomGuardrail):
@@ -67,7 +70,7 @@ async def _chat_stream(end: bool) -> AsyncGenerator[ModelResponseStream, None]:
         yield _chat_chunk(Delta(), finish_reason="stop")
 
 
-async def _responses_stream(end: bool) -> AsyncGenerator[dict, None]:
+async def _responses_stream(end: bool) -> AsyncGenerator[JsonPayload, None]:
     original_text = "This is the original answer."
     response_envelope = {"id": "resp_live", "model": "gpt-5.4-mini", "status": "in_progress", "output": []}
     yield {"type": "response.created", "response": response_envelope}
@@ -122,11 +125,11 @@ async def _responses_stream(end: bool) -> AsyncGenerator[dict, None]:
 
 async def _run_hook(
     route: str,
-    stream: AsyncGenerator[Any, None],
+    stream: AsyncGenerator[Union[ModelResponseStream, JsonPayload], None],
     sampling_rate: int = 1,
     end_of_stream_only: bool = False,
     buffer_until_moderated: bool = False,
-) -> List[Any]:
+) -> Tuple[StreamChunk, ...]:
     guardrail = _BlockingGuardrail(guardrail_name="test-blocking-guardrail", event_hook="post_call")
     guardrail.streaming_sampling_rate = sampling_rate
     guardrail.streaming_end_of_stream_only = end_of_stream_only
@@ -140,29 +143,30 @@ async def _run_hook(
         "metadata": {"guardrails": ["test-blocking-guardrail"]},
     }
 
-    collected: List[Any] = []
-    async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=user_api_key_dict,
-        response=stream,
-        request_data=request_data,
-    ):
-        collected.append(chunk)
-    return collected
+    return tuple(
+        [
+            chunk
+            async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=stream,
+                request_data=request_data,
+            )
+        ]
+    )
 
 
-def _sse_payloads(collected: List[Any]) -> List[dict]:
-    payloads = []
-    for chunk in collected:
-        if not isinstance(chunk, bytes):
-            continue
-        for block in chunk.decode().split("\n\n"):
-            for line in block.strip().split("\n"):
-                if line.startswith("data:"):
-                    payloads.append(json.loads(line[len("data:") :].strip()))
-    return payloads
+def _sse_payloads(collected: Tuple[StreamChunk, ...]) -> Tuple[JsonPayload, ...]:
+    return tuple(
+        json.loads(line[len("data:") :].strip())
+        for chunk in collected
+        if isinstance(chunk, bytes)
+        for block in chunk.decode().split("\n\n")
+        for line in block.strip().split("\n")
+        if line.startswith("data:")
+    )
 
 
-def _assert_no_error_frame(collected: List[Any]) -> None:
+def _assert_no_error_frame(collected: Tuple[StreamChunk, ...]) -> None:
     raw = "".join(chunk.decode() for chunk in collected if isinstance(chunk, bytes))
     assert '"error"' not in raw, f"unexpected error blob in stream: {raw!r}"
 
