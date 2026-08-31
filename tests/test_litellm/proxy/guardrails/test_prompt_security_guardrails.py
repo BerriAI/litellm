@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -838,3 +839,74 @@ async def test_prompt_security_incremental_diff_streams_redacted_deltas(monkeypa
     streamed = "".join(item.choices[0].delta.content or "" for item in out if item.choices)
     assert streamed == "order number [REDACTED] confirmed"
     assert "123-45-6789" not in streamed
+
+
+@pytest.mark.asyncio
+async def test_prompt_security_incremental_diff_boundary_split_fails_closed(monkeypatch: pytest.MonkeyPatch):
+    """A sensitive value split across sampled chunk boundaries cannot be retracted once
+    its raw prefix has been emitted; the stream must fail closed with an in-stream
+    underflow error frame instead of delivering the complete value."""
+    monkeypatch.setattr(
+        unified_module,
+        "endpoint_guardrail_translation_mappings",
+        {CallTypes.acompletion: OpenAIChatCompletionsHandler},
+    )
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="prompt_security_streaming",
+        event_hook="post_call",
+        default_on=True,
+        api_key="test-key",
+        api_base="https://test.prompt.security",
+        streaming_transform_mode="incremental_diff",
+    )
+    guardrail.streaming_sampling_rate = 1
+
+    async def mock_post(*args, **kwargs):
+        text = kwargs.get("json", {}).get("response", "")
+        redacted = text.replace("123-45-6789", "[REDACTED]")
+        mock_response = Response(
+            json={
+                "result": {
+                    "prompt": None,
+                    "response": {
+                        "action": "modify" if redacted != text else "log",
+                        "violations": ["pii"] if redacted != text else [],
+                        "modified_text": redacted,
+                    },
+                }
+            },
+            status_code=200,
+            request=Request(method="POST", url="https://test.prompt.security/api/protect"),
+        )
+        mock_response.raise_for_status = lambda: None
+        return mock_response
+
+    async def _mock_stream():
+        for chunk in [
+            _make_stream_chunk("order number 123-45"),
+            _make_stream_chunk("-6789 confirmed"),
+            _make_stream_chunk("", finish_reason="stop"),
+        ]:
+            yield chunk
+
+    with patch.object(guardrail.async_handler, "post", side_effect=mock_post):
+        out = []
+        async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+            response=_mock_stream(),
+            request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
+        ):
+            out.append(item)
+
+    streamed = "".join(
+        item.choices[0].delta.content or ""
+        for item in out
+        if isinstance(item, ModelResponseStream) and item.choices
+    )
+    assert "123-45-6789" not in streamed
+
+    error_frames = [item for item in out if isinstance(item, bytes)]
+    assert error_frames, "expected an in-stream error frame when the rewrite cannot be applied"
+    payload = json.loads(error_frames[-1].decode()[len("data: ") :])
+    assert payload["error"]["message"] == "stream_transform_underflow"
