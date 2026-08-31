@@ -32,7 +32,10 @@ from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult, GenericResponseOutputItem, OutputText
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.router import Router
+else:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 router: Final = APIRouter()
 
@@ -50,8 +53,8 @@ _EMPTY_TOOL_PAYLOAD: Final[Mapping[str, Any]] = MappingProxyType({})
 
 def _blocked_responses_api_stream(
     response: ResponsesAPIResponse,
-    logging_obj: object,
-    request_data: Mapping[str, object],
+    logging_obj: LiteLLMLoggingObj,
+    request_data: dict[str, object],
 ) -> CachedResponsesAPIStreamingIterator:
     return CachedResponsesAPIStreamingIterator(
         response=response,
@@ -419,7 +422,7 @@ async def responses_api(
     except ModifyResponseException as e:
         # Guardrail passthrough: return violation message in Responses API format (200)
         _data: Final = e.request_data
-        _logging_obj: Final = _data.get("litellm_logging_obj")
+        exception_logging_obj: Final = _data.get("litellm_logging_obj") or proxy_logging_obj
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -434,19 +437,19 @@ async def responses_api(
             type="message",
             role="assistant",
             status="completed",
-            content=(
+            content=[
                 OutputText(
                     type="output_text",
                     text=violation_text,
                     annotations=[],  # mutable-ok: the OpenAI response schema requires a list
                 ),
-            ),
+            ],
         )
         response_obj: Final = ResponsesAPIResponse(
             id=response_id,
             object="response",
             created_at=int(time.time()),
-            model=e.model or data.get("model"),
+            model=e.model,
             output=[blocked_output],  # mutable-ok: ResponsesAPIResponse.output is specified as a list
             status="completed",
             usage=_blocked_responses_api_usage(e.original_response),
@@ -454,7 +457,7 @@ async def responses_api(
         if data.get("stream") is True:
             streaming_response: Final = _blocked_responses_api_stream(
                 response=response_obj,
-                logging_obj=_logging_obj,
+                logging_obj=cast(LiteLLMLoggingObj, exception_logging_obj),  # cast-ok: guardrail request data carries call logging
                 request_data=_data,
             )
             selected_data_generator: Final = select_data_generator(
