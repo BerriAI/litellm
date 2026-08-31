@@ -2090,7 +2090,11 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         """
         own_concurrency_keys: Final = (
             _own_concurrency_keys_for_hop(
-                context.configured, context.model_group, context.tags, context.deployment_id, context.key_hash,
+                context.configured,
+                context.model_group,
+                context.tags,
+                context.deployment_id,
+                context.key_hash,
                 context.key_alias,
             )
             if context is not None

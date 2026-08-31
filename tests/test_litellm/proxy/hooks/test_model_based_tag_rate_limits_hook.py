@@ -1985,7 +1985,15 @@ async def test_log_success_event_accounts_against_the_same_bucket_admission_chec
 
     now = time_controller.now().timestamp()
     token_key = _expected_bucket_key(
-        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group=admission_bucket_group, limit=500000
+        "my-group",
+        "tokens",
+        "daily",
+        "end_user_id",
+        "u1",
+        86400,
+        now,
+        resolved_group=admission_bucket_group,
+        limit=500000,
     )
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
@@ -2062,7 +2070,13 @@ async def test_log_success_event_accounts_against_the_key_hash_admission_checked
     token_limits = {
         "token_limits": {
             "limits": [
-                {"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400, "scope_by_key_hash": True}
+                {
+                    "name": "daily",
+                    "tag_id": "end_user_id",
+                    "limit": 500000,
+                    "period_seconds": 86400,
+                    "scope_by_key_hash": True,
+                }
             ]
         }
     }
@@ -2114,7 +2128,9 @@ async def test_log_success_event_charges_the_window_admission_checked_not_a_late
     current when the response finishes.
     """
     token_limits = {
-        "token_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 500, "period_seconds": 60}]}
+        "token_limits": {
+            "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 500, "period_seconds": 60}]
+        }
     }
     router = litellm.Router(model_list=[_deployment("grp", "dep-1", token_limits)])
     limiter = _make_limiter(time_controller)
@@ -2148,7 +2164,9 @@ async def test_log_success_event_charges_the_window_admission_checked_not_a_late
     )
     assert (
         float(
-            await limiter.internal_usage_cache.async_get_cache(key=admitted_window_bucket, litellm_parent_otel_span=None)
+            await limiter.internal_usage_cache.async_get_cache(
+                key=admitted_window_bucket, litellm_parent_otel_span=None
+            )
         )
         == 42.0
     )
@@ -2174,7 +2192,11 @@ async def test_log_success_event_accounts_against_the_team_id_admission_checked(
     deployment = _deployment(
         "real-model-name",
         "dep-1",
-        {"token_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500, "period_seconds": 86400}]}},
+        {
+            "token_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500, "period_seconds": 86400}]
+            }
+        },
     )
     deployment["model_info"]["team_id"] = "team-1"
     deployment["model_info"]["team_public_model_name"] = "team-alias-name"
@@ -3105,7 +3127,9 @@ def _request_limit_router(limit: int) -> "litellm.Router":
                 "dep-1",
                 {
                     "request_limits": {
-                        "limits": [{"name": "per_period", "tag_id": "end_user_id", "limit": limit, "period_seconds": 300}]
+                        "limits": [
+                            {"name": "per_period", "tag_id": "end_user_id", "limit": limit, "period_seconds": 300}
+                        ]
                     }
                 },
             )
@@ -3558,7 +3582,9 @@ def _redis_limiter(time_controller: TimeController):
         pytest.skip("Redis environment variables (REDIS_HOST, REDIS_PORT) not set")
     redis_cache = RedisCache(host=redis_host, port=int(redis_port), password=os.getenv("REDIS_PASSWORD"))
     dual_cache = DualCache(redis_cache=redis_cache)
-    return _PROXY_ModelBasedTagRateLimitsHook(internal_usage_cache=dual_cache, time_provider=time_controller.now), redis_cache
+    return _PROXY_ModelBasedTagRateLimitsHook(
+        internal_usage_cache=dual_cache, time_provider=time_controller.now
+    ), redis_cache
 
 
 @pytest.mark.asyncio
@@ -3684,7 +3710,11 @@ async def test_redis_backed_token_admission_sees_increments_the_in_memory_cache_
             _deployment(
                 "grp",
                 "dep-1",
-                {"token_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 100, "period_seconds": 60}]}},
+                {
+                    "token_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 100, "period_seconds": 60}]
+                    }
+                },
             )
         ]
     )
@@ -3765,7 +3795,9 @@ async def test_redis_backed_concurrency_ttl_refreshes_on_every_admission(time_co
         # would make a real-time before/after comparison too slow to assert
         # on deterministically) with refresh_ttl=True, matching how a
         # concurrency check is actually admitted.
-        admitted, _ = await limiter._check_and_increment_one(cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True)
+        admitted, _ = await limiter._check_and_increment_one(
+            cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True
+        )
         assert admitted
         ttl_after_first_admission = await redis_cache.init_async_client().ttl(key)
         assert ttl_after_first_admission > 0
@@ -3775,7 +3807,9 @@ async def test_redis_backed_concurrency_ttl_refreshes_on_every_admission(time_co
         # A second admission on the same still-live key, most of the way
         # through the first admission's ttl, must push the ttl back out to
         # the full window again, not leave it counting down toward zero.
-        admitted, _ = await limiter._check_and_increment_one(cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True)
+        admitted, _ = await limiter._check_and_increment_one(
+            cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True
+        )
         assert admitted
         ttl_after_second_admission = await redis_cache.init_async_client().ttl(key)
         assert ttl_after_second_admission >= 2
@@ -4393,7 +4427,9 @@ async def test_cross_unit_refund_leaves_no_phantom_increment_in_memory(time_cont
         )
 
     now = time_controller.now().timestamp()
-    request_key = _expected_bucket_key("grp", "requests", "per_minute", "end_user_id", "refund-check", 60, now, limit=10)
+    request_key = _expected_bucket_key(
+        "grp", "requests", "per_minute", "end_user_id", "refund-check", 60, now, limit=10
+    )
     value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
     assert (float(value) if value is not None else 0.0) == 1.0
 
@@ -4467,7 +4503,9 @@ async def test_exception_mid_batch_refunds_every_earlier_admission_before_propag
     raising_key = "{tag_rl:test:exception-refund:b}:requests"
 
     class _FlakyLimiter(_PROXY_ModelBasedTagRateLimitsHook):
-        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool):
+        async def _check_and_increment_one(
+            self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool
+        ):
             if key == raising_key:
                 raise RuntimeError("simulated transient redis failure")
             return await super()._check_and_increment_one(cache, key, limit, increment, ttl, refresh_ttl)
@@ -4505,7 +4543,9 @@ async def test_a_raising_keys_own_ambiguous_outcome_is_never_refunded(time_contr
     raising_key = "{tag_rl:test:ambiguous-no-refund:b}:requests"
 
     class _FlakyLimiter(_PROXY_ModelBasedTagRateLimitsHook):
-        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool):
+        async def _check_and_increment_one(
+            self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool
+        ):
             if key == raising_key:
                 # Simulate Redis committing the increment before the
                 # response is lost: the write actually happens...
@@ -4667,7 +4707,13 @@ def test_partition_key_distinguishes_entries_that_differ_only_by_scoping_fields(
     high-cardinality traffic can evict the other's active counters from a
     cache neither entry asked to share.
     """
-    base_kwargs = {"name": "daily", "tag_id": "end_user_id", "limit": 100, "period_seconds": 86400, "max_in_memory_cache_size": 50}
+    base_kwargs = {
+        "name": "daily",
+        "tag_id": "end_user_id",
+        "limit": 100,
+        "period_seconds": 86400,
+        "max_in_memory_cache_size": 50,
+    }
     unscoped = TagRateLimitEntry(**base_kwargs)
     enabled_for_scoped = TagRateLimitEntry(
         **base_kwargs, enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",))
