@@ -272,8 +272,13 @@ def _entry_applies(entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str
     return key_alias in entry.apply_to_key_alias
 
 
+def _sub_mapping(container: Mapping[str, object], key: str) -> Mapping[str, object]:
+    value = container.get(key)
+    return value if isinstance(value, Mapping) else _EMPTY_MAPPING
+
+
 def _deployment_id(deployment: Mapping[str, object]) -> str | None:
-    return (deployment.get("model_info") or _EMPTY_MAPPING).get("id")
+    return _sub_mapping(deployment, "model_info").get("id")
 
 
 def _resolve_success_event_metadata_variable_name(
@@ -306,8 +311,7 @@ def _extract_team_id(request_kwargs: Mapping[str, object], metadata_variable_nam
     `metadata.user_api_key_team_id` (still present, unvalidated, on a route
     where `litellm_metadata` is the authoritative field) win over the real
     value."""
-    active: Final = request_kwargs.get(metadata_variable_name) or _EMPTY_MAPPING
-    team_id: Final = active.get("user_api_key_team_id")
+    team_id: Final = _sub_mapping(request_kwargs, metadata_variable_name).get("user_api_key_team_id")
     return team_id if isinstance(team_id, str) else None
 
 
@@ -317,8 +321,7 @@ def _extract_key_hash(request_kwargs: Mapping[str, object], metadata_variable_na
     `metadata["user_api_key"]` to `user_api_key_dict.api_key`, which despite
     the plain name is already the hashed token (see `litellm_pre_call_utils.py`).
     """
-    active: Final = request_kwargs.get(metadata_variable_name) or _EMPTY_MAPPING
-    key_hash: Final = active.get("user_api_key")
+    key_hash: Final = _sub_mapping(request_kwargs, metadata_variable_name).get("user_api_key")
     return key_hash if isinstance(key_hash, str) else None
 
 
@@ -327,8 +330,7 @@ def _extract_key_alias(request_kwargs: Mapping[str, object], metadata_variable_n
     the calling virtual key's own `key_alias`: `LiteLLMProxyRequestSetup` sets
     `metadata["user_api_key_alias"]` to `user_api_key_dict.key_alias`
     (see `litellm_pre_call_utils.py`)."""
-    active: Final = request_kwargs.get(metadata_variable_name) or _EMPTY_MAPPING
-    key_alias: Final = active.get("user_api_key_alias")
+    key_alias: Final = _sub_mapping(request_kwargs, metadata_variable_name).get("user_api_key_alias")
     return key_alias if isinstance(key_alias, str) else None
 
 
@@ -371,7 +373,7 @@ def _order_tags_for_identity_resolution(
 
 
 def _entries_for_unit(deployment: Mapping[str, object], unit: _LimitUnit) -> tuple[TagRateLimitEntry, ...]:
-    raw_tag_rate_limits: Final = (deployment.get("model_info") or _EMPTY_MAPPING).get("tag_rate_limits")
+    raw_tag_rate_limits: Final = _sub_mapping(deployment, "model_info").get("tag_rate_limits")
     if not raw_tag_rate_limits:
         return ()
     tag_rate_limits: Final = TagRateLimits.model_validate(raw_tag_rate_limits)
@@ -588,7 +590,7 @@ def _model_name(deployment: Mapping[str, object]) -> str:
 
 
 def _team_alias_key(deployment: Mapping[str, object]) -> tuple[str, str] | None:
-    model_info: Final = deployment.get("model_info") or _EMPTY_MAPPING
+    model_info: Final = _sub_mapping(deployment, "model_info")
     team_id: Final = model_info.get("team_id")
     team_public_model_name: Final = model_info.get("team_public_model_name")
     if team_id and team_public_model_name:
