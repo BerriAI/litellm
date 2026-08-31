@@ -13,7 +13,6 @@ from typing import Any, Final, TypedDict
 from urllib.parse import quote
 
 import httpx
-import yaml
 from typing_extensions import ReadOnly, Required
 
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -169,6 +168,8 @@ def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
     try:
         parsed: Any = json.loads(text)
     except json.JSONDecodeError:
+        import yaml
+
         parsed = yaml.safe_load(text)
 
     if not isinstance(parsed, dict):

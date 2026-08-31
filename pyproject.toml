@@ -106,10 +106,7 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
-mcp = [
-    "mcp>=1.28.1,<2.0",
-    "pyyaml>=6.0.3,<7.0",
-]
+mcp = ["mcp>=1.28.1,<2.0"]
 # SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
 # bundle the native libxmlsec1/libxml2 libraries, so no system packages are
 # required. Kept out of the base `proxy` extra so it stays optional.

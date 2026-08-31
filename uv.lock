@@ -4317,7 +4317,6 @@ grpc = [
 ]
 mcp = [
     { name = "mcp" },
-    { name = "pyyaml" },
 ]
 mlflow = [
     { name = "mlflow" },
@@ -4555,7 +4554,6 @@ requires-dist = [
     { name = "python-multipart", marker = "extra == 'proxy'", specifier = ">=0.0.27,<1.0" },
     { name = "python3-saml", marker = "extra == 'saml'", specifier = ">=1.16.0,<2.0" },
     { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6.0.3,<7.0" },
-    { name = "pyyaml", marker = "extra == 'mcp'", specifier = ">=6.0.3,<7.0" },
     { name = "pyyaml", marker = "extra == 'proxy'", specifier = ">=6.0.3,<7.0" },
     { name = "redisvl", marker = "extra == 'extra-proxy'", specifier = ">=0.4.1,<1.0" },
     { name = "requests", marker = "extra == 'cli'", specifier = ">=2.32.0,<3.0" },
