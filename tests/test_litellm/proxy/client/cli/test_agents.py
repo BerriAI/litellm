@@ -81,14 +81,14 @@ class TestBuildAgentEnv:
         assert "OPENAI_BASE_URL" not in env
         assert "OPENAI_API_KEY" not in env
 
-    def test_anthropic_profile_forces_tool_search_on(self):
+    def test_anthropic_profile_preserves_existing_tool_search(self):
         env = build_agent_env(
             {"ENABLE_TOOL_SEARCH": "false"},
             "http://localhost:4000",
             "sk-key",
             frozenset({"anthropic"}),
         )
-        assert env["ENABLE_TOOL_SEARCH"] == "true"
+        assert env["ENABLE_TOOL_SEARCH"] == "false"
 
     def test_anthropic_profile_drops_existing_api_key(self):
         env = build_agent_env(

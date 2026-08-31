@@ -58,10 +58,10 @@ class TestMergeClaudeSettings:
         assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert merged["apiKeyHelper"] == "new-helper"
 
-    def test_forces_tool_search_on(self):
+    def test_preserves_existing_tool_search(self):
         settings = {"env": {"ENABLE_TOOL_SEARCH": "false"}}
         merged = merge_claude_settings(settings, "http://localhost:4000", "helper")
-        assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
+        assert merged["env"]["ENABLE_TOOL_SEARCH"] == "false"
 
     def test_drops_stray_api_key(self):
         settings = {"env": {"ANTHROPIC_API_KEY": "leaked-key"}}

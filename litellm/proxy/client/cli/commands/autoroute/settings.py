@@ -36,10 +36,10 @@ def merge_claude_settings_static_token(
     raw_env: Final = settings.get(ENV_KEY, {})
     base_env: Final = raw_env if isinstance(raw_env, dict) else {}
     env: Final[dict[str, JsonValue]] = {
+        ENABLE_TOOL_SEARCH_KEY: ENABLE_TOOL_SEARCH_VALUE,
         **base_env,
         ANTHROPIC_BASE_URL_KEY: base_url.rstrip("/"),
         ANTHROPIC_AUTH_TOKEN_KEY: auth_token,
-        ENABLE_TOOL_SEARCH_KEY: ENABLE_TOOL_SEARCH_VALUE,
         **{key: AUTOROUTER_MODEL_NAME for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS},
     }
     env.pop(ANTHROPIC_API_KEY_KEY, None)
