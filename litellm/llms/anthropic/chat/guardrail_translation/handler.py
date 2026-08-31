@@ -13,21 +13,23 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
 
-from typing_extensions import assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
+    is_provider_native_tool_dict,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     anthropic_tool_name,
+    anthropic_tool_names,
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -56,11 +58,14 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
     from litellm.integrations.custom_guardrail import (
         CustomGuardrail,
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
@@ -95,6 +100,48 @@ InputWriteBackTarget = (
 )
 
 
+class _SSEDelta(TypedDict, total=False):
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+    stop_reason: ReadOnly[str | None]
+
+
+class _SSEEventData(TypedDict, total=False):
+    delta: ReadOnly[_SSEDelta]
+
+
+def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
+    return value
+
+
+def _content_block_at(blocks: Sequence[object], index: int) -> object:
+    return blocks[index]
+
+
+@runtime_checkable
+class _ModelDumpBlock(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+@runtime_checkable
+class _TextAttrBlock(Protocol):
+    text: str
+
+
+class _WritableMessage(Protocol):
+    @overload
+    def get(self, key: str, /) -> object | None: ...
+
+    @overload
+    def get(self, key: str, default: object, /) -> object: ...
+
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+def _as_writable(value: _WritableMessage) -> _WritableMessage:
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class ScannedText:
     text: str
@@ -123,7 +170,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _build_streaming_usage_response(
-        responses_so_far: list[Any],
+        responses_so_far: Sequence[object],
         request_data: dict | None,
     ) -> ModelResponse | None:
         chunks: Final = tuple(response for response in responses_so_far if isinstance(response, (str, bytes)))
@@ -141,7 +188,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         exc: "ModifyResponseException",
         stream_started: bool = False,
-        responses_so_far: list[Any] | None = None,
+        responses_so_far: Sequence[object] | None = None,
     ) -> list[bytes]:
         """
         Build an Anthropic SSE sequence delivering the guardrail block message
@@ -159,8 +206,21 @@ class AnthropicMessagesHandler(BaseTranslation):
           would make Anthropic clients reject the stream.
         """
         if stream_started:
-            return self._block_continuation_chunks(exc, responses_so_far or [])
+            return list(self._block_continuation_chunks(exc, responses_so_far or []))
         return self._standalone_block_chunks(exc)
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[Any] | None:
+        from litellm.proxy.common_request_processing import (
+            serialize_http_exception_detail,
+        )
+        from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
+
+        message, _ = serialize_http_exception_detail(exc.detail)
+        return tuple(anthropic_sse_error_frames(message))
 
     def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
         import uuid
@@ -184,7 +244,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return list(FakeAnthropicMessagesStreamIterator(response=block_response))
 
-    def _block_continuation_chunks(self, exc: "ModifyResponseException", responses_so_far: list[Any]) -> list[bytes]:
+    def _block_continuation_chunks(
+        self, exc: "ModifyResponseException", responses_so_far: Sequence[object]
+    ) -> Sequence[bytes]:
         """Continue an already-started message: close the open content block,
         append the block message as a new text block, then end the message --
         without a second message_start."""
@@ -196,7 +258,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         def _sse(event_type: str, payload: dict) -> bytes:
             return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
 
-        output_tokens: Final = blocked_response_usage(getattr(exc, "original_response", None))["output_tokens"]
+        output_tokens: Final = blocked_response_usage(getattr(exc, "original_response", None)).get("output_tokens", 0)
         open_index, max_index = self._content_block_state(responses_so_far)
         new_index: Final = (max_index + 1) if max_index is not None else 0
         chunks: list[bytes] = []
@@ -234,7 +296,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _content_block_state(
-        responses_so_far: list[Any],
+        responses_so_far: Sequence[object],
     ) -> tuple[int | None, int | None]:
         """From the SSE chunks already sent to the client, return (open
         content-block index or None, highest content-block index seen or None).
@@ -260,7 +322,20 @@ class AnthropicMessagesHandler(BaseTranslation):
         return open_index, max_index
 
     @staticmethod
-    def _iter_sse_events(item: Any) -> list[dict]:
+    def _parse_sse_data_line(raw_line: str) -> tuple[Mapping[str, object], ...]:
+        line: Final = raw_line.strip()
+        if not line.startswith("data:"):
+            return ()
+        try:
+            parsed: Final[object] = json.loads(line[len("data:") :].strip())
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(parsed, dict):
+            return ()
+        return (_as_str_mapping(parsed),)
+
+    @staticmethod
+    def _iter_sse_events(item: object) -> Sequence[Mapping[str, object]]:
         """Yield the event-data dicts in one stream chunk.
 
         Handles both formats this stream can carry (see
@@ -268,22 +343,15 @@ class AnthropicMessagesHandler(BaseTranslation):
         several events separated by a blank line -- and an already-parsed event
         ``dict``."""
         if isinstance(item, dict):
-            return [item]
+            return (_as_str_mapping(item),)
         if not isinstance(item, (bytes, bytearray)):
-            return []
-        events: Final[list[dict]] = []
-        for block in item.decode("utf-8", errors="replace").split("\n\n"):
-            for line in block.split("\n"):
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                try:
-                    parsed = json.loads(line[len("data:") :].strip())
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(parsed, dict):
-                    events.append(parsed)
-        return events
+            return ()
+        return tuple(
+            event
+            for block in item.decode("utf-8", errors="replace").split("\n\n")
+            for line in block.split("\n")
+            for event in AnthropicMessagesHandler._parse_sse_data_line(line)
+        )
 
     def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
@@ -315,8 +383,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-    ) -> Any:
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> Mapping[str, object]:
         """
         Process input messages by applying guardrails to text content.
         """
@@ -357,7 +425,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         structured_messages: Final = [full_structured_messages[index] for index in scoped_message_indices]
 
         tools_to_check: Final[list[ChatCompletionToolParam]] = (
-            [] if scan_only_tool_results else chat_completion_compatible_request.get("tools", [])
+            []
+            if scan_only_tool_results
+            else [
+                tool
+                for tool in chat_completion_compatible_request.get("tools", [])
+                if not is_provider_native_tool_dict(tool)
+            ]
         )
 
         # Step 1: Extract all text content and images
@@ -416,7 +490,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                         tool_name=anthropic_tool_name,
                     )
                     if scan_only_tool_results
-                    else anthropic_tools
+                    else [
+                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
+                        *anthropic_tools,
+                    ]
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
@@ -467,8 +544,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _openai_system_message_to_anthropic(
-        message: dict[str, Any],
-    ) -> dict[str, Any] | None:  # mutable-ok: API message payload
+        message: Mapping[str, object],
+    ) -> dict[str, object] | None:  # mutable-ok: API message payload
         """Convert an OpenAI system message to the client's Anthropic-shaped entry."""
         content: Final = message.get("content")
         if isinstance(content, str):
@@ -477,14 +554,14 @@ class AnthropicMessagesHandler(BaseTranslation):
             )  # mutable-ok: API message payload
         if not isinstance(content, list):
             return None
-        blocks: Final[list[dict[str, Any]]] = []  # mutable-ok: API message payload
+        blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "text":
                 continue
             text = block.get("text")
             if not isinstance(text, str) or not text:
                 continue
-            anthropic_block: dict[str, Any] = {  # mutable-ok: API message payload
+            anthropic_block: dict[str, object] = {  # mutable-ok: API message payload
                 "type": "text",
                 "text": text,
             }  # mutable-ok: API message payload
@@ -495,6 +572,39 @@ class AnthropicMessagesHandler(BaseTranslation):
         return (
             {"role": "system", "content": blocks} if blocks else None  # mutable-ok: API message payload
         )  # mutable-ok: API message payload
+
+    @staticmethod
+    def _fold_leading_systems_into_top_level(
+        data: dict[str, object],  # mutable-ok: API message payload
+        leading_systems: Sequence[object],
+        include_existing_system: bool,
+    ) -> None:
+        """Deliver leading system rows through Anthropic's top-level system param, which rejects them in messages."""
+        existing: Final = data.get("system") if include_existing_system else None
+        existing_blocks: Final[list[object]] = (  # mutable-ok: API message payload
+            [{"type": "text", "text": existing}]
+            if isinstance(existing, str) and existing
+            else list(existing)
+            if isinstance(existing, list)
+            else []
+        )
+        converted_rows: Final = tuple(
+            AnthropicMessagesHandler._openai_system_message_to_anthropic(message)
+            for message in leading_systems
+            if isinstance(message, dict)
+        )
+        folded: Final[list[object]] = existing_blocks + [  # mutable-ok: API message payload
+            block
+            for row in converted_rows
+            if row is not None
+            for block in (
+                [{"type": "text", "text": row["content"]}] if isinstance(row["content"], str) else row["content"]
+            )
+        ]
+        if folded:
+            data["system"] = folded  # rebind-ok: write-back mutates the request payload in place
+        else:
+            data.pop("system", None)
 
     @staticmethod
     def _is_hoisted_top_level_system(message: object, hoisted_system_message: object) -> bool:
@@ -514,7 +624,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _defer_systems_inside_tool_exchanges(
-        structured_messages: list,  # mutable-ok: API message payload
+        structured_messages: Sequence[Mapping[str, object]],
     ) -> list:
         """Hold a system row until the tool exchange around it completes so the call/result pair converts together."""
         from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
@@ -572,9 +682,24 @@ class AnthropicMessagesHandler(BaseTranslation):
                 )
 
         ordered: Final = AnthropicMessagesHandler._defer_systems_inside_tool_exchanges(structured_messages)
+        leading_count: Final = next(
+            (index for index, message in enumerate(ordered) if not _is_system(message)),
+            len(ordered),
+        )
+        leading_systems: Final = ordered[:leading_count]
+        hoisted_in_leading: Final = any(
+            AnthropicMessagesHandler._is_hoisted_top_level_system(message, hoisted_system_message)
+            for message in leading_systems
+        )
+        if leading_systems and not (leading_count == 1 and hoisted_in_leading):
+            AnthropicMessagesHandler._fold_leading_systems_into_top_level(
+                data,
+                leading_systems,
+                include_existing_system=hoisted_system_message is None,
+            )
         run: Final[list] = []  # mutable-ok: API message payload
-        hoisted_dropped = False  # rebind-ok: flips once the hoisted prompt is dropped
-        for message in ordered:
+        hoisted_dropped = hoisted_in_leading  # rebind-ok: flips once the hoisted prompt is dropped
+        for message in ordered[leading_count:]:
             if not _is_system(message):
                 run.append(message)
                 continue
@@ -602,7 +727,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _extract_midturn_system_text(
-        message: dict[str, Any],  # mutable-ok: API message payload
+        message: Mapping[str, object],
         msg_idx: int,
     ) -> ExtractedInput:
         """Match the adapter's filtering so positional guardrail write-back stays aligned."""
@@ -626,17 +751,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
-        """Extract tool names from Anthropic messages request (tools[].name)."""
-        names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
-            if isinstance(tool, dict) and tool.get("name"):
-                names.append(str(tool["name"]))
-        return names
+        """Extract every tool name in an Anthropic messages request: tools[].name, plus
+        tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
+        return [name for tool in data.get("tools") or [] for name in anthropic_tool_names(tool)]
 
     @classmethod
     def _extract_input_text_and_images(
         cls,
-        message: dict[str, Any],
+        message: Mapping[str, object],
         msg_idx: int,
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
@@ -696,7 +818,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         if scan_only_tool_results:
             return EMPTY_EXTRACTED_INPUT
 
-        text_str: Final = content_item.get("text", None)
+        text_str: Final[str | None] = content_item.get("text")
         return ExtractedInput(
             scanned=(
                 () if text_str is None else (ScannedText(text_str, ContentBlockTextTarget(msg_idx, content_idx)),)
@@ -707,7 +829,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     @classmethod
     def _extract_tool_result(
         cls,
-        content_item: Mapping[str, Any],
+        content_item: Mapping[str, object],
         msg_idx: int,
         content_idx: int,
     ) -> ExtractedInput:
@@ -736,7 +858,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     @staticmethod
-    def _image_sources(block: Mapping[str, Any]) -> tuple[str, ...]:
+    def _image_sources(block: Mapping[str, object]) -> tuple[str, ...]:
         source: Final = block.get("source")
         if not isinstance(source, Mapping):
             return ()
@@ -746,7 +868,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input(
         self,
-        messages: list[dict[str, Any]],
+        messages: Sequence[_WritableMessage],
         responses: list[str],
         scanned: tuple[ScannedText, ...],
     ) -> None:
@@ -788,10 +910,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         response: "AnthropicMessagesResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-        user_api_key_dict: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> "AnthropicMessagesResponse":
         """
         Process output response by applying guardrails to text content and tool calls.
 
@@ -869,10 +991,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         responses_so_far: list[Any],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-        user_api_key_dict: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
-    ) -> list[Any]:
+    ) -> Sequence[object]:
         """
         Process output streaming response by applying guardrails to text content.
 
@@ -950,8 +1072,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     def _prepare_request_data(
         self,
         request_data: dict | None,
-        response: Any,
-        user_api_key_dict: Any | None,
+        response: object,
+        user_api_key_dict: "UserAPIKeyAuth | None",
         key: str,
     ) -> dict:
         """Ensure request_data has the response/responses_so_far key and metadata."""
@@ -968,7 +1090,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         return request_data
 
     @staticmethod
-    def _get_response_content(response: Any) -> list[Any]:
+    def _get_response_content(response: object) -> Sequence[object]:
         """Extract content list from a dict or object response."""
         if isinstance(response, dict):
             return response.get("content", []) or []
@@ -978,7 +1100,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def _extract_from_content_blocks(
         self,
-        response_content: list[Any],
+        response_content: Sequence[object],
         texts_to_check: list[str],
         images_to_check: list[str],
         task_mappings: list[tuple[int, int | None]],
@@ -986,21 +1108,10 @@ class AnthropicMessagesHandler(BaseTranslation):
     ) -> None:
         """Extract text, images, and tool calls from content blocks."""
         for content_idx, content_block in enumerate(response_content):
-            block_dict: dict[str, Any] = {}
-            if isinstance(content_block, dict):
-                block_type = content_block.get("type")
-                block_dict = cast(dict[str, Any], content_block)
-            elif hasattr(content_block, "type"):
-                block_type = getattr(content_block, "type", None)
-                if hasattr(content_block, "model_dump"):
-                    block_dict = content_block.model_dump()
-                else:
-                    block_dict = {
-                        "type": block_type,
-                        "text": getattr(content_block, "text", None),
-                    }
-            else:
+            fields = self._output_block_fields(content_block)
+            if fields is None:
                 continue
+            block_type, block_dict = fields
 
             if block_type in ["text", "tool_use"]:
                 self._extract_output_text_and_images(
@@ -1013,11 +1124,26 @@ class AnthropicMessagesHandler(BaseTranslation):
                 )
 
     @staticmethod
+    def _output_block_fields(content_block: object) -> "tuple[object, Mapping[str, object]] | None":
+        if isinstance(content_block, dict):
+            block_dict: Final = _as_str_mapping(content_block)
+            return block_dict.get("type"), block_dict
+        if not hasattr(content_block, "type"):
+            return None
+        block_type: Final = getattr(content_block, "type", None)
+        if isinstance(content_block, _ModelDumpBlock):
+            return block_type, content_block.model_dump()
+        return block_type, {
+            "type": block_type,
+            "text": getattr(content_block, "text", None),
+        }
+
+    @staticmethod
     def _build_guardrail_inputs(
         texts_to_check: list[str],
         images_to_check: list[str],
         tool_calls_to_check: list["ChatCompletionToolCallChunk"],
-        response: Any,
+        response: object,
     ) -> "GenericGuardrailAPIInputs":
         """Build GenericGuardrailAPIInputs with optional images, tool calls, model."""
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
@@ -1034,7 +1160,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             inputs["model"] = response_model
         return inputs
 
-    def get_streaming_string_so_far(self, responses_so_far: list[Any]) -> str:
+    def get_streaming_string_so_far(self, responses_so_far: Sequence[object]) -> str:
         """
         Parse streaming responses and extract accumulated text content.
 
@@ -1105,7 +1231,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # Only process content_block_delta events
                 if event_type == "content_block_delta" and data_line:
                     try:
-                        data = json.loads(data_line)
+                        data: _SSEEventData = json.loads(data_line)
                         delta = data.get("delta", {})
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
@@ -1117,7 +1243,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return text
 
-    def _check_streaming_has_ended(self, responses_so_far: list[Any]) -> bool:
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """
         Check if streaming response has ended by looking for non-null stop_reason.
 
@@ -1168,7 +1294,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                         # Check for message_delta event with stop_reason
                         if event_type == "message_delta" and data_line:
                             try:
-                                data = json.loads(data_line)
+                                data: _SSEEventData = json.loads(data_line)
                                 delta = data.get("delta", {})
                                 stop_reason = delta.get("stop_reason")
                                 if stop_reason is not None:
@@ -1212,7 +1338,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def _extract_output_text_and_images(
         self,
-        content_block: dict[str, Any],
+        content_block: Mapping[str, object],
         content_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
@@ -1235,7 +1361,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 task_mappings.append((content_idx, None))
 
         # Extract tool calls
-        elif content_type == "tool_use":
+        elif content_type == "tool_use" and isinstance(content_block, dict):
             tool_call: Final = AnthropicConfig.convert_tool_use_to_openai_format(
                 anthropic_tool_content=content_block,
                 index=content_idx,
@@ -1260,7 +1386,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             content_idx = cast(int, mapping[0])
 
             # Handle both dict and object responses
-            response_content: list[Any] = []
+            response_content: Sequence[object] = []
             if isinstance(response, dict):
                 response_content = response.get("content", []) or []
             elif hasattr(response, "content"):
@@ -1276,14 +1402,15 @@ class AnthropicMessagesHandler(BaseTranslation):
             if content_idx >= len(response_content):
                 continue
 
-            content_block = response_content[content_idx]
+            content_block = _content_block_at(response_content, content_idx)
 
             # Verify it's a text block and update the text field
             # Handle both dict and Pydantic object content blocks
             if isinstance(content_block, dict):
-                if content_block.get("type") == "text":
-                    cast(dict[str, Any], content_block)["text"] = guardrail_response
+                block = _as_writable(content_block)
+                if block.get("type") == "text":
+                    block["text"] = guardrail_response
             elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
                 # Update Pydantic object's text attribute
-                if hasattr(content_block, "text"):
+                if isinstance(content_block, _TextAttrBlock):
                     content_block.text = guardrail_response

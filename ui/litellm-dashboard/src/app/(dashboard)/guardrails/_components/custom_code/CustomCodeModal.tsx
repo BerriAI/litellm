@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -13,6 +13,7 @@ import {
   ComboboxEmpty,
   ComboboxItem,
   ComboboxList,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -190,6 +191,7 @@ interface CustomCodeModalProps {
 }
 
 const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onSuccess, accessToken, editData }) => {
+  const anchor = useComboboxAnchor();
   const isEditMode = !!editData;
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
@@ -362,15 +364,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   // Save guardrail (create or update)
   const handleSave = async () => {
     if (!guardrailName.trim()) {
-      NotificationsManager.fromBackend("Please enter a guardrail name");
+      toast.fromError("Please enter a guardrail name");
       return;
     }
     if (!code.trim()) {
-      NotificationsManager.fromBackend("Please enter custom code");
+      toast.fromError("Please enter custom code");
       return;
     }
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -398,7 +400,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         }
 
         await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
-        NotificationsManager.success("Custom code guardrail updated successfully");
+        toast.success("Custom code guardrail updated successfully");
       } else {
         // Create new guardrail
         const guardrailData = {
@@ -413,13 +415,13 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         };
 
         await createGuardrailCall(accessToken, guardrailData);
-        NotificationsManager.success("Custom code guardrail created successfully");
+        toast.success("Custom code guardrail created successfully");
       }
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Failed to save guardrail:", error);
-      NotificationsManager.fromBackend(
+      toast.fromError(
         `Failed to ${isEditMode ? "update" : "create"} guardrail: ` +
           (error instanceof Error ? error.message : String(error)),
       );
@@ -524,18 +526,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
               multiple
             >
-              <ComboboxChips className="w-full">
+              <ComboboxChips render={<div ref={anchor} />} className="w-full">
                 {selectedModeOptions.map((option) => (
                   <ComboboxChip key={option.value} aria-label={option.label}>
                     {option.label}
                   </ComboboxChip>
                 ))}
-                <ComboboxChipsInput
-                  className="border-0 bg-transparent"
-                  placeholder={mode.length === 0 ? "Select modes" : undefined}
-                />
+                <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
               </ComboboxChips>
-              <ComboboxContent>
+              <ComboboxContent anchor={anchor}>
                 <ComboboxEmpty>No matching modes</ComboboxEmpty>
                 <ComboboxList>
                   {(option: ModeOption) => (
@@ -557,7 +556,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               <SelectTrigger className="w-full" aria-label="Template">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 <SelectGroup>
                   <SelectLabel>STANDARD</SelectLabel>
                   {TEMPLATE_ITEMS.map((template) => (
@@ -607,7 +606,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 }}
               >
                 {Array.from({ length: Math.max(lineCount, 20) }, (_, i) => (
-                  <div key={i + 1} className="text-gray-500 h-[22.4px]">
+                  <div key={i + 1} className="text-muted-foreground h-[22.4px]">
                     {i + 1}
                   </div>
                 ))}
@@ -650,21 +649,21 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_call.data, null, 2))}
-                          className="px-2 py-1 text-xs rounded-sm border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors"
+                          className="px-2 py-1 text-xs rounded-sm border border-warning/20 bg-warning/10 text-warning hover:bg-warning/15 transition-colors"
                         >
                           Pre-call
                         </button>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_mcp_call.data, null, 2))}
-                          className="px-2 py-1 text-xs rounded-sm border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
+                          className="px-2 py-1 text-xs rounded-sm border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors dark:border-purple-800 dark:bg-purple-950 dark:text-purple-300 dark:hover:bg-purple-900"
                         >
                           Pre MCP
                         </button>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.post_call.data, null, 2))}
-                          className="px-2 py-1 text-xs rounded-sm border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+                          className="px-2 py-1 text-xs rounded-sm border border-success/20 bg-success/10 text-success hover:bg-success/15 transition-colors"
                         >
                           Post-call
                         </button>
@@ -679,16 +678,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                           <strong>images</strong>: Base64 images (vision)
                         </div>
                         <div>
-                          <strong>tools</strong>: Tool definitions <span className="text-orange-600">(pre_call)</span>,
-                          MCP as OpenAI tool <span className="text-purple-600">(pre_mcp_call)</span>
+                          <strong>tools</strong>: Tool definitions <span className="text-warning">(pre_call)</span>, MCP
+                          as OpenAI tool <span className="text-purple-600">(pre_mcp_call)</span>
                         </div>
                         <div>
-                          <strong>tool_calls</strong>: LLM tool calls{" "}
-                          <span className="text-green-600">(post_call)</span>
+                          <strong>tool_calls</strong>: LLM tool calls <span className="text-success">(post_call)</span>
                         </div>
                         <div>
                           <strong>structured_messages</strong>: Full messages{" "}
-                          <span className="text-orange-600">(pre_call)</span>
+                          <span className="text-warning">(pre_call)</span>
                         </div>
                         <div>
                           <strong>model</strong>: Model name (always)
@@ -712,12 +710,12 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                       <div
                         className={`flex items-center gap-2 text-sm ${
                           testResult.error
-                            ? "text-red-600"
+                            ? "text-destructive"
                             : testResult.action === "allow"
-                              ? "text-green-600"
+                              ? "text-success"
                               : testResult.action === "block"
-                                ? "text-orange-600"
-                                : "text-blue-600"
+                                ? "text-warning"
+                                : "text-info"
                         }`}
                       >
                         {testResult.error ? (
@@ -758,10 +756,10 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               </CollapsibleContent>
             </Collapsible>
             {/* Contribution CTA Banner */}
-            <div className="mt-3 flex shrink-0 items-center justify-between rounded-lg border border-blue-200 bg-linear-to-r from-blue-50 to-indigo-50 p-4">
+            <div className="mt-3 flex shrink-0 items-center justify-between rounded-lg border border-info/20 bg-linear-to-r from-blue-50 to-indigo-50 p-4 dark:from-blue-950 dark:to-indigo-950">
               <div className="flex items-center gap-3">
-                <div className="rounded-full bg-blue-100 p-2">
-                  <Users className="size-5 text-blue-600" />
+                <div className="rounded-full bg-info/15 p-2">
+                  <Users className="size-5 text-info" />
                 </div>
                 <div>
                   <div className="text-sm font-medium">Built a useful guardrail?</div>

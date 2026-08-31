@@ -63,7 +63,7 @@ describe("MultiExportDropdown", () => {
 
   it("should not render anything when no entries have results", () => {
     const { container } = renderWithProviders(<MultiExportDropdown multiResult={makeMultiResult(false)} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render the Export button when at least one entry has a result", () => {

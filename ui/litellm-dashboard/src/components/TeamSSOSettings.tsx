@@ -14,6 +14,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { getDefaultTeamSettings, updateDefaultTeamSettings, Organization } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 import OrganizationDropdown from "./common_components/OrganizationDropdown";
 
@@ -110,6 +111,7 @@ const DEFAULT_VALUES: SettingsValues = {
 };
 
 const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
+  const anchor = useComboboxAnchor();
   const [loading, setLoading] = useState<boolean>(true);
   const [values, setValues] = useState<SettingsValues>(DEFAULT_VALUES);
   const [isEditing, setIsEditing] = useState<boolean>(false);
@@ -133,7 +135,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
       } catch (error) {
         console.error("Error fetching team SSO settings:", error);
         setFetchError(true);
-        NotificationsManager.fromBackend("Failed to fetch team settings");
+        toast.fromError("Failed to fetch team settings");
       } finally {
         setLoading(false);
       }
@@ -152,10 +154,10 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
       setValues(newValues);
       setEditedValues(newValues);
       setIsEditing(false);
-      NotificationsManager.success("Default team settings updated successfully");
+      toast.success("Default team settings updated successfully");
     } catch (error) {
       console.error("Error updating team settings:", error);
-      NotificationsManager.fromBackend("Failed to update team settings");
+      toast.fromError("Failed to update team settings");
     } finally {
       setSaving(false);
     }
@@ -372,7 +374,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                   value={editedValues.team_member_permissions || []}
                   onValueChange={(permissions: string[]) => update("team_member_permissions", permissions)}
                 >
-                  <ComboboxChips>
+                  <ComboboxChips render={<div ref={anchor} />}>
                     <ComboboxValue>
                       {(permissions: string[]) =>
                         permissions.map((permission) => (
@@ -382,13 +384,9 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
                         ))
                       }
                     </ComboboxValue>
-                    <ComboboxChipsInput
-                      className="border-0 bg-transparent"
-                      placeholder="Select permissions"
-                      aria-label="Team Member Permissions"
-                    />
+                    <ComboboxChipsInput placeholder="Select permissions" aria-label="Team Member Permissions" />
                   </ComboboxChips>
-                  <ComboboxContent>
+                  <ComboboxContent anchor={anchor}>
                     <ComboboxList>
                       {(permission: string) => (
                         <ComboboxItem key={permission} value={permission}>

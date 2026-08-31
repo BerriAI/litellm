@@ -79,7 +79,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
 
   return (
     <div className="relative m-0 p-0">
-      <div className="absolute bottom-0 left-[9px] top-[18px] w-px bg-gray-100 opacity-80" aria-hidden="true" />
+      <div className="absolute bottom-0 left-[9px] top-[18px] w-px bg-muted opacity-80" aria-hidden="true" />
 
       <div className="space-y-1">
         {toolsEvent && (
@@ -91,7 +91,10 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
           >
             <div>
               {toolsEvent.item?.tools?.map((tool, index) => (
-                <div key={index} className="relative z-[1] bg-white font-mono text-[13px] leading-[18px] text-gray-600">
+                <div
+                  key={index}
+                  className="relative z-raised bg-card font-mono text-[13px] leading-[18px] text-muted-foreground"
+                >
                   {tool.name}
                 </div>
               ))}
@@ -110,20 +113,20 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
               onOpenChange={(open) => toggleKey(key, open)}
             >
               <div>
-                <div className="relative z-[1] mb-3 bg-white last:mb-0">
-                  <div className="mb-1 text-[13px] font-medium text-gray-500">Request</div>
-                  <div className="rounded-md border border-gray-100 bg-gray-50 p-2 text-xs">
+                <div className="relative z-raised mb-3 bg-card last:mb-0">
+                  <div className="mb-1 text-[13px] font-medium text-muted-foreground">Request</div>
+                  <div className="rounded-md border border-border bg-muted p-2 text-xs">
                     {callEvent.item?.arguments && (
-                      <pre className="m-0 whitespace-pre-wrap break-words font-mono text-gray-700">
+                      <pre className="m-0 whitespace-pre-wrap break-words font-mono text-foreground">
                         {formatArguments(callEvent.item.arguments)}
                       </pre>
                     )}
                   </div>
                 </div>
 
-                <div className="relative z-[1] mb-3 bg-white last:mb-0">
-                  <div className="flex items-center text-[13px] text-gray-500">
-                    <span className="mr-1.5 font-bold text-emerald-500" aria-hidden="true">
+                <div className="relative z-raised mb-3 bg-card last:mb-0">
+                  <div className="flex items-center text-[13px] text-muted-foreground">
+                    <span className="mr-1.5 font-bold text-success" aria-hidden="true">
                       ✓
                     </span>
                     Approved
@@ -131,9 +134,9 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
                 </div>
 
                 {callEvent.item?.output && (
-                  <div className="relative z-[1] mb-3 bg-white last:mb-0">
-                    <div className="mb-1 text-[13px] font-medium text-gray-500">Response</div>
-                    <div className="whitespace-pre-wrap font-mono text-[13px] leading-normal text-gray-700">
+                  <div className="relative z-raised mb-3 bg-card last:mb-0">
+                    <div className="mb-1 text-[13px] font-medium text-muted-foreground">Response</div>
+                    <div className="whitespace-pre-wrap font-mono text-[13px] leading-normal text-foreground">
                       {callEvent.item.output}
                     </div>
                   </div>
@@ -158,9 +161,12 @@ interface MCPEventPanelProps {
 function MCPEventPanel({ title, open, onOpenChange, children }: MCPEventPanelProps) {
   return (
     <Collapsible open={open} onOpenChange={onOpenChange}>
-      <CollapsibleTrigger className="relative flex min-h-5 w-full items-center gap-1 pl-5 text-left text-sm font-normal leading-5 text-gray-400 hover:text-gray-500">
+      <CollapsibleTrigger className="relative flex min-h-5 w-full items-center gap-1 pl-5 text-left text-sm font-normal leading-5 text-muted-foreground hover:text-foreground">
         <ChevronRight
-          className={cn("absolute left-0.5 top-0.5 size-4 text-gray-400 transition-transform", open && "rotate-90")}
+          className={cn(
+            "absolute left-0.5 top-0.5 size-4 text-muted-foreground transition-transform",
+            open && "rotate-90",
+          )}
           aria-hidden="true"
         />
         {title}

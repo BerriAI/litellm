@@ -3,14 +3,9 @@ Unit tests for StandardLoggingPayloadSetup
 """
 
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 from datetime import datetime as dt_object
 import time
 import pytest
@@ -380,7 +375,7 @@ def test_cleanup_timestamps():
     assert all(isinstance(x, float) for x in result)
 
     # Test invalid input
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="start_time is required, got=invalid of type <class 'str'>"):
         StandardLoggingPayloadSetup.cleanup_timestamps(
             "invalid", end_float, completion_float
         )

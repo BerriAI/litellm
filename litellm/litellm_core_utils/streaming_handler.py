@@ -6,13 +6,14 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
@@ -92,7 +93,7 @@ def print_verbose(print_statement: object):
 
 @dataclass(frozen=True, slots=True)
 class _ProviderChunkParsed:
-    response_obj: dict[str, Any]
+    response_obj: dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +156,75 @@ class _TextCompletionChoiceLike(Protocol):
     finish_reason: str | None
 
 
+class _VertexFunctionCallLike(Protocol):
+    name: str
+    args: Mapping[str, Iterable[object]]
+
+
+class _VertexPartLike(Protocol):
+    function_call: _VertexFunctionCallLike
+
+
+class _VertexContentLike(Protocol):
+    parts: Sequence[_VertexPartLike]
+
+
+class _VertexFinishReasonLike(Protocol):
+    name: str
+
+
+class _VertexCandidateLike(Protocol):
+    content: _VertexContentLike
+    finish_reason: _VertexFinishReasonLike
+
+
+class _VertexChunkLike(Protocol):
+    text: str
+    candidates: Sequence[_VertexCandidateLike]
+
+
+class _ParsedChunkHiddenParams(BaseModel):
+    provider_specific_fields: Mapping[str, object] | None = None
+
+
+def _provider_response_model(chunk: object) -> str | None:
+    model: Final[object] = chunk.get("model") if isinstance(chunk, Mapping) else getattr(chunk, "model", None)
+    return model if isinstance(model, str) and model else None
+
+
+def _parsed_provider_hidden_params(hidden: object) -> _ParsedChunkHiddenParams | None:
+    if not isinstance(hidden, dict):
+        return None
+    try:
+        return _ParsedChunkHiddenParams.model_validate(hidden)
+    except ValidationError:
+        return None
+
+
+def _provider_hidden_params(
+    chunk: object,
+    provider_response_model: str | None,
+) -> Mapping[str, object] | None:
+    hidden: Final[object] = getattr(chunk, "_hidden_params", None)
+    parsed: Final = _parsed_provider_hidden_params(hidden)
+    provider_specific_fields: Final[object | None] = (
+        dict(parsed.provider_specific_fields)  # mutable-ok: stream assembly merges provider metadata into this dict
+        if parsed is not None and parsed.provider_specific_fields
+        else None
+    )
+    params: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            key: value
+            for key, value in (
+                ("provider_response_model", provider_response_model),
+                ("provider_specific_fields", provider_specific_fields),
+            )
+            if value is not None
+        }
+    )
+    return params or None
+
+
 class CustomStreamWrapper:
     def __init__(
         self,
@@ -164,7 +234,7 @@ class CustomStreamWrapper:
         custom_llm_provider: str | None = None,
         stream_options=None,
         make_call: Callable | None = None,
-        _response_headers: dict | None = None,
+        _response_headers: dict | httpx.Headers | None = None,
     ):
         self.model = model
         self.make_call = make_call
@@ -184,6 +254,7 @@ class CustomStreamWrapper:
         self.thinking_content = ""
 
         self.system_fingerprint: str | None = None
+        self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
@@ -291,13 +362,13 @@ class CustomStreamWrapper:
         that has since taken over the same Task/thread's context.
         """
         try:
-            logging_obj: Final = getattr(self, "logging_obj", None)
+            logging_obj: Final[object | None] = getattr(self, "logging_obj", None)
             if logging_obj is None:
                 return
             method_name: Final = (
                 "_restore_correlation_context_if_unclaimed" if guarded else "_restore_correlation_context"
             )
-            restore: Final = getattr(logging_obj, method_name, None)
+            restore: Final[Callable[[], object] | None] = getattr(logging_obj, method_name, None)
             if restore is not None:
                 restore()
         except Exception as restore_error:  # noqa: BLE001  # best-effort cleanup; must not raise into the caller
@@ -774,7 +845,9 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def model_response_creator(self, chunk: dict | None = None, hidden_params: dict | None = None):
+    def model_response_creator(
+        self, chunk: dict | None = None, hidden_params: Mapping[str, object] | None = None
+    ) -> ModelResponseStream:
         _model: Final = self._cached_model_name
         _logging_obj_llm_provider: Final = self._cached_logging_llm_provider
 
@@ -1215,7 +1288,7 @@ class CustomStreamWrapper:
                 for key, value in anthropic_response_obj["provider_specific_fields"].items():
                     setattr(model_response, key, value)
 
-            response_obj = cast(dict[str, Any], anthropic_response_obj)
+            response_obj = cast(dict[str, object], anthropic_response_obj)
         elif self.model == "replicate" or self.custom_llm_provider == "replicate":
             response_obj = self.handle_replicate_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
@@ -1261,18 +1334,18 @@ class CustomStreamWrapper:
                         raise Exception("An unknown error occurred with the stream")
                     self.received_finish_reason = "stop"
         elif self.custom_llm_provider == "vertex_ai" and not isinstance(chunk, ModelResponseStream):
-            chunk = cast(Any, chunk)
+            vertex_chunk: Final = cast(_VertexChunkLike, chunk)
             import proto
 
-            if hasattr(chunk, "candidates") is True:
+            if hasattr(vertex_chunk, "candidates") is True:
                 try:
                     try:
-                        completion_obj["content"] = chunk.text
+                        completion_obj["content"] = vertex_chunk.text
                     except Exception as e:
                         original_exception: Final = e
                         if "Part has no text." in str(e):
                             ## check for function calling
-                            function_call: Final = chunk.candidates[0].content.parts[0].function_call
+                            function_call: Final = vertex_chunk.candidates[0].content.parts[0].function_call
 
                             args_dict: Final = {}
 
@@ -1311,15 +1384,15 @@ class CustomStreamWrapper:
                         else:
                             raise original_exception
                     if (
-                        hasattr(chunk.candidates[0], "finish_reason")
-                        and chunk.candidates[0].finish_reason.name != "FINISH_REASON_UNSPECIFIED"
+                        hasattr(vertex_chunk.candidates[0], "finish_reason")
+                        and vertex_chunk.candidates[0].finish_reason.name != "FINISH_REASON_UNSPECIFIED"
                     ):  # every non-final chunk in vertex ai has this
-                        self.received_finish_reason = map_finish_reason(chunk.candidates[0].finish_reason.name)
+                        self.received_finish_reason = map_finish_reason(vertex_chunk.candidates[0].finish_reason.name)
                 except Exception:
-                    if chunk.candidates[0].finish_reason.name == "SAFETY":
-                        raise Exception(f"The response was blocked by VertexAI. {chunk}")
+                    if vertex_chunk.candidates[0].finish_reason.name == "SAFETY":
+                        raise Exception(f"The response was blocked by VertexAI. {vertex_chunk}")
             else:
-                completion_obj["content"] = str(chunk)
+                completion_obj["content"] = str(vertex_chunk)
         elif self.custom_llm_provider == "petals":
             if self.completion_stream is None or len(self.completion_stream) == 0:
                 if self.received_finish_reason is not None:
@@ -1357,20 +1430,21 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
             if response_obj["usage"] is not None:
+                _text_completion_usage: Final[Usage] = response_obj["usage"]
                 setattr(
                     model_response,
                     "usage",
                     litellm.Usage(
-                        prompt_tokens=response_obj["usage"].prompt_tokens,
-                        completion_tokens=response_obj["usage"].completion_tokens,
-                        total_tokens=response_obj["usage"].total_tokens,
+                        prompt_tokens=_text_completion_usage.prompt_tokens,
+                        completion_tokens=_text_completion_usage.completion_tokens,
+                        total_tokens=_text_completion_usage.total_tokens,
                     ),
                 )
         elif self.custom_llm_provider == "text-completion-codestral":
             if not isinstance(chunk, str):
                 raise ValueError(f"chunk is not a string: {chunk}")
             response_obj = cast(
-                dict[str, Any],
+                dict[str, object],
                 litellm.CodestralTextCompletionConfig()._chunk_parser(chunk),
             )
             completion_obj["content"] = response_obj["text"]
@@ -1395,15 +1469,17 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "cached_response":
-            chunk = cast(ModelResponseStream, chunk)
-            chunk_finish_reason: Final = chunk.choices[0].finish_reason
+            cached_chunk: Final = cast(ModelResponseStream, chunk)
+            chunk_finish_reason: Final = cached_chunk.choices[0].finish_reason
             response_obj = {
-                "text": chunk.choices[0].delta.content,
+                "text": cached_chunk.choices[0].delta.content,
                 "is_finished": chunk_finish_reason is not None,
                 "finish_reason": chunk_finish_reason,
-                "original_chunk": chunk,
+                "original_chunk": cached_chunk,
                 "tool_calls": (
-                    chunk.choices[0].delta.tool_calls if hasattr(chunk.choices[0].delta, "tool_calls") else None
+                    cached_chunk.choices[0].delta.tool_calls
+                    if hasattr(cached_chunk.choices[0].delta, "tool_calls")
+                    else None
                 ),
             }
 
@@ -1411,11 +1487,11 @@ class CustomStreamWrapper:
             if response_obj["tool_calls"] is not None:
                 completion_obj["tool_calls"] = response_obj["tool_calls"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
-            if hasattr(chunk, "id"):
-                model_response.id = chunk.id
-                self.response_id = chunk.id
-            if hasattr(chunk, "system_fingerprint"):
-                self.system_fingerprint = chunk.system_fingerprint
+            if hasattr(cached_chunk, "id"):
+                model_response.id = cached_chunk.id
+                self.response_id = cached_chunk.id
+            if hasattr(cached_chunk, "system_fingerprint"):
+                self.system_fingerprint = cached_chunk.system_fingerprint
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         else:  # openai / azure chat model
@@ -1474,7 +1550,12 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk: Any):
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
-        model_response = self.model_response_creator()
+        provider_response_model: Final = _provider_response_model(chunk)
+        if provider_response_model is not None:
+            self._provider_response_model = provider_response_model
+        model_response = self.model_response_creator(
+            hidden_params=_provider_hidden_params(chunk, self._provider_response_model)
+        )
         response_obj: dict[str, Any] = {}
         try:
             # return this for all models
@@ -1563,6 +1644,7 @@ class CustomStreamWrapper:
                     if self.stream_options is not None and self.stream_options["include_usage"] is True:
                         model_response.choices = []
                         return model_response
+                    self._record_usage_only_chunk(model_response=model_response)
                     return
             ## CHECK FOR TOOL USE
 
@@ -1789,6 +1871,30 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
+    def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
+        """
+        Keep provider usage-only chunks (e.g. OpenRouter's post-finish chunk, which carries a
+        provider-reported cost) available to cost tracking. They are never returned to the
+        caller; ``stream_options.include_usage`` only controls what the caller sees.
+        """
+        if getattr(model_response, "usage", None) is None:
+            return
+        self.chunks.append(model_response.model_copy(update={"choices": []}))
+
+    @staticmethod
+    def _resolve_provider_reported_cost(usage_cost: object) -> float | None:
+        """
+        Providers report usage.cost either as a number or, for Perplexity, as a
+        breakdown object whose total lives under ``total_cost``.
+        """
+        if isinstance(usage_cost, bool):
+            return None
+        if isinstance(usage_cost, (int, float)):
+            return float(usage_cost)
+        if isinstance(usage_cost, dict):
+            return CustomStreamWrapper._resolve_provider_reported_cost(usage_cost.get("total_cost"))
+        return None
+
     @staticmethod
     def _propagate_usage_cost_to_hidden_params(
         response: "ModelResponse",
@@ -1799,10 +1905,11 @@ class CustomStreamWrapper:
         calculator uses it instead of a token-based estimate.
         """
         _usage: Final[Usage | None] = getattr(response, "usage", None)
-        if _usage is not None and hasattr(_usage, "cost") and _usage.cost is not None:
+        _cost: Final = CustomStreamWrapper._resolve_provider_reported_cost(getattr(_usage, "cost", None))
+        if _cost is not None:
             if "additional_headers" not in response._hidden_params:
                 response._hidden_params["additional_headers"] = {}
-            response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(_usage.cost)
+            response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
     def __next__(self) -> "ModelResponseStream":
         cache_hit = False
@@ -2259,10 +2366,19 @@ class CustomStreamWrapper:
         if self.logging_obj is None or not self.chunks:
             return
         try:
-            partial_response: Final = litellm.stream_chunk_builder(chunks=self.chunks)
+            partial_response: Final = litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages if isinstance(self.messages, list) else None,
+                logging_obj=self.logging_obj,
+            )
+            if partial_response is None:
+                return
             usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
             if usage is None:
                 return
+            if self.model:
+                partial_response.model = self.model
+            backfill_missing_cache_usage_fields(usage)
             self.logging_obj.model_call_details["combined_usage_object"] = usage
             self.logging_obj.model_call_details["response_cost"] = (
                 self.logging_obj._response_cost_calculator(result=partial_response) or 0.0
@@ -2310,16 +2426,16 @@ class CustomStreamWrapper:
         def _normalize_status_code(exc: Exception) -> int | None:
             """Best-effort status_code extraction."""
             try:
-                code: Final = getattr(exc, "status_code", None)
+                code: Final[int | str | None] = getattr(exc, "status_code", None)
                 if code is not None:
                     return int(code)
             except Exception:
                 pass
 
-            response: Final = getattr(exc, "response", None)
+            response: Final[object | None] = getattr(exc, "response", None)
             if response is not None:
                 try:
-                    status_code: Final = getattr(response, "status_code", None)
+                    status_code: Final[int | str | None] = getattr(response, "status_code", None)
                     if status_code is not None:
                         return int(status_code)
                 except Exception:
@@ -2383,6 +2499,35 @@ class CustomStreamWrapper:
         return chunk
 
 
+def _cache_token_count(details: PromptTokensDetailsWrapper | None, keys: tuple[str, ...]) -> int:
+    for key in keys:
+        value = getattr(details, key, None)
+        if isinstance(value, int) and not isinstance(value, bool) and value:
+            return value
+    return 0
+
+
+def backfill_missing_cache_usage_fields(usage: Usage) -> None:
+    """Give partial-stream usage the same cache fields a complete stream reports.
+
+    Carries OpenAI-style ``prompt_tokens_details`` counts up to the Anthropic-style
+    top-level keys, defaulting to zero. It must carry the real count rather than a
+    flat zero: downstream readers treat these keys as authoritative once present and
+    skip their own normalization, so a zero here would overwrite a real cache read.
+    """
+    details: Final = usage.prompt_tokens_details
+    if getattr(usage, "cache_read_input_tokens", None) is None:
+        usage.cache_read_input_tokens = _cache_token_count(  # rebind-ok: in-place backfill is the contract
+            details, ("cached_tokens",)
+        )
+    if getattr(usage, "cache_creation_input_tokens", None) is None:
+        usage.cache_creation_input_tokens = _cache_token_count(  # rebind-ok: in-place backfill is the contract
+            details, ("cache_write_tokens", "cache_creation_tokens")
+        )
+    if usage.prompt_tokens_details is None:
+        usage.prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=0)  # rebind-ok: backfill in place
+
+
 _TokenDetails = TypeVar("_TokenDetails", PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper)
 
 
@@ -2406,7 +2551,7 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    latest_usage_chunk = None
+    latest_usage_chunk: Usage | Mapping[str, int] | None = None
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     completion_tokens_details: CompletionTokensDetailsWrapper | None = None
     cache_creation_token_details: CacheCreationTokenDetails | None = None

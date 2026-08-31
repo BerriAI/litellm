@@ -1,6 +1,7 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -47,7 +48,11 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
 }));
 
 vi.mock("./EntityUsage/EntityUsage", () => ({
-  default: () => <div>Entity Usage</div>,
+  default: ({ entityType, entityList }: { entityType: string; entityList: unknown }) => (
+    <div data-testid="entity-usage" data-entity-type={entityType} data-entity-list={JSON.stringify(entityList ?? null)}>
+      Entity Usage
+    </div>
+  ),
   EntityList: [],
 }));
 
@@ -77,6 +82,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
       React.createElement("option", { value: "customer" }, "Customer Usage"),
       tagOption,
       React.createElement("option", { value: "agent" }, "Agent Usage"),
+      React.createElement("option", { value: "user" }, "User Usage"),
       React.createElement("option", { value: "user-agent-activity" }, "User Agent Activity"),
     );
   };
@@ -136,12 +142,18 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
+  __esModule: true,
+  default: vi.fn(() => false),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
   useCurrentUser: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
   useInfiniteUsers: vi.fn(),
+  useUserLookup: vi.fn(() => ({ data: null })),
 }));
 
 describe("UsagePage", () => {
@@ -574,6 +586,66 @@ describe("UsagePage", () => {
     });
   });
 
+  it("should withhold the tag list until it resolves so no empty state is shown while loading", async () => {
+    let resolveTagList: (tags: Record<string, unknown>) => void = () => {};
+    mockTagListCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTagList = resolve;
+      }) as ReturnType<typeof networking.tagListCall>,
+    );
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "tag" } });
+    });
+
+    const entityUsage = await screen.findByTestId("entity-usage");
+    expect(entityUsage).toHaveAttribute("data-entity-list", "null");
+
+    await act(async () => {
+      resolveTagList({});
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
+  });
+
+  it("should drop the previous range's tags as soon as the range changes", async () => {
+    mockTagListCall.mockResolvedValue({ "old-range-tag": { name: "old-range-tag" } } as never);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "tag" } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("entity-usage")).toHaveAttribute(
+        "data-entity-list",
+        JSON.stringify([{ label: "old-range-tag", value: "old-range-tag" }]),
+      );
+    });
+
+    let resolveNewRange: (tags: Record<string, unknown>) => void = () => {};
+    mockTagListCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveNewRange = resolve;
+      }) as ReturnType<typeof networking.tagListCall>,
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("pick-a-different-range"));
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "null");
+
+    await act(async () => {
+      resolveNewRange({});
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
+  });
+
   it("should show tag usage selector option for internal users", async () => {
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
@@ -615,6 +687,49 @@ describe("UsagePage", () => {
     });
   });
 
+  // Org-admin membership comes from the server, so it can be revoked while the
+  // page is open. The Organization Usage option and its panel both disappear,
+  // and without a fallback the selector keeps a value it no longer offers,
+  // leaving the user on a blank trigger over a blank panel with nothing to
+  // click. An internal user is used because that is the session role an org
+  // admin actually carries.
+  it("should leave the organization view when org-admin membership is revoked mid-session", async () => {
+    const mockUseIsOrgAdmin = vi.mocked(useIsOrgAdmin);
+    mockUseIsOrgAdmin.mockReturnValue(true);
+    mockUseAuthorized.mockReturnValue({
+      isLoading: false,
+      isAuthorized: true,
+      token: "mock-token",
+      accessToken: "test-token",
+      userId: "user-123",
+      userEmail: "test@example.com",
+      userRole: "Internal User",
+      premiumUser: true,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    } as any);
+
+    const { rerender } = renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+
+    const usageSelect = screen.getByTestId("usage-view-select");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "organization" } });
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("Entity Usage").length).toBeGreaterThan(0);
+    });
+    expect((usageSelect as HTMLSelectElement).value).toBe("organization");
+
+    mockUseIsOrgAdmin.mockReturnValue(false);
+    act(() => {
+      rerender(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+    });
+
+    await waitFor(() => {
+      expect((screen.getByTestId("usage-view-select") as HTMLSelectElement).value).toBe("global");
+    });
+  });
+
   it("should show customer usage view for admins", async () => {
     mockUseCustomers.mockReturnValue({
       data: mockCustomers,
@@ -637,6 +752,19 @@ describe("UsagePage", () => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it("should withhold the customer list while it is still loading", async () => {
+    mockUseCustomers.mockReturnValue({ data: undefined, isLoading: true, error: null } as any);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "customer" } });
+    });
+
+    const entityUsage = await screen.findByTestId("entity-usage");
+    expect(entityUsage).toHaveAttribute("data-entity-list", "null");
   });
 
   it("should show agent usage view for admins", async () => {
@@ -713,7 +841,7 @@ describe("UsagePage", () => {
       });
 
       expect(userSelectCombobox()).toBeInTheDocument();
-      expect(promptsWith("Select user to filter...")).toBe(true);
+      expect(promptsWith("Search users by email…")).toBe(true);
     });
 
     it("should format user options with alias when available", async () => {
@@ -804,6 +932,46 @@ describe("UsagePage", () => {
     });
   });
 
+  describe("user usage view", () => {
+    it("should hand EntityUsage no user list so its own filter can search every user", async () => {
+      mockUseInfiniteUsers.mockReturnValue({
+        data: {
+          pages: [
+            {
+              users: Array.from({ length: 50 }, (_, index) => ({
+                user_id: `user-${index}`,
+                user_alias: null,
+                user_email: `user${index}@example.com`,
+              })),
+              page: 1,
+              total_pages: 4,
+              total_count: 200,
+            },
+          ],
+          pageParams: [1],
+        },
+        fetchNextPage: vi.fn(),
+        hasNextPage: true,
+        isFetchingNextPage: false,
+        isLoading: false,
+      } as unknown as ReturnType<typeof useInfiniteUsers>);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "user" } });
+      });
+
+      const entityUsage = await screen.findByTestId("entity-usage");
+      expect(entityUsage).toHaveAttribute("data-entity-type", "user");
+      expect(entityUsage).toHaveAttribute("data-entity-list", "null");
+    });
+  });
+
   describe("non-admin user behavior", () => {
     it("should not render user selector for non-admin users", async () => {
       mockUseAuthorized.mockReturnValue({
@@ -876,8 +1044,8 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityCall).toHaveBeenCalled();
       });
 
-      // Should still render the data from the paginated fallback
-      expect(screen.getByText("1,500")).toBeInTheDocument();
+      // Should still render the data from the paginated fallback, which lands a render after the call
+      expect(await screen.findByText("1,500")).toBeInTheDocument();
     });
 
     it("should stop showing the previous range's paginated pages while a new range is in flight", async () => {
