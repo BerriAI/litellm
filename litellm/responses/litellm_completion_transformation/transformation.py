@@ -1629,6 +1629,8 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_id"] = file_id
         if item.get("file_data"):
             file_dict["file_data"] = item["file_data"]
+        if item.get("filename"):
+            file_dict["filename"] = item["filename"]
 
         new_item: Final[dict[str, object]] = {"type": "file", "file": file_dict}
         if "cache_control" in item:

@@ -48,6 +48,7 @@ class TestWriteClaudeSettings:
 
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://proxy.example.com"
+        assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://proxy.example.com auth print-token"
 
     def test_updates_an_existing_file_preserving_unrelated_settings(self, paths, lite_on_path):
