@@ -820,13 +820,12 @@ def _derive_passthrough_model_from_target_url(target_url: str) -> str | None:
     try:
         parsed: Final = urlparse(target_url)
         path: Final = (parsed.path or "").strip("/")
-        if path:
-            return path
         # urlparse only raises lazily (e.g. invalid ports/IPv6 hosts surface on
         # attribute access), so ``.hostname`` stays inside the try block.
-        return parsed.hostname or None
+        hostname: Final = parsed.hostname
     except ValueError:
         return None
+    return path or hostname or None
 
 
 async def pass_through_request(
