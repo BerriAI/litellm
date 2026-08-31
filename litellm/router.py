@@ -4863,6 +4863,7 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
+            kwargs.pop("_is_responses_api_router_request", None)  # rebind-ok: internal marker must not reach providers
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data: Final = deployment["litellm_params"].copy()
@@ -4949,6 +4950,19 @@ class Router:
             BaseResponsesAPIStreamingIterator,
         )
 
+        model: Final = kwargs.get("model")
+        if not isinstance(model, str):
+            raise litellm.BadRequestError(
+                message="model is required for Router Responses requests",
+                model="",
+                llm_provider="",
+            )
+        responses_kwargs: Final = {  # mutable-ok: Router fallback handlers require mutable request kwargs
+            **kwargs,
+            "_is_responses_api_router_request": True,
+        }
+        responses_kwargs.pop("model", None)  # rebind-ok: validated model is passed explicitly below
+
         # Snapshot the request kwargs before _ageneric_api_call_with_fallbacks
         # mutates them. A shallow copy alone is not enough: the primary
         # attempt mutates nested dicts in place — notably `litellm_metadata`,
@@ -4964,16 +4978,18 @@ class Router:
         # fallback to the original reference for any non-picklable value.
         # The original_generic_function is preserved so the per-attempt
         # helper knows which underlying API to call on fallback.
-        fallback_kwargs: Final[dict[str, object]] = kwargs.copy()
+        fallback_kwargs: Final[dict[str, object]] = responses_kwargs.copy()
         if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
             fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
         if isinstance(fallback_kwargs.get("metadata"), dict):
             fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
         fallback_kwargs["original_generic_function"] = original_function
 
-        response: Final = await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
+        response: Final = await self._ageneric_api_call_with_fallbacks(
+            model=model, original_function=original_function, **responses_kwargs
+        )
 
-        if kwargs.get("stream") and isinstance(response, BaseResponsesAPIStreamingIterator):
+        if responses_kwargs.get("stream") and isinstance(response, BaseResponsesAPIStreamingIterator):
             return await self._aresponses_streaming_iterator(
                 response=response,
                 initial_kwargs=fallback_kwargs,
@@ -11887,6 +11903,28 @@ class Router:
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
+        previous_response_id: Final = request_kwargs.get("previous_response_id")
+        if request_kwargs.get("_is_responses_api_router_request") is True and isinstance(previous_response_id, str):
+            from litellm.responses.utils import ResponsesAPIRequestUtils
+
+            previous_model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(previous_response_id)
+            if previous_model_id is not None:
+                previous_deployment: Final = next(
+                    (
+                        deployment
+                        for deployment in healthy_deployments
+                        if isinstance((model_info := deployment.get("model_info")), Mapping)
+                        and str(model_info.get("id")) == previous_model_id
+                    ),
+                    None,
+                )
+                if previous_deployment is not None:
+                    healthy_deployments = [  # mutable-ok: Router selectors require a deployment list
+                        previous_deployment
+                    ]
+                else:
+                    request_kwargs["_cross_model_responses_replay"] = True  # rebind-ok: internal marker drives replay
+
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
             healthy_deployments=healthy_deployments,
@@ -11895,19 +11933,27 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
 
-        if self.enable_pre_call_checks and (messages is not None or input is not None):
+        replay_request_kwargs: Final = await self._prepare_cross_model_responses_replay(
+            model=model, request_kwargs=request_kwargs
+        )
+        if replay_request_kwargs is not request_kwargs:
+            request_kwargs.clear()  # rebind-ok: Router selection returns only deployments, so kwargs propagate via this dict
+            request_kwargs.update(replay_request_kwargs)  # rebind-ok: same Router request propagation boundary
+        effective_input: Final = request_kwargs.get("input")
+
+        if self.enable_pre_call_checks and (messages is not None or effective_input is not None):
             deployments_to_check: Final = cast(list[dict], healthy_deployments)
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=deployments_to_check,
                 messages=messages,
-                input=input,
+                input=effective_input,
                 request_kwargs=request_kwargs,
                 input_token_count=await self._acount_pre_call_check_tokens(
                     model=model,
                     healthy_deployments=deployments_to_check,
                     messages=messages,
-                    input=input,
+                    input=effective_input,
                     request_kwargs=request_kwargs,
                 ),
                 skip_inline_token_count=True,
@@ -11951,6 +11997,83 @@ class Router:
             raise exception
 
         return healthy_deployments
+
+    @staticmethod
+    async def _prepare_cross_model_responses_replay(
+        model: str,
+        request_kwargs: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        if request_kwargs.get("_cross_model_responses_replay") is not True:
+            return request_kwargs
+        previous_response_id: Final = request_kwargs.get("previous_response_id")
+        if not isinstance(previous_response_id, str):
+            return request_kwargs
+
+        from litellm.responses.litellm_completion_transformation.session_handler import (
+            ResponsesSessionHandler,
+            ResponsesSessionHistoryTooLongError,
+        )
+
+        try:
+            metadata: Final = request_kwargs.get("litellm_metadata", request_kwargs.get("metadata"))
+            api_key_hash: Final = (
+                str(metadata.get("user_api_key_hash"))
+                if isinstance(metadata, Mapping) and metadata.get("user_api_key_hash") is not None
+                else None
+            )
+            history: Final = await ResponsesSessionHandler.get_visible_history_for_previous_response_id(
+                previous_response_id=previous_response_id,
+                api_key_hash=api_key_hash,
+            )
+        except ResponsesSessionHistoryTooLongError as exc:
+            raise litellm.BadRequestError(
+                message=str(exc),
+                model=model,
+                llm_provider="",
+            ) from exc
+        if history is None:
+            raise litellm.BadRequestError(
+                message=(
+                    "Unable to replay previous_response_id across model groups because its visible history "
+                    "is unavailable in LiteLLM spend logs"
+                ),
+                model=model,
+                llm_provider="",
+            )
+
+        current_input: Final = request_kwargs.get("input")
+        if not isinstance(current_input, (str, list)):
+            raise litellm.BadRequestError(
+                message="Cross-model Responses replay requires a string or list input",
+                model=model,
+                llm_provider="",
+            )
+        current_items: Final[tuple[object, ...]] = (
+            (
+                {"type": "message", "role": "user", "content": current_input},  # mutable-ok: OpenAI request schema
+            )
+            if isinstance(current_input, str)
+            else tuple(
+                item
+                for item in current_input
+                if not isinstance(item, Mapping)
+                or (item.get("type") != "reasoning" and item.get("encrypted_content") is None)
+            )
+        )
+
+        return MappingProxyType(
+            {  # mutable-ok: MappingProxyType immediately freezes the assembled request
+                **MappingProxyType(
+                    {
+                        key: value
+                        for key, value in request_kwargs.items()
+                        if key not in frozenset(("previous_response_id", "_cross_model_responses_replay"))
+                    }
+                ),
+                "input": list((*history.input, *current_items)),  # mutable-ok: OpenAI Responses requires a JSON array
+                "litellm_trace_id": history.litellm_session_id,
+            }
+        )
 
     @staticmethod
     def _pop_effort_from_nested_carrier(request_kwargs: dict[str, object], carrier: str) -> None:

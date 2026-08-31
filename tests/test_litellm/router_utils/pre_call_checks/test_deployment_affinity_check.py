@@ -1,13 +1,16 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
-import json
-
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.responses.litellm_completion_transformation.session_handler import (
+    ResponsesSessionHandler,
+    ResponsesVisibleHistory,
+)
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -42,9 +45,7 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello there!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello there!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -348,9 +349,7 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await router.cache.async_set_cache(
-            affinity_cache_key, {"model_id": other_model_id}, ttl=3600
-        )
+        await router.cache.async_set_cache(affinity_cache_key, {"model_id": other_model_id}, ttl=3600)
 
         # Even though user-key affinity points elsewhere, previous_response_id should pin
         # to the deployment that created the original response.
@@ -362,6 +361,145 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
             litellm_metadata={"user_api_key_hash": user_api_key_hash},
         )
         assert follow_up._hidden_params["model_id"] == first_model_id
+
+
+@pytest.mark.asyncio
+async def test_same_model_group_continuation_does_not_replay_history():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "terra",
+                "litellm_params": {"model": "azure/terra", "api_key": "mock-api-key"},
+                "model_info": {"id": "terra-id", "base_model": "gpt-5"},
+            }
+        ]
+    )
+    previous_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure",
+        model_id="terra-id",
+        response_id="resp-terra",
+    )
+    captured_kwargs = {}
+
+    async def capture_request(**kwargs):
+        captured_kwargs.update(kwargs)
+        return "ok"
+
+    with patch.object(  # test-quality-ok: Router constructs the session handler internally
+        ResponsesSessionHandler,
+        "get_visible_history_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as replay_history:
+        result = await router._aresponses_with_streaming_fallbacks(
+            original_function=capture_request,
+            model="terra",
+            input="Follow-up",
+            previous_response_id=previous_response_id,
+        )
+
+    assert result == "ok"
+    replay_history.assert_not_awaited()
+    assert captured_kwargs["previous_response_id"] == previous_response_id
+    assert captured_kwargs["input"] == "Follow-up"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_cross_model_group_replays_visible_history_without_previous_response_id(stream: bool):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "luna",
+                "litellm_params": {
+                    "model": "azure/luna",
+                    "api_key": "mock-api-key",
+                    "api_base": "https://luna.openai.azure.com",
+                },
+                "model_info": {"id": "luna-id", "base_model": "gpt-5"},
+            }
+        ],
+    )
+    previous_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure",
+        model_id="terra-id",
+        response_id="resp-terra",
+    )
+    history = ResponsesVisibleHistory(
+        input=[
+            {"type": "message", "role": "user", "content": "My name is Chulsoo."},
+            {"type": "message", "role": "assistant", "content": "I will remember that."},
+        ],
+        litellm_session_id="session-terra",
+    )
+    captured_kwargs = {}
+
+    async def capture_request(**kwargs):
+        captured_kwargs.update(kwargs)
+        return "ok"
+
+    with patch.object(  # test-quality-ok: Router constructs the session handler internally
+        ResponsesSessionHandler,
+        "get_visible_history_for_previous_response_id",
+        new_callable=AsyncMock,
+        return_value=history,
+    ) as replay_history:
+        result = await router._aresponses_with_streaming_fallbacks(
+            original_function=capture_request,
+            model="luna",
+            input="What is my name?",
+            previous_response_id=previous_response_id,
+            stream=stream,
+            litellm_metadata={"user_api_key_hash": "hashed-api-key"},
+        )
+
+    assert result == "ok"
+    replay_history.assert_awaited_once_with(
+        previous_response_id=previous_response_id,
+        api_key_hash="hashed-api-key",
+    )
+    assert "previous_response_id" not in captured_kwargs
+    assert captured_kwargs["litellm_trace_id"] == "session-terra"
+    assert captured_kwargs["stream"] is stream
+    assert captured_kwargs["input"] == [
+        {"type": "message", "role": "user", "content": "My name is Chulsoo."},
+        {"type": "message", "role": "assistant", "content": "I will remember that."},
+        {"type": "message", "role": "user", "content": "What is my name?"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cross_model_group_fails_closed_without_history():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "luna",
+                "litellm_params": {"model": "azure/luna", "api_key": "mock-api-key"},
+                "model_info": {"id": "luna-id", "base_model": "gpt-5"},
+            }
+        ],
+    )
+    previous_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure",
+        model_id="terra-id",
+        response_id="resp-terra",
+    )
+    provider_call = AsyncMock()
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_visible_history_for_previous_response_id",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        with pytest.raises(litellm.BadRequestError, match="visible history is unavailable"):
+            await router._aresponses_with_streaming_fallbacks(
+                original_function=provider_call,
+                model="luna",
+                input="What is my name?",
+                previous_response_id=previous_response_id,
+            )
+
+    provider_call.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -519,9 +657,7 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
         },
         {
             "model_name": stable_model_map_key,
-            "litellm_params": {
-                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
-            },
+            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -542,9 +678,7 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
         model="some-router-model-group",
         healthy_deployments=healthy_deployments,
         messages=None,
-        request_kwargs={
-            "metadata": {"user_api_key_hash": user_key, "model_group": "alias-group"}
-        },
+        request_kwargs={"metadata": {"user_api_key_hash": user_key, "model_group": "alias-group"}},
         parent_otel_span=None,
     )
 
@@ -580,9 +714,7 @@ async def test_async_filter_deployments_falls_back_when_cached_deployment_is_unh
         },
         {
             "model_name": stable_model_map_key,
-            "litellm_params": {
-                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
-            },
+            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -621,9 +753,7 @@ async def test_async_user_key_affinity_ttl_expiry_allows_reroute():
         },
         {
             "model_name": stable_model_map_key,
-            "litellm_params": {
-                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
-            },
+            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -667,9 +797,7 @@ def test_cache_key_does_not_double_hash_user_api_key_hash():
     The affinity cache key should not hash it again.
     """
 
-    user_api_key_hash = (
-        "b95b015b66dd02a1c14e1e0a8729211f8ee53ec962658764f4cf58546c2c68e1"
-    )
+    user_api_key_hash = "b95b015b66dd02a1c14e1e0a8729211f8ee53ec962658764f4cf58546c2c68e1"
     key = DeploymentAffinityCheck.get_affinity_cache_key(
         model_group="any-model-group",
         user_key=user_api_key_hash,
@@ -707,9 +835,7 @@ def test_get_effective_flags_returns_per_group_config():
     assert session_id is True
 
     # unconfigured-model: falls back to global flags
-    user_key, responses_api, session_id = callback._get_effective_flags(
-        "unconfigured-model"
-    )
+    user_key, responses_api, session_id = callback._get_effective_flags("unconfigured-model")
     assert user_key is True
     assert responses_api is True
     assert session_id is False
@@ -941,12 +1067,8 @@ async def test_model_group_affinity_config_overrides_global():
     ]
 
     # Set up user-key affinity cache for claude-3
-    cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
-        model_group=stable_model_map_key, user_key=user_key
-    )
-    await callback.cache.async_set_cache(
-        cache_key, {"model_id": "deployment-1"}, ttl=60
-    )
+    cache_key = DeploymentAffinityCheck.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key)
+    await callback.cache.async_set_cache(cache_key, {"model_id": "deployment-1"}, ttl=60)
 
     # claude-3 has per-group config (session_affinity only), so user-key affinity
     # should NOT apply even though it's globally enabled
