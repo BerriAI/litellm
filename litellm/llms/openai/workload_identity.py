@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
 import litellm
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
 
 from .common_utils import OpenAIError
 
@@ -45,7 +45,10 @@ def resolve_openai_workload_identity_config(
     api_key: str | None,
     api_base: str | None,
 ) -> OpenAIWorkloadIdentityConfig | None:
-    if api_key or get_secret_str("OPENAI_API_KEY"):
+    static_api_key: Final = normalize_nonempty_secret_str(api_key) or normalize_nonempty_secret_str(
+        get_secret_str("OPENAI_API_KEY")
+    )
+    if static_api_key is not None:
         return None
     effective_api_base: Final = (
         api_base or litellm.api_base or get_secret_str("OPENAI_BASE_URL") or get_secret_str("OPENAI_API_BASE")
