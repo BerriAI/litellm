@@ -2172,9 +2172,8 @@ class Router:
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
-                **kwargs,
+                **{k: v for k, v in kwargs.items() if k != "_target_order"},
             }
-            input_kwargs.pop("_target_order", None)
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
@@ -3194,11 +3193,10 @@ class Router:
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
-                **kwargs,
+                **{k: v for k, v in kwargs.items() if k != "_target_order"},
             }
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
-            input_kwargs.pop("_target_order", None)
 
             _response: Final = litellm.acompletion(**input_kwargs)
 
