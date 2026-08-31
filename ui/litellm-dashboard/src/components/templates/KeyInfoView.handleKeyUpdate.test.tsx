@@ -1,5 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/lib/toast";
+
+vi.mock("@/lib/toast", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
 
 // ---- Hoisted shared mocks (safe to use inside vi.mock factories) ----
 const { keyUpdateCallMock, keyDeleteCallMock, mockUseAuthorized } = vi.hoisted(() => {
@@ -564,5 +569,21 @@ describe("KeyInfoView handleKeyUpdate soft_budget", () => {
     const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
     expect(sentPayload.soft_budget).toBeNull();
     expect(JSON.stringify({ ...sentPayload })).toContain('"soft_budget":null');
+  });
+
+  it("should reject an overflowing soft_budget instead of silently clearing it", async () => {
+    renderWithSoftBudget(25);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      soft_budget: "1e309",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(keyUpdateCallMock).not.toHaveBeenCalled();
   });
 });

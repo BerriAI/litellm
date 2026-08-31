@@ -217,6 +217,10 @@ export default function KeyInfoView({
         null;
       const nextSoftBudget =
         formValues.soft_budget === "" || formValues.soft_budget == null ? null : Number(formValues.soft_budget);
+      if (nextSoftBudget !== null && !Number.isFinite(nextSoftBudget)) {
+        toast.error("Soft Budget must be a finite number");
+        return;
+      }
       if (nextSoftBudget === previousSoftBudget) {
         delete formValues.soft_budget;
       } else {
