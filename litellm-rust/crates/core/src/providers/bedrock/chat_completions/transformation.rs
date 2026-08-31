@@ -9,7 +9,7 @@ use crate::chat_completions::transformation::{
 use crate::chat_completions::types::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
     ChatCompletionsUsage, ChatMessage, ChatMessageContent, ProviderChatRequestData,
-    ProviderChatResponseData,
+    ProviderChatResponseData, ThinkingBlock,
 };
 use crate::error::{CoreError, CoreResult};
 
@@ -48,6 +48,16 @@ const CONFIG_PARAMS: &[&str] = &[
 ];
 
 const CONVERSE_PATH_SUFFIX: &str = "/converse";
+
+const REASONING_CONTENT_KEY: &str = "reasoningContent";
+
+const REASONING_BLOCKS_FIELD: &str = "reasoningContentBlocks";
+
+struct Reasoning {
+    text: String,
+    blocks: Vec<ThinkingBlock>,
+    raw: Vec<Value>,
+}
 
 pub struct BedrockChatCompletionsConfig;
 
@@ -89,6 +99,58 @@ fn converse_body(conversation: &Conversation, params: &Map<String, Value>) -> Va
         .into_iter()
         .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system)))),
     ))
+}
+
+fn thinking_block(reasoning: &Map<String, Value>) -> Option<ThinkingBlock> {
+    if let Some(reasoning_text) = reasoning.get("reasoningText").and_then(Value::as_object) {
+        return Some(ThinkingBlock::Thinking {
+            thinking: reasoning_text
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            signature: reasoning_text
+                .get("signature")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        });
+    }
+    reasoning
+        .get("redactedContent")
+        .and_then(Value::as_str)
+        .map(|data| ThinkingBlock::Redacted {
+            data: data.to_string(),
+        })
+}
+
+/// Converse returns `reasoningContent` blocks unprompted on a reasoning model,
+/// so this path sees them without asking for thinking. Python reports them as
+/// `reasoning_content` plus `thinking_blocks` and echoes the raw blocks under
+/// `provider_specific_fields`; mirror that rather than declining a response the
+/// provider has already billed.
+fn reasoning(content: &[Value]) -> Option<Reasoning> {
+    let raw: Vec<Value> = content
+        .iter()
+        .filter_map(|block| block.get(REASONING_CONTENT_KEY).cloned())
+        .collect();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(Reasoning {
+        text: raw
+            .iter()
+            .filter_map(|block| {
+                block
+                    .get("reasoningText")
+                    .and_then(|reasoning_text| reasoning_text.get("text"))
+                    .and_then(Value::as_str)
+            })
+            .collect(),
+        blocks: raw
+            .iter()
+            .filter_map(|block| block.as_object().and_then(thinking_block))
+            .collect(),
+        raw,
+    })
 }
 
 fn has_blank_text(message: &ChatMessage) -> bool {
@@ -229,12 +291,14 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
             .and_then(|message| message.get("content"))
             .and_then(Value::as_array)
             .ok_or(CoreError::MissingField("output.message.content"))?;
-        // The route declines tool requests, so anything other than a text block
-        // is something this path never asked for. Decline; the host falls back.
+        // The route declines tool requests, so anything other than a text or
+        // reasoning block is something this path never asked for. Decline; the
+        // host falls back.
         if content.iter().any(|block| {
-            block
-                .as_object()
-                .is_none_or(|block| block.len() != 1 || !block.contains_key("text"))
+            block.as_object().is_none_or(|block| {
+                block.len() != 1
+                    || !(block.contains_key("text") || block.contains_key(REASONING_CONTENT_KEY))
+            })
         }) {
             return Err(CoreError::Unsupported("non-text response content block"));
         }
@@ -242,6 +306,18 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
             .iter()
             .filter_map(|block| block.get("text").and_then(Value::as_str))
             .collect();
+        let (reasoning_content, thinking_blocks, provider_specific_fields) =
+            match reasoning(content) {
+                Some(reasoning) => (
+                    Some(reasoning.text),
+                    Some(reasoning.blocks),
+                    Some(Map::from_iter([(
+                        REASONING_BLOCKS_FIELD.to_string(),
+                        Value::Array(reasoning.raw),
+                    )])),
+                ),
+                None => (None, None, None),
+            };
 
         let usage = body
             .get("usage")
@@ -281,6 +357,9 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
                     // Anthropic. A caller calling `.strip()` on it would break
                     // on this path alone.
                     content: Some(text),
+                    reasoning_content,
+                    thinking_blocks,
+                    provider_specific_fields,
                 },
                 finish_reason: finish_reason_for(
                     body.get("stopReason").and_then(Value::as_str).unwrap_or(""),

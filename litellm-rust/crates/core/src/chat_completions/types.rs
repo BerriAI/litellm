@@ -81,7 +81,23 @@ pub struct ChatCompletionsUsage {
     pub prompt_tokens_details: PromptTokensDetails,
 }
 
+/// A reasoning block normalized to the shape Python reports on the message,
+/// where a missing `thinking` or `signature` is omitted rather than nulled.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ThinkingBlock {
+    #[serde(rename = "thinking")]
+    Thinking {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thinking: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    #[serde(rename = "redacted_thinking")]
+    Redacted { data: String },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChatCompletionsChoiceMessage {
     pub role: String,
     // Whether an empty turn is `None` or `""` is the provider's choice, not a
@@ -89,6 +105,12 @@ pub struct ChatCompletionsChoiceMessage {
     // while Converse assigns the joined string unconditionally. Each config
     // mirrors its own, so keep this optional and serialize it even when None.
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_blocks: Option<Vec<ThinkingBlock>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_specific_fields: Option<Map<String, Value>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
