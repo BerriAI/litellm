@@ -9152,7 +9152,8 @@ class Router:
             if _deployment_on_router is not None:
                 # deployment with this model_id exists on the router
                 if (
-                    deployment.litellm_params == _deployment_on_router.litellm_params
+                    deployment.model_name == _deployment_on_router.model_name
+                    and deployment.litellm_params == _deployment_on_router.litellm_params
                     and deployment.model_info == _deployment_on_router.model_info
                 ):
                     # No need to update
