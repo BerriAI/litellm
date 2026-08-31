@@ -82,11 +82,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 ResponseOutputMessage(
                     type="message",
                     role="assistant",
-                    content=[
-                        ResponseOutputText(
-                            type="output_text", text="Hello from Cursor!"
-                        )
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="Hello from Cursor!")],
                 )
             ],
         )
@@ -121,9 +117,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
     @patch("litellm.proxy.proxy_server.user_api_key_auth")
-    async def test_responses_api_key_spend_header_includes_response_cost(
-        self, mock_auth, mock_router
-    ):
+    async def test_responses_api_key_spend_header_includes_response_cost(self, mock_auth, mock_router):
         """
         Test that x-litellm-key-spend header includes the current request's response_cost
         for /v1/responses endpoint.
@@ -159,9 +153,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 ResponseOutputMessage(
                     type="message",
                     role="assistant",
-                    content=[
-                        ResponseOutputText(type="output_text", text="Test response")
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="Test response")],
                 )
             ],
         )
@@ -356,6 +348,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "model": "gpt-4o", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
@@ -363,6 +356,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "response": {"model": "gpt-4o", "input": "hello"}}
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
@@ -370,6 +364,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {
             "type": "response.create",
             "model": "flat-model",
@@ -381,6 +376,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) is None
 
@@ -400,9 +396,7 @@ class TestResponsesWSFirstFrameValidation:
         )
 
         ws = MagicMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "session.update", "model": "gpt-4o"})
-        )
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "session.update", "model": "gpt-4o"}))
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
 
@@ -412,10 +406,7 @@ class TestResponsesWSFirstFrameValidation:
         ws.send_text.assert_awaited_once()
         ws.close.assert_awaited_once_with(code=1008, reason="Invalid first message")
         error_payload = json.loads(ws.send_text.await_args.args[0])
-        assert (
-            error_payload["error"]["message"]
-            == "First message must be a response.create JSON object."
-        )
+        assert error_payload["error"]["message"] == "First message must be a response.create JSON object."
 
     @pytest.mark.asyncio
     async def test_rejects_non_object_json_first_frame(self):
@@ -484,16 +475,12 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.url = "ws://testserver/v1/responses"
         ws.accept = AsyncMock()
         ws.receive_text = AsyncMock(
-            return_value=json.dumps(
-                {"type": "response.create", "model": "gpt-4o-mini", "input": []}
-            )
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
         ws.close = AsyncMock()
 
         processor = MagicMock()
-        processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini"}, MagicMock())
-        )
+        processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o-mini"}, MagicMock()))
 
         async def fake_llm_call():
             return None
@@ -529,9 +516,7 @@ class TestResponsesWSFirstFrameModelAuth:
             _enforce_responses_ws_first_frame_model_auth,
         )
 
-        request = Request(
-            {"type": "http", "method": "POST", "path": "/v1/responses", "headers": []}
-        )
+        request = Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": []})
         user_api_key_dict = MagicMock()
         llm_router = MagicMock()
 
@@ -593,9 +578,7 @@ class TestReadWSModelFromFirstFrameErrors:
 
         assert result is None
         ws.send_text.assert_not_awaited()
-        ws.close.assert_awaited_once_with(
-            code=1008, reason="Timed out waiting for first message"
-        )
+        ws.close.assert_awaited_once_with(code=1008, reason="Timed out waiting for first message")
 
     @pytest.mark.asyncio
     async def test_invalid_json_sends_error_and_closes(self):
@@ -613,9 +596,7 @@ class TestReadWSModelFromFirstFrameErrors:
         assert result is None
         payload = json.loads(ws.send_text.await_args.args[0])
         assert payload["error"]["message"] == "First message is not valid JSON."
-        ws.close.assert_awaited_once_with(
-            code=1008, reason="Invalid JSON in first message"
-        )
+        ws.close.assert_awaited_once_with(code=1008, reason="Invalid JSON in first message")
 
     @pytest.mark.asyncio
     async def test_missing_model_sends_error_and_closes(self):
@@ -624,9 +605,7 @@ class TestReadWSModelFromFirstFrameErrors:
         )
 
         ws = MagicMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "response.create", "input": []})
-        )
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "response.create", "input": []}))
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
 
@@ -679,10 +658,7 @@ class TestManagedResponsesSameProvider:
         assert self._handler("gpt-4o")._same_provider("gpt-4o-mini") is True
 
     def test_different_provider_is_not_same(self):
-        assert (
-            self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash")
-            is False
-        )
+        assert self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash") is False
 
     def test_inject_credentials_keeps_provider_for_same_provider_model(self):
         handler = self._handler("gpt-4o", custom_llm_provider="openai")
@@ -697,18 +673,14 @@ class TestManagedResponsesSameProvider:
         assert "custom_llm_provider" not in call_kwargs
 
     def test_unresolvable_connection_model_falls_back_to_custom_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         assert handler._same_provider("gpt-4o-mini") is True
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="gpt-4o-mini")
         assert call_kwargs["custom_llm_provider"] == "openai"
 
     def test_unresolvable_connection_model_still_drops_cross_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
         assert "custom_llm_provider" not in call_kwargs
@@ -840,9 +812,7 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
                     type="message",
                     role="assistant",
                     status="completed",
-                    content=[
-                        ResponseOutputText(type="output_text", text="agent reply", annotations=[])
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="agent reply", annotations=[])],
                 )
             ],
         )
@@ -851,9 +821,12 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
 
     app.dependency_overrides[user_api_key_auth] = _auth_override
     try:
-        with patch.object(ps, "llm_router", mock_router), patch(
-            "litellm.proxy.response_api_endpoints.endpoints._read_request_body",
-            side_effect=capturing_read_request_body,
+        with (
+            patch.object(ps, "llm_router", mock_router),
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints._read_request_body",
+                side_effect=capturing_read_request_body,
+            ),
         ):
             client = TestClient(app)
             response = client.post(
@@ -1488,8 +1461,8 @@ def _router_serving_only(base_model: str) -> MagicMock:
     mock_router.router_general_settings.pass_through_all_models = False
     mock_router.default_deployment = None
     mock_router.pattern_router.patterns = {base_model: ["anthropic/*"]}
-    mock_router.pattern_router.get_pattern.side_effect = (
-        lambda model: [{"model_name": "anthropic/*"}] if model == base_model else None
+    mock_router.pattern_router.get_pattern.side_effect = lambda model: (
+        [{"model_name": "anthropic/*"}] if model == base_model else None
     )
     return mock_router
 
@@ -1739,9 +1712,7 @@ class TestCursorGateRecognizesRoutingGroups:
         from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
 
         router = Router(
-            model_list=[
-                {"model_name": "member-fast", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}
-            ],
+            model_list=[{"model_name": "member-fast", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}],
             routing_groups=[
                 {"group_name": "grouped-thinking-high", "models": ["member-fast"], "routing_strategy": "simple-shuffle"}
             ],
@@ -1836,3 +1807,133 @@ class TestGuardrailBlockedResponsesUsage:
         assert usage["input_tokens"] == 0
         assert usage["output_tokens"] == 0
         assert usage["total_tokens"] == 0
+
+
+class TestResponsesInputTokens:
+    """Regression tests for POST /v1/responses/input_tokens.
+
+    The docs promise OpenAI-format token counting on the proxy, but the route was
+    never registered, so the POST fell through to the GET/DELETE-only
+    /v1/responses/{response_id} route and returned 405."""
+
+    def _post_input_tokens(self, body, path="/v1/responses/input_tokens", counter=None):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.response_api_endpoints.endpoints import _proxy_token_counter
+        from litellm.types.utils import TokenCountResponse
+
+        token_counter_mock = (
+            counter
+            if counter is not None
+            else AsyncMock(
+                return_value=TokenCountResponse(
+                    total_tokens=13,
+                    request_model=body.get("model", ""),
+                    model_used=body.get("model", ""),
+                    tokenizer_type="openai_api",
+                )
+            )
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", request_route=path)
+        app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
+        try:
+            client = TestClient(app)
+            response = client.post(path, json=body, headers={"Authorization": "Bearer sk-1234"})
+            return response, token_counter_mock
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+            app.dependency_overrides.pop(_proxy_token_counter, None)
+
+    def test_string_input_returns_openai_input_tokens_shape(self):
+        response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "Hello, how are you?"})
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"object": "response.input_tokens", "input_tokens": 13}
+        counter.assert_awaited_once()
+        assert counter.call_args.kwargs["call_endpoint"] is True
+        token_request = counter.call_args.kwargs["request"]
+        assert token_request.model == "gpt-4o"
+        assert token_request.messages == [{"role": "user", "content": "Hello, how are you?"}]
+
+    def test_every_route_alias_is_registered(self):
+        for path in ("/v1/responses/input_tokens", "/responses/input_tokens", "/openai/v1/responses/input_tokens"):
+            response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, path=path)
+            assert response.status_code == 200, f"{path}: {response.status_code} {response.text}"
+
+    def test_input_items_instructions_and_tools_are_forwarded(self):
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            }
+        ]
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": "What is the weather in Paris?"}],
+                "instructions": "You are terse.",
+                "tools": tools,
+            }
+        )
+
+        assert response.status_code == 200, response.text
+        token_request = counter.call_args.kwargs["request"]
+        assert token_request.messages == [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "What is the weather in Paris?"},
+        ]
+        assert token_request.tools == tools
+
+    def test_missing_model_returns_openai_400(self):
+        response, counter = self._post_input_tokens({"input": "Hello"})
+
+        assert response.status_code == 400, response.text
+        assert response.json() == {
+            "error": {
+                "message": "Missing required parameter: 'model'.",
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": "missing_required_parameter",
+            }
+        }
+        counter.assert_not_awaited()
+
+    def test_missing_input_returns_openai_400(self):
+        response, counter = self._post_input_tokens({"model": "gpt-4o"})
+
+        assert response.status_code == 400, response.text
+        assert response.json() == {
+            "error": {
+                "message": "Missing required parameter: 'input'.",
+                "type": "invalid_request_error",
+                "param": "input",
+                "code": "missing_required_parameter",
+            }
+        }
+        counter.assert_not_awaited()
+
+    def test_invalid_tools_returns_openai_400(self):
+        response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "hi", "tools": "not-a-list"})
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        counter.assert_not_awaited()
+
+    def test_provider_error_maps_status_code(self):
+        from litellm.proxy._types import ProxyException
+
+        failing_counter = AsyncMock(
+            side_effect=ProxyException(
+                message="rate limited",
+                type="token_counting_error",
+                param="model",
+                code="429",
+            )
+        )
+        response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, counter=failing_counter)
+
+        assert response.status_code == 429, response.text
+        assert response.json()["error"]["message"] == "rate limited"
