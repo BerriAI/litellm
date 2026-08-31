@@ -758,44 +758,41 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
     - strips model capability metadata (`supports_*`, effort ceilings, …) so it cannot leak into
       the provider request body (#38941)
     """
-    # Copy first: callers pass the live deployment litellm_params dict.
-    litellm_params = dict(
-        litellm_params
-    )  # mutable-ok: copy so probe mutations don't rewrite the shared deployment dict  # rebind-ok: local probe copy
+    probe = dict(litellm_params)  # mutable-ok: copy so probe mutations do not rewrite the shared deployment
     mode: Final = _resolve_health_check_mode(
         model_info,
-        litellm_params,  # any-ok: untyped router config dict
+        probe,  # any-ok: untyped router config dict
     )
     _health_check_params: Final = model_info.get("health_check_params", None)
     if isinstance(_health_check_params, dict):
-        litellm_params.update(_health_check_params)
+        probe.update(_health_check_params)
     elif _health_check_params is not None:
         logger.warning(
             "health_check_params for model %s is a %s, expected a dict. Ignoring it.",
-            litellm_params.get("model"),
+            probe.get("model"),
             type(_health_check_params).__name__,
         )
 
-    litellm_params["messages"] = _get_random_llm_message()
+    probe["messages"] = _get_random_llm_message()
     if _should_inject_health_check_max_tokens(
         model_info,
         mode,  # any-ok: untyped router config dict
     ):
-        _resolved_max_tokens: Final = _resolve_health_check_max_tokens(model_info, litellm_params)
+        _resolved_max_tokens: Final = _resolve_health_check_max_tokens(model_info, probe)
         if _resolved_max_tokens is not None:
-            litellm_params["max_tokens"] = _resolved_max_tokens
+            probe["max_tokens"] = _resolved_max_tokens
 
     # Per-model reasoning effort for health checks only (e.g. reasoning_effort=none).
     if mode in _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT:
         _hc_reasoning_effort: Final = model_info.get("health_check_reasoning_effort", None)
         if _hc_reasoning_effort is not None:
-            litellm_params["reasoning_effort"] = _hc_reasoning_effort
+            probe["reasoning_effort"] = _hc_reasoning_effort
 
     _health_check_model: Final = model_info.get("health_check_model", None)
     if _health_check_model is not None:
-        litellm_params["model"] = _health_check_model
+        probe["model"] = _health_check_model
     if mode == "audio_speech":
-        litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
+        probe["voice"] = model_info.get("health_check_voice", "alloy")
 
     # Handle Bedrock region routing format: bedrock/region/model
     # This is needed because health checks bypass get_llm_provider() for the model param
@@ -806,10 +803,10 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
     # Issue: Stripping these breaks AWS requirement for inference profile IDs
     #
     # Must also preserve route prefixes (converse/, invoke/) and handlers (llama/, deepseek_r1/, etc.)
-    if litellm_params["model"].startswith("bedrock/"):
+    if probe["model"].startswith("bedrock/"):
         from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
-        model = litellm_params["model"]
+        model = probe["model"]
         # Strip only the bedrock/ prefix (preserve routes like converse/, invoke/)
         model = model.removeprefix("bedrock/")  # len("bedrock/") = 8
 
@@ -829,13 +826,13 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
                 filtered_parts.append(part)
 
         model = "/".join(filtered_parts)
-        litellm_params["model"] = model
-        if not litellm_params.get("custom_llm_provider"):  # any-ok: untyped router dict
-            litellm_params["custom_llm_provider"] = (  # any-ok: untyped router dict
+        probe["model"] = model
+        if not probe.get("custom_llm_provider"):  # any-ok: untyped router dict
+            probe["custom_llm_provider"] = (  # any-ok: untyped router dict
                 "bedrock"
             )
 
-    return _strip_model_metadata_from_health_params(litellm_params)
+    return _strip_model_metadata_from_health_params(probe)
 
 
 async def perform_health_check(
