@@ -541,9 +541,10 @@ class BaseAnthropicMessagesStreamingIterator:
             return False
         try:
             queue.put_nowait(item)
-            return True
         except asyncio.QueueFull:
             pass
+        else:
+            return True
         put_task: Final = asyncio.ensure_future(queue.put(item))
         detached_task: Final = asyncio.ensure_future(client_detached.wait())
         try:
