@@ -9,13 +9,17 @@ Note: Embedding signatures in tool call IDs is a beta feature that requires
 enable_preview_features=True to be enabled.
 """
 
+import base64
+
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _encode_tool_call_id_with_signature,
+    _get_dummy_thought_signature,
     _get_thought_signature_from_tool,
+    _is_valid_thought_signature,
     convert_to_gemini_tool_call_invoke,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -94,10 +98,7 @@ def test_tool_call_id_includes_signature_in_response(enable_preview_features):
     tool_call_id = tools[0]["id"]
 
     # Verify signature is always in provider_specific_fields
-    assert (
-        tools[0].get("provider_specific_fields", {}).get("thought_signature")
-        == test_signature
-    )
+    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == test_signature
 
     # When preview features enabled, signature should be embedded in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
@@ -234,9 +235,7 @@ def test_openai_client_e2e_flow(enable_preview_features):
         ],
     }
     # Step 4: LiteLLM converts back to Gemini format, extracting signature
-    gemini_parts_converted = convert_to_gemini_tool_call_invoke(
-        openai_assistant_message
-    )
+    gemini_parts_converted = convert_to_gemini_tool_call_invoke(openai_assistant_message)
 
     # Verify signature is preserved through the round trip
     assert len(gemini_parts_converted) == 1
@@ -247,7 +246,10 @@ def test_openai_client_e2e_flow(enable_preview_features):
 @pytest.mark.parametrize("enable_preview_features", [True, False])
 def test_parallel_tool_calls_with_signatures(enable_preview_features):
     """Test that parallel tool calls preserve signatures correctly"""
-    signature1 = "signature_for_first_call"
+    # Real Gemini signatures are standard-alphabet base64; using a valid
+    # placeholder keeps the parallel-tool-call path lit up under the
+    # base64-validated extraction added for issue #37849.
+    signature1 = base64.b64encode(b"signature_for_first_call").decode("ascii")
     # Only first call has signature (Gemini behavior for parallel calls)
 
     gemini_parts = [
@@ -271,10 +273,7 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert len(tools) == 2
 
     # First tool call should have signature in provider_specific_fields
-    assert (
-        tools[0].get("provider_specific_fields", {}).get("thought_signature")
-        == signature1
-    )
+    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == signature1
 
     # When preview features enabled, first tool call has signature in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tools[0]["id"]
@@ -285,3 +284,122 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
     sig2 = _get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
     assert sig2 is None
+
+
+REAL_SIGNATURE = (
+    "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdT"
+    "tfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed"
+    "0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7C"
+    "vykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
+)
+
+
+# Signature values a client-side id sanitizer produces after stripping the raw
+# base64 down to id-shaped characters. Standard-alphabet base64 has no ``_`` or
+# trailing hex fragment, so Vertex rejects these with either "Base64 decoding
+# failed" or "Invalid thought signature". See issue #37849.
+@pytest.mark.parametrize(
+    "mangled_signature",
+    [
+        # from the issue reproducer, /v1/responses turn 2
+        "AY89a1/_57b05e78dc",
+        # from the issue reproducer, /v1/chat/completions turn 2
+        "AY89a1/_ee781c9832",
+        # short SHA-suffix-only sanitization
+        "AY89a1_S3YvIpUCcBTFSgDfesRLDnA_775ff49bcd",
+    ],
+)
+def test_is_valid_thought_signature_rejects_client_normalized_values(mangled_signature):
+    assert _is_valid_thought_signature(REAL_SIGNATURE) is True
+    assert _is_valid_thought_signature(mangled_signature) is False
+
+
+def test_is_valid_thought_signature_tolerates_missing_padding():
+    # Gemini omits ``=`` on the wire; the strict decoder must still accept the
+    # value once we re-pad it.
+    encoded = base64.b64encode(b"hello").decode("ascii").rstrip("=")
+    assert "=" not in encoded
+    assert _is_valid_thought_signature(encoded) is True
+
+
+def test_get_thought_signature_drops_client_mangled_id_suffix():
+    """When the segment after ``__thought__`` isn't valid base64, the extractor
+    must return ``None`` so the caller can either fall back to the dummy
+    skip-validator signature (Gemini 3+) or drop the signature entirely
+    (Gemini 2.x), instead of forwarding a corrupted value that Vertex would
+    reject. Regression test for issue #37849."""
+    mangled_id = f"call_2156408{THOUGHT_SIGNATURE_SEPARATOR}AY89a1/_57b05e78dc"
+    tool = {"id": mangled_id, "type": "function"}
+
+    assert _get_thought_signature_from_tool(tool) is None
+
+
+def test_get_thought_signature_still_prefers_provider_fields_even_when_id_mangled():
+    """A valid signature in ``provider_specific_fields`` must win over the
+    mangled tail so we don't downgrade a good signal."""
+    mangled_id = f"call_abc{THOUGHT_SIGNATURE_SEPARATOR}not_base64!!"
+    tool = {
+        "id": mangled_id,
+        "type": "function",
+        "function": {"name": "get_temperature", "arguments": '{"location": "Paris"}'},
+        "provider_specific_fields": {"thought_signature": REAL_SIGNATURE},
+    }
+
+    assert _get_thought_signature_from_tool(tool) == REAL_SIGNATURE
+
+
+def test_convert_to_gemini_uses_dummy_signature_when_client_mangles_id_on_gemini_3():
+    """On Gemini 3+ a mangled id must degrade to the documented skip-validator
+    dummy signature rather than forwarding the corrupted bytes."""
+    mangled_id = f"call_2156408{THOUGHT_SIGNATURE_SEPARATOR}AY89a1/_57b05e78dc"
+    assistant_message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": mangled_id,
+                "type": "function",
+                "function": {
+                    "name": "get_temperature",
+                    "arguments": '{"location": "Paris"}',
+                },
+            }
+        ],
+    }
+
+    parts = convert_to_gemini_tool_call_invoke(
+        assistant_message,
+        model="vertex_ai/gemini-3.1-pro-preview",
+    )
+
+    assert len(parts) == 1
+    assert parts[0].get("thoughtSignature") == _get_dummy_thought_signature()
+
+
+def test_convert_to_gemini_drops_signature_when_client_mangles_id_on_gemini_2():
+    """On older Gemini models the placeholder fallback doesn't apply, so a
+    mangled id must simply drop the signature (rather than forward a value
+    Vertex will 400 on)."""
+    mangled_id = f"call_2158562{THOUGHT_SIGNATURE_SEPARATOR}AY89a1/_ee781c9832"
+    assistant_message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": mangled_id,
+                "type": "function",
+                "function": {
+                    "name": "get_temperature",
+                    "arguments": '{"location": "Paris"}',
+                },
+            }
+        ],
+    }
+
+    parts = convert_to_gemini_tool_call_invoke(
+        assistant_message,
+        model="vertex_ai/gemini-2.5-pro",
+    )
+
+    assert len(parts) == 1
+    assert "thoughtSignature" not in parts[0]

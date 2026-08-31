@@ -1,4 +1,5 @@
 import base64
+import binascii
 import copy
 import hashlib
 import json
@@ -1158,6 +1159,29 @@ def _encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: st
     return tool_call_id
 
 
+def _is_valid_thought_signature(signature: str) -> bool:
+    """
+    A Gemini ``thoughtSignature`` travels as standard-alphabet base64 bytes
+    (``A-Z a-z 0-9 + /`` with ``=`` padding). If a client normalizes the
+    ``tool_call_id`` that embeds the signature (e.g.
+    ``sanitized[:30] + "_" + sha256hex[:10]``), the round-tripped value can
+    still contain the ``__thought__`` marker but no longer base64-decode.
+    Forwarding such a value causes Vertex/AI Studio to reject the request with
+    ``Base64 decoding failed for "..."`` or ``Invalid thought signature``.
+
+    Use ``validate=True`` to match Vertex's strict decoder, and pad the tail
+    since Gemini often omits ``=`` on the wire.
+    """
+    if not signature:
+        return False
+    try:
+        padding = "=" * (-len(signature) % 4)
+        base64.b64decode(signature + padding, validate=True)
+        return True
+    except (binascii.Error, ValueError):
+        return False
+
+
 def _get_thought_signature_from_tool(tool: dict) -> str | None:
     """Extract thought signature from tool call's provider_specific_fields.
 
@@ -1188,13 +1212,19 @@ def _get_thought_signature_from_tool(tool: dict) -> str | None:
                 signature = function.provider_specific_fields.get("thought_signature")
                 if signature:
                     return signature
-    # Check if thought signature is embedded in tool call ID
+    # Check if thought signature is embedded in tool call ID.
+    # Any client that normalizes the id shortens/hashes it, so the segment
+    # after ``__thought__`` may no longer base64-decode. Reject those here so
+    # the caller can decide between "no signature" and the dummy fallback,
+    # instead of forwarding a corrupted value that would 400 on Vertex. See
+    # issue #37849.
     tool_call_id: Final = tool.get("id")
     if tool_call_id and THOUGHT_SIGNATURE_SEPARATOR in tool_call_id:
         parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
         if len(parts) == 2:
             _, signature = parts
-            return signature
+            if _is_valid_thought_signature(signature):
+                return signature
     return None
 
 
