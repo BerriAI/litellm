@@ -73,6 +73,14 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
     });
 
+    it("should map aquaduck slug and Aquaduck enum key to the Aquaduck display name", () => {
+      const fromSlug = getProviderLogoAndName("aquaduck");
+      expect(fromSlug.displayName).toBe(Providers.Aquaduck);
+
+      const fromEnumKey = getProviderLogoAndName("Aquaduck");
+      expect(fromEnumKey.displayName).toBe(Providers.Aquaduck);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -146,6 +154,7 @@ describe("provider_info_helpers", () => {
     it("should map every provider to a bundled logo except the known logoless set, never a raw /ui/assets path", () => {
       const knownLogolessProviders = [
         Providers.AUTO_ROUTER,
+        Providers.Aquaduck,
         Providers.BYTEZ,
         Providers.CLARIFAI,
         Providers.Cognition,
@@ -193,6 +202,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
       expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
+    it("should return an aquaduck model placeholder for Aquaduck provider", () => {
+      expect(getPlaceholder(Providers.Aquaduck)).toBe("aquaduck/zai-org/glm-4.7-flash");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {

@@ -72,6 +72,7 @@ export enum Providers {
   AIOHTTP_OPENAI = "Aiohttp Openai",
   Anthropic = "Anthropic",
   ANTHROPIC_TEXT = "Anthropic Text",
+  Aquaduck = "Aquaduck AI",
   AssemblyAI = "AssemblyAI",
   AUTO_ROUTER = "Auto Router",
   Bedrock = "Amazon Bedrock",
@@ -184,6 +185,7 @@ export const provider_map: Record<string, string> = {
   AIOHTTP_OPENAI: "aiohttp_openai",
   Anthropic: "anthropic",
   ANTHROPIC_TEXT: "anthropic_text",
+  Aquaduck: "aquaduck",
   AssemblyAI: "assemblyai",
   AUTO_ROUTER: "auto_router",
   Azure: "azure",
@@ -412,6 +414,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.AIML]: "aiml/flux-pro/v1.1",
   [Providers.Anthropic]: "claude-3-opus",
+  [Providers.Aquaduck]: "aquaduck/zai-org/glm-4.7-flash",
   [Providers.Azure]: "my-deployment",
   [Providers.Azure_AI_Studio]: "azure_ai/command-r-plus",
   [Providers.Bedrock]: "claude-3-opus",
