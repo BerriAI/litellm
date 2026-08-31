@@ -479,7 +479,7 @@ losing the contents.
 
 | File              | What's in it                                                          |
 | ----------------- | --------------------------------------------------------------------- |
-| `versions.tf`     | Terraform + `required_providers` constraints (module declares no provider config), and the check that the provider's region matches `var.region` |
+| `versions.tf`     | Terraform + `required_providers` constraints (module declares no provider config) |
 | `examples/default/` | Thin root: `aws` provider (with an optional `default_tags` slot for org-wide tags) + a call to the module. The one-command deploy path. |
 | `variables.tf`    | All input variables                                                   |
 | `locals.tf`       | Path-prefix lists for ALB routing (mirror of `helm/.../ingress.yaml`) |

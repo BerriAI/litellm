@@ -11,11 +11,11 @@ TFVARS ?= $(MAKEFILE_DIR)dev.tfvars
 
 # The module declares no provider block, so the AWS provider resolves its region
 # from the environment. Read it out of tfvars to keep one source of truth.
-REGION := $(shell sed -n 's/^region *= *"\([^"]*\)".*/\1/p' $(TFVARS) 2>/dev/null)
+REGION := $(shell sed -n 's/^region *= *"\([^"]*\)".*/\1/p' "$(TFVARS)" 2>/dev/null)
 export AWS_REGION := $(REGION)
 export AWS_DEFAULT_REGION := $(REGION)
 
-TF := terraform -chdir=$(MAKEFILE_DIR)
+TF := terraform -chdir="$(MAKEFILE_DIR)"
 
 # Lazy (=, not :=) so a missing state file does not cost a terraform call on
 # every make invocation.
@@ -41,28 +41,18 @@ init: guard-tfvars ## Install providers (idempotent)
 	$(TF) init
 
 plan: init ## Show what would change
-	$(TF) plan -var-file=$(TFVARS)
+	$(TF) plan -var-file="$(TFVARS)"
 
 deploy: init ## Create or update the stack (prompts before applying)
-	$(TF) apply -var-file=$(TFVARS)
+	$(TF) apply -var-file="$(TFVARS)"
 
 destroy: init ## Tear the whole stack down (prompts before destroying)
-	$(TF) destroy -var-file=$(TFVARS)
-
-start: guard-cluster ## Scale the gateway to 1 task
-	aws ecs update-service --cluster $(CLUSTER) \
-		--service $(CLUSTER)-gateway --desired-count 1 --no-cli-pager \
-		--query 'service.desiredCount'
-
-stop: guard-cluster ## Scale the gateway to 0 tasks, leaving ALB billing
-	aws ecs update-service --cluster $(CLUSTER) \
-		--service $(CLUSTER)-gateway --desired-count 0 --no-cli-pager \
-		--query 'service.desiredCount'
+	$(TF) destroy -var-file="$(TFVARS)"
 
 url: guard-tfvars ## Print the ALB URL
 	@$(TF) output -raw alb_url && echo
 
-key: guard-tfvars ## Print the generated LITELLM_MASTER_KEY
+key: guard-tfvars ## Print the LITELLM_MASTER_KEY (auto-generated if none was passed)
 	@aws secretsmanager get-secret-value \
 		--secret-id $$($(TF) output -raw master_key_secret_arn) \
 		--query SecretString --output text

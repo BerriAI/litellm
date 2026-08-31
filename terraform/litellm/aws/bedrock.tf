@@ -22,16 +22,14 @@ data "aws_iam_policy_document" "bedrock_invoke" {
   dynamic "statement" {
     for_each = var.enable_bedrock_mantle ? [1] : []
 
+    # Every Mantle model is served under a project, and the AWS-managed
+    # AmazonBedrockMantleInferenceAccess scopes CreateInference the same way.
+    # Wildcard-on-* would let a compromised task push traffic through another
+    # team's project with a different DataRetentionMode.
     content {
       sid       = "BedrockMantleCreateInference"
       actions   = ["bedrock-mantle:CreateInference"]
-      resources = ["*"]
-
-      condition {
-        test     = "StringEquals"
-        variable = "aws:RequestedRegion"
-        values   = [data.aws_region.current.name]
-      }
+      resources = ["arn:${data.aws_partition.current.partition}:bedrock-mantle:${var.region}:${data.aws_caller_identity.current.account_id}:project/*"]
     }
   }
 }
@@ -42,18 +40,6 @@ resource "aws_iam_policy" "bedrock_invoke" {
   policy = data.aws_iam_policy_document.bedrock_invoke[0].json
 
   tags = local.tags
-
-  # The module declares no provider block, so the provider takes its region from
-  # the environment while var.region drives naming and subnets. If the two
-  # disagree, the Mantle statement's aws:RequestedRegion condition silently
-  # pins to the provider's region and every Mantle call is denied with no hint
-  # why. Fail at plan time instead.
-  lifecycle {
-    precondition {
-      condition     = !var.enable_bedrock_mantle || data.aws_region.current.name == var.region
-      error_message = "Provider region ${data.aws_region.current.name} != var.region ${var.region}, which would pin enable_bedrock_mantle's aws:RequestedRegion condition to the wrong region. Export AWS_REGION=${var.region} before running Terraform."
-    }
-  }
 }
 
 resource "aws_iam_role_policy_attachment" "task_bedrock_invoke" {
@@ -88,7 +74,7 @@ data "aws_iam_policy_document" "bedrock_model_import_assume" {
     condition {
       test     = "ArnLike"
       variable = "aws:SourceArn"
-      values   = ["arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:model-import-job/*"]
+      values   = ["arn:${data.aws_partition.current.partition}:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:model-import-job/*"]
     }
   }
 }

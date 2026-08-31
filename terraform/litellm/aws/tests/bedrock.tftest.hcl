@@ -14,14 +14,6 @@ mock_provider "aws" {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
     }
   }
-
-  # The Mantle policy's precondition compares the provider's region against
-  # var.region, and a generated placeholder would fail it every time.
-  mock_data "aws_region" {
-    defaults = {
-      name = "us-east-1"
-    }
-  }
 }
 mock_provider "random" {}
 
@@ -154,6 +146,33 @@ run "a_non_bedrock_arn_is_rejected" {
 
   variables {
     bedrock_model_arns = ["arn:aws:s3:::some-bucket/*"]
+  }
+
+  expect_failures = [
+    var.bedrock_model_arns,
+  ]
+}
+
+# Bare-partition wildcards are the ARN forms that read like real Bedrock ARNs
+# but match every resource, and are what the "resource type slug" clause of
+# the regex is there to reject.
+run "a_service_only_bedrock_arn_is_rejected" {
+  command = plan
+
+  variables {
+    bedrock_model_arns = ["arn:aws:bedrock:*"]
+  }
+
+  expect_failures = [
+    var.bedrock_model_arns,
+  ]
+}
+
+run "an_all_segments_wildcard_bedrock_arn_is_rejected" {
+  command = plan
+
+  variables {
+    bedrock_model_arns = ["arn:aws:bedrock:*:*:*"]
   }
 
   expect_failures = [

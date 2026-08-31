@@ -581,17 +581,18 @@ variable "bedrock_model_arns" {
     Non-empty attaches a policy to the task role granting
     `bedrock:InvokeModel` + `bedrock:InvokeModelWithResponseStream` on exactly
     these resources, so Bedrock entries in `proxy_config` authenticate with the
-    task role and need no API key in `gateway_extra_secrets`. Wildcards are
-    allowed. Invoking a cross-region inference profile (`us.anthropic.…`)
-    requires both the profile ARN and the underlying foundation-model ARN in
-    every region the profile can route to.
+    task role and need no API key in `gateway_extra_secrets`. Wildcards within
+    the resource segment are fine; wildcards in the account or resource-type
+    segment are not. Invoking a cross-region inference profile
+    (`us.anthropic.…`) requires both the profile ARN and the underlying
+    foundation-model ARN in every region the profile can route to.
   EOT
   type        = list(string)
   default     = []
 
   validation {
-    condition     = alltrue([for a in var.bedrock_model_arns : can(regex("^arn:aws[a-z-]*:bedrock:", a))])
-    error_message = "Every bedrock_model_arns entry must be a Bedrock ARN starting with arn:aws:bedrock:. A bare \"*\" would let the task role invoke every Bedrock resource in the account, including other teams' provisioned throughput and private imported models; wildcard within an ARN instead, e.g. arn:aws:bedrock:*::foundation-model/anthropic.*."
+    condition     = alltrue([for a in var.bedrock_model_arns : can(regex("^arn:aws[a-z-]*:bedrock:[^:]*:[^:]*:[a-z-]+/", a))])
+    error_message = "Every bedrock_model_arns entry must be a Bedrock ARN with a real resource type, e.g. arn:aws:bedrock:*::foundation-model/anthropic.*. Bare wildcards on the account or resource-type segment (\"*\", \"arn:aws:bedrock:*\", \"arn:aws:bedrock:*:*:*\") are rejected, because they would let the task role invoke every Bedrock resource in the account, including other teams' provisioned throughput and private imported models."
   }
 }
 
@@ -600,8 +601,8 @@ variable "enable_bedrock_mantle" {
     Grant the task role `bedrock-mantle:CreateInference`, required by
     `bedrock_mantle/...` models (OpenAI models hosted on Bedrock), which
     authorize against the mantle action rather than `bedrock:InvokeModel`.
-    The resource is a wildcard because the mantle surface exposes no per-model
-    ARN; the statement is scoped by an `aws:RequestedRegion` condition instead.
+    The grant is scoped to `project/*` under this account in `var.region`,
+    matching AWS's own `AmazonBedrockMantleInferenceAccess`.
   EOT
   type        = bool
   default     = false

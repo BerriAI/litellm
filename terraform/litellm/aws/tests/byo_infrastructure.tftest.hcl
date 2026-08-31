@@ -10,14 +10,6 @@ mock_provider "aws" {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
     }
   }
-
-  # check.provider_region_matches_var_region compares this against var.region,
-  # and a generated placeholder would trip it on every run below.
-  mock_data "aws_region" {
-    defaults = {
-      name = "us-east-1"
-    }
-  }
 }
 mock_provider "random" {}
 
@@ -321,22 +313,6 @@ run "redis_less_single_process_gateway_is_not_flagged" {
     condition     = local.max_gateway_processes == 1
     error_message = "One task with one worker is a single process, which is the supported way to run without Redis."
   }
-}
-
-# The mocked provider sits in us-east-1, so asking for a stack in us-west-2 is
-# the mismatch that silently builds resources in one region with ARNs naming
-# another.
-run "provider_region_other_than_var_region_is_flagged" {
-  command = plan
-
-  variables {
-    region = "us-west-2"
-    azs    = ["us-west-2a", "us-west-2b"]
-  }
-
-  expect_failures = [
-    check.provider_region_matches_var_region,
-  ]
 }
 
 run "no_database_and_no_redis_drops_the_schema_migration" {
