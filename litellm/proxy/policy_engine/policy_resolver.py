@@ -11,6 +11,7 @@ Handles:
 from collections.abc import Sequence
 from typing import Final
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine import (
@@ -29,21 +30,7 @@ def _plain_stage(hook: object) -> str | None:
     return None
 
 
-def _list_gated_stages_for_guardrail(guardrail_name: str) -> frozenset[str] | None:
-    """
-    The lifecycle stages where this guardrail only runs if its name is in the
-    request's flat guardrails list, or None when they cannot be determined
-    statically (enterprise tag-based Mode hooks, whose stages depend on
-    request tags).
-
-    An unregistered name or an event_hook of None yields an empty set: the
-    flat list never gates such a guardrail, so dropping the name from the
-    list cannot suppress anything.
-    """
-    from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
-
-    callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
-    event_hook: Final = callback.event_hook if callback is not None else None
+def _gated_stages_for_event_hook(event_hook: object) -> frozenset[str] | None:
     if event_hook is None:
         return frozenset()
     hooks: Final = tuple(event_hook) if isinstance(event_hook, list) else (event_hook,)
@@ -51,6 +38,35 @@ def _list_gated_stages_for_guardrail(guardrail_name: str) -> frozenset[str] | No
     if any(stage is None for stage in stages):
         return None
     return frozenset(stage for stage in stages if stage is not None and stage != GuardrailEventHooks.logging_only.value)
+
+
+def _list_gated_stages_for_guardrail(guardrail_name: str) -> frozenset[str] | None:
+    """
+    The lifecycle stages where this guardrail only runs if its name is in the
+    request's flat guardrails list, or None when they cannot be determined
+    statically (enterprise tag-based Mode hooks, whose stages depend on
+    request tags).
+
+    Stages are unioned across every registered callback carrying the name:
+    one guardrail_name can map to several callbacks with different hooks
+    (e.g. Presidio registers a post_call output-masking sibling alongside the
+    configured one, and duplicate-name deployments are supported for load
+    balancing), and stripping the name gates all of them.
+
+    An unregistered name or an event_hook of None yields an empty set: the
+    flat list never gates such a guardrail, so dropping the name from the
+    list cannot suppress anything.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    stage_sets: Final = tuple(
+        _gated_stages_for_event_hook(callback.event_hook)
+        for callback in litellm.callbacks
+        if isinstance(callback, CustomGuardrail) and callback.guardrail_name == guardrail_name
+    )
+    if any(stages is None for stages in stage_sets):
+        return None
+    return frozenset(stage for stages in stage_sets if stages is not None for stage in stages)
 
 
 class PolicyResolver:

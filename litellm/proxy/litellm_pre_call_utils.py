@@ -3012,7 +3012,8 @@ def _apply_resolved_guardrails_to_metadata(
     # Combine existing guardrails with policy-resolved guardrails (no duplicates).
     # Drop a name only when pipelines cover every stage it supports: a pipeline
     # manages just its own mode, so the guardrail must stay in the flat list for
-    # its stages outside that mode (mode-scoped execution skips prevent doubles).
+    # its stages outside that mode. The executor's pre_call skips keyed on
+    # _pipeline_managed_guardrails prevent double runs at that stage.
     combined = set(existing_guardrails)
     combined.update(resolved_guardrails)
     combined -= fully_pipeline_covered_guardrails
