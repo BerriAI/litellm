@@ -197,6 +197,11 @@ class _GlobalTagRateLimitStash:
     isolates each call's own reservations regardless of nesting.
     """
 
+    # Claimed once by this stash's first admission attempt, like owner_key_hash
+    # below -- a later _pre_call_with_fallbacks retry must not push this bucket
+    # epoch forward, or a caller straddling a period rollover between the
+    # in-scope attempt and an out-of-scope fallback gets its usage charged
+    # against a bucket admission never actually checked.
     admission_time: float | None = None
     # Every model any admission attempt for this call_id has classified
     # entries against, accumulated rather than overwritten: a
@@ -593,7 +598,8 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         renewal_allowed: Final = stash.owner_key_hash == key_hash
 
         now: Final = self._time_provider().timestamp()
-        stash.admission_time = now
+        if stash.admission_time is None:
+            stash.admission_time = now
         classified: Final = self._classify(config, tags, key_alias, key_hash, now, model)
         if not classified:
             self._record_admitted_model(stash, model, renewal_allowed)

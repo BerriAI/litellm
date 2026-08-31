@@ -16,8 +16,10 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.global_tag_rate_limits_hook import (
+    _bucket_key,
     _PROXY_GlobalTagRateLimitsHook,
 )
+from litellm.types.router import TagRateLimitEntry
 
 
 class TimeController:
@@ -603,6 +605,78 @@ async def test_apply_to_models_accounts_when_a_fallback_retry_re_admits_with_a_d
             data={**_data(["end_user_id:u1"], call_id="call-2"), "model": "opus-chain"},
             call_type="completion",
         )
+
+
+@pytest.mark.asyncio
+async def test_an_out_of_scope_fallback_retry_does_not_move_accounting_into_a_later_bucket(
+    time_controller, monkeypatch
+):
+    """
+    veria-ai finding: async_pre_call_hook overwrote stash.admission_time on
+    every attempt, including an out-of-scope fallback retry that never
+    matched any entry. If that retry lands in a different period bucket
+    than the original in-scope attempt (e.g. straddling a period rollover),
+    success-time accounting used the retry's timestamp to pick the bucket,
+    charging spend against a bucket admission never actually checked and
+    letting a caller dodge the limit by timing the retry across a rollover.
+    """
+    entry = TagRateLimitEntry(
+        name="chain_spend",
+        tag_id="end_user_id",
+        limit=10.0,
+        period_seconds=60,
+        apply_to_models=("opus-chain",),
+    )
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {"dollar_limits": {"limits": [entry.model_dump()]}},
+    )
+    hook = _make_hook(time_controller)
+    admission_bucket_id = int(time_controller.now().timestamp()) // 60
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "opus-chain"},
+        call_type="completion",
+    )
+    # Crosses into the next 60s bucket before the out-of-scope fallback retry.
+    time_controller.advance(65)
+    retry_bucket_id = int(time_controller.now().timestamp()) // 60
+    assert retry_bucket_id != admission_bucket_id
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "sonnet-chain"},
+        call_type="completion",
+    )
+
+    kwargs = {
+        "litellm_call_id": "call-1",
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "model": "sonnet-chain",
+        "standard_logging_object": {
+            "total_tokens": 0,
+            "response_cost": 12.0,
+            "model": "sonnet-chain",
+            "model_group": "sonnet-chain",
+        },
+    }
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # The spend must have landed in the bucket the original, in-scope
+    # admission actually checked, not the fresh bucket opened by the later,
+    # out-of-scope retry.
+    admission_key = _bucket_key(entry, "dollars", "u1", admission_bucket_id, key_hash=None)
+    retry_key = _bucket_key(entry, "dollars", "u1", retry_bucket_id, key_hash=None)
+    admission_bucket_value = await hook.internal_usage_cache.async_get_cache(
+        key=admission_key, litellm_parent_otel_span=None
+    )
+    retry_bucket_value = await hook.internal_usage_cache.async_get_cache(key=retry_key, litellm_parent_otel_span=None)
+    assert float(admission_bucket_value) == 12.0
+    assert retry_bucket_value is None
 
 
 @pytest.mark.asyncio
