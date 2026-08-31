@@ -148,7 +148,7 @@ def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> dict[str, Any]:
+def load_openapi_spec(filepath: str) -> Mapping[str, Any]:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """
@@ -166,7 +166,7 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-def _parse_openapi_spec(text: str) -> dict[str, Any]:
+def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
     """Parse JSON or YAML OpenAPI documents into a mapping."""
     try:
         parsed: Any = json.loads(text)
