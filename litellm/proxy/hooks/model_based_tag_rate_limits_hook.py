@@ -1770,7 +1770,13 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             )
         await self._release_keys(release_keys)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self,
+        kwargs,  # noqa: ANN001  # matches CustomLogger.async_log_failure_event; kwargs is dict[str, Any] codebase-wide
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+    ) -> None:
         # No special-case skip for this hook's own tag_rate_limit_exceeded
         # rejection: a hop whose own admission rejects never reaches the
         # point where a concurrency reservation is queued (see
@@ -1794,7 +1800,13 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         if release_keys:
             await self._release_keys(release_keys)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(
+        self,
+        kwargs,  # noqa: ANN001  # matches CustomLogger.async_log_success_event; kwargs is dict[str, Any] codebase-wide
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+    ) -> None:
         # Not `only_own_lineage=True`: see async_log_failure_event's own comment above.
         release_keys: Final = await self._pop_pending_concurrency_keys(kwargs)
         if release_keys:
