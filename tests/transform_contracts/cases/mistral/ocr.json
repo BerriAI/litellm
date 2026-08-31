@@ -1,0 +1,530 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "mistral.ocr.get_supported_ocr_params.latest",
+      "operation": "mistral.ocr.get_supported_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest"
+      },
+      "expected": [
+        "pages",
+        "include_image_base64",
+        "image_limit",
+        "image_min_size",
+        "bbox_annotation_format",
+        "document_annotation_format",
+        "document_annotation_prompt",
+        "extract_header",
+        "extract_footer",
+        "table_format",
+        "confidence_scores_granularity",
+        "include_blocks",
+        "id"
+      ]
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.extract_header_true",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "extract_header": true
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "extract_header": true
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.extract_footer_true",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "extract_footer": true
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "extract_footer": true
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.extract_header_and_footer",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "extract_header": true,
+          "extract_footer": false
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "extract_header": true,
+        "extract_footer": false
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.unsupported_param_dropped",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "extract_header": true,
+          "unsupported_param": "value"
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "extract_header": true
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.table_format_html",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "table_format": "html"
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "table_format": "html"
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.table_format_markdown",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "table_format": "markdown"
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "table_format": "markdown"
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.confidence_scores_word",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "confidence_scores_granularity": "word"
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "confidence_scores_granularity": "word"
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.confidence_scores_page",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "confidence_scores_granularity": "page"
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "confidence_scores_granularity": "page"
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.document_annotation_prompt",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "document_annotation_prompt": "Extract all invoice line items"
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "document_annotation_prompt": "Extract all invoice line items"
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.include_blocks_true",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "include_blocks": true
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "include_blocks": true
+      }
+    },
+    {
+      "id": "mistral.ocr.map_ocr_params.request_id",
+      "operation": "mistral.ocr.map_ocr_params",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "non_default_params": {
+          "id": "req-123"
+        },
+        "optional_params": {}
+      },
+      "expected": {
+        "id": "req-123"
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_request.table_format_html",
+      "operation": "mistral.ocr.transform_ocr_request",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "document": {
+          "type": "document_url",
+          "document_url": "https://example.com/doc.pdf"
+        },
+        "optional_params": {
+          "table_format": "html"
+        },
+        "headers": {}
+      },
+      "expected": {
+        "data": {
+          "model": "mistral-ocr-latest",
+          "document": {
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+          },
+          "table_format": "html"
+        },
+        "files": null
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_request.confidence_scores_word",
+      "operation": "mistral.ocr.transform_ocr_request",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "document": {
+          "type": "document_url",
+          "document_url": "https://example.com/doc.pdf"
+        },
+        "optional_params": {
+          "confidence_scores_granularity": "word"
+        },
+        "headers": {}
+      },
+      "expected": {
+        "data": {
+          "model": "mistral-ocr-latest",
+          "document": {
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+          },
+          "confidence_scores_granularity": "word"
+        },
+        "files": null
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_request.document_annotation_prompt",
+      "operation": "mistral.ocr.transform_ocr_request",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "document": {
+          "type": "document_url",
+          "document_url": "https://example.com/doc.pdf"
+        },
+        "optional_params": {
+          "document_annotation_prompt": "Extract all invoice line items"
+        },
+        "headers": {}
+      },
+      "expected": {
+        "data": {
+          "model": "mistral-ocr-latest",
+          "document": {
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+          },
+          "document_annotation_prompt": "Extract all invoice line items"
+        },
+        "files": null
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_request.request_id",
+      "operation": "mistral.ocr.transform_ocr_request",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "document": {
+          "type": "document_url",
+          "document_url": "https://example.com/doc.pdf"
+        },
+        "optional_params": {
+          "id": "req-123"
+        },
+        "headers": {}
+      },
+      "expected": {
+        "data": {
+          "model": "mistral-ocr-latest",
+          "document": {
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+          },
+          "id": "req-123"
+        },
+        "files": null
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_request.extract_header_true",
+      "operation": "mistral.ocr.transform_ocr_request",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "document": {
+          "type": "document_url",
+          "document_url": "https://example.com/doc.pdf"
+        },
+        "optional_params": {
+          "extract_header": true
+        },
+        "headers": {}
+      },
+      "expected": {
+        "data": {
+          "model": "mistral-ocr-latest",
+          "document": {
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+          },
+          "extract_header": true
+        },
+        "files": null
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_request.include_blocks_true",
+      "operation": "mistral.ocr.transform_ocr_request",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "document": {
+          "type": "document_url",
+          "document_url": "https://example.com/doc.pdf"
+        },
+        "optional_params": {
+          "include_blocks": true
+        },
+        "headers": {}
+      },
+      "expected": {
+        "data": {
+          "model": "mistral-ocr-latest",
+          "document": {
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+          },
+          "include_blocks": true
+        },
+        "files": null
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_request.pages",
+      "operation": "mistral.ocr.transform_ocr_request",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "document": {
+          "type": "document_url",
+          "document_url": "https://example.com/doc.pdf"
+        },
+        "optional_params": {
+          "pages": [0, 1]
+        },
+        "headers": {}
+      },
+      "expected": {
+        "data": {
+          "model": "mistral-ocr-latest",
+          "document": {
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+          },
+          "pages": [0, 1]
+        },
+        "files": null
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_request.multiple_optional_params",
+      "operation": "mistral.ocr.transform_ocr_request",
+      "input": {
+        "model": "mistral-ocr-latest",
+        "document": {
+          "type": "document_url",
+          "document_url": "https://example.com/doc.pdf"
+        },
+        "optional_params": {
+          "table_format": "html",
+          "confidence_scores_granularity": "page",
+          "extract_header": true
+        },
+        "headers": {}
+      },
+      "expected": {
+        "data": {
+          "model": "mistral-ocr-latest",
+          "document": {
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+          },
+          "table_format": "html",
+          "confidence_scores_granularity": "page",
+          "extract_header": true
+        },
+        "files": null
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_response.blocks_and_confidence_scores",
+      "operation": "mistral.ocr.transform_ocr_response",
+      "input": {
+        "model": "mistral-ocr-4-0",
+        "response": {
+          "status_code": 200,
+          "body": {
+            "pages": [
+              {
+                "index": 0,
+                "markdown": "# Invoice",
+                "blocks": [
+                  {
+                    "type": "title",
+                    "top_left_x": 10,
+                    "top_left_y": 20,
+                    "bottom_right_x": 300,
+                    "bottom_right_y": 60,
+                    "content": "Invoice"
+                  }
+                ],
+                "confidence_scores": {
+                  "page": 0.98
+                }
+              }
+            ],
+            "model": "mistral-ocr-4-0",
+            "usage_info": {
+              "pages_processed": 1
+            }
+          }
+        }
+      },
+      "expected": {
+        "pages": [
+          {
+            "index": 0,
+            "markdown": "# Invoice",
+            "images": null,
+            "dimensions": null,
+            "blocks": [
+              {
+                "type": "title",
+                "top_left_x": 10,
+                "top_left_y": 20,
+                "bottom_right_x": 300,
+                "bottom_right_y": 60,
+                "content": "Invoice"
+              }
+            ],
+            "confidence_scores": {
+              "page": 0.98
+            }
+          }
+        ],
+        "model": "mistral-ocr-4-0",
+        "document_annotation": null,
+        "usage_info": {
+          "pages_processed": 1,
+          "credits": null,
+          "doc_size_bytes": null
+        },
+        "content": null,
+        "tables": null,
+        "keyValuePairs": null,
+        "object": "ocr"
+      }
+    },
+    {
+      "id": "mistral.ocr.transform_ocr_response.ocr4_page_fields",
+      "operation": "mistral.ocr.transform_ocr_response",
+      "input": {
+        "model": "mistral-ocr-4-0",
+        "response": {
+          "status_code": 200,
+          "body": {
+            "pages": [
+              {
+                "index": 0,
+                "markdown": "table page",
+                "tables": [
+                  {
+                    "rows": 2,
+                    "cols": 3
+                  }
+                ],
+                "hyperlinks": [
+                  "https://example.com"
+                ],
+                "header": "Invoice header",
+                "footer": "Page 1"
+              }
+            ],
+            "model": "mistral-ocr-4-0",
+            "usage_info": {
+              "pages_processed": 1
+            }
+          }
+        }
+      },
+      "expected": {
+        "pages": [
+          {
+            "index": 0,
+            "markdown": "table page",
+            "images": null,
+            "dimensions": null,
+            "tables": [
+              {
+                "rows": 2,
+                "cols": 3
+              }
+            ],
+            "hyperlinks": [
+              "https://example.com"
+            ],
+            "header": "Invoice header",
+            "footer": "Page 1"
+          }
+        ],
+        "model": "mistral-ocr-4-0",
+        "document_annotation": null,
+        "usage_info": {
+          "pages_processed": 1,
+          "credits": null,
+          "doc_size_bytes": null
+        },
+        "content": null,
+        "tables": null,
+        "keyValuePairs": null,
+        "object": "ocr"
+      }
+    }
+  ]
+}
