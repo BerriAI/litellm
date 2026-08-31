@@ -17176,7 +17176,7 @@ def test_validate_soft_budget_value_accepts_valid_values(valid_value):
         _validate_soft_budget_value,
     )
 
-    _validate_soft_budget_value(valid_value)
+    assert _validate_soft_budget_value(valid_value) is None
 
 
 @pytest.mark.parametrize("invalid_value", [-5.0, float("nan"), float("inf")])
