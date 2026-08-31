@@ -1561,6 +1561,7 @@ async def _user_api_key_auth_builder(
                         skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
                         if skip_budget_checks:
                             verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
+                    valid_token.skip_budget_checks = skip_budget_checks
 
                     # Fetch project object for JWT path if project_id is set
                     _jwt_project_obj = None
@@ -1984,6 +1985,7 @@ async def _user_api_key_auth_builder(
                 skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
                 if skip_budget_checks:
                     verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
+            valid_token.skip_budget_checks = skip_budget_checks
 
             # Check 3. Check if user is in their team budget
             if not skip_budget_checks and valid_token.team_member_spend is not None:
@@ -2615,6 +2617,7 @@ async def _run_centralized_common_checks(
         request=request,
         llm_router=llm_router,
     )
+    user_api_key_auth_obj.skip_budget_checks = skip_budget_checks
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
     # any tag merge runs. Without this, header tags from

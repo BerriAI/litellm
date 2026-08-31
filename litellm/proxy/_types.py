@@ -2888,6 +2888,12 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    # Whether this request is exempt from budget enforcement because the requested
+    # model is zero-cost. Decided once in user_api_key_auth() and published here so
+    # every enforcement point agrees, including the ones that run after auth.
+    # exclude=True keeps it out of serialised key responses; the default enforces
+    # the budget, so a path that never computed the exemption fails closed.
+    skip_budget_checks: bool = Field(default=False, exclude=True)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used

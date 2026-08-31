@@ -32,6 +32,19 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             if max_budget is None or user_id is None:
                 return
 
+            # A zero-cost model is exempt from the personal budget, as it already is
+            # from the key, team and end-user budgets. The exemption is not recomputed
+            # here: user_api_key_auth() decided it and published it on the auth object,
+            # the same way budget_reservation below is handed in, so this hook cannot
+            # disagree with the checks that ran during auth.
+            if user_api_key_dict.skip_budget_checks:
+                verbose_proxy_logger.debug(
+                    "MaxBudgetLimiter: user_id=%s is over budget but the request is exempt "
+                    "(zero-cost model) - allowing",
+                    user_id,
+                )
+                return
+
             from litellm.proxy.proxy_server import general_settings
 
             if (
