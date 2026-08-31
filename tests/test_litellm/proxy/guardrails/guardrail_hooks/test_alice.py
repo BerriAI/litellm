@@ -533,6 +533,36 @@ class TestAliceTransportFailures:
 
         assert result["texts"] == ["hello"]
 
+    @pytest.mark.asyncio
+    async def test_an_undecodable_body_fails_closed_by_default(self):
+        """UnicodeDecodeError is a sibling of JSONDecodeError under ValueError, not a subclass."""
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(
+            return_value=Response(
+                status_code=200,
+                content=b"\xff\xfe not utf-8",
+                request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
+            )
+        )
+
+        with pytest.raises(GuardrailRaisedException, match="unavailable"):
+            await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    @pytest.mark.asyncio
+    async def test_an_undecodable_body_fails_open_when_configured(self):
+        guardrail = _guardrail(unreachable_fallback="fail_open")
+        guardrail.async_handler.post = AsyncMock(
+            return_value=Response(
+                status_code=200,
+                content=b"\xff\xfe not utf-8",
+                request=Request("POST", "https://api.alice.io/v2/evaluate/litellm"),
+            )
+        )
+
+        result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+        assert result["texts"] == ["hello"]
+
 
 class TestAliceSerialization:
     """`request_data` carries live objects, so it cannot be posted as it stands."""

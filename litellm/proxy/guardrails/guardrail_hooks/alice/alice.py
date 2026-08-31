@@ -195,10 +195,11 @@ class AliceGuardrail(CustomGuardrail):
             raise
         except httpx.RequestError as e:
             return self._on_unreachable(e, inputs)
-        except (json.JSONDecodeError, TypeError) as e:
-            # A body that cannot be parsed as JSON, or that parses to something other than an
-            # object, is as unreachable as a dropped connection: this deployment's policy
-            # decides, not a raw exception.
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+            # A body that cannot be decoded, cannot be parsed as JSON, or parses to something
+            # other than an object, is as unreachable as a dropped connection: this deployment's
+            # policy decides, not a raw exception. UnicodeDecodeError is named explicitly because
+            # it is a sibling of JSONDecodeError under ValueError, not a subclass of it.
             return self._on_unreachable(e, inputs)
 
         return self._enforce(verdict, inputs)
