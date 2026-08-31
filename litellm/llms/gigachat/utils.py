@@ -15,10 +15,10 @@ def convert_usage(usage_data: Mapping[str, int]) -> Usage:
     )
 
     return Usage(
-        prompt_tokens=usage_data.get("prompt_tokens", 0),
+        prompt_tokens=usage_data.get("prompt_tokens", 0) + precached_prompt_tokens,
         completion_tokens=usage_data.get("completion_tokens", 0),
         prompt_tokens_details=prompt_tokens_details,
-        total_tokens=usage_data.get("total_tokens", 0),
+        total_tokens=usage_data.get("total_tokens", 0) + precached_prompt_tokens,
     )
 
 
