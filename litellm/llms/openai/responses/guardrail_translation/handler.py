@@ -58,6 +58,8 @@ from litellm.types.llms.openai import (
     ContentPartAddedEvent,
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
+    ErrorEvent,
+    ErrorEventError,
     OpenAIMcpServerTool,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
@@ -77,6 +79,8 @@ from litellm.types.responses.main import (
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
     from litellm.integrations.custom_guardrail import (
         CustomGuardrail,
         ModifyResponseException,
@@ -98,6 +102,14 @@ class ResponsesStreamChunk(TypedDict, total=False):
 
     type: ReadOnly[str]
     text: ReadOnly[str]
+
+
+def _next_stream_sequence_number(responses_so_far: Sequence[Any] | None) -> int:
+    sequence_numbers: Final = (
+        item.get("sequence_number") if isinstance(item, dict) else getattr(item, "sequence_number", None)
+        for item in reversed(responses_so_far or ())
+    )
+    return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
 
 class OpenAIResponsesHandler(BaseTranslation):
@@ -640,6 +652,29 @@ class OpenAIResponsesHandler(BaseTranslation):
         }
         return responses_so_far[-1].get("type") in terminal_types
 
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[Any] | None:
+        from litellm.proxy.common_request_processing import (
+            serialize_http_exception_detail,
+        )
+
+        message, _ = serialize_http_exception_detail(exc.detail)
+        return (
+            ErrorEvent(
+                type=ResponsesAPIStreamEvents.ERROR,
+                sequence_number=_next_stream_sequence_number(responses_so_far),
+                error=ErrorEventError(
+                    type="guardrail_error",
+                    code=str(exc.status_code),
+                    message=message,
+                    param=None,
+                ),
+            ),
+        )
+
     def get_streaming_string_so_far(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> str:
         """
         Get the string so far from the responses so far.
@@ -871,8 +906,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> Sequence[ResponsesAPIStreamingResponse]:
         response_id, model, output_index = _continuation_identity(exc, responses_so_far)
         item: Final = _blocked_output_item(exc)
-        item_id: Final = item["id"]
-        item_model: Final = BaseLiteLLMOpenAIResponseObject.model_validate(item)
+        item_id: Final = item.id
         part: Final[_BlockedContentPart] = {"type": "output_text", "text": exc.message, "annotations": ()}
         done_part: Final[_BlockedDoneContentPart] = {
             "type": "output_text",
@@ -884,7 +918,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                 output_index=output_index,
-                item=item_model,
+                item=item,
             ),
             ContentPartAddedEvent(
                 type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
@@ -917,7 +951,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             OutputItemDoneEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
-                item=item_model,
+                item=item,
             ),
             ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
@@ -939,7 +973,7 @@ class _BlockedDoneContentPart(TypedDict):
     logprobs: ReadOnly[None]
 
 
-class _BlockedOutputItem(TypedDict):
+class _BlockedItemPayload(TypedDict):
     type: ReadOnly[str]
     id: ReadOnly[str]
     status: ReadOnly[str]
@@ -952,27 +986,27 @@ class _BlockedResponsePayload(TypedDict):
     object: ReadOnly[str]
     created_at: ReadOnly[int]
     model: ReadOnly[str]
-    output: ReadOnly[tuple[_BlockedOutputItem, ...]]
+    output: ReadOnly[tuple[GenericResponseOutputItem, ...]]
     status: ReadOnly[str]
     usage: ReadOnly[ResponseAPIUsage]
 
 
-def _blocked_output_item(exc: "ModifyResponseException") -> _BlockedOutputItem:
-    item: Final[_BlockedOutputItem] = {
+def _blocked_output_item(exc: "ModifyResponseException") -> GenericResponseOutputItem:
+    payload: Final[_BlockedItemPayload] = {
         "type": "message",
         "id": f"msg_{uuid.uuid4()}",
         "status": "completed",
         "role": "assistant",
         "content": ({"type": "output_text", "text": exc.message, "annotations": ()},),
     }
-    return item
+    return GenericResponseOutputItem.model_validate(payload)
 
 
 def _blocked_response(
     exc: "ModifyResponseException",
     response_id: str,
     model: str,
-    output_item: _BlockedOutputItem | None = None,
+    output_item: GenericResponseOutputItem | None = None,
 ) -> ResponsesAPIResponse:
     payload: Final[_BlockedResponsePayload] = {
         "id": response_id,

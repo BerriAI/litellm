@@ -2842,6 +2842,11 @@ RoutingDecisionCause = Literal[
     "housekeeping",
     "session_affinity_pin",
     "session_affinity_escalation",
+    # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
+    # human ask), so the session's held routing decision was replayed and the classifier was never
+    # called. Distinct from "session_affinity_pin", which reports the session_affinity flag pinning
+    # every turn including new asks; this cause only appears when session_affinity is off.
+    "user_turn_continuation",
     "default_fallback",
     "keyword",
     "quality_tier",
