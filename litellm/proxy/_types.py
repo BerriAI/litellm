@@ -2541,7 +2541,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     alerting: list | None = Field(
         None,
-        description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
+        description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
     )
     alert_types: list[AlertType] | None = Field(
         None,
