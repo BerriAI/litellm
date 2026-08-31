@@ -63,3 +63,73 @@ resource "aws_iam_role_policy_attachment" "task_bedrock_invoke" {
   role       = aws_iam_role.task.name
   policy_arn = aws_iam_policy.bedrock_invoke[0].arn
 }
+
+# Custom Model Import reads Hugging Face safetensors out of S3 under a role it
+# assumes itself, so this is a service role for Bedrock rather than anything the
+# tasks use. Serving the imported model afterwards is plain `bedrock:InvokeModel`
+# on the imported-model ARN, which belongs in var.bedrock_model_arns.
+data "aws_iam_policy_document" "bedrock_model_import_assume" {
+  count = var.enable_bedrock_custom_model_import ? 1 : 0
+
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["bedrock.amazonaws.com"]
+    }
+
+    # Without these a caller in another account who learns this role's name
+    # could have Bedrock assume it on their behalf and read the bucket.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:model-import-job/*"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "bedrock_model_import" {
+  count = var.enable_bedrock_custom_model_import ? 1 : 0
+
+  # Bedrock assumes this role with its own scoped session policy, so the grant
+  # here has to be a superset of that policy or the intersection denies the
+  # difference. It asks for GetObjectAttributes alongside GetObject, needed to
+  # read a multi-GB safetensors file's part layout before ranged reads. Omitting
+  # it fails the import job with "Encountered an internal error".
+  statement {
+    sid       = "ReadModelWeights"
+    actions   = ["s3:GetObject", "s3:GetObjectAttributes"]
+    resources = ["${aws_s3_bucket.this.arn}/models/*"]
+  }
+
+  # No s3:prefix condition: Bedrock chooses its own list parameters during
+  # import, and a mismatch surfaces as an opaque job failure. Reads stay pinned
+  # to models/ by the statement above.
+  statement {
+    sid       = "ListModelWeights"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.this.arn]
+  }
+}
+
+resource "aws_iam_role" "bedrock_model_import" {
+  count              = var.enable_bedrock_custom_model_import ? 1 : 0
+  name               = "${local.name}-bedrock-model-import"
+  assume_role_policy = data.aws_iam_policy_document.bedrock_model_import_assume[0].json
+
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy" "bedrock_model_import" {
+  count  = var.enable_bedrock_custom_model_import ? 1 : 0
+  name   = "read-model-weights"
+  role   = aws_iam_role.bedrock_model_import[0].id
+  policy = data.aws_iam_policy_document.bedrock_model_import[0].json
+}

@@ -602,6 +602,24 @@ variable "enable_bedrock_mantle" {
   default     = false
 }
 
+variable "enable_bedrock_custom_model_import" {
+  description = <<-EOT
+    Create a service role Bedrock assumes to read Hugging Face model weights
+    out of `models/` in the stack's S3 bucket during a `CreateModelImportJob`.
+    The import job itself is a one-off API call, not a Terraform resource, so
+    this only provisions the role; pass its ARN as `--role-arn` and add the
+    resulting imported-model ARN to `bedrock_model_arns` to let the proxy
+    invoke it.
+
+    Reference the imported model from `proxy_config` as
+    `bedrock/openai/<imported-model-arn>`. Imported models serve behind an
+    OpenAI-compatible runtime, and while Converse accepts the ARN it returns
+    token counts with empty content, so the invoke path is the working one.
+  EOT
+  type        = bool
+  default     = false
+}
+
 # ---------- OpenTelemetry v2 ----------
 #
 # https://docs.litellm.ai/docs/observability/opentelemetry_v2
