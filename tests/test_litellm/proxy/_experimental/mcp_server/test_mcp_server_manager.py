@@ -10914,7 +10914,10 @@ class TestKeyAttachedGuardrailsReachTheMCPPreCallHook:
             seen.update(data)
             return None
 
-        with patch.object(proxy_logging_obj, "pre_call_hook", side_effect=capture_pre_call_hook):
+        with (
+            patch("litellm.proxy.utils._premium_user_check"),
+            patch.object(proxy_logging_obj, "pre_call_hook", side_effect=capture_pre_call_hook),
+        ):
             await MCPServerManager().pre_call_tool_check(
                 name="echo",
                 arguments={"text": "hi"},
