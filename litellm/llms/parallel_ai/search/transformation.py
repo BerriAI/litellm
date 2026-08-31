@@ -73,7 +73,7 @@ class ParallelAISearchRequest(TypedDict, total=False):
 
     search_queries: list[str]  # Required - at least one keyword search query
     objective: str  # Optional - natural-language description of search goal
-    mode: str  # Optional - 'turbo', 'basic', or 'advanced' (default 'advanced')
+    mode: str  # Optional - 'turbo', 'fast', 'basic', or 'advanced' (default 'advanced')
     max_chars_total: int  # Optional - upper bound on total excerpt characters
     session_id: str  # Optional - tracks calls across search/extract requests
     client_model: str  # Optional - model consuming the results
@@ -138,7 +138,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
                 - If string: maps to `search_queries` (single item) and `objective`
                 - If list: maps to `search_queries` (keyword queries)
             optional_params: Optional parameters for the request
-                - mode: Search mode ('turbo', 'basic', 'advanced'); defaults to 'basic'
+                - mode: Search mode ('turbo', 'fast', 'basic', 'advanced'); defaults to 'basic'
                 - processor: Legacy v1beta param; 'base' maps to mode 'basic', 'pro' to 'advanced'
                 - max_results: Maximum number of search results -> `advanced_settings.max_results`
                 - search_domain_filter / include_domains: Domains to include -> `advanced_settings.source_policy.include_domains`

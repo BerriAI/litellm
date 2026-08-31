@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -9,7 +10,14 @@ PARALLEL_AI_DEFAULT_RESULTS: Final = 10
 PARALLEL_AI_ADDITIONAL_RESULT_COST: Final = 0.001
 PARALLEL_AI_USAGE_PARAM: Final = "_parallel_ai_usage"
 PARALLEL_AI_STANDARD_SEARCH_MODEL: Final = "parallel_ai/search"
+PARALLEL_AI_FAST_SEARCH_MODEL: Final = "parallel_ai/search-fast"
 PARALLEL_AI_TURBO_SEARCH_MODEL: Final = "parallel_ai/search-turbo"
+PARALLEL_AI_PRICING_MODEL_BY_MODE: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "fast": PARALLEL_AI_FAST_SEARCH_MODEL,
+        "turbo": PARALLEL_AI_TURBO_SEARCH_MODEL,
+    }
+)
 ADVANCED_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
@@ -54,7 +62,7 @@ def _effective_max_results(optional_params: Mapping[str, object]) -> int:
 
 
 def _request_cost(mode: str) -> float:
-    pricing_model: Final = PARALLEL_AI_TURBO_SEARCH_MODEL if mode == "turbo" else PARALLEL_AI_STANDARD_SEARCH_MODEL
+    pricing_model: Final = PARALLEL_AI_PRICING_MODEL_BY_MODE.get(mode, PARALLEL_AI_STANDARD_SEARCH_MODEL)
     model_info: Final = get_model_info(model=pricing_model, custom_llm_provider="parallel_ai")
     return float(model_info.get("input_cost_per_query") or 0.0)
 

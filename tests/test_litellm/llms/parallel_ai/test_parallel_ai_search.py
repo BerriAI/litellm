@@ -421,6 +421,7 @@ class TestParallelAISearch:
         "mode,usage,max_results,expected_cost",
         [
             ("turbo", [{"name": "sku_search", "count": 1}], None, 0.001),
+            ("fast", [{"name": "sku_search", "count": 1}], None, 0.001),
             ("basic", [{"name": "sku_search", "count": 1}], None, 0.005),
             ("advanced", [{"name": "sku_search", "count": 1}], None, 0.005),
             (

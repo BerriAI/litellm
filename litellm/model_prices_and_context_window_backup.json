@@ -35287,6 +35287,11 @@
         "litellm_provider": "parallel_ai",
         "mode": "search"
     },
+    "parallel_ai/search-fast": {
+        "input_cost_per_query": 0.001,
+        "litellm_provider": "parallel_ai",
+        "mode": "search"
+    },
     "parallel_ai/search-pro": {
         "input_cost_per_query": 0.005,
         "litellm_provider": "parallel_ai",

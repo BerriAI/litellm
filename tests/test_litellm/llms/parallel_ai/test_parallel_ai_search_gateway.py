@@ -63,7 +63,7 @@ def _parallel_search_body() -> dict[str, object]:
     }
 
 
-def _parallel_router() -> Router:
+def _parallel_router(mode: str = "turbo") -> Router:
     return Router(
         model_list=[],
         search_tools=[
@@ -72,7 +72,7 @@ def _parallel_router() -> Router:
                 "litellm_params": {
                     "search_provider": "parallel_ai",
                     "api_key": "parallel-search-key",
-                    "mode": "turbo",
+                    "mode": mode,
                 },
             }
         ],
@@ -142,7 +142,7 @@ def test_parallel_search_gateway_route(client, auth_as, monkeypatch):
 async def test_web_search_interception_executes_parallel_search(monkeypatch):
     """An intercepted web-search call uses the configured Parallel Search tool."""
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    monkeypatch.setattr(proxy_server, "llm_router", _parallel_router())
+    monkeypatch.setattr(proxy_server, "llm_router", _parallel_router(mode="fast"))
     mock_post = _mock_async_post(
         monkeypatch,
         url=PARALLEL_SEARCH_URL,
@@ -188,4 +188,4 @@ async def test_web_search_interception_executes_parallel_search(monkeypatch):
     request_kwargs = mock_post.await_args.kwargs
     assert request_kwargs["url"] == PARALLEL_SEARCH_URL
     assert request_kwargs["headers"]["x-api-key"] == "parallel-search-key"
-    assert request_kwargs["json"]["mode"] == "turbo"
+    assert request_kwargs["json"]["mode"] == "fast"
