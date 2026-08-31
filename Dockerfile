@@ -39,7 +39,9 @@ COPY --from=uvbin /uvx /usr/local/bin/uvx
 
 RUN apk add --no-cache \
     bash \
+    file \
     gcc \
+    make \
     python3 \
     python3-dev \
     rust \
