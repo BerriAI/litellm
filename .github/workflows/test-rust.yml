@@ -132,7 +132,7 @@ jobs:
       - name: Build panic contract wheel
         run: >-
           uv build --wheel --out-dir panic-dist
-          --config-setting "maturin.build-args=--features panic-test"
+          --config-setting "maturin.build-args=--features panic-test,extension-module"
 
       - name: Smoke-test native panic unwinding
         run: python .github/scripts/smoke_test_native_wheel.py panic-dist/*.whl
