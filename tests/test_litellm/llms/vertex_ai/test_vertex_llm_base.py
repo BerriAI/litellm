@@ -1039,6 +1039,25 @@ class TestVertexBase:
             == "https://internal-gateway.example.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent?key=abc"
         )
 
+    def test_check_custom_proxy_vertex_api_base_with_version_path_and_query_streaming_appends_alt_sse(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com/v1beta1?key=abc",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="streamGenerateContent",
+            stream=True,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:streamGenerateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:streamGenerateContent?key=abc&alt=sse"
+        )
+
     def test_check_custom_proxy_vertex_api_base_with_non_version_path_keeps_endpoint_append(self):
         vertex_base = VertexBase()
         gateway_api_base = "https://gateway.example.com/vertex-proxy"

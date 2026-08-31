@@ -684,7 +684,9 @@ class VertexBase:
                 else:
                     url = f"{api_base}:{endpoint}"
             if stream is True:
-                url = url + "?alt=sse"
+                parsed_stream_url: Final = urlparse(url)
+                stream_query: Final = f"{parsed_stream_url.query}&alt=sse" if parsed_stream_url.query else "alt=sse"
+                url = parsed_stream_url._replace(query=stream_query).geturl()
         return auth_header, url
 
     def _get_token_and_url(
