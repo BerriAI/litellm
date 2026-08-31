@@ -9635,6 +9635,7 @@ class Router:
                 verbose_router_logger.warning(
                     "Credential '%s' not found in credential_list", deployment.litellm_params.litellm_credential_name
                 )
+                return None
             credentials.update(credential_values)
             # Remove the credential name since we've resolved it
             credentials.pop("litellm_credential_name", None)
