@@ -302,7 +302,7 @@ class PassthroughGuardrailHandler:
         from litellm.types.guardrails import GuardrailEventHooks
 
         for callback in litellm.callbacks:
-            resolved = get_custom_logger_compatible_class(callback) if isinstance(callback, str) else callback
+            resolved = get_custom_logger_compatible_class(callback) if isinstance(callback, str) else callback  # pyright: ignore[reportArgumentType]  # resolver wants its callback-name literal; str does not narrow to it, and unknown names return None
             if not isinstance(resolved, CustomGuardrail):
                 continue
             try:
