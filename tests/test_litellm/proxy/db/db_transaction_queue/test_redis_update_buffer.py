@@ -523,8 +523,42 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
             "window_start": "2026-08-01T00:00:00.000000",
             "spend": 1.25,
             "started_at": "2026-08-10T12:00:00.000000",
+            "request_ids": [],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_budget_window_payloads_keep_request_ids_for_older_workers(redis_update_buffer, mock_redis_cache):
+    """A leader from before the field was dropped indexes request_ids while
+    merging what it popped, and the pop is destructive, so a payload without
+    the key would cost a rolling deploy those increments."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+        WindowSpendUpdateQueue,
+        build_window_spend_transaction,
+    )
+
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(return_value=[1])
+    window_queue = WindowSpendUpdateQueue()
+    await window_queue.add_update(
+        build_window_spend_transaction(
+            entity_type="key",
+            entity_id="hashed-token",
+            window_duration="30d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=1.25,
+        )
+    )
+
+    await redis_update_buffer.restore_transactions_to_redis(
+        window_spend_update_transactions=await window_queue.flush_and_get_aggregated_window_spend_transactions(),
+    )
+
+    rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
+    restored = json.loads(rpush_list[0]["values"][0])
+    assert [payload["request_ids"] for payload in restored] == [[]]
 
 
 @pytest.mark.asyncio

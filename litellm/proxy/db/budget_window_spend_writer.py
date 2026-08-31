@@ -7,17 +7,15 @@ instead of aggregating LiteLLM_SpendLogs every time a window counter goes cold
 (issue #35766). Raw SQL rather than the Prisma upsert helper because the
 conditional roll cannot be expressed through the query builder.
 
-Seeding a row that does not exist yet reads LiteLLM_SpendLogs once, summing
-only rows that started before the batch being flushed so neither source counts
-the same request twice. Anything at or after that cutoff is owed by an
-increment that still reaches the row, on this pod's next flush or another
-pod's, so a row lags real spend by at most one flush interval of queued
-increments: the same lag the SpendLogs aggregate it replaces (and every other
-spend column) already has. A request whose increment is lost before it flushes,
-which today means the pod dying, is missed by both sources and stays missing.
+Seeding a row that does not exist yet reads LiteLLM_SpendLogs once and takes
+off what the increments being flushed will add, so neither source counts the
+same request twice. A row therefore lags real spend by at most one flush
+interval of increments queued elsewhere: the same lag the SpendLogs aggregate
+it replaces (and every other spend column) already has.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -64,32 +62,45 @@ _ROLL_WINDOW_SPEND_SQL: Final = (
 )
 
 _SEED_FROM_SPEND_LOGS_KEY_SQL: Final = (
-    'SELECT COALESCE(SUM(spend), 0.0) AS total FROM "LiteLLM_SpendLogs" '
-    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC') "
-    "AND \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')"
+    "SELECT COALESCE(SUM(spend), 0.0) AS total, "
+    "COALESCE(SUM(spend) FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
+    'FROM "LiteLLM_SpendLogs" '
+    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
 )
 
 _SEED_FROM_SPEND_LOGS_TEAM_SQL: Final = (
-    'SELECT COALESCE(SUM(spend), 0.0) AS total FROM "LiteLLM_SpendLogs" '
-    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC') "
-    "AND \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')"
+    "SELECT COALESCE(SUM(spend), 0.0) AS total, "
+    "COALESCE(SUM(spend) FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
+    'FROM "LiteLLM_SpendLogs" '
+    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
 )
 
 _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL: Final = (
-    'SELECT COALESCE(SUM(spend), 0.0) AS total FROM "LiteLLM_SpendLogs" '
+    "SELECT COALESCE(SUM(spend), 0.0) AS total, COALESCE(SUM(spend), 0.0) AS before_batch "
+    'FROM "LiteLLM_SpendLogs" '
     "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
 )
 
 _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL: Final = (
-    'SELECT COALESCE(SUM(spend), 0.0) AS total FROM "LiteLLM_SpendLogs" '
+    "SELECT COALESCE(SUM(spend), 0.0) AS total, COALESCE(SUM(spend), 0.0) AS before_batch "
+    'FROM "LiteLLM_SpendLogs" '
     "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
 )
 
 _UPSERT_TRANSACTION_TIMEOUT: Final = timedelta(seconds=60)
 
 
+@dataclass(frozen=True, slots=True)
+class WindowSeedTotals:
+    """The two sums a seed needs: everything persisted for the window, and the
+    part of it that predates the batch being flushed."""
+
+    total: float
+    before_batch: float
+
+
 class WindowSpendLogsAggregate(Protocol):
-    """Sums LiteLLM_SpendLogs for one entity between window_start and the
+    """Sums LiteLLM_SpendLogs for one entity since window_start, split at the
     batch's earliest request.
 
     Injected so the flush can be exercised without a database and so the
@@ -103,18 +114,18 @@ class WindowSpendLogsAggregate(Protocol):
         entity_id: str,
         window_start: datetime,
         batch_started_at: datetime | None,
-    ) -> float | None: ...
+    ) -> WindowSeedTotals | None: ...
 
 
-async def spend_logs_total_before_batch(
+async def spend_logs_seed_totals(
     prisma_client: "PrismaClient",
     entity_type: str,
     entity_id: str,
     window_start: datetime,
     batch_started_at: datetime | None,
-) -> float | None:
-    """LiteLLM_SpendLogs spend for one entity since window_start, stopping
-    before the requests the increments being flushed already cover.
+) -> WindowSeedTotals | None:
+    """LiteLLM_SpendLogs spend for one entity since window_start, both in full
+    and up to the start of the batch being flushed, in one scan.
 
     The spend log writer drains its own queue on a ~2s poll whenever anything
     is queued, while window increments flush on the much slower batch tick, so
@@ -122,11 +133,12 @@ async def spend_logs_total_before_batch(
     already in the table. Counting them in the seed and again in the increment
     is what made a fresh row land at twice the true spend.
 
-    Every log row at or after the cutoff belongs to a request whose own
-    increment still reaches this row, on this pod's next flush or another pod's,
-    so bounding the sum by time needs nothing from the request itself. Without a
-    known start the whole window is summed: that can only over-count once, which
-    enforcement tolerates, whereas under-counting is a budget bypass.
+    Both halves are needed because neither is safe alone: the full sum
+    double-counts this batch, and the sum before the batch drops spend another
+    pod has already persisted but not yet incremented. _seed_base picks between
+    them. Without a known batch start the two are the same sum, so the seed
+    counts everything: that can only over-count once, which enforcement
+    tolerates, whereas under-counting is a budget bypass.
     """
     if entity_type == Litellm_EntityType.KEY.value:
         bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_KEY_SQL, _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL
@@ -145,8 +157,11 @@ async def spend_logs_total_before_batch(
         )
     )
     if not rows:
-        return 0.0
-    return float(rows[0].get("total") or 0.0)
+        return WindowSeedTotals(total=0.0, before_batch=0.0)
+    return WindowSeedTotals(
+        total=float(rows[0].get("total") or 0.0),
+        before_batch=float(rows[0].get("before_batch") or 0.0),
+    )
 
 
 def _exclusion_upper_bound(started_at: datetime) -> datetime:
@@ -186,19 +201,33 @@ async def _seed_base_for_missing_row(
 
     This is the LiteLLM_SpendLogs aggregate the window counter reseed runs on
     every cold counter today, but here it runs once per window lifetime and off
-    the request path, and it stops before the queued increments so they are
+    the request path, and it discounts the queued increments so they are
     counted once.
     """
     if _primary_key(transaction) in existing_primary_keys:
         return 0.0
-    base: Final = await spend_logs_aggregate(
+    totals: Final = await spend_logs_aggregate(
         prisma_client=prisma_client,
         entity_type=transaction["entity_type"],
         entity_id=transaction["entity_id"],
         window_start=datetime.fromisoformat(transaction["window_start"]).replace(tzinfo=timezone.utc),
         batch_started_at=_transaction_started_at(transaction),
     )
-    return float(base or 0.0)
+    if totals is None:
+        return 0.0
+    return _seed_base(totals=totals, batch_spend=transaction["spend"])
+
+
+def _seed_base(totals: WindowSeedTotals, batch_spend: float) -> float:
+    """What the window already held before the increments about to be applied.
+
+    Subtracting the batch's own spend from the full sum keeps every other
+    request in the seed, including the ones another pod persisted and has not
+    incremented yet, which a plain cutoff would drop for good if that pod died.
+    When this batch's own log rows have not landed yet the subtraction takes
+    spend that was never counted, so the sum before the batch is the floor.
+    """
+    return max(totals.total - batch_spend, totals.before_batch)
 
 
 def _transaction_started_at(transaction: WindowSpendTransaction) -> datetime | None:
@@ -232,7 +261,7 @@ def _upsert_params(
 async def commit_window_spend_updates(
     prisma_client: "PrismaClient",
     transactions: Sequence[WindowSpendTransaction],
-    spend_logs_aggregate: WindowSpendLogsAggregate = spend_logs_total_before_batch,
+    spend_logs_aggregate: WindowSpendLogsAggregate = spend_logs_seed_totals,
 ) -> None:
     """Apply aggregated window increments to LiteLLM_BudgetWindowSpend.
 
