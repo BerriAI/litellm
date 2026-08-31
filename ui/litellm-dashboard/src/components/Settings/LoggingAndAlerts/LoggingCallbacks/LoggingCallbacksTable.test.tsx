@@ -97,6 +97,23 @@ describe("LoggingCallbacksTable", () => {
     expect(onDelete).toHaveBeenCalledWith(callback);
   });
 
+  it("hides the actions menu for read-only runtime callback rows", () => {
+    render(
+      <LoggingCallbacksTable
+        callbacks={[
+          { name: "langfuse", type: "success" as const, variables: baseVars },
+          { name: "datadog", type: "success" as const, variables: baseVars, read_only: true },
+        ]}
+        availableCallbacks={{}}
+        onTest={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("callback-actions-langfuse-success")).toBeInTheDocument();
+    expect(screen.queryByTestId("callback-actions-datadog-success")).not.toBeInTheDocument();
+  });
+
   // Regression: `/get_callbacks` returns the same `name` twice when a
   // callback is registered for both success and failure (e.g. `generic_api`
   // → POST to spend-log on both 200 and 4xx/5xx). The UI used to ignore
