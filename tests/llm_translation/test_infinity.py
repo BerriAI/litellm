@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 
 import litellm
+from litellm.llms.infinity.common_utils import InfinityError
 
 from unittest.mock import patch, MagicMock
 
@@ -15,6 +16,14 @@ from test_rerank import assert_response_shape
 from base_embedding_unit_tests import BaseLLMEmbeddingTest
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.types.utils import EmbeddingResponse, Usage
+
+
+def test_infinity_error_default_headers_are_not_shared() -> None:
+    first_error = InfinityError(status_code=500, message="first")
+    second_error = InfinityError(status_code=500, message="second")
+
+    assert first_error.headers is None
+    assert second_error.headers is None
 
 
 @pytest.mark.asyncio()
