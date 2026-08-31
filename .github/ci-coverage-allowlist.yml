@@ -5,6 +5,22 @@ description: >-
 
 test_paths:
   - reason: >-
+      What is left of the caching suite in tests/local_testing that runs nowhere. Every job that
+      globs that directory either deselects it (local_testing_part1 and part2 carry `-k "... and
+      not caching and not cache"`) or keeps only another keyword (langfuse, router, assistants),
+      and no job names these files the way redis_caching_unit_tests names test_dual_cache.py.
+      The gap was eight files and 118 tests when measured 2026-08-20; the five keyless ones now
+      run in the caching-local shard, leaving these three. Measured 2026-08-21 with no provider
+      credentials and no Redis: test_caching.py needs both (37 of 65 fail without them),
+      test_disk_cache_unit_tests.py needs OPENAI_API_KEY for 2 of its 4, and
+      test_gcs_cache_unit_tests.py needs GCS credentials for all 4. They want the keyless/live
+      split that porting tests/local_testing off CircleCI will force, not a job that is red by
+      construction
+    paths:
+      - tests/local_testing/test_caching.py
+      - tests/local_testing/test_disk_cache_unit_tests.py
+      - tests/local_testing/test_gcs_cache_unit_tests.py
+  - reason: >-
       The end-to-end suite runs against a deployed proxy from its own in-cluster rig rather than
       from a pull request; it needs a live gateway and provider credentials no PR job holds
     paths:
@@ -21,72 +37,14 @@ test_paths:
       - tests/documentation_tests/test_requests_lib_usage.py
       - tests/documentation_tests/test_standard_logging_payload.py
   - reason: >-
-      Sibling files here are executed by name from the code-quality workflow; this one is referenced
-      by no job
+      Named like a test but shaped like a benchmark: it fetches live image URLs, times aiohttp
+      against httpx, prints the ratio, and asserts nothing, so pytest cannot collect it (its
+      functions take arguments, not fixtures) and running it beside its siblings in the
+      code-quality workflow would add a network dependency for a number nothing reads. Exempt
+      as a script rather than as an unresolved gap; revisit by deleting it once the aiohttp
+      choice it informed is settled
     paths:
       - tests/code_coverage_tests/test_aio_http_image_conversion.py
-  - reason: >-
-      A second mirror of the package tree living beside tests/test_litellm, which is the mirror the
-      repo convention names; only test_no_hardcoded_secrets.py is invoked, from the linting
-      workflow, and whether this directory should exist at all is unresolved
-    paths:
-      - tests/litellm/a2a_protocol/providers/pydantic_ai_agents/test_pydantic_ai_agent_headers.py
-      - tests/litellm/a2a_protocol/providers/pydantic_ai_agents/test_pydantic_ai_agent_transformation.py
-      - tests/litellm/integrations/helicone/test_helicone_gemini.py
-      - tests/litellm/litellm_core_utils/test_json_schema_validation.py
-      - tests/litellm/llms/anthropic/test_anthropic_reasoning_effort.py
-      - tests/litellm/llms/anthropic/test_anthropic_schema_filter.py
-      - tests/litellm/llms/azure/test_azure_embedding.py
-      - tests/litellm/llms/bedrock/embed/test_embedding.py
-      - tests/litellm/llms/bedrock/test_nova_imported_models.py
-      - tests/litellm/llms/deepseek/chat/test_deepseek_chat_transformation.py
-      - tests/litellm/llms/gradient_ai/chat/test_gradient_ai_chat_transformation.py
-      - tests/litellm/llms/oci/chat/test_oci_chat_transformation.py
-      - tests/litellm/llms/openai_like/test_abliteration_provider.py
-      - tests/litellm/llms/openai_like/test_assemblyai_provider.py
-      - tests/litellm/llms/openai_like/test_empiriolabs_provider.py
-      - tests/litellm/llms/vertex_ai/agent_engine/test_transformation.py
-      - tests/litellm/llms/vertex_ai/gemini/test_transformation.py
-      - tests/litellm/llms/vertex_ai/text_to_speech/test_transformation.py
-      - tests/litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
-      - tests/litellm/proxy/agent_endpoints/test_agent_rbac.py
-      - tests/litellm/proxy/common_utils/test_rbac_utils.py
-      - tests/litellm/proxy/management_endpoints/test_common_utils.py
-      - tests/litellm/proxy/management_endpoints/test_cost_estimate_endpoint.py
-      - tests/litellm/proxy/test_claude_code_marketplace.py
-      - tests/litellm/proxy/test_init_litellm_callbacks.py
-      - tests/litellm/proxy/test_prisma_engine_watchdog.py
-      - tests/litellm/proxy/vector_store_endpoints/test_vector_store_rbac.py
-      - tests/litellm/test_bedrock_extended_beta_models.py
-      - tests/litellm/test_bedrock_nemotron_super.py
-      - tests/litellm/test_proxy_auth.py
-      - tests/litellm/test_router_retry_backoff_headers.py
-      - tests/litellm/test_sambanova_model_metadata.py
-      - tests/litellm/test_stream_chunk_builder_images.py
-  - reason: >-
-      Legacy proxy suite superseded by the proxy shards; no job invokes it and whether it still
-      describes supported behaviour is unresolved
-    paths:
-      - tests/old_proxy_tests/tests/test_anthropic_context_caching.py
-      - tests/old_proxy_tests/tests/test_anthropic_sdk.py
-      - tests/old_proxy_tests/tests/test_async.py
-      - tests/old_proxy_tests/tests/test_gemini_context_caching.py
-      - tests/old_proxy_tests/tests/test_langchain_embedding.py
-      - tests/old_proxy_tests/tests/test_langchain_request.py
-      - tests/old_proxy_tests/tests/test_llamaindex.py
-      - tests/old_proxy_tests/tests/test_mistral_sdk.py
-      - tests/old_proxy_tests/tests/test_openai_embedding.py
-      - tests/old_proxy_tests/tests/test_openai_exception_request.py
-      - tests/old_proxy_tests/tests/test_openai_request.py
-      - tests/old_proxy_tests/tests/test_openai_request_with_traceparent.py
-      - tests/old_proxy_tests/tests/test_openai_simple_embedding.py
-      - tests/old_proxy_tests/tests/test_openai_tts_request.py
-      - tests/old_proxy_tests/tests/test_pass_through_langfuse.py
-      - tests/old_proxy_tests/tests/test_q.py
-      - tests/old_proxy_tests/tests/test_simple_traceparent_openai.py
-      - tests/old_proxy_tests/tests/test_vertex_sdk_forward_headers.py
-      - tests/old_proxy_tests/tests/test_vtx_embedding.py
-      - tests/old_proxy_tests/tests/test_vtx_sdk_embedding.py
   - reason: >-
       No job invokes this suite and its files mix pure transformation tests with ones driving live
       vendor vector stores, so assigning them needs a per-file decision
@@ -117,23 +75,20 @@ test_paths:
       - tests/load_tests/test_vertex_embeddings_load_test.py
       - tests/load_tests/test_vertex_load_tests.py
   - reason: >-
+      A local-only agent rig: test_a2a_completion_bridge.py needs a LangGraph server on
+      localhost:2024 and test_a2a.py drives a live A2A endpoint, so neither can run in a
+      pull request job. Until 2026-08-20 the CircleCI agent job hid them behind a grep -v
+      that this census could not see; the glob now excludes them structurally and this entry
+      is the decision on the record. Revisit when the A2A bridge gets a recorded-wire fixture
+    paths:
+      - tests/agent_tests/local_only_agent_tests
+  - reason: >-
       Third-party integration tests that skip themselves without OCI configuration or sandbox
       credentials, neither of which a pull request job holds
     paths:
       - tests/integration/sandbox/test_e2b_sandbox.py
       - tests/integration/test_oci_integration.py
       - tests/integration/test_oci_proxy_integration.py
-  - reason: >-
-      Two prompt-factory tests sitting at the top level of tests/ instead of under the
-      tests/test_litellm mirror the shards enumerate; they need moving rather than a shard entry
-    paths:
-      - tests/litellm_core_utils/test_anthropic_dedup_factory.py
-      - tests/litellm_core_utils/test_bedrock_converse_dedup_factory.py
-  - reason: >-
-      A unit test for the proxy-extras package that no job invokes, while the package's other tests
-      live under tests/proxy_migration_tests
-    paths:
-      - tests/litellm-proxy-extras/test_litellm_proxy_extras_utils.py
 
 dockerfiles:
   - reason: >-

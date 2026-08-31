@@ -59,7 +59,7 @@ test.describe("Logs page", () => {
 
     // Expand: clicking the row opens the detail drawer for that request.
     await row.click();
-    const drawer = page.locator(".ant-drawer-content").first();
+    const drawer = page.getByRole("dialog").first();
     await expect(drawer).toBeVisible({ timeout: 20_000 });
     await expect(drawer.getByText("Request & Response")).toBeVisible({
       timeout: 20_000,
@@ -91,7 +91,7 @@ test.describe("Logs page", () => {
 
     const row = await openLogsForRequest(page, requestId);
     await row.click();
-    const drawer = page.locator(".ant-drawer-content").first();
+    const drawer = page.getByRole("dialog").first();
     await expect(drawer).toBeVisible({ timeout: 20_000 });
 
     // Copy request: the Input card's copy button puts the prompt on the clipboard.
@@ -120,7 +120,7 @@ test.describe("Logs page", () => {
     const row = await openLogsForRequest(page, requestId);
     await row.click();
 
-    const drawer = page.locator(".ant-drawer-content").first();
+    const drawer = page.getByRole("dialog").first();
     await expect(drawer.getByText("Request & Response")).toBeVisible({
       timeout: 20_000,
     });
@@ -129,23 +129,49 @@ test.describe("Logs page", () => {
     // box, so the wrapper reads as hidden while the clipped text node inside it does not.
     const header = sectionHeader(drawer, "Input");
     const body = header.locator("xpath=following-sibling::div[1]");
-    await expect(header.locator(".anticon-up")).toBeVisible();
+    await expect(header.locator(".lucide-chevron-up")).toBeVisible();
     await expect(body).toBeVisible();
 
     await header.click();
-    await expect(header.locator(".anticon-down")).toBeVisible({
+    await expect(header.locator(".lucide-chevron-down")).toBeVisible({
       timeout: 10_000,
     });
     await expect(body).toBeHidden({ timeout: 10_000 });
 
     await header.click();
-    await expect(header.locator(".anticon-up")).toBeVisible({
+    await expect(header.locator(".lucide-chevron-up")).toBeVisible({
       timeout: 10_000,
     });
     await expect(body).toBeVisible({ timeout: 10_000 });
     await expect(drawer.getByText(prompt, { exact: false })).toBeVisible({
       timeout: 10_000,
     });
+  });
+
+  test("the trace sidebar collapses and expands again", async ({ page, request }) => {
+    const prompt = `logs-sidebar-prompt-${uniqueSuffix()}`;
+    const requestId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt,
+    });
+    await waitForSpendLog(request, requestId);
+
+    const row = await openLogsForRequest(page, requestId);
+    await row.click();
+
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
+
+    const toggle = drawer.getByLabel("Collapse trace sidebar");
+    await expect(toggle).toBeVisible({ timeout: 10_000 });
+    await toggle.click();
+
+    const expandToggle = drawer.getByLabel("Expand trace sidebar");
+    await expect(expandToggle).toBeVisible({ timeout: 10_000 });
+    await expandToggle.click({ timeout: 10_000 });
+
+    await expect(drawer.getByLabel("Collapse trace sidebar")).toBeVisible({ timeout: 10_000 });
+    await expect(drawer.getByText(prompt, { exact: false })).toBeVisible({ timeout: 10_000 });
   });
 
   test("the JSON view exposes Request and Response tabs", async ({ page, request }) => {
@@ -159,14 +185,12 @@ test.describe("Logs page", () => {
     const row = await openLogsForRequest(page, requestId);
     await row.click();
 
-    const drawer = page.locator(".ant-drawer-content").first();
+    const drawer = page.getByRole("dialog").first();
     await expect(drawer.getByText("Request & Response")).toBeVisible({
       timeout: 20_000,
     });
 
-    // antd Radio.Button hides the <input> under its <label>, which intercepts
-    // the pointer event — click the label, not the radio.
-    await drawer.locator("label.ant-radio-button-wrapper").filter({ hasText: "JSON" }).click();
+    await drawer.getByRole("tab", { name: "JSON" }).click();
 
     const requestTab = drawer.getByRole("tab", { name: "Request" });
     await expect(requestTab).toBeVisible({ timeout: 10_000 });

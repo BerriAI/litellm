@@ -1,6 +1,6 @@
 import copy
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
@@ -39,15 +39,17 @@ _EXTRA_SENSITIVE_CALLBACK_KEYS: Final = {"gcs_path_service_account"}
 # already-encrypted input cheaply (no decrypt-attempt round trip) and
 # avoid double-encrypting if `LITELLM_SALT_KEY` is rotated between writes.
 _CALLBACK_VAR_ENCRYPTED_PREFIX: Final = "litellm_enc::"
-# Metadata slots that hold operator-configured callback setup (and therefore
-# integration credentials). Resolved from UserAPIKeyAuth during pre-call setup,
-# never read back off the copies stamped into request metadata.
-_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings"})
+# Metadata slots that hold operator-configured callback and secret-manager setup
+# (and therefore integration credentials). Resolved from UserAPIKeyAuth during
+# pre-call setup, never read back off the copies stamped into request metadata.
+_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings", "secret_manager_settings"})
 
 blue_color_code: Final = "\033[94m"
 reset_color_code: Final = "\033[0m"
 
 TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY: Final = "_pillar_response_headers_trusted"
+
+GUARDRAIL_SCAN_IDS_METADATA_KEY: Final = "guardrail_scan_ids"
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -460,6 +462,10 @@ def get_logging_caching_headers(request_data: dict) -> dict | None:
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(_metadata["applied_guardrails"])
 
+    scan_ids: Final = _metadata.get(GUARDRAIL_SCAN_IDS_METADATA_KEY)
+    if scan_ids:
+        headers["x-litellm-guardrail-scan-id"] = ",".join(scan_ids)
+
     if "applied_policies" in _metadata:
         headers["x-litellm-applied-policies"] = ",".join(_metadata["applied_policies"])
 
@@ -492,6 +498,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
     {
         "applied_policies",
         "applied_guardrails",
+        GUARDRAIL_SCAN_IDS_METADATA_KEY,
         "policy_sources",
         "guardrails",
         "guardrail_config",
@@ -518,8 +525,8 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
 
 
 def sanitize_openai_provider_metadata(
-    metadata: dict[str, Any] | None,
-) -> dict[str, str] | None:
+    metadata: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
     """
     Keep only provider-safe OpenAI metadata entries (string keys -> string values).
 
@@ -552,6 +559,22 @@ def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_nam
             _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
+
+
+def add_guardrail_scan_id(request_data: dict, scan_id: str | None) -> None:
+    """
+    Record a provider scan id so it can be surfaced to the caller.
+
+    Guardrails only return scan details to the client when they block, so allowed requests carry no
+    audit trail. Ids recorded here become the x-litellm-guardrail-scan-id response header.
+    """
+    if not scan_id:
+        return
+    _, _metadata = get_or_create_metadata_bucket(request_data)
+    existing: Final = _metadata.get(GUARDRAIL_SCAN_IDS_METADATA_KEY)
+    scan_ids: Final = tuple(existing) if isinstance(existing, (list, tuple)) else ()
+    if scan_id not in scan_ids:
+        _metadata[GUARDRAIL_SCAN_IDS_METADATA_KEY] = (*scan_ids, scan_id)
 
 
 def add_policy_to_applied_policies_header(request_data: dict, policy_name: str | None):
@@ -621,7 +644,7 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
 
 
-def normalize_callback_names(callbacks: Iterable[Any]) -> list[Any]:
+def normalize_callback_names(callbacks: Iterable[object] | None) -> list[object]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
@@ -651,7 +674,7 @@ def decrypt_callback_vars(metadata: Any) -> Any:
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
 
 
-def _transform_callback_vars(metadata: Any, transform: Callable[[str, Any], Any]) -> Any:
+def _transform_callback_vars(metadata: object, transform: Callable[[str, Any], Any]) -> object:
     if not isinstance(metadata, dict):
         return metadata
     out: Final = copy.deepcopy(metadata)
@@ -681,7 +704,7 @@ def is_sensitive_callback_key(
     return _CALLBACK_VAR_MASKER.is_sensitive_key(key)
 
 
-def _encrypt_if_plaintext(key: str, value: Any) -> Any:
+def _encrypt_if_plaintext(key: str, value: object) -> object:
     if not isinstance(value, str) or not value:
         return value
     if not is_sensitive_callback_key(key):
@@ -702,7 +725,7 @@ def _encrypt_if_plaintext(key: str, value: Any) -> Any:
         return value
 
 
-def _decrypt_or_passthrough(key: str, value: Any) -> Any:
+def _decrypt_or_passthrough(key: str, value: object) -> object:
     if not isinstance(value, str) or not value:
         return value
     if not value.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):

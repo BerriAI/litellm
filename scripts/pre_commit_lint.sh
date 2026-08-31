@@ -13,7 +13,7 @@
 #   - tests/e2e Python -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #                         + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
 #   - dashboard        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
-#   - proxy/types      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
+#   - proxy/types      -> regenerate the lazy OpenAPI snapshot and dashboard API types, fail on drift (check-ui-api-types.yml)
 #
 # Each block is skipped when no matching files are in scope, so unrelated commits
 # stay fast. This is intentionally not auto-installed as a git hook (see
@@ -23,6 +23,16 @@
 # `ln -s ../../scripts/pre_commit_lint.sh .git/hooks/pre-commit`.
 
 set -eu
+
+# Queue for one of the machine-wide heavy-work slots (see scripts/gate_slot_lock.py)
+# before anything else, so N parallel `make check` runs across worktrees execute two
+# at a time instead of thrashing the machine. The wrapper exports
+# LITELLM_GATE_SLOT_HELD, so this re-exec happens exactly once and everything this
+# script spawns (make lint, the budget gates) skips its own acquisition.
+if [ -z "${LITELLM_GATE_SLOT_HELD:-}" ]; then
+    script_dir=$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")
+    exec python3 "$script_dir/gate_slot_lock.py" "$0" "$@"
+fi
 
 if [ -z "${PRE_COMMIT_LINT_INNER:-}" ]; then
     log_file=$(git rev-parse --path-format=absolute --git-path pre_commit_lint.log)
@@ -234,7 +244,7 @@ fi
 
 genapi_checks() {
     local status=0
-    echo "check: checking dashboard API types are in sync (npm run gen:api)"
+    echo "check: checking the lazy OpenAPI snapshot and dashboard API types are in sync (npm run gen:api)"
     # gen-api-types.mjs imports litellm.proxy.proxy_server, which needs the proxy deps
     # and an up-to-date Prisma client; check-ui-api-types.yml installs those and runs
     # prisma generate before gen:api, so mirror that here or a stale client can mask
@@ -250,7 +260,14 @@ genapi_checks() {
     elif ! uv run --no-sync python scripts/prisma_generate_if_needed.py; then
         echo "✗ Could not regenerate Prisma client (prisma generate failed)." >&2
         status=1
+    elif ! uv run --no-sync python -m litellm.proxy._lazy_openapi_snapshot; then
+        echo "✗ Could not regenerate the lazy OpenAPI snapshot (python -m litellm.proxy._lazy_openapi_snapshot failed)." >&2
+        status=1
     elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then
+        if ! git diff --quiet -- litellm/proxy/_lazy_openapi_snapshot.json; then
+            echo "✗ The lazy OpenAPI snapshot is stale; regenerated litellm/proxy/_lazy_openapi_snapshot.json. Stage it and commit; re-run make check only if other checks failed too." >&2
+            status=1
+        fi
         if ! git diff --quiet -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
             echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and commit; re-run make check only if other checks failed too." >&2
             status=1

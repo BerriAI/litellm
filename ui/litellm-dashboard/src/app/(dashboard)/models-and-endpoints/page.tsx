@@ -22,6 +22,7 @@ import PassThroughPanel from "@/app/(dashboard)/models-and-endpoints/panels/Pass
 import HealthStatusPanel from "@/app/(dashboard)/models-and-endpoints/panels/HealthStatusPanel";
 import ModelRetrySettingsPanel from "@/app/(dashboard)/models-and-endpoints/panels/ModelRetrySettingsPanel";
 import ModelGroupAliasPanel from "@/app/(dashboard)/models-and-endpoints/panels/ModelGroupAliasPanel";
+import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/panels/AccessGroupBudgetsPanel";
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -34,6 +35,7 @@ type ModelTabSlug =
   | "health"
   | "retry-settings"
   | "model-group-alias"
+  | "access-group-budgets"
   | "price-data";
 
 const BASE_TAB_KEY = "all-models";
@@ -46,6 +48,7 @@ const TAB_LABELS: Record<ModelTabSlug, string> = {
   health: "Health Status",
   "retry-settings": "Model Retry Settings",
   "model-group-alias": "Model Group Alias",
+  "access-group-budgets": "Model Access Group Budgets",
   "price-data": "Price Data Reload",
 };
 
@@ -67,6 +70,8 @@ const renderPanel = (key: string) => {
       return <ModelRetrySettingsPanel />;
     case "model-group-alias":
       return <ModelGroupAliasPanel />;
+    case "access-group-budgets":
+      return <AccessGroupBudgetsPanel />;
     case "price-data":
       return <PriceDataPanel />;
     default:
@@ -102,7 +107,15 @@ export default function ModelsAndEndpointsPage() {
       ...(canCreate ? (["add"] as const) : []),
       ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
       ...(isAdmin
-        ? (["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"] as const)
+        ? ([
+            "llm-credentials",
+            "pass-through",
+            "health",
+            "retry-settings",
+            "model-group-alias",
+            "access-group-budgets",
+            "price-data",
+          ] as const)
         : []),
     ],
     [canCreate, isAdmin],
@@ -111,7 +124,7 @@ export default function ModelsAndEndpointsPage() {
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
-    if (slug === "auto-routers") {
+    if (slug === "auto-routers" || slug === "access-group-budgets") {
       return (
         <span className="flex items-center gap-2">
           {TAB_LABELS[slug]} <BetaBadge />
@@ -175,16 +188,18 @@ export default function ModelsAndEndpointsPage() {
         ) : (
           <Tabs value={activeKey} onValueChange={setActiveKey}>
             <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
-              <TabsList variant="line" className="min-w-0 flex-1 justify-start overflow-x-auto">
-                {visibleSlugs.map((slug) => {
-                  const key = slug || BASE_TAB_KEY;
-                  return (
-                    <TabsTrigger key={key} value={key} className="flex-none">
-                      {tabLabel(slug)}
-                    </TabsTrigger>
-                  );
-                })}
-              </TabsList>
+              <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
+                <TabsList variant="line" className="w-max justify-start">
+                  {visibleSlugs.map((slug) => {
+                    const key = slug || BASE_TAB_KEY;
+                    return (
+                      <TabsTrigger key={key} value={key} className="flex-none">
+                        {tabLabel(slug)}
+                      </TabsTrigger>
+                    );
+                  })}
+                </TabsList>
+              </div>
               <div className="flex shrink-0 items-center gap-2 pb-1">
                 {lastRefreshed && (
                   <span className="text-xs text-muted-foreground">Last Refreshed: {lastRefreshed}</span>

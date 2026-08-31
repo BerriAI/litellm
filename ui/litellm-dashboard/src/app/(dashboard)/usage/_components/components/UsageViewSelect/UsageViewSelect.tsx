@@ -19,6 +19,7 @@ export interface UsageViewSelectProps {
   onChange: (value: UsageOption) => void;
   userRole: string | null;
   canViewTagUsage?: boolean;
+  isOrgAdmin?: boolean;
   title?: string;
   description?: string;
   "data-id"?: string;
@@ -103,29 +104,52 @@ const OPTIONS: OptionConfig[] = [
     adminOnly: true,
   },
 ];
+export interface UsageOptionAvailability {
+  userRole: string | null;
+  canViewTagUsage?: boolean;
+  isOrgAdmin?: boolean;
+}
+
+/**
+ * Single source of truth for whether a given usage view is available to the
+ * current user, mirroring the capability matrix in OPTIONS below. Used both
+ * to filter the select's menu and to validate a usage view restored from
+ * persisted state (e.g. localStorage), whose role may have changed since.
+ */
+export const isUsageOptionAvailable = (
+  value: UsageOption,
+  { userRole, canViewTagUsage = false, isOrgAdmin = false }: UsageOptionAvailability,
+): boolean => {
+  const option = OPTIONS.find((o) => o.value === value);
+  if (!option) return false;
+  const isAdmin = all_admin_roles.includes(userRole ?? "");
+  if (option.capability) {
+    return hasCapability(userRole, option.capability, isOrgAdmin);
+  }
+  if (option.value === "tag" && canViewTagUsage) {
+    return true;
+  }
+  if (option.adminOnly && !isAdmin) {
+    return false;
+  }
+  return true;
+};
+
 export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
   userRole,
   canViewTagUsage = false,
+  isOrgAdmin = false,
   title = "Usage View",
   description = "Select the usage data you want to view",
   "data-id": dataId,
 }) => {
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
-    return OPTIONS.filter((option) => {
-      if (option.capability) {
-        return hasCapability(userRole, option.capability);
-      }
-      if (option.value === "tag" && canViewTagUsage) {
-        return true;
-      }
-      if (option.adminOnly && !isAdmin) {
-        return false;
-      }
-      return true;
-    }).map((option) => {
+    return OPTIONS.filter((option) =>
+      isUsageOptionAvailable(option.value, { userRole, canViewTagUsage, isOrgAdmin }),
+    ).map((option) => {
       let label = option.label;
       let desc = option.description;
       if (option.showForAdmin && option.showForNonAdmin) {
@@ -153,8 +177,8 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
             <BarChart3 className="size-8" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-gray-900 mb-0.5 leading-tight">{title}</h3>
-            <p className="text-xs text-gray-600 leading-tight">{description}</p>
+            <h3 className="text-sm font-semibold text-foreground mb-0.5 leading-tight">{title}</h3>
+            <p className="text-xs text-muted-foreground leading-tight">{description}</p>
           </div>
         </div>
         <div className="shrink-0">
@@ -180,8 +204,8 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
                   <span className="flex items-center gap-2 py-1">
                     <span className="shrink-0 mt-0.5">{option.icon}</span>
                     <span className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium text-gray-900">{option.label}</span>
-                      <span className="block text-xs text-gray-600 mt-0.5">{option.description}</span>
+                      <span className="block text-sm font-medium text-foreground">{option.label}</span>
+                      <span className="block text-xs text-muted-foreground mt-0.5">{option.description}</span>
                     </span>
                     {option.badgeText && <Badge>{option.badgeText}</Badge>}
                   </span>
