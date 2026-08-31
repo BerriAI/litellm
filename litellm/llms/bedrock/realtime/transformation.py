@@ -41,7 +41,6 @@ from litellm.types.realtime import (
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
-from litellm.utils import get_empty_usage
 
 
 class BedrockContentEnd(BaseModel):
@@ -118,7 +117,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self._user_transcript_active = False
         self._user_transcript_generation_stage: str | None = None
         self._user_item_id: str | None = None
-        self._latest_usage: OpenAIRealtimeResponseUsage | None = None
+        self._user_transcript_buffer = ""
+        self._cumulative_usage = BedrockUsageEvent()
+        self._reported_usage = BedrockUsageEvent()
 
     def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
         """Validate environment - no special validation needed for Bedrock."""
@@ -836,47 +837,79 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         return (speech_event,)
 
     def transform_usage_event(self, usage_event: BedrockUsageEvent) -> None:
-        """Record Bedrock usageEvent token totals for the next response.done."""
+        """Record Bedrock's session-cumulative usage totals for the next response.done."""
         verbose_logger.debug("Handling usageEvent")
+        self._cumulative_usage = usage_event
+
+    def _take_usage_delta(self) -> OpenAIRealtimeResponseUsage:
+        """Usage for the response now completing: cumulative totals minus what prior response.done events reported."""
+        prior: Final = self._reported_usage
+        latest: Final = self._cumulative_usage
+        self._reported_usage = latest
         input_details: Final[OpenAIRealtimeUsageTokenDetails] = {
-            "audio_tokens": usage_event.details.total.input.speechTokens,
-            "text_tokens": usage_event.details.total.input.textTokens,
+            "audio_tokens": latest.details.total.input.speechTokens - prior.details.total.input.speechTokens,
+            "text_tokens": latest.details.total.input.textTokens - prior.details.total.input.textTokens,
             "cached_tokens": 0,
         }
         output_details: Final[OpenAIRealtimeUsageTokenDetails] = {
-            "audio_tokens": usage_event.details.total.output.speechTokens,
-            "text_tokens": usage_event.details.total.output.textTokens,
+            "audio_tokens": latest.details.total.output.speechTokens - prior.details.total.output.speechTokens,
+            "text_tokens": latest.details.total.output.textTokens - prior.details.total.output.textTokens,
         }
-        latest_usage: Final[OpenAIRealtimeResponseUsage] = {
-            "input_tokens": usage_event.totalInputTokens,
-            "output_tokens": usage_event.totalOutputTokens,
-            "total_tokens": usage_event.totalTokens,
+        usage_delta: Final[OpenAIRealtimeResponseUsage] = {
+            "input_tokens": latest.totalInputTokens - prior.totalInputTokens,
+            "output_tokens": latest.totalOutputTokens - prior.totalOutputTokens,
+            "total_tokens": latest.totalTokens - prior.totalTokens,
             "input_token_details": input_details,
             "output_token_details": output_details,
         }
-        self._latest_usage = latest_usage
+        return usage_delta
+
+    def leftover_usage_done_events(self) -> tuple[OpenAIRealtimeEvents, ...]:
+        """Logged-only response.done for usage Bedrock reports after the final turn's contentEnd."""
+        if self._cumulative_usage == self._reported_usage:
+            return ()
+        usage: Final = self._take_usage_delta()
+        leftover_done: Final = OpenAIRealtimeDoneEvent(
+            type="response.done",
+            event_id=f"event_{uuid.uuid4()}",
+            response=OpenAIRealtimeResponseDoneObject(
+                object="realtime.response",
+                id=f"resp_{uuid.uuid4()}",
+                status="completed",
+                conversation_id=f"conv_{uuid.uuid4()}",
+                usage=dict(usage),  # mutable-ok: OpenAIRealtimeResponseDoneObject types usage as plain dict
+            ),
+        )
+        return (leftover_done,)
 
     def transform_user_transcript_event(self, transcript: str) -> tuple[OpenAIRealtimeEvents, ...]:
-        """Transform a USER-role Bedrock textOutput (ASR transcript) to OpenAI transcription events."""
+        """Transform a USER-role Bedrock textOutput (ASR transcript) to an OpenAI transcription delta."""
         verbose_logger.debug("Handling USER textOutput (ASR transcript)")
-        item_id: Final = self._current_user_item_id()
         delta_event: Final[OpenAIRealtimeInputAudioTranscriptionDelta] = {
             "type": "conversation.item.input_audio_transcription.delta",
             "event_id": f"event_{uuid.uuid4()}",
-            "item_id": item_id,
+            "item_id": self._current_user_item_id(),
             "content_index": 0,
             "delta": transcript,
         }
-        if self._user_transcript_generation_stage == "SPECULATIVE":
-            return (delta_event,)
+        if self._user_transcript_generation_stage != "SPECULATIVE":
+            self._user_transcript_buffer += transcript
+        return (delta_event,)
+
+    def user_transcript_completed_events(self) -> tuple[OpenAIRealtimeEvents, ...]:
+        """One completed event with the full transcript once the FINAL user content block ends."""
+        transcript: Final = self._user_transcript_buffer
+        if not transcript:
+            return ()
+        self._user_transcript_buffer = ""
         completed_event: Final[OpenAIRealtimeInputAudioTranscriptionCompleted] = {
             "type": "conversation.item.input_audio_transcription.completed",
             "event_id": f"event_{uuid.uuid4()}",
-            "item_id": item_id,
+            "item_id": self._current_user_item_id(),
             "content_index": 0,
             "transcript": transcript,
         }
-        return (delta_event, completed_event)
+        return (completed_event,)
 
     def transform_text_output_event(
         self,
@@ -1096,14 +1129,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not current_response_id or not current_conversation_id:
             return [], None, None, None
 
-        empty_usage: Final = get_empty_usage()
-        zero_usage: Final[OpenAIRealtimeResponseUsage] = {
-            "input_tokens": empty_usage.prompt_tokens,
-            "output_tokens": empty_usage.completion_tokens,
-            "total_tokens": empty_usage.total_tokens,
-        }
-        usage: Final = self._latest_usage or zero_usage
-        self._latest_usage = None
+        usage: Final = self._take_usage_delta()
         response_done: Final = OpenAIRealtimeDoneEvent(
             type="response.done",
             event_id=f"event_{uuid.uuid4()}",
@@ -1324,6 +1350,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         elif "contentEnd" in event and self._user_transcript_active:
             self._user_transcript_active = False
             self._user_transcript_generation_stage = None
+            returned_messages.extend(self.user_transcript_completed_events())
 
         elif "contentEnd" in event:
             events, current_delta_chunks = self.transform_content_end_event(

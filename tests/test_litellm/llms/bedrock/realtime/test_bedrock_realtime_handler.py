@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
+import litellm
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
@@ -124,14 +124,6 @@ class ScriptedBedrockStream:
         return (None, self._receiver)
 
 
-class ImmediatelyEndingBedrockStream:
-    def __init__(self):
-        self.input_stream = FakeInputStream()
-
-    async def await_output(self):
-        return (None, EndedBedrockReceiver())
-
-
 class FakeStaticCredentialsResolver:
     pass
 
@@ -171,7 +163,7 @@ def stub_aws_sdk_client(monkeypatch):
 
         async def invoke_model_with_bidirectional_stream(self, operation_input):
             captured["operation_input"] = operation_input
-            return ImmediatelyEndingBedrockStream()
+            return ScriptedBedrockStream(captured.get("scripted_payloads", []))
 
     package = types.ModuleType("aws_sdk_bedrock_runtime")
     client_module = types.ModuleType("aws_sdk_bedrock_runtime.client")
@@ -292,7 +284,40 @@ class TestBedrockRealtimeHandler:
         assert stream.input_stream.closed
 
     @pytest.mark.asyncio
-    async def test_forwarded_events_are_collected_for_spend_logging(self):
+    async def test_forwarded_events_are_filtered_to_logged_types_for_spend_logging(self):
+        handler = BedrockRealtime()
+        stream = ScriptedBedrockStream(
+            [
+                json.dumps({"event": {"userSpeechStart": {}}}),
+                json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}),
+                json.dumps({"event": {"textOutput": {"content": "Hi"}}}),
+                json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN"}}}),
+            ]
+        )
+        client_ws = RealtimeClientWS()
+
+        logged_events = [
+            event
+            async for event in handler._forward_bedrock_to_client(
+                stream,
+                client_ws,
+                BedrockRealtimeConfig(),
+                "amazon.nova-sonic-v1:0",
+                FakeLogging(),
+                {},
+            )
+        ]
+
+        assert [event["type"] for event in logged_events] == ["response.done"]
+        sent_types = [json.loads(message)["type"] for message in client_ws.sent_to_client]
+        assert "input_audio_buffer.speech_started" in sent_types
+        assert "response.text.delta" in sent_types
+        assert "response.done" in sent_types
+        assert client_ws.closed
+
+    @pytest.mark.asyncio
+    async def test_logged_event_types_star_collects_every_forwarded_event(self, monkeypatch):
+        monkeypatch.setattr(litellm, "logged_real_time_event_types", "*")
         handler = BedrockRealtime()
         stream = ScriptedBedrockStream(
             [
@@ -301,37 +326,89 @@ class TestBedrockRealtimeHandler:
             ]
         )
         client_ws = RealtimeClientWS()
-        logged_events = []
 
-        await handler._forward_bedrock_to_client(
-            stream,
-            client_ws,
-            BedrockRealtimeConfig(),
-            "amazon.nova-sonic-v1:0",
-            FakeLogging(),
-            {},
-            logged_events,
-        )
+        logged_events = [
+            event
+            async for event in handler._forward_bedrock_to_client(
+                stream,
+                client_ws,
+                BedrockRealtimeConfig(),
+                "amazon.nova-sonic-v1:0",
+                FakeLogging(),
+                {},
+            )
+        ]
 
         assert [event["type"] for event in logged_events] == [
             "input_audio_buffer.speech_started",
             "input_audio_buffer.speech_stopped",
         ]
-        assert client_ws.closed
+
+    @pytest.mark.asyncio
+    async def test_trailing_usage_after_last_done_is_dispatched_for_spend(self, stub_aws_sdk_client, monkeypatch):
+        import litellm.llms.bedrock.realtime.handler as handler_module
+
+        dispatched = {}
+
+        class RecordingLogging(FakeLogging):
+            async def dispatch_success_handlers(self, result=None, prefer_async_handlers=False, **kwargs):
+                dispatched["events"] = result
+
+        class RecordingLoggingWorker:
+            def ensure_initialized_and_enqueue(self, coro):
+                dispatched["coro"] = coro
+
+        monkeypatch.setattr(handler_module, "GLOBAL_LOGGING_WORKER", RecordingLoggingWorker())
+        stub_aws_sdk_client["scripted_payloads"] = [
+            json.dumps(
+                {
+                    "event": {
+                        "usageEvent": {
+                            "totalInputTokens": 3,
+                            "totalOutputTokens": 6,
+                            "totalTokens": 9,
+                            "details": {
+                                "total": {
+                                    "input": {"speechTokens": 3, "textTokens": 0},
+                                    "output": {"speechTokens": 0, "textTokens": 6},
+                                }
+                            },
+                        }
+                    }
+                }
+            )
+        ]
+
+        await BedrockRealtime().async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=RealtimeClientWS(),
+            logging_obj=RecordingLogging(),
+            aws_region_name="us-east-1",
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+        )
+        await dispatched["coro"]
+
+        assert [event["type"] for event in dispatched["events"]] == ["response.done"]
+        usage = dispatched["events"][0]["response"]["usage"]
+        assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (3, 6, 9)
+        assert usage["input_token_details"] == {"audio_tokens": 3, "text_tokens": 0, "cached_tokens": 0}
+        assert usage["output_token_details"] == {"audio_tokens": 0, "text_tokens": 6}
 
     @pytest.mark.asyncio
     async def test_bedrock_stream_end_closes_client_websocket(self):
         handler = BedrockRealtime()
         client_ws = ClosableClientWS()
 
-        await handler._forward_bedrock_to_client(
+        async for _ in handler._forward_bedrock_to_client(
             EndedBedrockStream(),
             client_ws,
             BedrockRealtimeConfig(),
             "amazon.nova-sonic-v1:0",
             MagicMock(),
             {},
-        )
+        ):
+            pass
 
         assert client_ws.closed
 
