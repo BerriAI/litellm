@@ -457,7 +457,9 @@ async def responses_api(
         if data.get("stream") is True:
             streaming_response: Final = _blocked_responses_api_stream(
                 response=response_obj,
-                logging_obj=cast(LiteLLMLoggingObj, exception_logging_obj),  # cast-ok: guardrail request data carries call logging
+                logging_obj=cast(
+                    LiteLLMLoggingObj, exception_logging_obj
+                ),  # cast-ok: guardrail request data carries call logging
                 request_data=_data,
             )
             selected_data_generator: Final = select_data_generator(
