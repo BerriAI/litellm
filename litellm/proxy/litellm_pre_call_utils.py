@@ -793,7 +793,7 @@ def convert_key_logging_metadata_to_callback(
 def _get_validated_callback_metadata(item: dict, *, source: str) -> AddTeamCallback | None:
     try:
         return AddTeamCallback(**item)
-    except (PydanticValidationError, ValueError) as e:
+    except (PydanticValidationError, ValueError, TypeError, AttributeError) as e:
         verbose_proxy_logger.warning(
             "Ignoring invalid %s callback metadata: %s",
             source,
