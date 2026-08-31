@@ -861,7 +861,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     def _image_sources(block: Mapping[str, object]) -> tuple[str, ...]:
         """Normalize an Anthropic image block into strings a guardrail can read.
 
-        `source` is one of three shapes (types/llms/anthropic.py:259):
+        `source` is one of three shapes (`AnthropicMessagesImageParam.source`):
 
             {"type": "base64", "media_type": "image/png", "data": "<b64>"}
             {"type": "url",    "url": "https://..."}
