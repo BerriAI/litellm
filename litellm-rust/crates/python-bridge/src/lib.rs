@@ -614,6 +614,12 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     Ok(stats.into_any().unbind())
 }
 
+#[cfg(feature = "panic-test")]
+#[pyfunction]
+fn _panic_for_test() {
+    panic!("intentional PyO3 panic smoke test");
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
@@ -630,5 +636,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(achat_completions, module)?)?;
     module.add_class::<ResponsesWebSocketConnection>()?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
+    #[cfg(feature = "panic-test")]
+    module.add_function(wrap_pyfunction!(_panic_for_test, module)?)?;
     Ok(())
 }
