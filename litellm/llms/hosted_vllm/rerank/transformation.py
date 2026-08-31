@@ -180,12 +180,13 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         meta_billed_units: Final = raw_meta.get("billed_units") if isinstance(raw_meta, dict) else None
         meta_tokens: Final = raw_meta.get("tokens") if isinstance(raw_meta, dict) else None
         usage_total_tokens: Final = usage_data.get("total_tokens", 0) if isinstance(usage_data, dict) else 0
-        total_tokens: Final = (
-            meta_billed_units.get("total_tokens") if isinstance(meta_billed_units, dict) else None
-        ) or usage_total_tokens
-        input_tokens: Final = (
-            meta_tokens.get("input_tokens") if isinstance(meta_tokens, dict) else None
-        ) or usage_total_tokens
+        meta_total: Final = meta_billed_units.get("total_tokens") if isinstance(meta_billed_units, dict) else None
+        meta_input: Final = meta_tokens.get("input_tokens") if isinstance(meta_tokens, dict) else None
+        # Rerank has no completion step, so a server reporting only one of the two
+        # meta fields still gives us the full token count; cross-fill before
+        # falling back to the OpenAI/TEI-style top-level `usage` field.
+        total_tokens: Final = meta_total if meta_total is not None else (meta_input if meta_input is not None else usage_total_tokens)
+        input_tokens: Final = meta_input if meta_input is not None else (meta_total if meta_total is not None else usage_total_tokens)
         _billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
         _tokens: Final = RerankTokens(input_tokens=input_tokens)
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)

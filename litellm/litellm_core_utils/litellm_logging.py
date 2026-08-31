@@ -4904,6 +4904,24 @@ class StandardLoggingPayloadSetup:
         return clean_metadata
 
     @staticmethod
+    def _get_rerank_usage_from_meta(meta: object) -> Usage | None:
+        """
+        RerankResponse has no top-level `usage` field - token usage lives under
+        `meta.billed_units`/`meta.tokens` instead (Cohere-style API). Some servers
+        report only one of the two fields; since rerank has no completion step,
+        cross-fill so a lone `tokens.input_tokens` still yields a nonzero total.
+        """
+        if not isinstance(meta, dict) or ("billed_units" not in meta and "tokens" not in meta):
+            return None
+        billed_units: Final = meta.get("billed_units")
+        tokens: Final = meta.get("tokens")
+        meta_total: Final = billed_units.get("total_tokens") if isinstance(billed_units, dict) else None
+        meta_input: Final = tokens.get("input_tokens") if isinstance(tokens, dict) else None
+        total_tokens: Final = meta_total if meta_total is not None else (meta_input if meta_input is not None else 0)
+        prompt_tokens: Final = meta_input if meta_input is not None else (meta_total if meta_total is not None else 0)
+        return Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=total_tokens)
+
+    @staticmethod
     def get_usage_from_response_obj(response_obj: dict | None, combined_usage_object: Usage | None = None) -> Usage:
         ## BASE CASE ##
         if combined_usage_object is not None:
@@ -4917,23 +4935,9 @@ class StandardLoggingPayloadSetup:
 
         usage: Final = response_obj.get("usage", None) or {}
         if not usage:
-            # RerankResponse has no top-level `usage` field - token usage lives
-            # under `meta.billed_units`/`meta.tokens` instead (Cohere-style API).
-            meta: Final = response_obj.get("meta")
-            if isinstance(meta, dict) and ("billed_units" in meta or "tokens" in meta):
-                billed_units: Final = meta.get("billed_units")
-                tokens: Final = meta.get("tokens")
-                total_tokens: Final = (
-                    billed_units.get("total_tokens", 0) if isinstance(billed_units, dict) else 0
-                ) or 0
-                prompt_tokens: Final = (
-                    tokens.get("input_tokens", total_tokens) if isinstance(tokens, dict) else total_tokens
-                ) or total_tokens
-                return Usage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=0,
-                    total_tokens=total_tokens,
-                )
+            rerank_usage: Final = StandardLoggingPayloadSetup._get_rerank_usage_from_meta(response_obj.get("meta"))
+            if rerank_usage is not None:
+                return rerank_usage
         if usage is None or (not isinstance(usage, dict) and not isinstance(usage, Usage)):
             return Usage(
                 prompt_tokens=0,
@@ -4967,23 +4971,9 @@ class StandardLoggingPayloadSetup:
             return _empty
         _raw: Final = response_obj.get("usage", None)
         if not _raw:
-            # RerankResponse has no top-level `usage` field - token usage lives
-            # under `meta.billed_units`/`meta.tokens` instead (Cohere-style API).
-            meta: Final = response_obj.get("meta")
-            if isinstance(meta, dict) and ("billed_units" in meta or "tokens" in meta):
-                billed_units: Final = meta.get("billed_units")
-                tokens: Final = meta.get("tokens")
-                total_tokens: Final = (
-                    billed_units.get("total_tokens", 0) if isinstance(billed_units, dict) else 0
-                ) or 0
-                prompt_tokens: Final = (
-                    tokens.get("input_tokens", total_tokens) if isinstance(tokens, dict) else total_tokens
-                ) or total_tokens
-                return {  # mutable-ok: hot-path return type is a plain dict by design, matching `_empty` above
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": 0,
-                    "total_tokens": total_tokens,
-                }
+            rerank_usage: Final = StandardLoggingPayloadSetup._get_rerank_usage_from_meta(response_obj.get("meta"))
+            if rerank_usage is not None:
+                return rerank_usage.model_dump()
             return _empty
         if isinstance(_raw, ResponseAPIUsage):
             return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_raw).model_dump()

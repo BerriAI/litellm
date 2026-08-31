@@ -4603,3 +4603,28 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        {"tokens": {"input_tokens": 38}},
+        {"billed_units": {"total_tokens": 38}},
+    ],
+)
+def test_get_usage_as_dict_rerank_meta_partial_fields_cross_fill(meta):
+    """
+    Some rerank servers report only `tokens.input_tokens` or only
+    `billed_units.total_tokens`, not both. Since rerank has no completion step,
+    either field alone should populate both prompt_tokens and total_tokens
+    instead of leaving one of them at zero.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    response_obj = {"id": "rerank-abc", "results": [], "meta": meta}
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+
+    assert usage_dict["prompt_tokens"] == 38
+    assert usage_dict["completion_tokens"] == 0
+    assert usage_dict["total_tokens"] == 38

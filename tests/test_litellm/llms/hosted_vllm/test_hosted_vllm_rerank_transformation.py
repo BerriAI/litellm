@@ -150,6 +150,28 @@ class TestHostedVLLMRerankTransform:
         assert result.meta["billed_units"]["total_tokens"] == 42
         assert result.meta["tokens"]["input_tokens"] == 42
 
+    @pytest.mark.parametrize(
+        "meta",
+        [
+            {"tokens": {"input_tokens": 38}},
+            {"billed_units": {"total_tokens": 38}},
+        ],
+    )
+    def test_transform_response_with_meta_partial_fields_cross_fill(self, meta):
+        """Some servers report only one of `tokens`/`billed_units`. Since rerank
+        has no completion step, either field alone should populate both
+        `meta.tokens.input_tokens` and `meta.billed_units.total_tokens`."""
+        response_dict = {
+            "id": "rerank-abc",
+            "results": [
+                {"index": 0, "relevance_score": 0.9, "document": {"text": "doc1 text"}},
+            ],
+            "meta": meta,
+        }
+        result = self.config._transform_response(response_dict)
+        assert result.meta["billed_units"]["total_tokens"] == 38
+        assert result.meta["tokens"]["input_tokens"] == 38
+
     def test_transform_response_missing_results(self):
         response_dict = {"id": "abc123", "usage": {"total_tokens": 10}}
         with pytest.raises(ValueError, match="No results found in the response="):
