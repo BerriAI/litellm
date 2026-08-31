@@ -726,6 +726,30 @@ async def test_stale_timeout_does_not_let_sub_threshold_hard_failures_open_the_b
 
 
 @pytest.mark.asyncio
+async def test_hard_failure_resets_timeout_streak_so_a_later_burst_must_earn_its_own_duration():
+    """A stale timeout followed by hard failures must not pre-age the duration gate:
+    a later short timeout burst has to span timeout_min_duration on its own.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=0.05)
+
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    await asyncio.sleep(0.06)
+    for _ in range(breaker.failure_threshold):
+        breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    assert breaker.is_open() is False, "the burst is instantaneous, so the duration gate must hold it closed"
+
+    await asyncio.sleep(0.06)
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    assert breaker.is_open() is True, "the same run of timeouts persisting past the duration must open it"
+
+
+@pytest.mark.asyncio
 async def test_breaker_metrics_track_state_and_failure_class():
     """Breaker accounting must be observable: failure class, transitions, and state."""
     from prometheus_client import REGISTRY

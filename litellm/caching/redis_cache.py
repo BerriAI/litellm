@@ -111,9 +111,9 @@ class RedisCircuitBreaker:
 
     Transitions:
       CLOSED    -> OPEN      after failure_threshold consecutive hard connectivity
-                             failures, or after failure_threshold timeout failures in
-                             an unbroken failure streak whose timeouts span at least
-                             timeout_min_duration seconds
+                             failures, or after an unbroken run of timeout failures
+                             (no success or hard failure in between) that reaches
+                             failure_threshold and spans timeout_min_duration seconds
       OPEN      -> HALF_OPEN after recovery_timeout seconds
       HALF_OPEN -> CLOSED    on success
       HALF_OPEN -> OPEN      on failure (resets timer)
@@ -143,6 +143,7 @@ class RedisCircuitBreaker:
         self.timeout_min_duration = timeout_min_duration
         self._failure_count = 0
         self._hard_failure_count = 0
+        self._timeout_count = 0
         self._timeout_streak_started_at: float | None = None
         self._opened_at: float | None = None
         self._state = self.CLOSED
@@ -169,7 +170,7 @@ class RedisCircuitBreaker:
             return True
         if self._hard_failure_count >= self.failure_threshold:
             return True
-        if self._failure_count - self._hard_failure_count < self.failure_threshold:
+        if self._timeout_count < self.failure_threshold:
             return False
         return now - (self._timeout_streak_started_at or now) >= self.timeout_min_duration
 
@@ -179,10 +180,13 @@ class RedisCircuitBreaker:
         now: Final = time.time()
         self._failure_count += 1
         if is_timeout:
+            self._timeout_count += 1
             if self._timeout_streak_started_at is None:
                 self._timeout_streak_started_at = now
         else:
             self._hard_failure_count += 1
+            self._timeout_count = 0
+            self._timeout_streak_started_at = None
         self._opened_at = now
         _breaker_metrics().record_failure("timeout" if is_timeout else "connectivity")
         if self._should_open(now):
@@ -203,6 +207,7 @@ class RedisCircuitBreaker:
             verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
         self._failure_count = 0
         self._hard_failure_count = 0
+        self._timeout_count = 0
         self._timeout_streak_started_at = None
         self._set_state(self.CLOSED)
 
