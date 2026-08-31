@@ -1,8 +1,9 @@
 """Anthropic error format type definitions."""
 
+from collections.abc import Mapping
 from typing import Literal
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 # Known Anthropic error types
 # Source: https://docs.anthropic.com/en/api/errors
@@ -23,6 +24,7 @@ class AnthropicErrorDetail(TypedDict):
 
     type: AnthropicErrorType
     message: str
+    provider_specific_fields: NotRequired[ReadOnly[Mapping[str, object]]]
 
 
 class AnthropicErrorResponse(TypedDict, total=False):
