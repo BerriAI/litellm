@@ -1,8 +1,11 @@
+import json
+
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.utils import ProviderConfigManager
 
@@ -26,17 +29,47 @@ def test_aiand_chat_provider(monkeypatch: pytest.MonkeyPatch):
     assert api_key == "test-key"
     assert api_base == AIAND_API_BASE
 
-    config = create_config_class(provider_config)()
-    assert (
-        config.get_complete_url(
-            api_base=None,
-            api_key=None,
-            model=model,
-            optional_params={},
-            litellm_params={},
+
+
+def test_aiand_completion_request(respx_mock: respx.MockRouter):
+    messages = [{"role": "user", "content": "Hello"}]
+    route = respx_mock.post(f"{AIAND_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "openai/gpt-oss-120b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
         )
-        == f"{AIAND_API_BASE}/chat/completions"
     )
+
+    litellm.completion(
+        model="aiand/openai/gpt-oss-120b",
+        api_key="test-key",
+        messages=messages,
+    )
+
+    assert route.called
+    request = route.calls.last.request
+    assert str(request.url) == f"{AIAND_API_BASE}/chat/completions"
+    assert request.headers["Authorization"] == "Bearer test-key"
+    request_body = json.loads(request.read())
+    assert request_body["model"] == "openai/gpt-oss-120b"
+    assert request_body["messages"] == messages
 
 
 def test_aiand_responses_provider():
