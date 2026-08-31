@@ -4893,6 +4893,108 @@ async def test_team_member_delete_still_rejects_a_user_the_team_has_no_trace_of(
     mock_db_client.db.litellm_teammembership.delete_many.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_team_member_delete_leaves_a_bystander_named_by_a_conflicting_user_id_alone(
+    mock_db_client, mock_admin_auth
+):
+    """
+    A request can carry a user_id and a user_email that point at two different people, and only the
+    email matches a roster entry. Cleaning up both ids would strip the team, the membership row and
+    the keys off the bystander the roster never listed, so the user_id only widens the cleanup when
+    the roster came back empty.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-conflict-123"
+    roster_user_id = "user-del-conflict-roster"
+    bystander_user_id = "user-del-conflict-bystander"
+    roster_email = "roster@example.com"
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": roster_user_id, "user_email": roster_email, "role": "user"}
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    roster_user_row = MagicMock()
+    roster_user_row.user_id = roster_user_id
+    roster_user_row.user_email = roster_email
+    roster_user_row.teams = [test_team_id]
+
+    bystander_user_row = MagicMock()
+    bystander_user_row.user_id = bystander_user_id
+    bystander_user_row.user_email = "bystander@example.com"
+    bystander_user_row.teams = [test_team_id]
+
+    rows_by_user_id = {
+        roster_user_id: roster_user_row,
+        bystander_user_id: bystander_user_row,
+    }
+
+    async def find_user_rows(where):
+        user_id_filter = where.get("user_id")
+        if isinstance(user_id_filter, dict):
+            return [
+                rows_by_user_id[uid]
+                for uid in user_id_filter.get("in", [])
+                if uid in rows_by_user_id
+            ]
+        return [
+            row
+            for row in rows_by_user_id.values()
+            if row.user_email == where.get("user_email")
+        ]
+
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        side_effect=find_user_rows
+    )
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    mock_db_client.db.litellm_verificationtoken = MagicMock()
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    _wire_member_delete_tx(mock_db_client)
+
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(
+            team_id=test_team_id,
+            user_id=bystander_user_id,
+            user_email=roster_email,
+        ),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    mock_db_client.db.litellm_usertable.update.assert_awaited_once_with(
+        where={"user_id": roster_user_id},
+        data={"teams": {"set": []}},
+    )
+    mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"team_id": test_team_id, "user_id": roster_user_id}
+    )
+    mock_db_client.db.litellm_verificationtoken.delete_many.assert_awaited_once_with(
+        where={"user_id": {"in": [roster_user_id]}, "team_id": test_team_id}
+    )
+
+
 class _InjectedMemberDeleteFailure(Exception):
     pass
 

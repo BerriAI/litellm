@@ -3310,7 +3310,9 @@ async def team_member_delete(
         ## DELETE TEAM ID from USER ROW, IF EXISTS ##
         # get user row
         removed_user_ids: Final = frozenset(m.user_id for m in removed_team_members if m.user_id is not None)
-        addressed_user_ids: Final = removed_user_ids.union((data.user_id,) if data.user_id is not None else ())
+        addressed_user_ids: Final = (
+            removed_user_ids if removed_team_members else frozenset((data.user_id,) if data.user_id is not None else ())
+        )
         key_val: Final[Mapping[str, object]] = (
             {"user_id": {"in": sorted(addressed_user_ids)}} if addressed_user_ids else {"user_email": data.user_email}
         )
