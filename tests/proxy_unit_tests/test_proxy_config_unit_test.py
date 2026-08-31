@@ -353,3 +353,40 @@ class TestYamlStorePromptsDbOverride:
         """_yaml_general_settings_keys should be empty on init."""
         proxy_config = ProxyConfig()
         assert proxy_config._yaml_general_settings_keys == set()
+
+    @pytest.mark.asyncio
+    async def test_response_storage_yaml_value_takes_precedence_over_db(self):
+        proxy_config = self._make_proxy_config_with_yaml_keys({"store_responses_in_spend_logs"})
+        test_general_settings = {"store_responses_in_spend_logs": False}
+
+        with mock.patch("litellm.proxy.proxy_server.general_settings", test_general_settings):
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_responses_in_spend_logs": True},
+            )
+
+        assert test_general_settings["store_responses_in_spend_logs"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("db_value", "expected"),
+        [
+            (None, None),
+            (True, True),
+            ("TRUE", True),
+            (0, False),
+        ],
+    )
+    async def test_response_storage_db_value_is_normalized_when_yaml_omits_key(
+        self,
+        db_value,
+        expected,
+    ):
+        proxy_config = self._make_proxy_config_with_yaml_keys({"master_key"})
+        test_general_settings = {"master_key": "sk-test"}
+
+        with mock.patch("litellm.proxy.proxy_server.general_settings", test_general_settings):
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_responses_in_spend_logs": db_value},
+            )
+
+        assert test_general_settings["store_responses_in_spend_logs"] is expected

@@ -25479,6 +25479,11 @@ export interface components {
              */
             store_prompts_in_spend_logs?: boolean | null;
             /**
+             * Store Responses In Spend Logs
+             * @description Controls response content storage in spend logs independently. When unset, follows store_prompts_in_spend_logs for backward compatibility.
+             */
+            store_responses_in_spend_logs?: boolean | null;
+            /**
              * Supported Db Objects
              * @description Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).
              */

@@ -6685,6 +6685,21 @@ class ProxyConfig:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
 
+        if "store_responses_in_spend_logs" in _general_settings:
+            response_storage_value: Final = (
+                general_settings.get("store_responses_in_spend_logs")
+                if "store_responses_in_spend_logs" in self._yaml_general_settings_keys
+                else _general_settings["store_responses_in_spend_logs"]
+            )
+            if response_storage_value is None:
+                general_settings["store_responses_in_spend_logs"] = None
+            elif isinstance(response_storage_value, bool):
+                general_settings["store_responses_in_spend_logs"] = response_storage_value
+            elif isinstance(response_storage_value, str):
+                general_settings["store_responses_in_spend_logs"] = response_storage_value.lower() == "true"
+            else:
+                general_settings["store_responses_in_spend_logs"] = bool(response_storage_value)
+
         if "disable_auto_add_proxy_admin_to_teams" in _general_settings:
             value = _general_settings["disable_auto_add_proxy_admin_to_teams"]
             if isinstance(value, str):
@@ -16328,6 +16343,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
+        "store_responses_in_spend_logs": "Boolean",
         "maximum_spend_logs_retention_period": "String",
         "maximum_health_check_retention_period": "String",
         "maximum_spend_logs_cleanup_batch_size": "Integer",

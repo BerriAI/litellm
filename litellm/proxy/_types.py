@@ -2591,6 +2591,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    store_responses_in_spend_logs: bool | None = Field(
+        None,
+        description="Controls response content storage in spend logs independently. When unset, follows store_prompts_in_spend_logs for backward compatibility.",
+    )
     disable_auto_add_proxy_admin_to_teams: bool | None = Field(
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
