@@ -1370,33 +1370,52 @@ async def pass_through_request(
             request_payload=failure_request_payload,
         )
 
-        if response.status_code < 400 and response_body is not None and guardrails_to_run:
+        if response.status_code < 400 and response_body is not None:
             # Build an enriched data dict: _parsed_body has been stripped of
             # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
             # so we re-attach the configured guardrails here so should_run_guardrail
             # sees them.
             hook_data: Final = dict(_parsed_body or {})
-            existing_metadata = hook_data.get("metadata")
-            if not isinstance(existing_metadata, dict):
-                existing_metadata = {}
-            hook_data["metadata"] = {
-                **existing_metadata,
-                "guardrails": guardrails_to_run,
-            }
-            post_call_guardrail_data = hook_data
-            response_body = await proxy_logging_obj.post_call_success_hook(
-                data=hook_data,
-                user_api_key_dict=user_api_key_dict,
-                response=response_body,
-            )
-            if isinstance(response_body, dict):
-                content = json.dumps(response_body).encode("utf-8")
-                _content_modified = True
-            else:
-                verbose_proxy_logger.debug(
-                    "pass_through_endpoint: post_call_success_hook returned %s, expected dict — using original response",
-                    type(response_body).__name__,
+            if guardrails_to_run:
+                existing_metadata = hook_data.get("metadata")
+                if not isinstance(existing_metadata, dict):
+                    existing_metadata = {}
+                hook_data["metadata"] = {
+                    **existing_metadata,
+                    "guardrails": guardrails_to_run,
+                }
+            # Per-request `guardrails` from the request body were popped out of
+            # `_parsed_body` by _init_kwargs_for_pass_through_endpoint (so they
+            # are not forwarded upstream) and parked in kwargs["litellm_params"].
+            # pre_call_hook ran before that strip and honored them; restore them
+            # here so post-call enforcement sees the same request-level attach.
+            # Endpoint-level guardrails keep precedence: a top-level "guardrails"
+            # key would shadow the metadata entry in get_guardrail_from_metadata.
+            request_level_guardrails: Final = (kwargs.get("litellm_params") or {}).get("guardrails") if kwargs else None
+            if request_level_guardrails and not guardrails_to_run and "guardrails" not in hook_data:
+                hook_data["guardrails"] = request_level_guardrails
+            # Endpoint-level opt-in is not the only way a post-call guardrail
+            # is attached: `default_on: true` guardrails and per-request
+            # `guardrails` body params apply here too (issue #32201). Gating
+            # solely on `guardrails_to_run` silently relayed responses those
+            # guardrails were configured to block. Only invoke the hook when
+            # a guardrail would actually run, so plain pass-through traffic
+            # does not start triggering non-guardrail callback hooks.
+            if guardrails_to_run or PassthroughGuardrailHandler.has_applicable_post_call_guardrail(hook_data):
+                post_call_guardrail_data = hook_data
+                response_body = await proxy_logging_obj.post_call_success_hook(
+                    data=hook_data,
+                    user_api_key_dict=user_api_key_dict,
+                    response=response_body,
                 )
+                if isinstance(response_body, dict):
+                    content = json.dumps(response_body).encode("utf-8")
+                    _content_modified = True
+                else:
+                    verbose_proxy_logger.debug(
+                        "pass_through_endpoint: post_call_success_hook returned %s, expected dict — using original response",
+                        type(response_body).__name__,
+                    )
         elif response_body is None:
             verbose_proxy_logger.debug(
                 "pass_through_endpoint: response body not JSON-parseable, skipping post-call guardrails"

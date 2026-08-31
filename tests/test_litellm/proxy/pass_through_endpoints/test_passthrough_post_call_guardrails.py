@@ -3,6 +3,10 @@ Tests for post-call guardrail invocation on pass-through endpoints.
 
 Verifies that apply_guardrail(input_type="response") is called for
 non-streaming pass-through responses. Addresses issue #20270.
+
+Also verifies that post-call guardrails enforce (block / rewrite) no matter
+how they are attached — endpoint-level config, ``default_on: true``, or a
+per-request ``guardrails`` body param. Addresses issue #32201.
 """
 
 import json
@@ -13,6 +17,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
@@ -312,3 +317,241 @@ def test_modify_response_exception_importable_from_both_paths():
     )
 
     assert FromExceptions is FromGuardrail
+
+
+# ---------------------------------------------------------------------------
+# Issue #32201: post_call guardrails attached to a pass-through endpoint are
+# consulted but never enforce.
+#
+# These tests run the REAL dispatch (real ProxyLogging + real
+# ToolPermissionGuardrail registered in litellm.callbacks) so a regression in
+# any layer — the gate in pass_through_request, should_run_guardrail, or the
+# guardrail's dict-response handling — fails them.
+# ---------------------------------------------------------------------------
+
+_ANTHROPIC_DENIED_TOOL_USE_RESPONSE = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-x",
+    "stop_reason": "tool_use",
+    "content": [
+        {
+            "type": "tool_use",
+            "id": "t1",
+            "name": "Bash",
+            "input": {"command": "rm -rf /"},
+        }
+    ],
+}
+
+_ANTHROPIC_SAFE_RESPONSE = {
+    "id": "msg_2",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-x",
+    "stop_reason": "tool_use",
+    "content": [
+        {
+            "type": "tool_use",
+            "id": "t2",
+            "name": "Bash",
+            "input": {"command": "ls -la"},
+        }
+    ],
+}
+
+_TOOL_FIREWALL_RULES = [
+    {
+        "id": "allow_safe_bash",
+        "tool_name": "Bash",
+        "decision": "allow",
+        "allowed_param_patterns": {
+            "command": r"^(?!.*(rm\s+-rf|terraform\s+destroy|kubectl\s+delete)).*$"
+        },
+    }
+]
+
+
+def _make_tool_firewall_guardrail(default_on: bool):
+    from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
+        ToolPermissionGuardrail,
+    )
+
+    return ToolPermissionGuardrail(
+        guardrail_name="tool-firewall",
+        event_hook="post_call",
+        rules=_TOOL_FIREWALL_RULES,
+        default_action="deny",
+        on_disallowed_action="block",
+        default_on=default_on,
+    )
+
+
+def _make_real_dispatch_user_api_key_dict():
+    d = _make_user_api_key_dict(request_route="/anthropic/v1/messages")
+    # collect_guardrails reads these when an endpoint-level config is present
+    d.metadata = {}
+    d.team_metadata = {}
+    return d
+
+
+def _real_dispatch_patches(upstream_body: dict, request_body: dict):
+    """Patches for end-to-end pass_through_request runs with a REAL ProxyLogging."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+    mock_response = _make_httpx_response(upstream_body)
+    mock_async_client_obj = MagicMock()
+    mock_async_client_obj.client = AsyncMock()
+    mock_pt_logging = MagicMock()
+    mock_pt_logging.pass_through_async_success_handler = AsyncMock()
+
+    patches = [
+        patch(
+            f"{_PT_MOD}.HttpPassThroughEndpointHelpers.non_streaming_http_request_handler",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+        patch(f"{_PT_MOD}._is_streaming_response", return_value=False),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        patch(f"{_PT_MOD}.pass_through_endpoint_logging", mock_pt_logging),
+        patch(f"{_PT_MOD}.get_async_httpx_client", return_value=mock_async_client_obj),
+        patch(
+            f"{_PT_MOD}._read_request_body",
+            new_callable=AsyncMock,
+            return_value=request_body,
+        ),
+        patch(f"{_PT_MOD}._safe_get_request_headers", return_value={}),
+    ]
+
+    stack = ExitStack()
+    for p in patches:
+        stack.enter_context(p)
+    return stack
+
+
+_PASSTHROUGH_REQUEST_BODY = {
+    "model": "claude-x",
+    "max_tokens": 64,
+    "messages": [{"role": "user", "content": "go"}],
+}
+
+
+@pytest.mark.asyncio
+class TestPostCallGuardrailEnforcement:
+    """A post_call guardrail attached to a pass-through endpoint must enforce."""
+
+    async def test_endpoint_attached_guardrail_blocks_denied_tool_use(self):
+        """Issue #32201 primary repro: guardrail attached via the endpoint's
+        `guardrails` config blocks an upstream response with a denied tool_use
+        instead of relaying it with HTTP 200."""
+        guardrail = _make_tool_firewall_guardrail(default_on=False)
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+
+        with _real_dispatch_patches(
+            _ANTHROPIC_DENIED_TOOL_USE_RESPONSE, dict(_PASSTHROUGH_REQUEST_BODY)
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await pass_through_request(
+                    request=_make_mock_request(),
+                    target="https://example.com/v1/messages",
+                    custom_headers={"Content-Type": "application/json"},
+                    user_api_key_dict=_make_real_dispatch_user_api_key_dict(),
+                    stream=False,
+                    guardrails_config={"tool-firewall": None},
+                )
+
+        assert str(exc_info.value.code) == "400"
+        assert "tool-firewall" in str(exc_info.value.message)
+
+    async def test_default_on_guardrail_blocks_without_endpoint_config(self):
+        """A `default_on: true` post_call guardrail must enforce on
+        pass-through routes that have no endpoint-level guardrails config
+        (e.g. the provider-native /anthropic/* passthrough)."""
+        guardrail = _make_tool_firewall_guardrail(default_on=True)
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+
+        with _real_dispatch_patches(
+            _ANTHROPIC_DENIED_TOOL_USE_RESPONSE, dict(_PASSTHROUGH_REQUEST_BODY)
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await pass_through_request(
+                    request=_make_mock_request(),
+                    target="https://example.com/v1/messages",
+                    custom_headers={"Content-Type": "application/json"},
+                    user_api_key_dict=_make_real_dispatch_user_api_key_dict(),
+                    stream=False,
+                )
+
+        assert str(exc_info.value.code) == "400"
+
+    async def test_request_body_guardrails_param_enforced_post_call(self):
+        """A per-request `guardrails` body param (honored by pre_call today)
+        must also attach the guardrail for post-call enforcement."""
+        guardrail = _make_tool_firewall_guardrail(default_on=False)
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+
+        body = dict(_PASSTHROUGH_REQUEST_BODY)
+        body["guardrails"] = ["tool-firewall"]
+
+        with _real_dispatch_patches(_ANTHROPIC_DENIED_TOOL_USE_RESPONSE, body):
+            with pytest.raises(ProxyException) as exc_info:
+                await pass_through_request(
+                    request=_make_mock_request(),
+                    target="https://example.com/v1/messages",
+                    custom_headers={"Content-Type": "application/json"},
+                    user_api_key_dict=_make_real_dispatch_user_api_key_dict(),
+                    stream=False,
+                )
+
+        assert str(exc_info.value.code) == "400"
+
+    async def test_passing_response_is_relayed_unchanged(self):
+        """An upstream response whose tool_use passes the rules must be
+        relayed unchanged with the upstream status code."""
+        guardrail = _make_tool_firewall_guardrail(default_on=True)
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+
+        with _real_dispatch_patches(
+            _ANTHROPIC_SAFE_RESPONSE, dict(_PASSTHROUGH_REQUEST_BODY)
+        ):
+            result = await pass_through_request(
+                request=_make_mock_request(),
+                target="https://example.com/v1/messages",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_make_real_dispatch_user_api_key_dict(),
+                stream=False,
+            )
+
+        assert result.status_code == 200
+        assert json.loads(bytes(result.body)) == _ANTHROPIC_SAFE_RESPONSE
+
+    async def test_unattached_guardrail_skips_post_call_hook(self):
+        """With a registered but unattached (non-default_on) guardrail, the
+        post-call hook must not run: pass-through stays opt-in for guardrails
+        and non-guardrail callbacks must not start firing on plain traffic."""
+        guardrail = _make_tool_firewall_guardrail(default_on=False)
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(
+            return_value=dict(_PASSTHROUGH_REQUEST_BODY)
+        )
+        mock_proxy_logging.post_call_success_hook = AsyncMock()
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        mock_response = _make_httpx_response(_ANTHROPIC_DENIED_TOOL_USE_RESPONSE)
+        with _common_patches(mock_proxy_logging, mock_response):
+            result = await pass_through_request(
+                request=_make_mock_request(),
+                target="https://example.com/v1/messages",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_make_real_dispatch_user_api_key_dict(),
+                stream=False,
+            )
+
+        mock_proxy_logging.post_call_success_hook.assert_not_awaited()
+        assert result.status_code == 200

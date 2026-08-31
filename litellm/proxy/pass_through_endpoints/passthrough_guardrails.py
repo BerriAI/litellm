@@ -274,6 +274,50 @@ class PassthroughGuardrailHandler:
         return guardrails_to_run if guardrails_to_run else None
 
     @staticmethod
+    def has_applicable_post_call_guardrail(data: dict) -> bool:
+        """
+        Check whether any registered guardrail would run post_call for ``data``.
+
+        Endpoint-level opt-in (``collect_guardrails``) is not the only way a
+        post-call guardrail can be attached to a pass-through request:
+        guardrails configured with ``default_on: true`` and per-request
+        ``guardrails`` body params must enforce too — pre-call enforcement on
+        pass-through already honors both, and so do the normal completion
+        routes. Gating the response-side hook on endpoint opt-in alone made a
+        ``mode: post_call`` guardrail with ``on_disallowed_action: block``
+        silently degrade into a plain relay of the upstream response
+        (issue #32201).
+
+        Errors from ``should_run_guardrail`` count as applicable so the real
+        ``post_call_success_hook`` invocation surfaces them the same way the
+        completion routes would, instead of silently skipping enforcement
+        (fail closed).
+        """
+        import litellm
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.litellm_core_utils.litellm_logging import (
+            get_custom_logger_compatible_class,
+        )
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        for callback in litellm.callbacks:
+            resolved = get_custom_logger_compatible_class(callback) if isinstance(callback, str) else callback
+            if not isinstance(resolved, CustomGuardrail):
+                continue
+            try:
+                if resolved.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call):
+                    return True
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Passthrough post-call guardrail applicability check errored for %s; "
+                    "running the post-call hook so the error surfaces (fail closed)",
+                    getattr(resolved, "guardrail_name", type(resolved).__name__),
+                    exc_info=True,
+                )
+                return True
+        return False
+
+    @staticmethod
     def get_field_targeted_text(
         data: dict,
         guardrail_name: str,
