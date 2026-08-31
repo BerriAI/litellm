@@ -39,6 +39,23 @@ def gh(*args: str) -> str:
     return result.stdout
 
 
+def parse_concatenated_json(raw: str) -> list[dict]:
+    """Parse the concatenated JSON documents that `gh api --paginate` emits."""
+    decoder = json.JSONDecoder()
+    issues: list[dict] = []
+    idx = 0
+    while idx < len(raw):
+        if raw[idx].isspace():
+            idx += 1
+            continue
+        parsed, idx = decoder.raw_decode(raw, idx)
+        if isinstance(parsed, list):
+            issues.extend(parsed)
+        else:
+            issues.append(parsed)
+    return issues
+
+
 def fetch_open_issues(repo: str | None) -> list[dict]:
     """Fetch all open issues (excluding PRs) via gh api --paginate."""
     if repo:
@@ -49,18 +66,7 @@ def fetch_open_issues(repo: str | None) -> list[dict]:
         endpoint = "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
     cmd = ["api", "--paginate", endpoint]
 
-    raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
-    issues = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parsed = json.loads(line)
-        if isinstance(parsed, list):
-            issues.extend(parsed)
-        else:
-            issues.append(parsed)
+    issues = parse_concatenated_json(gh(*cmd))
 
     # Filter out pull requests (they also appear in the issues endpoint)
     return [i for i in issues if "pull_request" not in i]
