@@ -611,18 +611,20 @@ def test_retry_attempts_in_cluster_kwargs():
     assert "cluster_error_retry_attempts" in kwargs
 
 
-def test_async_only_retry_kwargs_in_cluster_kwargs_when_async_client_requested():
-    """connection_error_retry_attempts exists only on the async cluster client's
-    constructor. Introspecting the sync class regardless of which client is
-    actually built silently drops it for every async cluster caller."""
+def test_async_only_kwargs_in_cluster_kwargs_when_async_client_requested():
+    """decode_responses is on the async cluster client's constructor and not the sync
+    one, on every redis-py the matrix covers. Introspecting the sync class regardless
+    of which client is actually built silently drops it for every async cluster caller."""
     sync_kwargs = _get_redis_cluster_kwargs()
     async_kwargs = _get_redis_cluster_kwargs(async_redis.RedisCluster)
 
-    assert "connection_error_retry_attempts" not in sync_kwargs
-    assert "connection_error_retry_attempts" in async_kwargs
+    assert "decode_responses" not in sync_kwargs
+    assert "decode_responses" in async_kwargs
 
 
-@patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class")
+@patch(  # test-quality-ok: redis-py >= 6 keeps no cluster_error_retry_attempts attribute on the built client, so the constructor call is the only place the value is observable
+    "litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class"
+)
 def test_async_cluster_forwards_retry_attempts(mock_get_cluster_class):
     """Regression: cluster_error_retry_attempts must reach the constructed async
     cluster client. Silently dropping it removes an operator's only lever for
@@ -638,19 +640,16 @@ def test_async_cluster_forwards_retry_attempts(mock_get_cluster_class):
     assert call_kwargs["cluster_error_retry_attempts"] == 2
 
 
-@patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class")
-def test_async_cluster_passes_async_only_kwargs(mock_get_cluster_class):
+def test_async_cluster_passes_async_only_kwargs():
     """Regression: decode_responses is an async-cluster-only constructor arg. When
     the allow-list came from the sync class it was filtered out and values came
     back as bytes instead of str."""
-    mock_cluster_cls = mock_get_cluster_class.return_value
-    get_redis_async_client(
+    client = get_redis_async_client(
         startup_nodes=[{"host": "cluster-node", "port": 6379}],
         decode_responses=True,
     )
 
-    call_kwargs = mock_cluster_cls.call_args[1]
-    assert call_kwargs["decode_responses"] is True
+    assert client.connection_kwargs["decode_responses"] is True
 
 
 @pytest.mark.parametrize("cluster_client", [redis.RedisCluster, async_redis.RedisCluster], ids=["sync", "async"])

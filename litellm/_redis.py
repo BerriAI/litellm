@@ -141,12 +141,11 @@ def _get_redis_cluster_kwargs(client: type | None = None):
     """Config kwargs the target cluster client's constructor actually accepts.
 
     Defaults to the sync ``redis.RedisCluster``, but the async cluster client
-    (``redis.asyncio.cluster.RedisCluster``) accepts several constructor kwargs
-    the sync class does not (``cluster_error_retry_attempts``,
-    ``connection_error_retry_attempts``, ``decode_responses``, ...). Introspecting
+    (``redis.asyncio.cluster.RedisCluster``) declares connection settings such as
+    ``decode_responses`` on its own constructor, where the sync class takes them
+    through ``**kwargs`` and so never names them in its signature. Introspecting
     only the sync class regardless of which client is actually built silently
-    drops those for every async cluster caller, including any operator-configured
-    retry bound meant to cap a stuck node's worst-case latency.
+    drops those for every async cluster caller.
     """
     if client is None:
         client = redis.RedisCluster
