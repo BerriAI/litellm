@@ -6363,6 +6363,7 @@ def embedding(
         elif (
             custom_llm_provider == "openai_like"
             or custom_llm_provider == "llamafile"
+            or custom_llm_provider == "llmman"
             or custom_llm_provider == "lm_studio"
         ):
             api_base = api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")

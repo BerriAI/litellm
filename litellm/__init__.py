@@ -1888,6 +1888,9 @@ if TYPE_CHECKING:
     from .llms.llamafile.chat.transformation import (
         LlamafileChatConfig as _LlamafileChatConfig,
     )
+    from .llms.llmman.chat.transformation import (
+        LlmmanChatConfig as _LlmmanChatConfig,
+    )
     from .llms.lm_studio.chat.transformation import (
         LMStudioChatConfig as _LMStudioChatConfig,
     )
