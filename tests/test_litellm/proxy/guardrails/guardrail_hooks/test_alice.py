@@ -1,3 +1,4 @@
+import json
 import os
 from copy import deepcopy
 from unittest.mock import AsyncMock
@@ -118,7 +119,8 @@ class TestAliceForwarding:
         assert guardrail.async_handler.post.call_args.kwargs["json"]["input_type"] == "response"
 
     @pytest.mark.asyncio
-    async def test_no_texts_reaches_no_evaluation(self):
+    async def test_nothing_selectable_reaches_no_evaluation(self):
+        """No texts, images, tools, tool_calls, or structured_messages: genuinely nothing to send."""
         guardrail = _guardrail()
         guardrail.async_handler.post = AsyncMock()
 
@@ -126,6 +128,43 @@ class TestAliceForwarding:
 
         assert result == {"texts": []}
         guardrail.async_handler.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_only_still_reaches_alice(self):
+        """A batch with empty texts but populated tool_calls is still a selection decision Alice
+        should make, not the plugin — see the class docstring."""
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        inputs = {"texts": [], "tool_calls": [{"id": "call_1", "function": {"name": "get_weather"}}]}
+
+        await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+        guardrail.async_handler.post.assert_called_once()
+        assert guardrail.async_handler.post.call_args.kwargs["json"]["inputs"]["tool_calls"] == inputs["tool_calls"]
+
+    @pytest.mark.asyncio
+    async def test_images_only_still_reaches_alice(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "images": ["data:image/png;base64,abc"]}, request_data={}, input_type="request"
+        )
+
+        guardrail.async_handler.post.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_structured_messages_only_still_reaches_alice(self):
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "structured_messages": [{"role": "user", "content": []}]},
+            request_data={},
+            input_type="request",
+        )
+
+        guardrail.async_handler.post.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_makes_exactly_one_attempt(self):
@@ -157,6 +196,59 @@ class TestAliceCredentialStripping:
         assert "secret_fields" not in sent_request_data
         assert "api_key" not in sent_request_data
         assert sent_request_data == {"model": "gpt-4o", "metadata": {"user_api_key_alias": "payments-bot"}}
+
+    @pytest.mark.asyncio
+    async def test_nested_credentials_are_stripped_at_every_depth(self):
+        """Shaped after a real captured Claude Code payload: the caller's Authorization/x-api-key
+        lives under several independent nesting paths, none of which are the root."""
+        guardrail = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        request_data = {
+            "model": "claude-3-5-sonnet",
+            "secret_fields": {"raw_headers": {"authorization": "Bearer caller-virtual-key"}},
+            "provider_specific_header": {"extra_headers": {"authorization": "sk-ant-oat01-nested-oauth"}},
+            "proxy_server_request": {
+                "url": "/v1/messages",
+                "headers": {"authorization": "Bearer inbound-caller-secret", "x-request-id": "req-1"},
+                "body": {
+                    "model": "claude-3-5-sonnet",
+                    "metadata": {"headers": {"authorization": "Bearer body-metadata-secret"}},
+                },
+            },
+            "metadata": {
+                "user_api_key_alias": "payments-bot",
+                "headers": {"authorization": "Bearer metadata-secret"},
+                "requester_metadata": {"headers": {"authorization": "Bearer requester-metadata-secret"}},
+            },
+            "litellm_metadata": {"headers": {"authorization": "Bearer litellm-metadata-secret"}},
+        }
+
+        await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data=request_data, input_type="request")
+
+        posted_body = guardrail.async_handler.post.call_args.kwargs["json"]
+        serialized = json.dumps(posted_body)
+        assert "authorization" not in serialized.lower()
+        assert "caller-virtual-key" not in serialized
+        assert "nested-oauth" not in serialized
+        assert "inbound-caller-secret" not in serialized
+        assert "body-metadata-secret" not in serialized
+        assert "metadata-secret" not in serialized
+        assert "requester-metadata-secret" not in serialized
+        assert "litellm-metadata-secret" not in serialized
+
+        sent_request_data = posted_body["request_data"]
+        assert sent_request_data["model"] == "claude-3-5-sonnet"
+        assert sent_request_data["proxy_server_request"]["url"] == "/v1/messages"
+        assert "headers" not in sent_request_data["proxy_server_request"]
+        assert sent_request_data["proxy_server_request"]["body"]["model"] == "claude-3-5-sonnet"
+        assert "headers" not in sent_request_data["proxy_server_request"]["body"]["metadata"]
+        assert sent_request_data["metadata"]["user_api_key_alias"] == "payments-bot"
+        assert "headers" not in sent_request_data["metadata"]
+        assert "requester_metadata" in sent_request_data["metadata"]
+        assert "headers" not in sent_request_data["metadata"]["requester_metadata"]
+        assert "headers" not in sent_request_data["litellm_metadata"]
+        assert "secret_fields" not in sent_request_data
+        assert "provider_specific_header" not in sent_request_data
 
     @pytest.mark.asyncio
     async def test_the_original_request_data_is_not_mutated(self):

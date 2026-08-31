@@ -48,18 +48,30 @@ _KNOWN_VERDICTS: Final = frozenset({_VERDICT_ALLOW, _VERDICT_BLOCK, _VERDICT_MAS
 
 _DEFAULT_BLOCK_MESSAGE: Final = "Blocked by your organization's content policy."
 
+# apply_guardrail selects nothing: it forwards whichever of these came populated and lets Alice
+# decide what is worth evaluating. Only skip the call when every one of them is empty — there is
+# then genuinely nothing to send.
+_SELECTABLE_INPUT_FIELDS: Final = ("texts", "images", "tools", "tool_calls", "structured_messages")
+
 # Caps on the outbound copy of request_data. A payload deeper or wider than this is malformed
 # rather than large, and serializing it would cost more than the evaluation it feeds.
 _MAX_DEPTH: Final = 12
 _MAX_ITEMS: Final = 5000
 
-# request_data carries the caller's raw credentials under these top-level keys. LiteLLM's own
-# spend-log sanitizer excludes `secret_fields` for the same reason
+# request_data carries the caller's raw credentials under these keys, at any nesting depth —
+# a real captured payload puts inbound headers at request_data["proxy_server_request"]["headers"],
+# again under ["metadata"]["headers"] / ["litellm_metadata"]["headers"], and again under
+# ["metadata"]["requester_metadata"]["headers"], any of which can carry an Authorization or
+# x-api-key value. LiteLLM's own spend-log sanitizer excludes `secret_fields` for the same reason
 # (spend_tracking_utils._SENSITIVE_REQUEST_BODY_KEYS): `secret_fields.raw_headers` holds the
 # caller's Authorization / x-api-key in the clear, and `api_key` can carry a forwarded provider
-# credential. Posting either to a third-party guardrail endpoint would be worse than what the
-# proxy already refuses to persist in its own audit trail — so these never leave the process.
-_CREDENTIAL_KEYS_TO_STRIP: Final = frozenset({"secret_fields", "api_key"})
+# credential. Stripping by key name rather than by path means a new nesting path can never
+# reintroduce the leak. Posting any of these to a third-party guardrail endpoint would be worse
+# than what the proxy already refuses to persist in its own audit trail — so none of them leave
+# the process.
+_CREDENTIAL_KEYS_TO_STRIP: Final = frozenset(
+    {"secret_fields", "api_key", "raw_headers", "headers", "provider_specific_header"}
+)
 
 
 class AliceReplacement(TypedDict):
@@ -88,12 +100,14 @@ class AliceGuardrail(CustomGuardrail):
     Alice — policy-based guardrails for prompts and model responses.
 
     This forwards the hook's arguments as it received them and enforces the verdict that comes
-    back, with one deliberate exception: the caller's raw credentials
-    (`secret_fields`, the root `api_key`) are stripped from `request_data` before it is
-    serialized, and never reach Alice. Short of that, it selects nothing and renames nothing:
-    which parts of a conversation are worth evaluating, and how a verdict is reached, are
-    decided by Alice — so changing either is a change on their side rather than a LiteLLM
-    upgrade.
+    back, with one deliberate exception: any key named `secret_fields`, `api_key`, `raw_headers`,
+    `headers`, or `provider_specific_header` is dropped from `request_data` at any nesting depth
+    before it is serialized, and never reaches Alice. Short of that, it selects nothing and
+    renames nothing: which parts of a conversation are worth evaluating, and how a verdict is
+    reached, are decided by Alice — so changing either is a change on their side rather than a
+    LiteLLM upgrade. A batch with nothing selectable at all (no `texts`, `images`, `tools`,
+    `tool_calls`, or `structured_messages`) still skips the call, since there would be nothing to
+    send.
 
     Known limitation: the unified guardrail's `streaming_transform_mode` defaults to
     `block_only`, whose streaming path discards any returned text rewrite. A MASK verdict is
@@ -162,7 +176,7 @@ class AliceGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        if not inputs.get("texts"):
+        if not any(inputs.get(field) for field in _SELECTABLE_INPUT_FIELDS):
             return inputs
 
         try:
@@ -195,15 +209,12 @@ class AliceGuardrail(CustomGuardrail):
         request_data: Mapping[str, object],
         input_type: str,
     ) -> AliceVerdict:
-        safe_request_data: Final = {  # mutable-ok: one-shot filtered copy, discarded once serialized below
-            key: value for key, value in request_data.items() if key not in _CREDENTIAL_KEYS_TO_STRIP
-        }
         response: Final = await self.async_handler.post(
             url=self.api_base,
             json={  # mutable-ok: one-shot HTTP request body, never mutated after construction
                 "input_type": input_type,
                 "inputs": _json_safe(inputs),
-                "request_data": _json_safe(safe_request_data),
+                "request_data": _json_safe(request_data, strip_keys=_CREDENTIAL_KEYS_TO_STRIP),
             },
             headers={  # mutable-ok: one-shot HTTP headers, never mutated after construction
                 "Content-Type": "application/json",
@@ -305,7 +316,12 @@ class AliceGuardrail(CustomGuardrail):
         return AliceGuardrailConfigModel
 
 
-def _json_safe(value: object, depth: int = 0, seen: frozenset[int] = frozenset()) -> object:
+def _json_safe(
+    value: object,
+    depth: int = 0,
+    seen: frozenset[int] = frozenset(),
+    strip_keys: frozenset[str] = frozenset(),
+) -> object:
     """
     Copy `value` into something `json.dumps` accepts, dropping only what cannot cross.
 
@@ -313,6 +329,11 @@ def _json_safe(value: object, depth: int = 0, seen: frozenset[int] = frozenset()
     be serialized as it stands. What is dropped is decided by a mechanical rule rather than a
     field list: a list drifts from what the far side needs, a rule cannot. Serializing naively
     raises, and that error would be read as "guardrail unavailable" on every single request.
+
+    `strip_keys` drops a dict key by name at every depth it appears, not just the root — a caller
+    passes `_CREDENTIAL_KEYS_TO_STRIP` here so a credential nested under any path is caught the
+    same way a top-level one is, without maintaining a list of paths. The source object is never
+    mutated: every branch below builds a new container.
     """
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
@@ -324,20 +345,20 @@ def _json_safe(value: object, depth: int = 0, seen: frozenset[int] = frozenset()
     if isinstance(value, dict):
         out: dict[str, object] = {}  # mutable-ok: bounded accumulator local to this call, never escapes as-is
         for key, item in list(value.items())[:_MAX_ITEMS]:  # mutable-ok: list() only to slice an unordered view
-            if isinstance(key, str):
-                out[key] = _json_safe(item, depth + 1, nested)
+            if isinstance(key, str) and key not in strip_keys:
+                out[key] = _json_safe(item, depth + 1, nested, strip_keys)
         return out
 
     if isinstance(value, (list, tuple, set, frozenset)):
         return [  # mutable-ok: return value is a one-shot list, discarded by the caller after use
-            _json_safe(item, depth + 1, nested)
+            _json_safe(item, depth + 1, nested, strip_keys)
             for item in list(value)[:_MAX_ITEMS]  # mutable-ok: list() only to slice an unordered view
         ]
 
     dump: Final = getattr(value, "model_dump", None)
     if callable(dump):
         try:
-            return _json_safe(dump(mode="json"), depth + 1, nested)
+            return _json_safe(dump(mode="json"), depth + 1, nested, strip_keys)
         except Exception:  # noqa: BLE001  # a model that will not dump is one we drop
             return None
 
