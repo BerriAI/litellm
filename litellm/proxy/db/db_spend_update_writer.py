@@ -232,7 +232,7 @@ class DBSpendUpdateWriter:
                 team_id,
             )
             if ProxyUpdateSpend.disable_spend_updates() is True:
-                return None
+                return
             if token is not None and isinstance(token, str) and token.startswith("sk-"):
                 hashed_token = hash_token(token=token)
             else:
@@ -318,7 +318,7 @@ class DBSpendUpdateWriter:
                 org_id,
                 end_user_id,
             )
-            return None
+            return
 
     async def _enqueue_tool_usage_transaction(
         self,
