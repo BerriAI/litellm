@@ -64,6 +64,12 @@ def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
         usage.pop("total_tokens", None)
 
 
+def _create_base_llm_response_processor(
+    data: dict,  # mutable-ok: existing processor contract owns mutable request data
+) -> ProxyBaseLLMRequestProcessing:
+    return ProxyBaseLLMRequestProcessing(data=data)
+
+
 @router.post(
     "/v1/messages",
     tags=["[beta] Anthropic `/v1/messages`"],
@@ -93,7 +99,7 @@ async def anthropic_response(
     )
 
     data: Final = await _read_request_body(request=request)
-    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    base_llm_response_processor: Final = _create_base_llm_response_processor(data=data)
     try:
         result: Final = await base_llm_response_processor.base_process_llm_request(
             request=request,
@@ -155,12 +161,14 @@ async def anthropic_response(
         )
 
         if data.get("stream", None) is not None and data["stream"] is True:
-            # For streaming, use the standard SSE data generator
-            async def _passthrough_stream_generator():
-                yield _anthropic_response
+            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                FakeAnthropicMessagesStreamIterator,
+            )
+
+            blocked_stream: Final = FakeAnthropicMessagesStreamIterator(response=_anthropic_response)
 
             selected_data_generator: Final = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                response=_passthrough_stream_generator(),
+                response=blocked_stream,
                 user_api_key_dict=user_api_key_dict,
                 request_data=_data,
                 proxy_logging_obj=proxy_logging_obj,
