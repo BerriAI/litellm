@@ -423,6 +423,7 @@ class OllamaChatConfig(BaseConfig):
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
+    seen_tool_calls: bool = False
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -468,6 +469,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
             if tool_calls is not None:
+                self.seen_tool_calls = True
                 for tool_call in tool_calls:
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
@@ -508,9 +510,13 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason") or "stop"
-                # Override finish_reason when tool_calls are present
-                # Fixes: https://github.com/BerriAI/litellm/issues/18922
-                if tool_calls is not None:
+                # Override finish_reason when tool_calls were streamed in any chunk,
+                # not just the final one. Ollama emits tool_calls mid-stream and the
+                # done chunk carries none, which left finish_reason at "stop" and
+                # made the Anthropic /v1/messages bridge emit stop_reason "end_turn".
+                # Fixes: https://github.com/BerriAI/litellm/issues/18922 and
+                # https://github.com/BerriAI/litellm/issues/34692
+                if self.seen_tool_calls:
                     finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(
