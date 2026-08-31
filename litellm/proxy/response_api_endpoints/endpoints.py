@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast, get_args
 from uuid import uuid4
@@ -11,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_api_usage as _blocked_responses_api_usage,
@@ -26,10 +28,14 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
 if TYPE_CHECKING:
+    from litellm.responses.litellm_completion_transformation.session_handler import (
+        ResponsesVisibleHistory,
+    )
     from litellm.router import Router
 
 router: Final = APIRouter()
@@ -44,6 +50,93 @@ _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     }
 )
 _EMPTY_TOOL_PAYLOAD: Final[Mapping[str, Any]] = MappingProxyType({})
+
+
+async def _prepare_cross_deployment_responses_replay(
+    *,
+    model: str,
+    request_kwargs: Mapping[str, object],
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+    history_loader: Callable[..., Awaitable["ResponsesVisibleHistory | None"]] | None = None,
+) -> Mapping[str, object]:
+    previous_response_id: Final = request_kwargs.get("previous_response_id")
+    if not isinstance(previous_response_id, str):
+        return request_kwargs
+
+    from litellm.responses.litellm_completion_transformation.session_handler import (
+        ResponsesSessionHandler,
+        ResponsesSessionHistoryTooLongError,
+    )
+
+    metadata: Final = request_kwargs.get("litellm_metadata", request_kwargs.get("metadata"))
+    api_key_hash: Final = (
+        str(metadata.get("user_api_key_hash"))
+        if isinstance(metadata, Mapping) and metadata.get("user_api_key_hash") is not None
+        else None
+    )
+    loader: Final = history_loader or ResponsesSessionHandler.get_visible_history_for_previous_response_id
+    try:
+        history = await loader(
+            previous_response_id=previous_response_id,
+            api_key_hash=api_key_hash,
+        )
+    except ResponsesSessionHistoryTooLongError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if history is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unable to replay previous_response_id across deployments because its visible history "
+                "is unavailable in LiteLLM spend logs"
+            ),
+        )
+
+    current_input: Final = request_kwargs.get("input")
+    if not isinstance(current_input, (str, list)):
+        raise HTTPException(
+            status_code=400,
+            detail="Cross-deployment Responses replay requires a string or list input",
+        )
+    current_items: Final[tuple[object, ...]] = (
+        ({"type": "message", "role": "user", "content": current_input},)  # mutable-ok: OpenAI request schema
+        if isinstance(current_input, str)
+        else tuple(
+            item
+            for item in current_input
+            if not isinstance(item, Mapping)
+            or (item.get("type") != "reasoning" and item.get("encrypted_content") is None)
+        )
+    )
+    replay_request: Final = {  # mutable-ok: proxy guardrails require mutable request data
+        **MappingProxyType(
+            {
+                key: value
+                for key, value in request_kwargs.items()
+                if key
+                not in frozenset(
+                    (
+                        "previous_response_id",
+                        "_responses_replay_handler",
+                        "_responses_api_origin_model_id",
+                    )
+                )
+            }
+        ),
+        "input": list((*history.input, *current_items)),  # mutable-ok: OpenAI Responses requires a JSON array
+        "litellm_trace_id": history.litellm_session_id,
+    }
+    for metadata_key in ("metadata", "litellm_metadata"):
+        replay_metadata = replay_request.get(metadata_key)
+        if isinstance(replay_metadata, dict):
+            replay_metadata.pop(PRE_CALL_EXECUTED_GUARDRAILS_KEY, None)
+    guarded_request: Final[dict] = await proxy_logging_obj.pre_call_hook(  # mutable-ok: proxy hook contract
+        user_api_key_dict=user_api_key_dict,
+        data=replay_request,
+        call_type="aresponses",
+        guardrails_only=True,
+    )
+    return MappingProxyType(guarded_request)
 
 
 def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
@@ -264,7 +357,14 @@ async def responses_api(
         # Run pre-call checks (rate limits, guardrails, budget) BEFORE creating
         # polling ID. This ensures rate-limited requests get a synchronous 429
         # instead of a polling ID that immediately fails in the background task.
-        processor = ProxyBaseLLMRequestProcessing(data=data)
+        processor = ProxyBaseLLMRequestProcessing(
+            data=data,
+            responses_replay_handler=partial(
+                _prepare_cross_deployment_responses_replay,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+            ),
+        )
         try:
             data, _logging_obj = await processor.common_processing_pre_call_logic(
                 request=request,
@@ -335,7 +435,14 @@ async def responses_api(
         return initial_state
 
     # Normal response flow
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor = ProxyBaseLLMRequestProcessing(
+        data=data,
+        responses_replay_handler=partial(
+            _prepare_cross_deployment_responses_replay,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+        ),
+    )
     try:
         response: Final = await processor.base_process_llm_request(
             request=request,

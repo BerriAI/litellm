@@ -428,6 +428,14 @@ class DeploymentAffinityCheck(CustomLogger):
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
 
+        # Router Responses requests apply previous-response affinity only after
+        # every eligibility check. Narrowing here would discard siblings before
+        # context, RPM, region, tag, and plugin checks can evaluate them.
+        if request_kwargs.get("_is_responses_api_router_request") is True and request_kwargs.get(
+            "previous_response_id"
+        ):
+            return typed_healthy_deployments
+
         (
             enable_user_key,
             enable_responses_api,

@@ -1677,7 +1677,15 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
+        frozenset(
+            {
+                "secret_fields",
+                "proxy_server_request",
+                "litellm_logging_obj",
+                "_responses_replay_handler",
+            }
+        )
+        | _TRANSPORT_ONLY_CREDENTIAL_KEYS
     )
     proxy_server_request["body"] = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
 

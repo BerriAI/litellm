@@ -1492,8 +1492,13 @@ def _timing_values(
 
 
 class ProxyBaseLLMRequestProcessing:
-    def __init__(self, data: dict):
+    def __init__(
+        self,
+        data: dict,  # mutable-ok: shared proxy request payload is intentionally mutated across processing stages
+        responses_replay_handler: Callable[..., Awaitable[Mapping[str, object]]] | None = None,
+    ):
         self.data = data
+        self.responses_replay_handler = responses_replay_handler
 
     @staticmethod
     def get_custom_headers(
@@ -1944,6 +1949,9 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             call_type=route_type,
         )
+
+        if self.responses_replay_handler is not None:
+            self.data["_responses_replay_handler"] = self.responses_replay_handler
 
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
         # have mutated `self.data` in place, and the audit-trail snapshot taken in

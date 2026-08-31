@@ -6,10 +6,6 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.responses.litellm_completion_transformation.session_handler import (
-    ResponsesSessionHandler,
-    ResponsesVisibleHistory,
-)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
@@ -385,20 +381,17 @@ async def test_same_model_group_continuation_does_not_replay_history():
         captured_kwargs.update(kwargs)
         return "ok"
 
-    with patch.object(  # test-quality-ok: Router constructs the session handler internally
-        ResponsesSessionHandler,
-        "get_visible_history_for_previous_response_id",
-        new_callable=AsyncMock,
-    ) as replay_history:
-        result = await router._aresponses_with_streaming_fallbacks(
-            original_function=capture_request,
-            model="terra",
-            input="Follow-up",
-            previous_response_id=previous_response_id,
-        )
+    replay_handler = AsyncMock()
+    result = await router._aresponses_with_streaming_fallbacks(
+        original_function=capture_request,
+        model="terra",
+        input="Follow-up",
+        previous_response_id=previous_response_id,
+        _responses_replay_handler=replay_handler,
+    )
 
     assert result == "ok"
-    replay_history.assert_not_awaited()
+    replay_handler.assert_not_awaited()
     assert captured_kwargs["previous_response_id"] == previous_response_id
     assert captured_kwargs["input"] == "Follow-up"
 
@@ -424,39 +417,36 @@ async def test_cross_model_group_replays_visible_history_without_previous_respon
         model_id="terra-id",
         response_id="resp-terra",
     )
-    history = ResponsesVisibleHistory(
-        input=[
-            {"type": "message", "role": "user", "content": "My name is Chulsoo."},
-            {"type": "message", "role": "assistant", "content": "I will remember that."},
-        ],
-        litellm_session_id="session-terra",
-    )
     captured_kwargs = {}
 
     async def capture_request(**kwargs):
         captured_kwargs.update(kwargs)
         return "ok"
 
-    with patch.object(  # test-quality-ok: Router constructs the session handler internally
-        ResponsesSessionHandler,
-        "get_visible_history_for_previous_response_id",
-        new_callable=AsyncMock,
-        return_value=history,
-    ) as replay_history:
-        result = await router._aresponses_with_streaming_fallbacks(
-            original_function=capture_request,
-            model="luna",
-            input="What is my name?",
-            previous_response_id=previous_response_id,
-            stream=stream,
-            litellm_metadata={"user_api_key_hash": "hashed-api-key"},
-        )
+    async def replay_handler(*, model, request_kwargs):
+        assert model == "luna"
+        assert request_kwargs["previous_response_id"] == previous_response_id
+        return {
+            **{key: value for key, value in request_kwargs.items() if key != "previous_response_id"},
+            "input": [
+                {"type": "message", "role": "user", "content": "My name is Chulsoo."},
+                {"type": "message", "role": "assistant", "content": "I will remember that."},
+                {"type": "message", "role": "user", "content": "What is my name?"},
+            ],
+            "litellm_trace_id": "session-terra",
+        }
+
+    result = await router._aresponses_with_streaming_fallbacks(
+        original_function=capture_request,
+        model="luna",
+        input="What is my name?",
+        previous_response_id=previous_response_id,
+        stream=stream,
+        litellm_metadata={"user_api_key_hash": "hashed-api-key"},
+        _responses_replay_handler=replay_handler,
+    )
 
     assert result == "ok"
-    replay_history.assert_awaited_once_with(
-        previous_response_id=previous_response_id,
-        api_key_hash="hashed-api-key",
-    )
     assert "previous_response_id" not in captured_kwargs
     assert captured_kwargs["litellm_trace_id"] == "session-terra"
     assert captured_kwargs["stream"] is stream
@@ -485,21 +475,94 @@ async def test_cross_model_group_fails_closed_without_history():
     )
     provider_call = AsyncMock()
 
-    with patch.object(
-        ResponsesSessionHandler,
-        "get_visible_history_for_previous_response_id",
-        new_callable=AsyncMock,
-        return_value=None,
-    ):
-        with pytest.raises(litellm.BadRequestError, match="visible history is unavailable"):
-            await router._aresponses_with_streaming_fallbacks(
-                original_function=provider_call,
-                model="luna",
-                input="What is my name?",
-                previous_response_id=previous_response_id,
-            )
+    with pytest.raises(litellm.BadRequestError, match="different deployment"):
+        await router._aresponses_with_streaming_fallbacks(
+            original_function=provider_call,
+            model="luna",
+            input="What is my name?",
+            previous_response_id=previous_response_id,
+        )
 
     provider_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ineligible_origin_falls_back_to_sibling_after_pre_call_checks():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "terra",
+                "litellm_params": {"model": "azure/terra-small", "api_key": "mock"},
+                "model_info": {"id": "terra-small", "base_model": "gpt-5", "max_input_tokens": 1},
+            },
+            {
+                "model_name": "terra",
+                "litellm_params": {"model": "azure/terra-large", "api_key": "mock"},
+                "model_info": {"id": "terra-large", "base_model": "gpt-5", "max_input_tokens": 1000},
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+    previous_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure",
+        model_id="terra-small",
+        response_id="resp-terra",
+    )
+    captured_kwargs = {}
+
+    async def replay_handler(*, model, request_kwargs):
+        return {
+            **{key: value for key, value in request_kwargs.items() if key != "previous_response_id"},
+            "input": [{"type": "message", "role": "user", "content": "visible replay"}],
+        }
+
+    async def capture_request(**kwargs):
+        captured_kwargs.update(kwargs)
+        return "ok"
+
+    result = await router._aresponses_with_streaming_fallbacks(
+        original_function=capture_request,
+        model="terra",
+        input="Follow-up that exceeds one token",
+        previous_response_id=previous_response_id,
+        _responses_replay_handler=replay_handler,
+    )
+
+    assert result == "ok"
+    assert captured_kwargs["model_info"]["id"] == "terra-large"
+    assert "previous_response_id" not in captured_kwargs
+
+
+@pytest.mark.asyncio
+async def test_router_responses_affinity_callback_keeps_sibling_candidates():
+    affinity = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=3600,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=True,
+        enable_session_id_affinity=True,
+    )
+    deployments = [
+        {"model_info": {"id": "origin-id"}},
+        {"model_info": {"id": "sibling-id"}},
+    ]
+    previous_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure",
+        model_id="origin-id",
+        response_id="resp-origin",
+    )
+
+    filtered = await affinity.async_filter_deployments(
+        model="terra",
+        healthy_deployments=deployments,
+        messages=None,
+        request_kwargs={
+            "previous_response_id": previous_response_id,
+            "_is_responses_api_router_request": True,
+        },
+    )
+
+    assert filtered == deployments
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
@@ -145,8 +145,10 @@ class ResponsesSessionHandler:
     async def get_visible_history_for_previous_response_id(
         previous_response_id: str,
         api_key_hash: str | None = None,
+        spend_logs_loader: Callable[..., Awaitable[tuple[SpendLogsPayload, ...]]] | None = None,
     ) -> ResponsesVisibleHistory | None:
-        spend_logs: Final = await ResponsesSessionHandler.get_spend_logs_for_visible_replay(
+        loader: Final = spend_logs_loader or ResponsesSessionHandler.get_spend_logs_for_visible_replay
+        spend_logs: Final = await loader(
             previous_response_id=previous_response_id,
             api_key_hash=api_key_hash,
         )

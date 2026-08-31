@@ -644,15 +644,14 @@ async def test_visible_history_replays_only_user_and_assistant_text():
         }
     ]
 
-    with patch.object(  # test-quality-ok: session handler has no repository injection seam
-        ResponsesSessionHandler,
-        "get_spend_logs_for_visible_replay",
-        new_callable=AsyncMock,
-        return_value=mock_spend_logs,
-    ):
-        history = await ResponsesSessionHandler.get_visible_history_for_previous_response_id("resp-terra")
+    spend_logs_loader = AsyncMock(return_value=mock_spend_logs)
+    history = await ResponsesSessionHandler.get_visible_history_for_previous_response_id(
+        "resp-terra",
+        spend_logs_loader=spend_logs_loader,
+    )
 
     assert history is not None
+    spend_logs_loader.assert_awaited_once_with(previous_response_id="resp-terra", api_key_hash=None)
     assert history.litellm_session_id == "session-terra"
     assert history.input == (
         {"type": "message", "role": "user", "content": "My name is Chulsoo."},
