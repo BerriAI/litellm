@@ -1,7 +1,8 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
+import { masterKey } from "../../helpers/traffic";
 
 test.describe("AI Hub (internal admin view)", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
@@ -76,5 +77,83 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
     // Agent Hub and MCP Hub tabs are conditionally rendered only when public
     // agents/MCP servers exist, so we don't assert on them in a fresh CI run.
     await expect(page.getByRole("tab", { name: "Model Hub" })).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("Agent Hub and MCP Hub tabs render their public entries", async ({ page, request }) => {
+    const suffix = `${Date.now()}`;
+    const agentName = `e2e-public-agent-${suffix}`;
+    const mcpServerName = `e2e_public_mcp_${suffix}`;
+    const auth = { Authorization: `Bearer ${masterKey()}` };
+
+    const seedPublicEntries = async (api: APIRequestContext): Promise<{ agentId: string; serverId: string }> => {
+      const agentRes = await api.post("/v1/agents", {
+        headers: auth,
+        data: {
+          agent_name: agentName,
+          agent_card_params: {
+            name: agentName,
+            description: "E2E public agent",
+            version: "1.0.0",
+            url: "http://127.0.0.1:9999/",
+            capabilities: {},
+            skills: [],
+            defaultInputModes: ["text"],
+            defaultOutputModes: ["text"],
+          },
+        },
+      });
+      expect(agentRes.ok(), `agent create failed (${agentRes.status()}): ${await agentRes.text()}`).toBe(true);
+      const agentId = (await agentRes.json()).agent_id as string;
+
+      const serverRes = await api.post("/v1/mcp/server", {
+        headers: auth,
+        data: {
+          server_name: mcpServerName,
+          url: "http://127.0.0.1:9999/mcp",
+          transport: "http",
+          description: "E2E public MCP server",
+        },
+      });
+      expect(serverRes.ok(), `mcp server create failed (${serverRes.status()}): ${await serverRes.text()}`).toBe(true);
+      const serverId = (await serverRes.json()).server_id as string;
+
+      const agentPublicRes = await api.post("/v1/agents/make_public", {
+        headers: auth,
+        data: { agent_ids: [agentId] },
+      });
+      expect(agentPublicRes.ok(), `agents make_public failed: ${await agentPublicRes.text()}`).toBe(true);
+      const mcpPublicRes = await api.post("/v1/mcp/make_public", {
+        headers: auth,
+        data: { mcp_server_ids: [serverId] },
+      });
+      expect(mcpPublicRes.ok(), `mcp make_public failed: ${await mcpPublicRes.text()}`).toBe(true);
+
+      return { agentId, serverId };
+    };
+
+    const { agentId, serverId } = await seedPublicEntries(request);
+    try {
+      await page.goto(`/ui/model_hub_table?key=${masterKey()}`);
+      await dismissFeedbackPopup(page);
+
+      const agentHubTab = page.getByRole("tab", { name: "Agent Hub" });
+      await expect(agentHubTab).toBeVisible({ timeout: 15_000 });
+      await agentHubTab.click();
+      await expect(page.getByText("Available Agents")).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByRole("row").filter({ hasText: agentName })).toHaveCount(1, { timeout: 10_000 });
+      await expect(page.getByText("E2E public agent").first()).toBeVisible();
+
+      const mcpHubTab = page.getByRole("tab", { name: "MCP Hub" });
+      await expect(mcpHubTab).toBeVisible();
+      await mcpHubTab.click();
+      await expect(page.getByText("Available MCP Servers")).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByRole("row").filter({ hasText: mcpServerName })).toHaveCount(1, { timeout: 10_000 });
+      await expect(page.getByText("E2E public MCP server").first()).toBeVisible();
+    } finally {
+      await request.post("/v1/agents/make_public", { headers: auth, data: { agent_ids: [] } });
+      await request.post("/v1/mcp/make_public", { headers: auth, data: { mcp_server_ids: [] } });
+      await request.delete(`/v1/agents/${agentId}`, { headers: auth });
+      await request.delete(`/v1/mcp/server/${serverId}`, { headers: auth });
+    }
   });
 });

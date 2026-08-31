@@ -2,7 +2,14 @@ import { test, expect, type Locator, type Page as PlaywrightPage } from "@playwr
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
-import { CHAT_MODEL_A, MOCK_RESPONSE_TEXT, sendChatCompletion, waitForSpendLog } from "../../helpers/traffic";
+import {
+  CHAT_MODEL_A,
+  MOCK_RESPONSE_TEXT,
+  sendChatCompletion,
+  waitForSpendLog,
+  waitForSpendLogByPrompt,
+} from "../../helpers/traffic";
+import { openPlayground, selectModel, sendMessage } from "../../helpers/playground";
 
 /**
  * Anchored to traffic this spec generates itself, with a unique prompt and end user per run, so it
@@ -45,6 +52,23 @@ test.describe("Logs page", () => {
     storageState: ADMIN_STORAGE_PATH,
     // The copy buttons go through navigator.clipboard, which rejects without these.
     permissions: ["clipboard-read", "clipboard-write"],
+  });
+
+  test("a chat sent from the Playground lands in Logs with its content", async ({ page, request }) => {
+    const prompt = `logs-playground-prompt-${uniqueSuffix()}`;
+    await openPlayground(page);
+    await selectModel(page, CHAT_MODEL_A);
+    await sendMessage(page, prompt);
+    await expect(page.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 60_000 });
+
+    const requestId = await waitForSpendLogByPrompt(request, prompt);
+
+    const row = await openLogsForRequest(page, requestId);
+    await row.click();
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText(prompt, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
   });
 
   test("a served request expands to its request and response", async ({ page, request }) => {

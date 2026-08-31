@@ -1,12 +1,17 @@
 import { test, expect } from "@playwright/test";
-import { INTERNAL_USER_STORAGE_PATH, E2E_TEAM_CRUD_ALIAS, E2E_TEAM_ORG_ALIAS } from "../../constants";
+import {
+  INTERNAL_USER_STORAGE_PATH,
+  E2E_TEAM_CRUD_ALIAS,
+  E2E_TEAM_KEYGEN_ALIAS,
+  E2E_TEAM_ORG_ALIAS,
+} from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
 
 /**
  * Differential partner to internalUserNoTeam.spec.ts: the seeded
- * e2e-internal-user belongs to exactly two teams, so the Create Key dropdown
- * must list both. Without this, the no-team spec's "zero options" assertion
+ * e2e-internal-user belongs to exactly three teams, so the Create Key dropdown
+ * must list all of them. Without this, the no-team spec's "zero options" assertion
  * would still pass against a bug that empties the dropdown for everyone.
  */
 test.describe("Internal User with team memberships", () => {
@@ -24,10 +29,11 @@ test.describe("Internal User with team memberships", () => {
     const dropdown = page.locator('[data-slot="combobox-content"]:visible').first();
     await expect(dropdown).toBeVisible({ timeout: 5_000 });
 
-    // Both seeded memberships render, and nothing else does — proving the
+    // All seeded memberships render, and nothing else does — proving the
     // dropdown is scoped to the user's teams rather than empty or unfiltered.
     await expect(dropdown.getByText(E2E_TEAM_CRUD_ALIAS, { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(dropdown.getByText(E2E_TEAM_ORG_ALIAS, { exact: true })).toBeVisible();
-    await expect(dropdown.getByRole("option")).toHaveCount(2);
+    await expect(dropdown.getByText(E2E_TEAM_KEYGEN_ALIAS, { exact: true })).toBeVisible();
+    await expect(dropdown.getByRole("option")).toHaveCount(3);
   });
 });
