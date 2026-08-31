@@ -1,6 +1,8 @@
 import logging
 import re
 
+import pytest
+
 from litellm.caching.caching import Cache
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
@@ -87,6 +89,20 @@ def _semantic_cache():
     )
 
 
+@pytest.mark.parametrize(
+    "cache_type",
+    [LiteLLMCacheType.REDIS_SEMANTIC, LiteLLMCacheType.VALKEY_SEMANTIC],
+)
+def test_semantic_cache_embedding_max_input_tokens_reaches_backend(cache_type):
+    cache = Cache(
+        type=cache_type,
+        redis_url="redis://localhost:6379",
+        similarity_threshold=0.8,
+        semantic_cache_embedding_max_input_tokens=2048,
+    )
+    assert cache.cache.embedding_max_input_tokens == 2048
+
+
 def test_semantic_cache_key_excludes_prompt_so_paraphrases_share_a_bucket():
     cache = _semantic_cache()
     tenant = {"user_api_key": "hash-abc"}
@@ -146,3 +162,22 @@ def test_exact_cache_key_still_includes_prompt():
         model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}]
     )
     assert key_a != key_b
+
+
+@pytest.mark.parametrize(
+    "anthropic_param",
+    [
+        {"system": "answer ALPHA"},
+        {"top_k": 5},
+        {"stop_sequences": ["STOP"]},
+    ],
+)
+def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
+    """Anthropic /v1/messages params with no OpenAI equivalent must still key the
+    cache; without them two requests that differ only by system prompt collide."""
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    messages = [{"role": "user", "content": "which greek letter?"}]
+    baseline = cache.get_cache_key(model="claude-sonnet-4-5", messages=messages)
+    assert baseline != cache.get_cache_key(
+        model="claude-sonnet-4-5", messages=messages, **anthropic_param
+    )

@@ -12,16 +12,81 @@ const staticImageData: Plugin = {
   },
 };
 
-const config: ViteUserConfig = {
+const sharedViteConfig = {
   plugins: [staticImageData],
+  resolve: { alias: { "@": resolve(__dirname, "src") } },
+  define: { "import.meta.vitest": "undefined" },
+  esbuild: { jsx: "automatic", jsxImportSource: "react" } as const,
+};
+
+const TEST_TS_FILES_THAT_RENDER_REACT: readonly string[] = [
+  "src/**/hooks/**/*.test.ts",
+  "src/**/cost-tracking/_components/**/use_*.test.ts",
+  "src/**/models-and-endpoints/detailNavigation.test.ts",
+  "src/**/models-and-endpoints/vertexCredentialsUpload.test.ts",
+  "src/components/chat/useChatHistory.test.ts",
+  "src/lib/forms/pickDirty.test.ts",
+];
+
+const jsdomTier = {
+  environment: "./tests/jsdomFetchEnv.ts",
+  setupFiles: ["tests/setupTests.ts"],
+  globals: true,
+  css: true,
+  testTimeout: 60_000,
+  hookTimeout: 30_000,
+};
+
+const config: ViteUserConfig = {
+  ...sharedViteConfig,
   test: {
-    environment: "./tests/jsdomFetchEnv.ts",
-    setupFiles: ["tests/setupTests.ts"],
-    globals: true,
-    css: true, // lets you import CSS/modules without extra mocks
-    testTimeout: 30000,
+    projects: [
+      {
+        ...sharedViteConfig,
+        test: {
+          name: "unit",
+          environment: "node",
+          setupFiles: ["tests/setup.unit.ts"],
+          globals: true,
+          testTimeout: 60_000,
+          hookTimeout: 30_000,
+          include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
+          exclude: ["node_modules/**", ...TEST_TS_FILES_THAT_RENDER_REACT],
+        },
+      },
+      {
+        ...sharedViteConfig,
+        test: {
+          ...jsdomTier,
+          name: "component",
+          include: ["src/**/*.test.tsx", "tests/**/*.test.tsx", ...TEST_TS_FILES_THAT_RENDER_REACT],
+          exclude: ["node_modules/**", "**/*.integration.test.tsx"],
+        },
+      },
+      {
+        ...sharedViteConfig,
+        test: {
+          ...jsdomTier,
+          name: "integration",
+          include: ["src/**/*.integration.test.tsx", "tests/**/*.integration.test.tsx"],
+          exclude: ["node_modules/**"],
+        },
+      },
+      {
+        ...sharedViteConfig,
+        test: {
+          name: "types",
+          include: [],
+          typecheck: {
+            enabled: true,
+            include: ["src/**/*.test-d.ts", "src/**/*.test-d.tsx"],
+            ignoreSourceErrors: true,
+          },
+        },
+      },
+    ],
     silent: process.env.CI ? "passed-only" : false,
-    teardownTimeout: 60000,
+    teardownTimeout: 60_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
@@ -31,37 +96,16 @@ const config: ViteUserConfig = {
         "**/*.test.*",
         "**/*.test-d.*",
         "**/*.spec.*",
-
         "tests/**",
-
         "node_modules/**",
         ".next/**",
         "out/**",
-
         "**/*.config.*",
         "postcss.config.*",
         "tailwind.config.*",
         "next.config.*",
       ],
     },
-    exclude: ["node_modules/**"],
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts", "tests/**/*.test.tsx"],
-    typecheck: {
-      include: ["src/**/*.test-d.ts", "src/**/*.test-d.tsx"],
-      ignoreSourceErrors: true,
-    },
-  },
-  resolve: {
-    alias: {
-      "@": resolve(__dirname, "src"),
-    },
-  },
-  define: {
-    "import.meta.vitest": "undefined",
-  },
-  esbuild: {
-    jsx: "automatic",
-    jsxImportSource: "react",
   },
 };
 

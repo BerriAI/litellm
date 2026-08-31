@@ -60,6 +60,7 @@ class TestIsThinkingEnabled:
             ({"reasoning_effort": "medium"}, True),
             # both thinking enabled and reasoning_effort returns True
             ({"thinking": {"type": "enabled"}, "reasoning_effort": "high"}, True),
+            ({"thinking": True}, True),
             # falsy thinking values should not crash
             ({"thinking": False}, False),
             ({"thinking": 0}, False),

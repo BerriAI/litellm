@@ -1,5 +1,6 @@
-import { Button, Input, InputNumber } from "antd";
 import React from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export interface TagRateLimitEntry {
   // Stable identity for React list keys so deleting a middle row doesn't shift
@@ -72,25 +73,29 @@ export function TagRateLimitEditor({ value, onChange }: TagRateLimitEditorProps)
       {value.map((row, idx) => (
         <div key={row.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
           <Input
+            aria-label="Tag"
             value={row.tag}
             onChange={(e) => updateRow(idx, "tag", e.target.value)}
             placeholder="Tag (e.g. cell-1)"
             style={{ width: 180 }}
           />
-          <InputNumber
+          <Input
+            aria-label="RPM limit"
+            type="number"
             min={0}
-            value={row.rpm_limit ?? undefined}
-            onChange={(v) => updateRow(idx, "rpm_limit", v ?? null)}
+            value={row.rpm_limit ?? ""}
+            onChange={(e) => updateRow(idx, "rpm_limit", e.target.value === "" ? null : Number(e.target.value))}
             placeholder="RPM"
             style={{ width: 120 }}
           />
-          <Button type="text" danger size="small" onClick={() => removeRow(idx)} style={{ padding: "0 4px" }}>
+          <Button variant="destructive" size="sm" aria-label="Remove tag limit" onClick={() => removeRow(idx)}>
             ✕
           </Button>
         </div>
       ))}
       <Button
-        size="small"
+        variant="outline"
+        size="sm"
         onClick={(e) => {
           e.preventDefault();
           addRow();

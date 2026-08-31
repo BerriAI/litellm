@@ -3,6 +3,7 @@ import {
   PTU_COUNT_FIELD,
   PTU_RATE_FIELD,
   ptuCountRules,
+  ptuNoUsageCostRule,
   ptuPairRule,
   ptuRateRules,
   ptuStartRequiredRule,
@@ -37,6 +38,39 @@ describe("ptuCountRules", () => {
 
   it("rejects a value that is not a number at all", async () => {
     await expect(validate("abc")).rejects.toThrow("whole number between 1 and");
+  });
+});
+
+describe("ptuNoUsageCostRule", () => {
+  const check = (value: unknown, count: unknown) =>
+    ptuNoUsageCostRule(PTU_COUNT_FIELD)({ getFieldValue: () => count }).validator(null, value);
+
+  it("leaves a deployment without PTU config free to carry any price", async () => {
+    await expect(check("2.5", "")).resolves.toBeUndefined();
+    await expect(check(0.5, null)).resolves.toBeUndefined();
+  });
+
+  it("accepts a blank or zero price alongside PTU config, which is what the backend stores", async () => {
+    await expect(check("", 15)).resolves.toBeUndefined();
+    await expect(check(null, 15)).resolves.toBeUndefined();
+    await expect(check(0, 15)).resolves.toBeUndefined();
+    await expect(check("0", 15)).resolves.toBeUndefined();
+  });
+
+  it("rejects a non-zero price alongside PTU config, which the backend answers with a 400", async () => {
+    await expect(check("2.5", 15)).rejects.toThrow("bills by reserved capacity");
+    await expect(check(0.000001, 15)).rejects.toThrow("bills by reserved capacity");
+  });
+
+  it("reads the count by the field name it was given", () => {
+    const seen: string[] = [];
+    ptuNoUsageCostRule(PTU_COUNT_FIELD)({
+      getFieldValue: (name: string) => {
+        seen.push(name);
+        return 15;
+      },
+    }).validator(null, 0);
+    expect(seen).toEqual([PTU_COUNT_FIELD]);
   });
 });
 
