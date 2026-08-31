@@ -1,87 +1,57 @@
 use litellm_ai_gateway::io::audio_transcription::{
     AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
 };
-use litellm_python_interop::{from_py, release_gil, to_py};
+use litellm_core::error::CoreResult;
+use litellm_python_interop::from_py;
 use pyo3::prelude::*;
+use serde_json::{Map, Value};
 
 use crate::errors::core_error_to_pyerr;
-use crate::marshal::{optional_object_to_map, optional_timeout};
+use crate::marshal::{RouteOptions, object_or_empty};
+use crate::routes::BridgeRoute;
 
-#[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn transcription(
-    py: Python<'_>,
-    model: String,
-    audio: Py<PyAny>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    optional_params: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Py<PyAny>> {
-    let audio = from_py(audio.bind(py))?;
-    let extra_headers = match extra_headers {
-        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
-        None => None,
-    };
-    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
-    let timeout = optional_timeout(timeout_seconds);
-    let result = release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_audio_transcription(
-            AudioTranscriptionRequest {
-                model: &model,
-                audio,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: custom_llm_provider.as_deref(),
-                extra_headers,
-                optional_params,
-                timeout,
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
-                request_metadata: Default::default(),
-                litellm_call_id: None,
-            },
-        ))
-    });
-    match result {
-        Ok(value) => to_py(py, &value),
-        Err(err) => Err(core_error_to_pyerr(err)),
-    }
+struct AudioTranscriptionCall {
+    options: RouteOptions,
+    audio: Value,
+    optional_params: Map<String, Value>,
 }
 
-#[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn atranscription(
-    py: Python<'_>,
-    model: String,
-    audio: Py<PyAny>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    optional_params: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Bound<'_, PyAny>> {
-    let audio = from_py(audio.bind(py))?;
-    let extra_headers = match extra_headers {
-        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
-        None => None,
-    };
-    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
-    let timeout = optional_timeout(timeout_seconds);
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = run_audio_transcription(AudioTranscriptionRequest {
+impl BridgeRoute<AudioTranscriptionInputs> for AudioTranscriptionCall {
+    type Output = Value;
+
+    fn from_python(py: Python<'_>, inputs: AudioTranscriptionInputs) -> PyResult<Self> {
+        Ok(Self {
+            options: RouteOptions::from_python(
+                py,
+                inputs.model,
+                inputs.api_key,
+                inputs.api_base,
+                inputs.custom_llm_provider,
+                inputs.extra_headers,
+                inputs.timeout_seconds,
+            )?,
+            audio: from_py(inputs.audio.bind(py))?,
+            optional_params: object_or_empty(py, "optional_params", inputs.optional_params)?,
+        })
+    }
+
+    async fn run(self) -> CoreResult<Value> {
+        let RouteOptions {
+            model,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            timeout,
+        } = self.options;
+        run_audio_transcription(AudioTranscriptionRequest {
             model: &model,
-            audio,
+            audio: self.audio,
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
-            optional_params,
+            optional_params: self.optional_params,
             timeout,
             callbacks: Vec::new(),
             guardrails: Vec::new(),
@@ -89,12 +59,25 @@ fn atranscription(
             litellm_call_id: None,
         })
         .await
-        .map_err(core_error_to_pyerr)?;
-        Python::attach(|py| to_py(py, &value))
-    })
+    }
 }
 
-pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(transcription, module)?)?;
-    module.add_function(wrap_pyfunction!(atranscription, module)?)
+bridge_route! {
+    sync = transcription,
+    asynchronous = atranscription,
+    inputs = AudioTranscriptionInputs,
+    required = {
+        model: String,
+        audio: Py<PyAny>,
+    },
+    optional = {
+        api_key: Option<String>,
+        api_base: Option<String>,
+        custom_llm_provider: Option<String>,
+        extra_headers: Option<Py<PyAny>>,
+        optional_params: Option<Py<PyAny>>,
+        timeout_seconds: Option<f64>,
+    },
+    call = AudioTranscriptionCall,
+    errors = core_error_to_pyerr,
 }
