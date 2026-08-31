@@ -1488,3 +1488,71 @@ describe("Teams - the exact bytes the create call sends", () => {
     expect(teamCreateCall).not.toHaveBeenCalled();
   });
 });
+
+describe("Teams - create team modal keeps user selections", () => {
+  const orgs = () => [
+    { organization_id: "org-1", organization_alias: "Org One", models: [], members: [] },
+    { organization_id: "org-2", organization_alias: "Org Two", models: [], members: [] },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    mockUseOrganizations.mockReturnValue({ data: orgs() });
+  });
+
+  const openCreateModal = async () => {
+    const queryClient = createQueryClient();
+    const wrap = (children: React.ReactElement) => (
+      <NuqsTestingAdapter hasMemory>
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      </NuqsTestingAdapter>
+    );
+    const view = render(wrap(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />));
+    act(() => {
+      fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+    return {
+      rerenderTeams: () => view.rerender(wrap(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />)),
+    };
+  };
+
+  const selectOrganization = async (label: string) => {
+    const user = userEvent.setup();
+    const orgCombobox = screen.getByRole("combobox", { name: /organization/i });
+    await user.click(orgCombobox);
+    await user.click(await screen.findByText(label));
+    return orgCombobox;
+  };
+
+  it("keeps the selected organization and models when the organizations list refetches", async () => {
+    const { rerenderTeams } = await openCreateModal();
+
+    const orgCombobox = await selectOrganization("Org One");
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+
+    mockUseOrganizations.mockReturnValue({ data: orgs() });
+    act(() => {
+      rerenderTeams();
+    });
+
+    expect(orgCombobox).toHaveValue("Org One");
+    expect(screen.getByTestId("create-team-models-select")).toHaveValue("gpt-4");
+  });
+
+  it("clears the selected models when the user picks a different organization", async () => {
+    await openCreateModal();
+
+    await selectOrganization("Org One");
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+    expect(screen.getByTestId("create-team-models-select")).toHaveValue("gpt-4");
+
+    await selectOrganization("Org Two");
+    expect(screen.getByTestId("create-team-models-select")).toHaveValue("");
+  });
+});
