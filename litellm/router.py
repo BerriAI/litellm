@@ -9577,6 +9577,8 @@ class Router:
         """
         # Try to get deployment by model_id first
         deployment = self.get_deployment(model_id=model_id)
+        if deployment is not None and team_id is not None and not self._deployment_usable_by_team(deployment, team_id):
+            deployment = None
 
         # If not found, try by model_group_name
         if deployment is None:

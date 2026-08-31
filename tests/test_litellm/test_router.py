@@ -4739,6 +4739,37 @@ def test_get_deployment_credentials_with_provider_no_fallback_to_other_team_only
     )
 
 
+def test_get_deployment_credentials_with_provider_rejects_other_team_exact_id():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-b-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.2",
+                    "api_key": "team-b-key",
+                },
+                "model_info": {
+                    "id": "team-b-deployment",
+                    "team_id": "team-b",
+                },
+            },
+        ],
+    )
+
+    owner_credentials = router.get_deployment_credentials_with_provider(
+        model_id="team-b-deployment", team_id="team-b"
+    )
+    assert owner_credentials is not None
+    assert owner_credentials["api_key"] == "team-b-key"
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="team-b-deployment", team_id="team-a"
+        )
+        is None
+    )
+
+
 def test_deployment_usable_by_team_helpers():
     """
     Direct coverage of the team-ownership filter: a team-scoped deployment is
