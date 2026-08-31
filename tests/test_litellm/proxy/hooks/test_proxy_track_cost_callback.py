@@ -1,4 +1,5 @@
 
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -593,6 +594,11 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
     )
 
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
+    spend_counter_update_complete = proxy_logging_obj.db_spend_update_writer.update_database.await_args.kwargs[
+        "spend_counter_update_complete"
+    ]
+    assert isinstance(spend_counter_update_complete, asyncio.Event)
+    assert spend_counter_update_complete.is_set()
     increment_spend_counters.assert_awaited_once_with(
         token="test_api_key",
         team_id="test_team_id",
