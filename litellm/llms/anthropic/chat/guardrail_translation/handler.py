@@ -861,21 +861,9 @@ class AnthropicMessagesHandler(BaseTranslation):
     def _image_sources(block: Mapping[str, object]) -> tuple[str, ...]:
         """Normalize an Anthropic image block into strings a guardrail can read.
 
-        `source` is one of three shapes (`AnthropicMessagesImageParam.source`):
-
-            {"type": "base64", "media_type": "image/png", "data": "<b64>"}
-            {"type": "url",    "url": "https://..."}
-            {"type": "file",   "file_id": "..."}
-
-        base64 is returned as a data URI rather than the bare payload: consumers of
-        ``GenericGuardrailAPIInputs["images"]`` otherwise have no way to know the
-        format, and an API like Bedrock's ApplyGuardrail requires it. url is passed
-        through so the consumer can fetch it under its own SSRF policy.
-
-        file is not resolvable here (the bytes live behind the Files API), so it
-        yields nothing. That is a silent gap for any consumer that treats a missing
-        entry as "no image to scan"; scanning a file_id needs a fetch this extractor
-        has no client for.
+        base64 becomes a data URI so the format travels with the payload, which is what
+        the OpenAI path already puts in this field. A file source yields nothing: those
+        bytes live behind the Files API and this extractor has no client to fetch them.
         """
         source: Final = block.get("source")
         if not isinstance(source, Mapping):
