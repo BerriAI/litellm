@@ -26,10 +26,16 @@ async fn handle_key_info(
     State(state): State<AppState>,
     Query(params): Query<KeyInfoParams>,
 ) -> Response {
-    let hashed_token = params
-        .key
-        .as_deref()
-        .unwrap_or(auth.hashed_token.as_hex_str());
+    let is_master = state.master_key.is_some() && auth.key_object.token == "master";
+
+    let hashed_token = if is_master {
+        params
+            .key
+            .as_deref()
+            .unwrap_or(auth.hashed_token.as_hex_str())
+    } else {
+        auth.hashed_token.as_hex_str()
+    };
 
     // Try to get key info from database
     if let Some(ref postgres) = state.postgres {

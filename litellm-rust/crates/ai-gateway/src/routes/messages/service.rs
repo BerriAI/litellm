@@ -56,6 +56,7 @@ pub async fn run(
     }
 
     // Check budget against live Redis spend counter (avoids stale cache)
+    let mut redis_budget_checked = false;
     if let Some(max_budget) = key_object.max_budget {
         if let Some(ref redis) = state.redis {
             let mut key_buf = [0u8; 256];
@@ -66,7 +67,9 @@ pub async fn run(
                         "API key has exceeded its budget limit of ${max_budget:.2} (${live_spend:.2} spent)"
                     )));
                 }
-                Ok(_) => {}
+                Ok(_) => {
+                    redis_budget_checked = true;
+                }
                 Err(e) => {
                     crate::hardening::log_degradation("redis", "key_budget_check", &e.to_string());
                 }
@@ -74,8 +77,9 @@ pub async fn run(
         }
     }
 
-    // Fallback: check cached spend (used when Redis is unavailable)
-    if !key_object.is_within_budget() {
+    // Fallback: check cached spend only when Redis is unavailable or check failed.
+    // Cached spend is stale (from key load time), so it is not authoritative.
+    if !redis_budget_checked && !key_object.is_within_budget() {
         return Err(CoreError::Auth(format!(
             "API key has exceeded its budget limit of ${:.2}",
             key_object.max_budget.unwrap_or(0.0)
@@ -481,6 +485,11 @@ async fn record_streaming_spend_estimate(
                 event = "cost_calculation_failed",
                 "pricing data missing for model, streaming spend will not be tracked"
             );
+            state
+                .metrics
+                .errors_total
+                .with_label_values(&[model, "unpriced_request"])
+                .inc();
             return;
         }
     };
@@ -508,12 +517,14 @@ async fn record_streaming_spend_estimate(
                 cost,
             });
         }
-    }
 
-    if let Some(ref redis) = state.redis {
-        let mut key_buf = [0u8; 256];
-        let key = spend_key(&mut key_buf, "key", hex);
-        let _ = redis.incr_by_float(key, cost).await;
+        if let Some(ref org_id) = key_object.org_id {
+            worker.record_update(SpendUpdateItem {
+                entity_type: EntityType::Organization,
+                entity_id: org_id.clone(),
+                cost,
+            });
+        }
     }
 }
 
@@ -590,6 +601,11 @@ async fn record_spend(
                 event = "cost_calculation_failed",
                 "pricing data missing for model, spend will not be tracked"
             );
+            state
+                .metrics
+                .errors_total
+                .with_label_values(&[model, "unpriced_request"])
+                .inc();
             return;
         }
     };
@@ -624,26 +640,6 @@ async fn record_spend(
                 entity_id: org_id.clone(),
                 cost,
             });
-        }
-    }
-
-    // Increment Redis spend counters directly (for real-time budget checks)
-    if let Some(ref redis) = state.redis {
-        let mut key_buf = [0u8; 256];
-        let key = spend_key(&mut key_buf, "key", hex);
-        let _ = redis.incr_by_float(key, cost).await;
-
-        if let Some(ref user_id) = key_object.user_id {
-            let key = spend_key(&mut key_buf, "user", user_id);
-            let _ = redis.incr_by_float(key, cost).await;
-        }
-        if let Some(ref team_id) = key_object.team_id {
-            let key = spend_key(&mut key_buf, "team", team_id);
-            let _ = redis.incr_by_float(key, cost).await;
-        }
-        if let Some(ref org_id) = key_object.org_id {
-            let key = spend_key(&mut key_buf, "org", org_id);
-            let _ = redis.incr_by_float(key, cost).await;
         }
     }
 }

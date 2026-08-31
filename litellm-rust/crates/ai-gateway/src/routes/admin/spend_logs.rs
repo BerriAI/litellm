@@ -8,7 +8,7 @@ use axum::routing::get;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::auth::key_auth::RequireValidKey;
+use crate::auth::key_auth::RequireMasterKey;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -28,7 +28,7 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn handle_spend_logs(
-    _auth: RequireValidKey,
+    _auth: RequireMasterKey,
     State(state): State<AppState>,
     Query(params): Query<SpendLogsParams>,
 ) -> Response {

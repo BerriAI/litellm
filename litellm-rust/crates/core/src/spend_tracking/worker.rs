@@ -60,7 +60,7 @@ enum SpendMessage {
 /// The background spend worker. Receives spend entries via a channel,
 /// batches them, and flushes periodically or when the batch is full.
 pub struct SpendWorker {
-    tx: mpsc::UnboundedSender<SpendMessage>,
+    tx: mpsc::Sender<SpendMessage>,
 }
 
 impl SpendWorker {
@@ -70,7 +70,7 @@ impl SpendWorker {
     /// - `flush_interval`: flush at least this often (default 100ms)
     /// - `flush`: the sink to write batched data to
     pub fn spawn<F: SpendFlush>(batch_size: usize, flush_interval: Duration, flush: F) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(10_000);
         tokio::spawn(worker_loop(rx, batch_size, flush_interval, flush));
         Self { tx }
     }
@@ -78,18 +78,26 @@ impl SpendWorker {
     /// Record a spend update for a specific entity (key, user, team, etc.).
     /// Non-blocking: sends to the background worker via channel.
     pub fn record_update(&self, item: SpendUpdateItem) {
-        let _ = self.tx.send(SpendMessage::Update(item));
+        if self.tx.try_send(SpendMessage::Update(item)).is_err() {
+            eprintln!("[warn] spend worker channel full, dropping spend update");
+        }
     }
 
     /// Record a spend log entry (the per-request log row).
     /// Non-blocking: sends to the background worker via channel.
     pub fn record_log(&self, entry: SpendEntry) {
-        let _ = self.tx.send(SpendMessage::Log(Box::new(entry)));
+        if self
+            .tx
+            .try_send(SpendMessage::Log(Box::new(entry)))
+            .is_err()
+        {
+            eprintln!("[warn] spend worker channel full, dropping spend log");
+        }
     }
 }
 
 async fn worker_loop<F: SpendFlush>(
-    mut rx: mpsc::UnboundedReceiver<SpendMessage>,
+    mut rx: mpsc::Receiver<SpendMessage>,
     batch_size: usize,
     flush_interval: Duration,
     flush: F,

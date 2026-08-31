@@ -26,6 +26,7 @@ use axum::routing::get;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
+use crate::auth::key_auth::RequireMasterKey;
 use crate::middleware::alerting::alerting_middleware_from_app_state;
 use crate::middleware::cors::cors_middleware_default;
 use crate::middleware::csrf::csrf_middleware_from_app_state;
@@ -83,7 +84,7 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
-pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn metrics(_auth: RequireMasterKey, State(state): State<AppState>) -> impl IntoResponse {
     let body = state.metrics.render();
     (
         StatusCode::OK,

@@ -10452,9 +10452,26 @@ async def chat_completion(
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data: Final = await _read_request_body(request=request)
 
-    # Try sidecar Rust gateway first (skip when guardrails are configured,
-    # since the Rust sidecar does not run Python-side guardrails)
-    if not getattr(litellm, "guardrail_name_config_map", {}):
+    has_rate_limits = (
+        user_api_key_dict is not None
+        and (
+            getattr(user_api_key_dict, "tpm_limit", None) is not None
+            or getattr(user_api_key_dict, "rpm_limit", None) is not None
+            or getattr(user_api_key_dict, "user_tpm_limit", None) is not None
+            or getattr(user_api_key_dict, "user_rpm_limit", None) is not None
+            or getattr(user_api_key_dict, "team_tpm_limit", None) is not None
+            or getattr(user_api_key_dict, "team_rpm_limit", None) is not None
+        )
+    )
+
+    if has_rate_limits:
+        verbose_proxy_logger.debug(
+            "Skipping Rust dispatch: rate limits configured on API key"
+        )
+
+    # Try sidecar Rust gateway first (skip when guardrails or rate limits are configured,
+    # since the Rust sidecar does not run Python-side guardrails or rate limits)
+    if not has_rate_limits and not getattr(litellm, "guardrail_name_config_map", {}):
         try:
             from litellm.proxy.rust_gateway_integration import route_to_rust
             rust_headers = {
@@ -10469,9 +10486,9 @@ async def chat_completion(
         except Exception as e:
             verbose_proxy_logger.debug(f"Sidecar Rust gateway routing failed: {e}")
 
-    # Try PyO3 Rust bridge (skip when guardrails are configured,
-    # since the PyO3 bridge does not run Python-side guardrails)
-    if not getattr(litellm, "guardrail_name_config_map", {}):
+    # Try PyO3 Rust bridge (skip when guardrails or rate limits are configured,
+    # since the PyO3 bridge does not run Python-side guardrails or rate limits)
+    if not has_rate_limits and not getattr(litellm, "guardrail_name_config_map", {}):
         from litellm.rust_bridge.pipeline import process_request as rust_process_request
 
         rust_response = rust_process_request("/v1/chat/completions", data)

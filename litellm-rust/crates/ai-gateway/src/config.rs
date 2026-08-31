@@ -227,7 +227,14 @@ pub fn load_config_from_yaml(path: &str) -> Result<LoadedConfig, String> {
 
     eprintln!("  total deployments loaded: {}", deployments.len());
 
-    let general_settings = config.general_settings.unwrap_or_default();
+    let mut general_settings = config.general_settings.unwrap_or_default();
+    if let Some(ref mut mk) = general_settings.master_key {
+        *mk = resolve_env_ref(std::mem::take(mk));
+        if mk.is_empty() {
+            eprintln!("warning: master_key resolved to empty; auth will be disabled");
+            general_settings.master_key = None;
+        }
+    }
     let litellm_settings = config.litellm_settings.unwrap_or_default();
     let router_settings = config.router_settings.unwrap_or_default();
 

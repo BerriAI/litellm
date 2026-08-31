@@ -103,10 +103,13 @@ fn extract_raw_key(parts: &Parts) -> Option<&str> {
 
 /// Mask a sensitive value for logging: show first 4 and last 4 chars.
 fn mask_key(key: &str) -> String {
-    if key.len() <= 12 {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 12 {
         "****".to_string()
     } else {
-        format!("{}...{}", &key[..4], &key[key.len() - 4..])
+        let first: String = chars[..4].iter().collect();
+        let last: String = chars[chars.len() - 4..].iter().collect();
+        format!("{first}...{last}")
     }
 }
 
@@ -302,5 +305,31 @@ impl FromRequestParts<AppState> for RequireValidKey {
             key_object: key_obj,
             hashed_token,
         })
+    }
+}
+
+/// Extractor that only accepts the master key. Virtual keys are rejected.
+/// Used for admin routes and metrics that must not be accessible to regular API consumers.
+pub struct RequireMasterKey;
+
+#[axum::async_trait]
+impl FromRequestParts<AppState> for RequireMasterKey {
+    type Rejection = (StatusCode, String);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let raw_key = extract_raw_key(parts).ok_or_else(|| {
+            tracing::warn!("AdminAuth: No key extracted from headers");
+            AuthRejection::KeyNotFound
+        })?;
+
+        if !is_master_key(raw_key, state.master_key.as_deref()) {
+            tracing::warn!("AdminAuth: Rejected non-master key={}", mask_key(raw_key));
+            return Err(AuthRejection::KeyNotFound.into());
+        }
+
+        Ok(RequireMasterKey)
     }
 }
