@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import json
+import math
 from typing import Any
 
 # Asynchronously fetch data from a given URL
@@ -60,6 +61,19 @@ def _reasoning_effort_levels(reasoning_options: list) -> list:
     return [level for level in REASONING_EFFORT_LEVEL_ORDER if level in offered]
 
 
+def _valid_token_price(value: object) -> bool:
+    try:
+        price = float(value)  # pyright: ignore[reportArgumentType]  # non-numeric values are rejected via the except
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(price) and price >= 0
+
+
+def _has_valid_token_prices(pricing: dict | None) -> bool:
+    prices = pricing or {}
+    return _valid_token_price(prices.get("input")) and _valid_token_price(prices.get("output"))
+
+
 def _pricing(pricing: dict) -> dict:
     out: dict[str, Any] = {}
     if not pricing:
@@ -88,6 +102,10 @@ def transform_friendli_data(data: list, local_data: dict) -> dict:
     if not data:
         return transformed
     for model in data:
+        # An unpriced row must never wholesale-replace an already priced local entry:
+        # missing prices cost-calculate as zero, silently zeroing tracked spend
+        if not _has_valid_token_prices(model.get("pricing")):
+            continue
         model_id = model["id"]
         base_model = model.get("base_model") or ""
         entry: dict[str, Any] = {

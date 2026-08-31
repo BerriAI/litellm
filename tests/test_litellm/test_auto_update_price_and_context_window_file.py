@@ -115,6 +115,38 @@ def test_transform_modalities_set_vision_image_and_video_flags(sync_module):
     assert entry_text["supports_video_input"] is False
 
 
+def test_transform_skips_rows_without_valid_token_prices_so_priced_local_entries_survive(sync_module):
+    local = {
+        "friendliai/zai-org/GLM-Test": {
+            "litellm_provider": "friendliai",
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 5e-07,
+        }
+    }
+    unpriced_rows = [
+        _reasoning_model(pricing={}),
+        _reasoning_model(pricing=None),
+        _reasoning_model(pricing={"input": "0.00000015"}),
+        _reasoning_model(pricing={"output": "0.0000005"}),
+        _reasoning_model(pricing={"input": "not-a-number", "output": "0.0000005"}),
+        _reasoning_model(pricing={"input": "-0.00000015", "output": "0.0000005"}),
+        _reasoning_model(pricing={"input": "inf", "output": "0.0000005"}),
+        _reasoning_model(pricing={"input": "nan", "output": "0.0000005"}),
+    ]
+    remote = sync_module.transform_friendli_data(unpriced_rows, local)
+    assert remote == {}
+    sync_module.sync_local_data_with_remote(local, remote, replace_keys=frozenset(remote))
+    assert local["friendliai/zai-org/GLM-Test"]["input_cost_per_token"] == 1.5e-07
+    assert local["friendliai/zai-org/GLM-Test"]["output_cost_per_token"] == 5e-07
+
+
+def test_transform_keeps_zero_priced_rows(sync_module):
+    free_model = _reasoning_model(pricing={"input": "0", "output": "0"})
+    entry = sync_module.transform_friendli_data([free_model], {})["friendliai/zai-org/GLM-Test"]
+    assert entry["input_cost_per_token"] == 0.0
+    assert entry["output_cost_per_token"] == 0.0
+
+
 def test_transforms_survive_failed_fetch(sync_module):
     assert sync_module.transform_friendli_data(None, {}) == {}
     assert sync_module.transform_friendli_data([], {}) == {}
