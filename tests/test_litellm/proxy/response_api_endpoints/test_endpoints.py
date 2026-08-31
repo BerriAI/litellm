@@ -720,6 +720,70 @@ def _auth_override():
     return UserAPIKeyAuth(api_key="sk-test-cursor", user_id="cursor-user")
 
 
+@pytest.mark.asyncio
+async def test_streaming_responses_guardrail_block_returns_sse_events():
+    import litellm.proxy.proxy_server as ps
+
+    from litellm.integrations.custom_guardrail import ModifyResponseException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    guardrail_exception = ModifyResponseException(
+        message="blocked by test",
+        model="gpt-4o",
+        request_data={"model": "gpt-4o", "stream": True},
+    )
+    app.dependency_overrides[user_api_key_auth] = _auth_override
+    try:
+        with (
+            patch.object(ps, "general_settings", {}),
+            patch.object(ps, "llm_router", MagicMock()),
+            patch.object(ps, "proxy_config", MagicMock()),
+            patch.object(ps, "proxy_logging_obj", AsyncMock()),
+            patch.object(ps, "select_data_generator", MagicMock()),
+            patch.object(ps, "user_api_base", None),
+            patch.object(ps, "user_max_tokens", None),
+            patch.object(ps, "user_model", None),
+            patch.object(ps, "user_request_timeout", None),
+            patch.object(ps, "user_temperature", None),
+            patch.object(ps, "version", "1.0.0"),
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new_callable=AsyncMock,
+                side_effect=guardrail_exception,
+            ),
+        ):
+            client = TestClient(app)
+            response = client.post(
+                "/v1/responses",
+                json={"model": "gpt-4o", "stream": True, "input": "hello"},
+                headers={"Authorization": "Bearer sk-test-cursor"},
+            )
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    frames = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
+    assert frames[-1] == "[DONE]"
+    events = [json.loads(frame) for frame in frames[:-1]]
+    assert [event["type"] for event in events] == [
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert events[0]["response"]["status"] == "in_progress"
+    assert events[0]["response"]["output"] == []
+    assert events[3]["delta"] == "blocked by test"
+    assert events[-1]["response"]["status"] == "completed"
+    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "blocked by test"
+
+
 def test_cursor_chat_completions_messages_body_uses_chat_pipeline():
     """A genuine chat-completions body (``messages`` present; what Cursor sends for
     models whose BYOK it already fixed) must run through the standard chat pipeline
