@@ -237,8 +237,6 @@ def map_gemini_image_tools_params(
         search_tool: Final = gemini_config._map_web_search_options(web_search_options)
         result = gemini_config._add_tools_to_optional_params(result, [search_tool])
 
-    gemini_config._drop_search_tools_mixed_with_functions(result)
-
     if isinstance(result.get("tools"), list):
         result["tools"] = _dedupe_gemini_search_tools(result["tools"])
 
