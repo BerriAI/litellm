@@ -58,11 +58,9 @@ def _normalise_structured_marker(value: object) -> str:
 
 def _parse_structured_error_payload(error_text: str) -> dict[str, Any] | None:
     """Parse a JSON error body, including SDK prefixes around the JSON."""
-    candidates = [error_text.strip()]
-    start = error_text.find("{")
-    end = error_text.rfind("}")
-    if start >= 0 and end > start:
-        candidates.append(error_text[start : end + 1])
+    start: Final = error_text.find("{")
+    end: Final = error_text.rfind("}")
+    candidates: Final = (error_text.strip(),) + ((error_text[start : end + 1],) if start >= 0 and end > start else ())
 
     for candidate in candidates:
         try:
@@ -74,6 +72,15 @@ def _parse_structured_error_payload(error_text: str) -> dict[str, Any] | None:
     return None
 
 
+def _response_json_payload(response: httpx.Response | None) -> object | None:
+    if response is None:
+        return None
+    try:
+        return response.json()
+    except (TypeError, ValueError):
+        return None
+
+
 def _structured_validation_signal(
     *,
     error_str: str,
@@ -81,25 +88,19 @@ def _structured_validation_signal(
     error_body: object | None = None,
 ) -> bool:
     """Return whether the provider supplies an explicit validation signal."""
-    payloads: list[dict[str, Any]] = []
-    if isinstance(error_body, dict):
-        payloads.append(error_body)
-    if response is not None:
-        try:
-            response_payload = response.json()
-        except (TypeError, ValueError):
-            response_payload = None
-        if isinstance(response_payload, dict):
-            payloads.append(response_payload)
-    parsed_error = _parse_structured_error_payload(error_str)
-    if parsed_error is not None:
-        payloads.append(parsed_error)
+    payloads: Final = tuple(
+        payload
+        for payload in (
+            error_body,
+            _response_json_payload(response),
+            _parse_structured_error_payload(error_str),
+        )
+        if isinstance(payload, dict)
+    )
 
     for payload in payloads:
-        error_objects = [payload]
-        nested_error = payload.get("error")
-        if isinstance(nested_error, dict):
-            error_objects.append(nested_error)
+        nested_error: Final = payload.get("error")
+        error_objects: Final = (payload, nested_error) if isinstance(nested_error, dict) else (payload,)
 
         for error_object in error_objects:
             for key in _STRUCTURED_ERROR_SIGNAL_KEYS:
