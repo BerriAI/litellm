@@ -5,6 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -43,6 +44,12 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.types.utils import CredentialItem
+
+if TYPE_CHECKING:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
+    from litellm.proxy.policy_engine.policy_registry import PolicyRegistry
+    from litellm.types.proxy.policy_engine import Policy
 
 
 
@@ -4226,7 +4233,11 @@ async def test_add_guardrails_from_policy_engine():
     attachment_registry._initialized = False
 
 
-def _policy_engine_pipeline_registries(policies, monkeypatch, callbacks):
+def _policy_engine_pipeline_registries(
+    policies: "dict[str, Policy]",
+    monkeypatch: pytest.MonkeyPatch,
+    callbacks: "list[CustomGuardrail]",
+) -> "tuple[PolicyRegistry, AttachmentRegistry]":
     from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.types.proxy.policy_engine import PolicyAttachment
@@ -4244,14 +4255,16 @@ def _policy_engine_pipeline_registries(policies, monkeypatch, callbacks):
     return policy_registry, attachment_registry
 
 
-def _reset_policy_engine_registries(policy_registry, attachment_registry):
+def _reset_policy_engine_registries(
+    policy_registry: "PolicyRegistry", attachment_registry: "AttachmentRegistry"
+) -> None:
     policy_registry._policies = {}
     policy_registry._initialized = False
     attachment_registry._attachments = []
     attachment_registry._initialized = False
 
 
-def _word_guard_pipeline_policy(mode: str):
+def _word_guard_pipeline_policy(mode: str) -> "Policy":
     from litellm.types.proxy.policy_engine import (
         GuardrailPipeline,
         PipelineStep,
