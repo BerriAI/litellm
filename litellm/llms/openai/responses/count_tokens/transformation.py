@@ -4,7 +4,69 @@ OpenAI Responses API token counting transformation logic.
 This module handles the transformation of requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Literal
+
+from typing_extensions import ReadOnly, TypedDict
+
+
+class ResponsesInputTextPart(TypedDict):
+    type: ReadOnly[Literal["input_text"]]
+    text: ReadOnly[str]
+
+
+class ResponsesInputImagePart(TypedDict):
+    type: ReadOnly[Literal["input_image"]]
+    image_url: ReadOnly[str]
+    detail: ReadOnly[str]
+
+
+ResponsesInputPart = ResponsesInputTextPart | ResponsesInputImagePart
+
+
+def _chat_image_block_to_responses_part(image_url: object) -> ResponsesInputImagePart | None:
+    url: Final = image_url.get("url") if isinstance(image_url, Mapping) else image_url
+    if not isinstance(url, str) or not url:
+        return None
+    detail: Final = image_url.get("detail") if isinstance(image_url, Mapping) else None
+    part: Final[ResponsesInputImagePart] = {
+        "type": "input_image",
+        "image_url": url,
+        "detail": detail if isinstance(detail, str) and detail else "auto",
+    }
+    return part
+
+
+def _chat_block_to_responses_part(block: object) -> ResponsesInputPart | None:
+    if isinstance(block, str):
+        bare: Final[ResponsesInputTextPart] = {"type": "input_text", "text": block}
+        return bare
+    if not isinstance(block, Mapping):
+        return None
+    match block.get("type"):
+        case "text":
+            text_value: Final = block.get("text")
+            text: Final[ResponsesInputTextPart] = {
+                "type": "input_text",
+                "text": text_value if isinstance(text_value, str) else "",
+            }
+            return text
+        case "image_url":
+            return _chat_image_block_to_responses_part(block.get("image_url"))
+        case _:
+            return None
+
+
+def chat_content_blocks_to_responses_content(
+    content: Sequence[object],
+) -> str | tuple[ResponsesInputPart, ...]:
+    """Text-only content collapses to a joined string, so text-only counts stay unchanged."""
+    parts: Final = tuple(
+        part for part in (_chat_block_to_responses_part(block) for block in content) if part is not None
+    )
+    if any(part["type"] != "input_text" for part in parts):
+        return parts
+    return "\n".join(part["text"] for part in parts if part["type"] == "input_text")
 
 
 class OpenAICountTokensConfig:
@@ -120,14 +182,7 @@ class OpenAICountTokensConfig:
                     instructions_parts.append("\n".join(text_parts))
             elif role == "user":
                 if isinstance(content, list):
-                    # Extract text from content blocks for Responses API
-                    text_parts = []
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            text_parts.append(block.get("text", ""))
-                        elif isinstance(block, str):
-                            text_parts.append(block)
-                    content = "\n".join(text_parts)
+                    content = chat_content_blocks_to_responses_content(content)
                 input_items.append({"role": "user", "content": content})
             elif role == "assistant":
                 # Map tool_calls to Responses API function_call items
