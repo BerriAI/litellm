@@ -161,19 +161,27 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
                 "metadata": {"guardrails": ["test-openai-moderation"]},
             }
 
-            # Should raise HTTPException
-            with pytest.raises(HTTPException) as exc_info:
-                async for (
-                    _
-                ) in unified_guardrail.async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    response=mock_stream(),
-                    request_data=request_data,
-                ):
-                    pass
+            # Chunks have already been flushed by end-of-stream moderation, so
+            # the block surfaces as the in-stream error frame, not a raise.
+            import json as _json
 
-            assert exc_info.value.status_code == 400
-            assert "Violated OpenAI moderation policy" in str(exc_info.value.detail)
+            collected = []
+            async for (
+                chunk
+            ) in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                collected.append(chunk)
+
+            frame = collected[-1]
+            assert isinstance(frame, bytes)
+            text = frame.decode()
+            assert text.startswith("data: ")
+            assert "Violated OpenAI moderation policy" in text
+            payload = _json.loads(text[len("data: ") :])
+            assert payload["error"]["code"] == "400"
 
 
 @pytest.mark.asyncio
