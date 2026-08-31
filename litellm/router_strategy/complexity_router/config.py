@@ -823,6 +823,32 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    enable_context_window_escalation: bool = Field(
+        default=True,
+        description=(
+            "Escalate a request off a tier whose models provably cannot hold its prompt, before "
+            "dispatch. The classifier scores complexity and never prompt size, so a long agentic "
+            "session whose newest ask is trivial lands on a small-window tier and the provider "
+            "rejects it with a context-window 400 that nothing retries. When every model of the "
+            "decided tier has a declared window smaller than the estimated prompt, the request "
+            "moves to the lowest configured tier with a model whose declared window fits; when "
+            "only some of the tier's models fit, the pick is restricted to those and the tier "
+            "keeps the request. Models with no resolvable window are never escalated away from "
+            "and never escalated onto. Set false to dispatch on complexity alone, as before."
+        ),
+    )
+    context_window_escalation_buffer: float = Field(
+        default=0.95,
+        gt=0,
+        le=1,
+        description=(
+            "Fraction of a model's declared context window the estimated prompt must fit within. "
+            "The token count is an estimate, so fitting against the full window would dispatch "
+            "prompts that the provider's own tokenizer then rejects; 0.95 leaves room for that "
+            "drift plus the response tokens."
+        ),
+    )
+
     # Semantic (embedding) matching for keyword_tier_rules instead of literal text matching
     semantic_keyword_matching: bool = Field(
         default=False,
